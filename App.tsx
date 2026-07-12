@@ -16,7 +16,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 import {
@@ -59,7 +59,8 @@ type LatestRelease = {
   assets: Array<{ name: string; browser_download_url: string }>;
 };
 
-export default function App() {
+function HermesApp() {
+  const insets = useSafeAreaInsets();
   const webViewRef = useRef<WebView>(null);
   const wasOfflineRef = useRef(false);
   const [sourceUrl, setSourceUrl] = useState(buildHermesUrl());
@@ -111,7 +112,8 @@ export default function App() {
     const controller = new AbortController();
     const installedVersion = Constants.expoConfig?.version ?? '0.0.0';
 
-    void fetch(GITHUB_LATEST_RELEASE_API, {
+    void fetch(`${GITHUB_LATEST_RELEASE_API}?t=${Date.now()}`, {
+      cache: 'no-store',
       headers: { Accept: 'application/vnd.github+json' },
       signal: controller.signal,
     })
@@ -164,10 +166,9 @@ export default function App() {
   };
 
   return (
-    <SafeAreaProvider>
-      <SafeAreaView style={styles.safeArea} edges={['top', 'right', 'bottom', 'left']}>
-        <StatusBar style="light" />
-        <WebView
+    <View style={styles.root}>
+      <StatusBar style="light" translucent backgroundColor="transparent" />
+      <WebView
           key={webViewKey}
           ref={webViewRef}
           source={{ uri: sourceUrl }}
@@ -233,10 +234,10 @@ export default function App() {
               <Text style={styles.loadingText}>正在连接 Hermes...</Text>
             </View>
           )}
-        />
+      />
 
-        {(!isOnline || loadFailed) && (
-          <View style={styles.networkBanner}>
+      {(!isOnline || loadFailed) && (
+          <View style={[styles.networkBanner, { top: insets.top + 8 }]}>
             <View style={styles.networkCopy}>
               <Text style={styles.networkTitle}>{isOnline ? '服务暂时无法连接' : '网络已断开'}</Text>
               <Text style={styles.networkDetail}>任务仍在 DBB3 服务端继续运行</Text>
@@ -250,14 +251,21 @@ export default function App() {
               <Text style={styles.retryText}>重连</Text>
             </Pressable>
           </View>
-        )}
-      </SafeAreaView>
+      )}
+    </View>
+  );
+}
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <HermesApp />
     </SafeAreaProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  safeArea: {
+  root: {
     flex: 1,
     backgroundColor: BRAND_BACKGROUND,
   },
@@ -292,7 +300,6 @@ const styles = StyleSheet.create({
   },
   networkBanner: {
     position: 'absolute',
-    top: 8,
     left: 10,
     right: 10,
     minHeight: 58,
