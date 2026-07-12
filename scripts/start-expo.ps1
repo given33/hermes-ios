@@ -15,6 +15,15 @@ $env:Path = "$nodeRoot;$corepackShims;$env:Path"
 $env:npm_config_registry = 'https://registry.npmmirror.com'
 Set-Location $projectRoot
 
+$hotspotAddress = Get-NetIPAddress `
+  -AddressFamily IPv4 `
+  -IPAddress '192.168.137.1' `
+  -ErrorAction SilentlyContinue
+if ($hotspotAddress) {
+  $env:REACT_NATIVE_PACKAGER_HOSTNAME = '192.168.137.1'
+  Write-Host 'Using Windows hotspot address: 192.168.137.1' -ForegroundColor Cyan
+}
+
 if ($Tunnel) {
   pnpm exec expo start --go --tunnel --clear
 } else {
