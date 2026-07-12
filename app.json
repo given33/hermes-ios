@@ -28,7 +28,6 @@
     "plugins": [
       "expo-dev-client",
       "expo-secure-store",
-      "expo-sharing",
       [
         "expo-splash-screen",
         {

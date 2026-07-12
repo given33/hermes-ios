@@ -13,6 +13,7 @@ if (-not (Test-Path (Join-Path $nodeRoot 'node.exe'))) {
 
 $env:Path = "$nodeRoot;$corepackShims;$env:Path"
 $env:npm_config_registry = 'https://registry.npmmirror.com'
+$env:EXPO_OFFLINE = '1'
 Set-Location $projectRoot
 
 $hotspotAddress = Get-NetIPAddress `
