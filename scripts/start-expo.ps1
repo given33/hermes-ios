@@ -16,7 +16,7 @@ $env:npm_config_registry = 'https://registry.npmmirror.com'
 Set-Location $projectRoot
 
 if ($Tunnel) {
-  pnpm exec expo start --tunnel --clear
+  pnpm exec expo start --go --tunnel --clear
 } else {
-  pnpm exec expo start --lan --clear
+  pnpm exec expo start --go --lan --clear
 }
