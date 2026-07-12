@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Hermes Agent",
+    "slug": "hermes-agent-ios",
+    "scheme": "hermes-agent",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "com.given33.hermesagent",
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "requireFullScreen": false,
+      "infoPlist": {
+        "CFBundleDisplayName": "Hermes Agent",
+        "CFBundleAllowMixedLocalizations": true,
+        "CFBundleDevelopmentRegion": "zh_CN",
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "用于在 Hermes 会话中拍照并上传。",
+        "NSMicrophoneUsageDescription": "用于在 Hermes 会话中录制并上传音频。",
+        "NSPhotoLibraryUsageDescription": "用于从照片图库选择图片并上传到 Hermes 会话。",
+        "UIFileSharingEnabled": true,
+        "LSSupportsOpeningDocumentsInPlace": true
+      }
+    },
+    "plugins": [
+      "expo-dev-client",
+      "expo-secure-store",
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#170d02",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 180,
+          "resizeMode": "contain"
+        }
+      ]
+    ],
+    "extra": {
+      "hermesUrl": "https://8.138.40.16",
+      "githubRepository": "given33/hermes-ios"
+    }
+  }
+}

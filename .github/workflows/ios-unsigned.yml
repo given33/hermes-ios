@@ -1,0 +1,88 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - name: Generate the native iOS project
+        run: pnpm exec expo prebuild --platform ios --clean --no-install
+      - name: Install CocoaPods
+        run: pod install --project-directory=ios
+      - name: Compile without code signing
+        shell: bash
+        run: |
+          WORKSPACE="$(find ios -maxdepth 1 -type d -name '*.xcworkspace' -print -quit)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          if [ -z "$WORKSPACE" ] || [ -z "$SCHEME" ]; then
+            echo 'Unable to locate the generated Xcode workspace.' >&2
+            exit 1
+          fi
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/hermes-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            COMPILER_INDEX_STORE_ENABLE=NO
+      - name: Package the IPA
+        shell: bash
+        run: |
+          APP_PATH="$(find "$RUNNER_TEMP/hermes-build/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo 'The unsigned .app bundle was not produced.' >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
+          shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" > "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hermes-Agent-unsigned
+          path: |
+            ${{ runner.temp }}/Hermes-Agent-unsigned.ipa
+            ${{ runner.temp }}/Hermes-Agent-unsigned.ipa.sha256
+      - name: Publish the tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" \
+              "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256" \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" \
+              "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256" \
+              --generate-notes \
+              --title "Hermes Agent $GITHUB_REF_NAME"
+          fi
