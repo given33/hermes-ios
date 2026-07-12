@@ -19,6 +19,8 @@
 3. 使用 Expo Go 扫描终端中的二维码。
 4. 不在同一局域网时，运行 `scripts/start-expo.ps1 -Tunnel`。
 
+如果 Expo Go 显示 `The request timed out`，双击桌面的 `Hermes iOS 修复调试网络.cmd` 并允许 UAC。该脚本只允许本地子网访问 Metro 的 TCP 8081，不会向公网开放其他端口。当前网络会重置 ngrok 连接，因此同一 Wi-Fi 下优先使用局域网调试入口。
+
 ## 构建 IPA
 
 `expo build` 已停止维护，本项目使用它的官方替代方案 EAS Build。EAS 签名构建需要先登录 Expo，并提供 Apple 开发者凭据；运行 `scripts/build-eas-preview.ps1` 会进入官方引导。
