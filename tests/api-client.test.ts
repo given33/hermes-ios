@@ -380,3 +380,64 @@ test('WebSocket URL converts http to ws and rejects every other socket path', as
   );
   assert.equal(calls, 1);
 });
+
+test('dashboard theme and font methods use the canonical GET and PUT endpoints', async () => {
+  const calls: FetchCall[] = [];
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init: init ?? {} });
+      const path = new URL(url).pathname;
+      const responseBody = path.endsWith('/themes')
+        ? { active: 'default', themes: [] }
+        : path.endsWith('/font') && init?.method !== 'PUT'
+          ? { font: 'theme' }
+          : path.endsWith('/theme')
+            ? { ok: true, theme: 'mono' }
+            : { ok: true, font: 'inter' };
+      return jsonResponse(url, responseBody);
+    },
+  );
+
+  assert.deepEqual(await client.getThemes(), { active: 'default', themes: [] });
+  assert.deepEqual(await client.setTheme('mono'), { ok: true, theme: 'mono' });
+  assert.deepEqual(await client.getFontPref(), { font: 'theme' });
+  assert.deepEqual(await client.setFontPref('inter'), { ok: true, font: 'inter' });
+
+  assert.deepEqual(
+    calls.map((call) => ({
+      path: new URL(call.url).pathname,
+      method: call.init.method ?? 'GET',
+      contentType: new Headers(call.init.headers).get('Content-Type'),
+      body: call.init.body,
+    })),
+    [
+      {
+        path: '/api/dashboard/themes',
+        method: 'GET',
+        contentType: null,
+        body: undefined,
+      },
+      {
+        path: '/api/dashboard/theme',
+        method: 'PUT',
+        contentType: 'application/json',
+        body: JSON.stringify({ name: 'mono' }),
+      },
+      {
+        path: '/api/dashboard/font',
+        method: 'GET',
+        contentType: null,
+        body: undefined,
+      },
+      {
+        path: '/api/dashboard/font',
+        method: 'PUT',
+        contentType: 'application/json',
+        body: JSON.stringify({ font: 'inter' }),
+      },
+    ],
+  );
+});

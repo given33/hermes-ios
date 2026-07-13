@@ -3,6 +3,7 @@ import { StyleSheet, View } from 'react-native';
 
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { LoginScreen } from '../auth/LoginScreen';
+import { ThemeProvider } from '../design/ThemeProvider';
 import { useWebUiFonts } from './webui-fonts';
 
 export function HermesNativeApp() {
@@ -21,9 +22,14 @@ export function HermesNativeApp() {
 }
 
 function NativeAuthRoot() {
-  const { state } = useAuth();
+  const { state, client } = useAuth();
   if (state.status !== 'authenticated') return <LoginScreen />;
-  return <View accessibilityLabel="Hermes authenticated content" style={styles.contentSlot} />;
+  if (!client) return null;
+  return (
+    <ThemeProvider client={client}>
+      <View accessibilityLabel="Hermes authenticated content" style={styles.contentSlot} />
+    </ThemeProvider>
+  );
 }
 
 const styles = StyleSheet.create({

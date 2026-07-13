@@ -109,6 +109,10 @@ export interface ThemeListResponse {
   themes: ThemeListEntry[];
 }
 
+export interface DashboardFontResponse {
+  font: string;
+}
+
 export interface NativeThemeColors {
   background: string;
   foregroundLayer: string;

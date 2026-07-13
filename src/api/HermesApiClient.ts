@@ -3,6 +3,10 @@ import type {
   HermesQueryValue,
   WebSocketTicketResponse,
 } from './hermes-types';
+import type {
+  DashboardFontResponse,
+  ThemeListResponse,
+} from '../design/theme-types';
 import {
   assertWebSocketPath,
   buildWebSocketUrl,
@@ -128,6 +132,30 @@ export class HermesApiClient {
       this.request<WebSocketTicketResponse>('/api/auth/ws-ticket', { method: 'POST' }),
     );
     return buildWebSocketUrl(this.baseUrl, path, ticket, profile);
+  }
+
+  getThemes(): Promise<ThemeListResponse> {
+    return this.request<ThemeListResponse>('/api/dashboard/themes');
+  }
+
+  setTheme(name: string): Promise<{ ok: boolean; theme: string }> {
+    return this.request('/api/dashboard/theme', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  getFontPref(): Promise<DashboardFontResponse> {
+    return this.request<DashboardFontResponse>('/api/dashboard/font');
+  }
+
+  setFontPref(font: string): Promise<{ ok: boolean; font: string }> {
+    return this.request('/api/dashboard/font', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ font }),
+    });
   }
 
   private createSameOriginUrl(path: string): URL {
