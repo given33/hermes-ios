@@ -19,6 +19,10 @@ test('the web view owns the full screen safe area without native double padding'
   assert.match(appSource, /useSafeAreaInsets/);
   assert.doesNotMatch(appSource, /SafeAreaView/);
   assert.match(appSource, /top:\s*insets\.top\s*\+\s*8/);
+  assert.match(appSource, /automaticallyAdjustContentInsets=\{false\}/);
+  assert.match(appSource, /contentInset=\{\{ top: 0, right: 0, bottom: 0, left: 0 \}\}/);
+  assert.match(appSource, /dataset\.hermesKeyboard/);
+  assert.match(appSource, /padding-bottom:\s*6px\s*!important/);
 });
 
 test('release checks bypass stale GitHub API caches', () => {
@@ -26,8 +30,8 @@ test('release checks bypass stale GitHub API caches', () => {
   assert.match(appSource, /GITHUB_LATEST_RELEASE_API.*Date\.now\(\)/s);
 });
 
-test('the 1.0.2 release increments both app and native build versions', () => {
-  assert.equal(appConfig.expo.version, '1.0.2');
-  assert.equal(appConfig.expo.ios.buildNumber, '3');
-  assert.equal(packageConfig.version, '1.0.2');
+test('the 1.0.3 release increments both app and native build versions', () => {
+  assert.equal(appConfig.expo.version, '1.0.3');
+  assert.equal(appConfig.expo.ios.buildNumber, '4');
+  assert.equal(packageConfig.version, '1.0.3');
 });

@@ -38,6 +38,56 @@ const NATIVE_BRIDGE = `
     if (window.__HERMES_NATIVE_BRIDGE__) return true;
     window.__HERMES_NATIVE_BRIDGE__ = true;
     document.documentElement.dataset.hermesClient = 'ios';
+    const nativeStyle = document.createElement('style');
+    nativeStyle.id = 'hermes-ios-native-compat';
+    nativeStyle.textContent = [
+      'html[data-hermes-client="ios"] .hc-route-select{display:none!important}',
+      'html[data-hermes-client="ios"][data-hermes-keyboard="open"] .hc-single-composer{padding-bottom:6px!important}',
+      'html[data-hermes-client="ios"][data-hermes-keyboard="open"] .hc-chat-top:has(.hc-single-chat){padding-bottom:0!important}'
+    ].join('');
+    (document.head || document.documentElement).appendChild(nativeStyle);
+
+    let layoutHeight = Math.max(
+      window.innerHeight,
+      window.visualViewport ? window.visualViewport.height : 0
+    );
+    let settleTimers = [];
+    const syncViewport = () => {
+      const viewport = window.visualViewport;
+      layoutHeight = Math.max(
+        layoutHeight,
+        window.innerHeight,
+        viewport ? viewport.height : 0
+      );
+      const height = Math.max(1, Math.round(viewport ? viewport.height : window.innerHeight));
+      const offsetTop = Math.max(0, Math.round(viewport ? viewport.offsetTop : 0));
+      const occluded = Math.max(0, layoutHeight - height - offsetTop);
+      document.documentElement.style.setProperty('--hermes-viewport-height', height + 'px');
+      document.documentElement.style.setProperty('--hermes-viewport-offset-top', offsetTop + 'px');
+      document.documentElement.dataset.hermesKeyboard =
+        viewport && occluded >= 120 ? 'open' : 'closed';
+    };
+    const settleViewport = () => {
+      settleTimers.forEach(clearTimeout);
+      syncViewport();
+      settleTimers = [120, 360, 700].map((delay) => setTimeout(syncViewport, delay));
+    };
+    const resetViewport = () => {
+      layoutHeight = Math.max(
+        window.innerHeight,
+        window.visualViewport ? window.visualViewport.height : 0
+      );
+      settleViewport();
+    };
+    window.addEventListener('resize', settleViewport);
+    window.addEventListener('orientationchange', resetViewport);
+    window.addEventListener('pageshow', settleViewport);
+    window.visualViewport && window.visualViewport.addEventListener('resize', settleViewport);
+    window.visualViewport && window.visualViewport.addEventListener('scroll', syncViewport);
+    document.addEventListener('focusin', settleViewport);
+    document.addEventListener('focusout', settleViewport);
+    settleViewport();
+
     document.addEventListener('click', (event) => {
       const node = event.target;
       const anchor = node && node.closest ? node.closest('a[download]') : null;
@@ -178,7 +228,9 @@ function HermesApp() {
           allowsBackForwardNavigationGestures
           allowsInlineMediaPlayback
           allowsLinkPreview
+          automaticallyAdjustContentInsets={false}
           cacheEnabled
+          contentInset={{ top: 0, right: 0, bottom: 0, left: 0 }}
           contentInsetAdjustmentBehavior="never"
           decelerationRate="normal"
           incognito={false}
