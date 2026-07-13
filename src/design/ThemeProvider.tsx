@@ -14,16 +14,18 @@ import {
 import type { HermesApiClient } from '../api/HermesApiClient';
 import { FONT_CHOICES, type FontChoice } from './font-catalog';
 import {
+  executeLifecycleThemePlan,
+  startThemeReconciliation,
+  type ThemeReconciliationHandle,
+} from './theme-reconciliation';
+import {
   INITIAL_THEME_STATE,
-  executeThemeStateEffects,
   planFontMutation,
-  planLocalSeed,
-  planServerFontReconcile,
-  planServerThemesReconcile,
   planThemeMutation,
   resolveActiveTheme,
   selectActiveThemeTokens,
   themeStateReducer,
+  type ThemeStateEffectExecutor,
   type ThemeStatePlan,
 } from './theme-state';
 import { ThemePreferenceStore } from './theme-store';
@@ -61,24 +63,33 @@ export function ThemeProvider({
   const [state, dispatch] = useReducer(themeStateReducer, INITIAL_THEME_STATE);
   const [ready, setReady] = useState(false);
   const stateRef = useRef(state);
+  const reconciliationRef = useRef<ThemeReconciliationHandle | null>(null);
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
-  const executeEffects = useCallback(
-    (plan: ThemeStatePlan) =>
-      executeThemeStateEffects(plan.effects, {
-        writeTheme: (value) => preferenceStore.writeTheme(value),
-        writeFont: (value) => preferenceStore.writeFont(value),
-        async putTheme(value) {
-          await client.setTheme(value);
-        },
-        async putFont(value) {
-          await client.setFontPref(value);
-        },
-      }),
+  const effectExecutor = useMemo<ThemeStateEffectExecutor>(
+    () => ({
+      writeTheme: (value) => preferenceStore.writeTheme(value),
+      writeFont: (value) => preferenceStore.writeFont(value),
+      async putTheme(value) {
+        await client.setTheme(value);
+      },
+      async putFont(value) {
+        await client.setFontPref(value);
+      },
+    }),
     [client, preferenceStore],
+  );
+
+  const executeEffects = useCallback(
+    (plan: ThemeStatePlan) => {
+      const lifecycle = reconciliationRef.current;
+      if (!lifecycle) return Promise.resolve();
+      return executeLifecycleThemePlan(plan, effectExecutor, lifecycle);
+    },
+    [effectExecutor],
   );
 
   const commitPlan = useCallback((plan: ThemeStatePlan) => {
@@ -87,50 +98,27 @@ export function ThemeProvider({
   }, []);
 
   useEffect(() => {
-    let active = true;
-
-    const bootstrap = async () => {
-      let current = stateRef.current;
-      try {
-        const preferences = await preferenceStore.read();
-        if (!active) return;
-        const localPlan = planLocalSeed(current, preferences);
-        current = localPlan.state;
-        commitPlan(localPlan);
-        await executeEffects(localPlan);
-      } catch {
-        // Keep the built-in defaults and continue to the server authority.
-      }
-
-      if (!active) return;
-      setReady(true);
-      const [themesResult, fontResult] = await Promise.allSettled([
-        client.getThemes(),
-        client.getFontPref(),
-      ]);
-      if (!active) return;
-
-      if (themesResult.status === 'fulfilled') {
-        const themePlan = planServerThemesReconcile(current, themesResult.value);
-        current = themePlan.state;
-        commitPlan(themePlan);
-        await executeEffects(themePlan);
-      }
-      if (fontResult.status === 'fulfilled' && active) {
-        const fontPlan = planServerFontReconcile(current, fontResult.value);
-        commitPlan(fontPlan);
-        await executeEffects(fontPlan);
-      }
-    };
-
-    void bootstrap();
+    setReady(false);
+    const reconciliation = startThemeReconciliation({
+      store: preferenceStore,
+      client,
+      effects: effectExecutor,
+      getState: () => stateRef.current,
+      commit: commitPlan,
+      markReady: () => setReady(true),
+    });
+    reconciliationRef.current = reconciliation;
     return () => {
-      active = false;
+      reconciliation.cancel();
+      if (reconciliationRef.current === reconciliation) {
+        reconciliationRef.current = null;
+      }
     };
-  }, [client, commitPlan, executeEffects, preferenceStore]);
+  }, [client, commitPlan, effectExecutor, preferenceStore]);
 
   const setTheme = useCallback(
     async (name: string) => {
+      reconciliationRef.current?.markThemeMutation();
       const plan = planThemeMutation(stateRef.current, name);
       commitPlan(plan);
       await executeEffects(plan);
@@ -140,6 +128,7 @@ export function ThemeProvider({
 
   const setFont = useCallback(
     async (id: string) => {
+      reconciliationRef.current?.markFontMutation();
       const plan = planFontMutation(stateRef.current, id);
       commitPlan(plan);
       await executeEffects(plan);

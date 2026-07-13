@@ -283,8 +283,10 @@ export function selectActiveThemeTokens(state: ThemeState): NativeThemeTokens {
 export async function executeThemeStateEffects(
   effects: readonly ThemeStateEffect[],
   executor: ThemeStateEffectExecutor,
+  isActive: () => boolean = () => true,
 ): Promise<void> {
   for (const effect of effects) {
+    if (!isActive()) return;
     try {
       if (effect.type === 'storage-set') {
         if (effect.key === THEME_STORAGE_KEYS.theme) {
