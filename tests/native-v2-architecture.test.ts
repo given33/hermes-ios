@@ -4,6 +4,12 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+import {
+  assertNativeRootComposition,
+  assertNoWebRuntime,
+  readNativeRuntimeSources,
+} from './support/native-v2-architecture';
+
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const appSource = readFileSync(resolve(projectRoot, 'App.tsx'), 'utf8');
 const indexSource = readFileSync(resolve(projectRoot, 'index.ts'), 'utf8');
@@ -11,27 +17,75 @@ const appConfig = JSON.parse(readFileSync(resolve(projectRoot, 'app.json'), 'utf
 const packageConfig = JSON.parse(readFileSync(resolve(projectRoot, 'package.json'), 'utf8'));
 
 test('native v2 has no WebView runtime', () => {
-  assert.doesNotMatch(appSource, /react-native-webview|<WebView|injectedJavaScript/);
+  assertNoWebRuntime(readNativeRuntimeSources(projectRoot));
   assert.equal(packageConfig.dependencies['react-native-webview'], undefined);
+});
+
+test('native runtime guard rejects nested WebView, DOM, and iframe sources', () => {
+  const forbiddenSources = [
+    "import { WebView } from 'react-native-webview'; export const Panel = () => <WebView />;",
+    "export const bridge = () => document.querySelector('#root');",
+    "export const Frame = () => <iframe title='legacy' />;",
+  ];
+
+  for (const source of forbiddenSources) {
+    assert.throws(
+      () => assertNoWebRuntime([{ path: 'src/features/nested/LegacyPanel.tsx', source }]),
+      /forbidden web runtime/i,
+    );
+  }
 });
 
 test('native v2 registers every frozen WebUI destination', async () => {
   const { HERMES_NATIVE_ROUTES } = await import('../src/app/route-registry');
 
   assert.deepEqual(
-    HERMES_NATIVE_ROUTES.map((route) => route.id),
-    ['chat', 'sessions', 'models', 'logs', 'cron', 'skills', 'plugins', 'mcp',
-      'channels', 'webhooks', 'pairing', 'profiles', 'config', 'env', 'system',
-      'docs', 'kanban', 'achievements'],
+    HERMES_NATIVE_ROUTES,
+    [
+      { id: 'chat', label: '单聊', title: '单聊' },
+      { id: 'sessions', label: '会话', title: '会话' },
+      { id: 'models', label: '模型', title: '模型' },
+      { id: 'logs', label: '日志', title: '日志' },
+      { id: 'cron', label: '定时任务', title: '定时任务' },
+      { id: 'skills', label: '技能', title: '技能' },
+      { id: 'plugins', label: '插件管理', title: '插件管理' },
+      { id: 'mcp', label: 'MCP', title: 'MCP' },
+      { id: 'channels', label: '消息渠道', title: '消息渠道' },
+      { id: 'webhooks', label: '网络钩子', title: '网络钩子' },
+      { id: 'pairing', label: '设备配对', title: '设备配对' },
+      { id: 'profiles', label: '多Agent配置', title: '多Agent配置' },
+      { id: 'config', label: '配置', title: '配置' },
+      { id: 'env', label: '密钥', title: '密钥' },
+      { id: 'system', label: '系统监控', title: '系统监控' },
+      { id: 'docs', label: '文档', title: '文档' },
+      { id: 'kanban', label: '看板', title: '看板' },
+      { id: 'achievements', label: '成就', title: '成就' },
+    ],
   );
 });
 
 test('native v2 mounts the Hermes root inside native providers', () => {
   assert.match(indexSource, /import ['"]react-native-gesture-handler['"]/);
-  assert.match(appSource, /GestureHandlerRootView/);
-  assert.match(appSource, /SafeAreaProvider/);
-  assert.match(appSource, /HermesNativeApp/);
-  assert.doesNotMatch(appSource, /NetInfo|FileSystem|SecureStore|Sharing/);
+  assertNativeRootComposition(appSource);
+});
+
+test('native root guard rejects reordered layers and extra wrappers', () => {
+  assert.throws(
+    () => assertNativeRootComposition(`
+      export default function App() {
+        return <SafeAreaProvider><GestureHandlerRootView><HermesNativeApp /></GestureHandlerRootView></SafeAreaProvider>;
+      }
+    `),
+    /native root composition/i,
+  );
+  assert.throws(
+    () => assertNativeRootComposition(`
+      export default function App() {
+        return <GestureHandlerRootView><SafeAreaProvider><View><HermesNativeApp /></View></SafeAreaProvider></GestureHandlerRootView>;
+      }
+    `),
+    /native root composition/i,
+  );
 });
 
 test('native v2 uses the isolated beta identity and required Expo plugins', () => {
