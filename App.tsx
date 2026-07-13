@@ -42,7 +42,7 @@ const NATIVE_BRIDGE = `
     nativeStyle.id = 'hermes-ios-native-compat';
     nativeStyle.textContent = [
       'html[data-hermes-client="ios"] .hc-route-select{display:none!important}',
-      'html[data-hermes-client="ios"][data-hermes-keyboard="open"] .hc-single-composer{padding-bottom:6px!important}',
+      'html[data-hermes-client="ios"][data-hermes-keyboard="open"] .hc-single-composer{padding-bottom:3px!important;transform:translateY(var(--hermes-composer-keyboard-nudge,0px))}',
       'html[data-hermes-client="ios"][data-hermes-keyboard="open"] .hc-chat-top:has(.hc-single-chat){padding-bottom:0!important}'
     ].join('');
     (document.head || document.documentElement).appendChild(nativeStyle);
@@ -66,6 +66,25 @@ const NATIVE_BRIDGE = `
       document.documentElement.style.setProperty('--hermes-viewport-offset-top', offsetTop + 'px');
       document.documentElement.dataset.hermesKeyboard =
         viewport && occluded >= 120 ? 'open' : 'closed';
+      const composer = document.querySelector('.hc-single-composer');
+      const viewportBottom = offsetTop + height;
+      const keyboardOpen = document.documentElement.dataset.hermesKeyboard === 'open';
+      const currentKeyboardNudge = Number.parseFloat(
+        document.documentElement.style.getPropertyValue('--hermes-composer-keyboard-nudge')
+      ) || 0;
+      const keyboardGap = composer
+        ? viewportBottom - composer.getBoundingClientRect().bottom - 4
+        : 0;
+      const keyboardNudge = composer && keyboardOpen
+        ? Math.min(56, Math.max(0, keyboardGap + currentKeyboardNudge))
+        : 0;
+      document.documentElement.style.setProperty(
+        '--hermes-composer-keyboard-nudge',
+        keyboardNudge + 'px'
+      );
+      window.dispatchEvent(new CustomEvent('hermes:viewport-change', {
+        detail: { height, offsetTop, keyboardOpen, keyboardNudge }
+      }));
     };
     const settleViewport = () => {
       settleTimers.forEach(clearTimeout);
