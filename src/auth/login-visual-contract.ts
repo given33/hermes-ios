@@ -19,6 +19,11 @@ export type ProviderButtonInteractionEvent =
 
 export type ProviderButtonVisualState = 'base' | 'hover' | 'active';
 
+export interface ProviderButtonLayerTargets {
+  readonly hoverOpacity: 0 | 1;
+  readonly activeOpacity: 0 | 1;
+}
+
 export const INITIAL_PROVIDER_BUTTON_INTERACTION: ProviderButtonInteractionState =
   Object.freeze({ hovered: false, pressed: false });
 
@@ -47,6 +52,15 @@ export function providerButtonVisualState(
 ): ProviderButtonVisualState {
   if (state.pressed) return 'active';
   return state.hovered ? 'hover' : 'base';
+}
+
+export function providerButtonLayerTargets(
+  state: ProviderButtonInteractionState,
+): ProviderButtonLayerTargets {
+  return {
+    hoverOpacity: state.hovered ? 1 : 0,
+    activeOpacity: state.pressed ? 1 : 0,
+  };
 }
 
 export const LOGIN_VISUAL_CONTRACT = {

@@ -35,7 +35,7 @@ import { useAuth } from './AuthProvider';
 import {
   INITIAL_PROVIDER_BUTTON_INTERACTION,
   LOGIN_VISUAL_CONTRACT,
-  providerButtonVisualState,
+  providerButtonLayerTargets,
   reduceProviderButtonInteraction,
 } from './login-visual-contract';
 
@@ -51,11 +51,6 @@ const LOGIN_EASE_OUT = Easing.bezier(...LOGIN_ENTRANCE.easing);
 const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
   ...PROVIDER_BUTTON.filterTransition.easing,
 );
-const PROVIDER_BUTTON_ANIMATION_TARGET = {
-  base: 0,
-  hover: 1,
-  active: 2,
-} as const;
 
 export function LoginScreen() {
   const { state, provision, unlock, logout } = useAuth();
@@ -284,24 +279,36 @@ function ProviderButton({
   label: string;
   onPress(): void;
 }) {
-  const filterProgress = useRef(new Animated.Value(0)).current;
+  const hoverOpacity = useRef(new Animated.Value(0)).current;
+  const activeOpacity = useRef(new Animated.Value(0)).current;
   const [focusVisible, setFocusVisible] = useState(false);
   const [interaction, dispatchInteraction] = useReducer(
     reduceProviderButtonInteraction,
     INITIAL_PROVIDER_BUTTON_INTERACTION,
   );
-  const visualState = providerButtonVisualState(interaction);
+  const layerTargets = providerButtonLayerTargets(interaction);
 
   useEffect(() => {
-    const animation = Animated.timing(filterProgress, {
+    const animation = Animated.timing(hoverOpacity, {
       duration: PROVIDER_BUTTON.filterTransition.durationMs,
       easing: PROVIDER_BUTTON_EASE_OUT,
-      toValue: PROVIDER_BUTTON_ANIMATION_TARGET[visualState],
-      useNativeDriver: false,
+      toValue: layerTargets.hoverOpacity,
+      useNativeDriver: true,
     });
     animation.start();
     return () => animation.stop();
-  }, [filterProgress, visualState]);
+  }, [hoverOpacity, layerTargets.hoverOpacity]);
+
+  useEffect(() => {
+    const animation = Animated.timing(activeOpacity, {
+      duration: PROVIDER_BUTTON.filterTransition.durationMs,
+      easing: PROVIDER_BUTTON_EASE_OUT,
+      toValue: layerTargets.activeOpacity,
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [activeOpacity, layerTargets.activeOpacity]);
 
   useEffect(() => {
     if (!disabled) return;
@@ -309,57 +316,9 @@ function ProviderButton({
     setFocusVisible(false);
   }, [disabled]);
 
-  const backgroundColor = filterProgress.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: [
-      PROVIDER_BUTTON.base.backgroundColor,
-      PROVIDER_BUTTON.hover.backgroundColor,
-      PROVIDER_BUTTON.active.backgroundColor,
-    ],
-  });
-  const textColor = filterProgress.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: [
-      PROVIDER_BUTTON.base.textColor,
-      PROVIDER_BUTTON.hover.textColor,
-      PROVIDER_BUTTON.active.textColor,
-    ],
-  });
-  const bevelTopColor = filterProgress.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: [
-      PROVIDER_BUTTON.base.bevel.top,
-      PROVIDER_BUTTON.hover.bevel.top,
-      PROVIDER_BUTTON.active.bevel.top,
-    ],
-  });
-  const bevelRightColor = filterProgress.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: [
-      PROVIDER_BUTTON.base.bevel.right,
-      PROVIDER_BUTTON.hover.bevel.right,
-      PROVIDER_BUTTON.active.bevel.right,
-    ],
-  });
-  const bevelBottomColor = filterProgress.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: [
-      PROVIDER_BUTTON.base.bevel.bottom,
-      PROVIDER_BUTTON.hover.bevel.bottom,
-      PROVIDER_BUTTON.active.bevel.bottom,
-    ],
-  });
-  const bevelLeftColor = filterProgress.interpolate({
-    inputRange: [0, 1, 2],
-    outputRange: [
-      PROVIDER_BUTTON.base.bevel.left,
-      PROVIDER_BUTTON.hover.bevel.left,
-      PROVIDER_BUTTON.active.bevel.left,
-    ],
-  });
-
   return (
     <Pressable
+      accessibilityLabel={label}
       accessibilityRole="button"
       accessibilityState={{ busy, disabled }}
       disabled={disabled}
@@ -373,26 +332,107 @@ function ProviderButton({
       onPressOut={() => dispatchInteraction('press-out')}
       style={styles.providerButtonFrame}
     >
-      <Animated.View style={[styles.primaryButton, { backgroundColor }]}>
-        <Animated.View
+      <View
+        accessibilityElementsHidden
+        accessible={false}
+        importantForAccessibility="no-hide-descendants"
+        style={[
+          styles.primaryButton,
+          { backgroundColor: PROVIDER_BUTTON.base.backgroundColor },
+        ]}
+      >
+        <View
           pointerEvents="none"
           style={[
             styles.buttonBevel,
             {
-              borderTopColor: bevelTopColor,
-              borderRightColor: bevelRightColor,
-              borderBottomColor: bevelBottomColor,
-              borderLeftColor: bevelLeftColor,
+              borderTopColor: PROVIDER_BUTTON.base.bevel.top,
+              borderRightColor: PROVIDER_BUTTON.base.bevel.right,
+              borderBottomColor: PROVIDER_BUTTON.base.bevel.bottom,
+              borderLeftColor: PROVIDER_BUTTON.base.bevel.left,
             },
           ]}
         />
         {busy ? (
           <ActivityIndicator color={PROVIDER_BUTTON.base.textColor} size="small" />
         ) : null}
-        <Animated.Text style={[styles.primaryButtonText, { color: textColor }]}>
+        <Text
+          style={[
+            styles.primaryButtonText,
+            { color: PROVIDER_BUTTON.base.textColor },
+          ]}
+        >
           {label}
-        </Animated.Text>
-      </Animated.View>
+        </Text>
+        <Animated.View
+          accessibilityElementsHidden
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          pointerEvents="none"
+          style={[
+            styles.providerButtonVisualLayer,
+            {
+              backgroundColor: PROVIDER_BUTTON.hover.backgroundColor,
+              opacity: hoverOpacity,
+            },
+          ]}
+        >
+          <View
+            pointerEvents="none"
+            style={[
+              styles.buttonBevel,
+              {
+                borderTopColor: PROVIDER_BUTTON.hover.bevel.top,
+                borderRightColor: PROVIDER_BUTTON.hover.bevel.right,
+                borderBottomColor: PROVIDER_BUTTON.hover.bevel.bottom,
+                borderLeftColor: PROVIDER_BUTTON.hover.bevel.left,
+              },
+            ]}
+          />
+          <Text
+            style={[
+              styles.primaryButtonText,
+              { color: PROVIDER_BUTTON.hover.textColor },
+            ]}
+          >
+            {label}
+          </Text>
+        </Animated.View>
+        <Animated.View
+          accessibilityElementsHidden
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          pointerEvents="none"
+          style={[
+            styles.providerButtonVisualLayer,
+            {
+              backgroundColor: PROVIDER_BUTTON.active.backgroundColor,
+              opacity: activeOpacity,
+            },
+          ]}
+        >
+          <View
+            pointerEvents="none"
+            style={[
+              styles.buttonBevel,
+              {
+                borderTopColor: PROVIDER_BUTTON.active.bevel.top,
+                borderRightColor: PROVIDER_BUTTON.active.bevel.right,
+                borderBottomColor: PROVIDER_BUTTON.active.bevel.bottom,
+                borderLeftColor: PROVIDER_BUTTON.active.bevel.left,
+              },
+            ]}
+          />
+          <Text
+            style={[
+              styles.primaryButtonText,
+              { color: PROVIDER_BUTTON.active.textColor },
+            ]}
+          >
+            {label}
+          </Text>
+        </Animated.View>
+      </View>
       {focusVisible ? (
         <View pointerEvents="none" style={styles.providerButtonFocusRing} />
       ) : null}
@@ -685,6 +725,20 @@ const styles = StyleSheet.create({
     letterSpacing: 2.496,
     lineHeight: 18.72,
     textAlign: 'center',
+  },
+  providerButtonVisualLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+    paddingHorizontal: 16,
+    paddingVertical: 15.2,
+    borderRadius: 0,
   },
   buttonBevel: {
     position: 'absolute',
