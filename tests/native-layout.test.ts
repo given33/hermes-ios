@@ -26,10 +26,13 @@ test('the web view owns the full screen safe area without native double padding'
   assert.match(appSource, /--hermes-composer-keyboard-nudge/);
   assert.match(
     appSource,
-    /viewportBottom\s*-\s*composer\.getBoundingClientRect\(\)\.bottom\s*-\s*4/,
+    /untransformedBottom[\s\S]*composerRect\.bottom\s*-\s*currentKeyboardNudge/,
   );
-  assert.match(appSource, /Math\.min\(56,\s*Math\.max\(0,/);
-  assert.match(appSource, /keyboardGap\s*\+\s*currentKeyboardNudge/);
+  assert.match(appSource, /Math\.min\(72,\s*Math\.max\(0,/);
+  assert.match(appSource, /new MutationObserver\(bindComposerObserver\)/);
+  assert.match(appSource, /new ResizeObserver\(settleViewport\)/);
+  assert.match(appSource, /window\.__HERMES_SYNC_VIEWPORT__\s*=\s*settleViewport/);
+  assert.match(appSource, /type:\s*'viewport-metrics'/);
   assert.match(appSource, /new CustomEvent\('hermes:viewport-change'/);
 });
 
@@ -38,8 +41,8 @@ test('release checks bypass stale GitHub API caches', () => {
   assert.match(appSource, /GITHUB_LATEST_RELEASE_API.*Date\.now\(\)/s);
 });
 
-test('the 1.0.4 release increments both app and native build versions', () => {
-  assert.equal(appConfig.expo.version, '1.0.4');
-  assert.equal(appConfig.expo.ios.buildNumber, '5');
-  assert.equal(packageConfig.version, '1.0.4');
+test('the 1.0.5 release increments both app and native build versions', () => {
+  assert.equal(appConfig.expo.version, '1.0.5');
+  assert.equal(appConfig.expo.ios.buildNumber, '6');
+  assert.equal(packageConfig.version, '1.0.5');
 });

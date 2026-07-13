@@ -52,6 +52,9 @@ const NATIVE_BRIDGE = `
       window.visualViewport ? window.visualViewport.height : 0
     );
     let settleTimers = [];
+    let composerObserver = null;
+    let observedComposer = null;
+    let lastMetricsKey = '';
     const syncViewport = () => {
       const viewport = window.visualViewport;
       layoutHeight = Math.max(
@@ -72,25 +75,60 @@ const NATIVE_BRIDGE = `
       const currentKeyboardNudge = Number.parseFloat(
         document.documentElement.style.getPropertyValue('--hermes-composer-keyboard-nudge')
       ) || 0;
-      const keyboardGap = composer
-        ? viewportBottom - composer.getBoundingClientRect().bottom - 4
+      const composerRect = composer ? composer.getBoundingClientRect() : null;
+      const untransformedBottom = composerRect
+        ? composerRect.bottom - currentKeyboardNudge
+        : viewportBottom;
+      const keyboardGap = composerRect
+        ? viewportBottom - untransformedBottom - 4
         : 0;
       const keyboardNudge = composer && keyboardOpen
-        ? Math.min(56, Math.max(0, keyboardGap + currentKeyboardNudge))
+        ? Math.min(72, Math.max(0, keyboardGap))
         : 0;
       document.documentElement.style.setProperty(
         '--hermes-composer-keyboard-nudge',
         keyboardNudge + 'px'
       );
-      window.dispatchEvent(new CustomEvent('hermes:viewport-change', {
-        detail: { height, offsetTop, keyboardOpen, keyboardNudge }
-      }));
+      const metrics = {
+        height,
+        offsetTop,
+        layoutHeight,
+        occluded,
+        viewportBottom,
+        composerBottom: composerRect ? Math.round(composerRect.bottom) : null,
+        keyboardGap: Math.round(keyboardGap),
+        keyboardOpen,
+        keyboardNudge
+      };
+      window.dispatchEvent(new CustomEvent('hermes:viewport-change', { detail: metrics }));
+      const metricsKey = JSON.stringify(metrics);
+      if (metricsKey !== lastMetricsKey) {
+        lastMetricsKey = metricsKey;
+        window.ReactNativeWebView.postMessage(JSON.stringify({
+          type: 'viewport-metrics',
+          metrics
+        }));
+      }
     };
     const settleViewport = () => {
       settleTimers.forEach(clearTimeout);
       syncViewport();
-      settleTimers = [120, 360, 700].map((delay) => setTimeout(syncViewport, delay));
+      settleTimers = [50, 150, 300, 600, 1000].map((delay) => setTimeout(syncViewport, delay));
     };
+    const bindComposerObserver = () => {
+      const composer = document.querySelector('.hc-single-composer');
+      if (composer === observedComposer) return;
+      composerObserver && composerObserver.disconnect();
+      observedComposer = composer;
+      composerObserver = composer && window.ResizeObserver
+        ? new ResizeObserver(settleViewport)
+        : null;
+      composerObserver && composerObserver.observe(composer);
+      settleViewport();
+    };
+    const mutationObserver = new MutationObserver(bindComposerObserver);
+    mutationObserver.observe(document.documentElement, { childList: true, subtree: true });
+    window.__HERMES_SYNC_VIEWPORT__ = settleViewport;
     const resetViewport = () => {
       layoutHeight = Math.max(
         window.innerHeight,
@@ -105,6 +143,7 @@ const NATIVE_BRIDGE = `
     window.visualViewport && window.visualViewport.addEventListener('scroll', syncViewport);
     document.addEventListener('focusin', settleViewport);
     document.addEventListener('focusout', settleViewport);
+    bindComposerObserver();
     settleViewport();
 
     document.addEventListener('click', (event) => {
@@ -132,6 +171,7 @@ function HermesApp() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef<WebView>(null);
   const wasOfflineRef = useRef(false);
+  const lastViewportMetricsRef = useRef<Record<string, unknown> | null>(null);
   const [sourceUrl, setSourceUrl] = useState(buildHermesUrl());
   const [webViewKey, setWebViewKey] = useState(0);
   const [isOnline, setIsOnline] = useState(true);
@@ -166,7 +206,9 @@ function HermesApp() {
       webViewRef.current?.injectJavaScript(`
         window.dispatchEvent(new Event('online'));
         window.dispatchEvent(new Event('focus'));
+        window.dispatchEvent(new CustomEvent('hermes:app-resume'));
         document.dispatchEvent(new Event('visibilitychange'));
+        window.__HERMES_SYNC_VIEWPORT__ && window.__HERMES_SYNC_VIEWPORT__();
         true;
       `);
       if (loadFailed) {
@@ -275,9 +317,12 @@ function HermesApp() {
                 type?: string;
                 url?: string;
                 filename?: string;
+                metrics?: Record<string, unknown>;
               };
               if (message.type === 'download' && message.url) {
                 void downloadAttachment(message.url, message.filename);
+              } else if (message.type === 'viewport-metrics' && message.metrics) {
+                lastViewportMetricsRef.current = message.metrics;
               }
             } catch {
               // Ignore messages that do not belong to the native bridge.
