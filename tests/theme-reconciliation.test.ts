@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  getThemeEffectPlanQueue,
   startThemeReconciliation,
   ThemeEffectPlanQueue,
   type ThemeReconciliationHandle,
@@ -55,6 +56,9 @@ function startHarness(options: {
   font: Deferred<DashboardFontResponse>;
   effects?: ThemeStateEffectExecutor;
   queue?: ThemeEffectPlanQueue;
+  store?: {
+    read(): Promise<{ theme: string | null; font: string | null }>;
+  };
 }): {
   handle: ThemeReconciliationHandle;
   getState(): ThemeState;
@@ -66,7 +70,7 @@ function startHarness(options: {
   let readyCount = 0;
   const calls: string[] = [];
   const handle = startThemeReconciliation({
-    store: {
+    store: options.store ?? {
       async read() {
         calls.push('local-read');
         return { theme: 'default', font: 'theme' };
@@ -441,4 +445,92 @@ test('rapid user mutations persist and PUT only the newest value last', async ()
   assert.equal(serverFont, 'space-mono');
   assert.equal(effectCalls.includes('server-theme:mono'), false);
   assert.equal(effectCalls.includes('server-font:inter'), false);
+});
+
+test('a hung old-client PUT cannot block a replacement lifecycle sharing the store queue', async () => {
+  const oldThemes = deferred<ThemeListResponse>();
+  const oldFont = deferred<DashboardFontResponse>();
+  const oldPutResponse = deferred<void>();
+  const effectCalls: string[] = [];
+  let localTheme = 'default';
+  let serverTheme = 'default';
+  const sharedStore = {
+    async read() {
+      return { theme: localTheme, font: 'theme' };
+    },
+  };
+  const sharedQueue = getThemeEffectPlanQueue(sharedStore);
+  assert.equal(getThemeEffectPlanQueue(sharedStore), sharedQueue);
+  const oldLifecycle = startHarness({
+    themes: oldThemes,
+    font: oldFont,
+    queue: sharedQueue,
+    store: sharedStore,
+    effects: {
+      async writeTheme(value) {
+        localTheme = value;
+        effectCalls.push(`old-local:${value}`);
+      },
+      async writeFont() {},
+      async putTheme(value) {
+        serverTheme = value;
+        effectCalls.push(`old-server:start:${value}`);
+        await oldPutResponse.promise;
+        effectCalls.push(`old-server:done:${value}`);
+      },
+      async putFont() {},
+    },
+  });
+  await waitFor(() => oldLifecycle.getReadyCount() === 1);
+
+  oldLifecycle.handle.markThemeMutation();
+  const oldMutation = planThemeMutation(oldLifecycle.getState(), 'mono');
+  oldLifecycle.setState(oldMutation.state);
+  const oldMutationRun = oldLifecycle.handle.runThemePlan(oldMutation);
+  await waitFor(() => effectCalls.includes('old-server:start:mono'));
+  oldLifecycle.handle.cancel();
+
+  const newThemes = deferred<ThemeListResponse>();
+  const newFont = deferred<DashboardFontResponse>();
+  const newLifecycle = startHarness({
+    themes: newThemes,
+    font: newFont,
+    queue: sharedQueue,
+    store: sharedStore,
+    effects: {
+      async writeTheme(value) {
+        localTheme = value;
+        effectCalls.push(`new-local:${value}`);
+      },
+      async writeFont() {},
+      async putTheme(value) {
+        serverTheme = value;
+        effectCalls.push(`new-server:${value}`);
+      },
+      async putFont() {},
+    },
+  });
+
+  await waitFor(() => newLifecycle.getReadyCount() === 1);
+  newLifecycle.handle.markThemeMutation();
+  const newMutation = planThemeMutation(newLifecycle.getState(), 'nous-blue');
+  newLifecycle.setState(newMutation.state);
+  const newMutationRun = newLifecycle.handle.runThemePlan(newMutation);
+  await newMutationRun;
+
+  assert.equal(localTheme, 'nous-blue');
+  assert.equal(serverTheme, 'nous-blue');
+  assert.equal(effectCalls.includes('old-server:done:mono'), false);
+  assert.ok(effectCalls.includes('new-local:nous-blue'));
+  assert.ok(effectCalls.includes('new-server:nous-blue'));
+
+  oldPutResponse.resolve(undefined);
+  oldThemes.resolve({ active: 'default', themes: [] });
+  oldFont.resolve({ font: 'theme' });
+  newThemes.resolve({ active: 'default', themes: [] });
+  newFont.resolve({ font: 'theme' });
+  await oldMutationRun;
+  await oldLifecycle.handle.completed;
+  await newLifecycle.handle.completed;
+  assert.equal(serverTheme, 'nous-blue');
 });

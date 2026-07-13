@@ -4,6 +4,7 @@ import {
   planServerFontReconcile,
   planServerThemesReconcile,
   type ThemeState,
+  type ThemeStateEffect,
   type ThemeStateEffectExecutor,
   type ThemeStatePlan,
 } from './theme-state';
@@ -19,13 +20,17 @@ export class ThemeEffectPlanQueue {
   private themeTail: Promise<void> = Promise.resolve();
   private fontTail: Promise<void> = Promise.resolve();
 
-  run(
+  runStorage(
     field: ThemeEffectField,
     plan: ThemeStatePlan,
     effects: ThemeStateEffectExecutor,
     guard: () => boolean,
   ): Promise<void> {
-    const task = () => executeThemeStateEffects(plan.effects, effects, guard);
+    const storageEffects = plan.effects.filter(
+      (effect) => effect.type === 'storage-set',
+    );
+    if (storageEffects.length === 0) return Promise.resolve();
+    const task = () => executeThemeStateEffects(storageEffects, effects, guard);
     const previous = field === 'theme' ? this.themeTail : this.fontTail;
     const queued = previous.then(task, task);
     const settled = queued.catch(() => {});
@@ -79,22 +84,48 @@ export function startThemeReconciliation(
   let active = true;
   let themeMutationEpoch = 0;
   let fontMutationEpoch = 0;
+  let themeNetworkTail: Promise<void> = Promise.resolve();
+  let fontNetworkTail: Promise<void> = Promise.resolve();
   const isActive = () => active;
 
-  const runThemePlanAt = (plan: ThemeStatePlan, epoch: number) =>
-    options.queue.run(
+  const runNetwork = (
+    field: ThemeEffectField,
+    effects: ThemeStateEffect[],
+    guard: () => boolean,
+  ): Promise<void> => {
+    if (effects.length === 0) return Promise.resolve();
+    const task = () => executeThemeStateEffects(effects, options.effects, guard);
+    const previous = field === 'theme' ? themeNetworkTail : fontNetworkTail;
+    const queued = previous.then(task, task);
+    const settled = queued.catch(() => {});
+    if (field === 'theme') {
+      themeNetworkTail = settled;
+    } else {
+      fontNetworkTail = settled;
+    }
+    return queued;
+  };
+
+  const runThemePlanAt = async (plan: ThemeStatePlan, epoch: number) => {
+    const guard = () => active && themeMutationEpoch === epoch;
+    await options.queue.runStorage('theme', plan, options.effects, guard);
+    if (!guard()) return;
+    await runNetwork(
       'theme',
-      plan,
-      options.effects,
-      () => active && themeMutationEpoch === epoch,
+      plan.effects.filter((effect) => effect.type === 'api-put'),
+      guard,
     );
-  const runFontPlanAt = (plan: ThemeStatePlan, epoch: number) =>
-    options.queue.run(
+  };
+  const runFontPlanAt = async (plan: ThemeStatePlan, epoch: number) => {
+    const guard = () => active && fontMutationEpoch === epoch;
+    await options.queue.runStorage('font', plan, options.effects, guard);
+    if (!guard()) return;
+    await runNetwork(
       'font',
-      plan,
-      options.effects,
-      () => active && fontMutationEpoch === epoch,
+      plan.effects.filter((effect) => effect.type === 'api-put'),
+      guard,
     );
+  };
 
   const applyThemePlan = async (plan: ThemeStatePlan, epoch: number) => {
     if (!active || themeMutationEpoch !== epoch) return;
