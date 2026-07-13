@@ -5,6 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  assertGestureHandlerImportFirst,
   assertNativeRootComposition,
   assertNoWebRuntime,
   readNativeRuntimeSources,
@@ -21,9 +22,10 @@ test('native v2 has no WebView runtime', () => {
   assert.equal(packageConfig.dependencies['react-native-webview'], undefined);
 });
 
-test('native runtime guard rejects nested WebView, DOM, and iframe sources', () => {
+test('native runtime guard rejects nested WebView, WKWebView, DOM, and iframe sources', () => {
   const forbiddenSources = [
     "import { WebView } from 'react-native-webview'; export const Panel = () => <WebView />;",
+    'export const nativeView: WKWebView | null = null;',
     "export const bridge = () => document.querySelector('#root');",
     "export const Frame = () => <iframe title='legacy' />;",
   ];
@@ -64,8 +66,23 @@ test('native v2 registers every frozen WebUI destination', async () => {
   );
 });
 
+test('native v2 loads gesture handler before any other entry statement', () => {
+  assertGestureHandlerImportFirst(indexSource);
+});
+
+test('gesture handler entry guard rejects reordered imports', () => {
+  assert.throws(
+    () => assertGestureHandlerImportFirst(`
+      import { registerRootComponent } from 'expo';
+      import 'react-native-gesture-handler';
+      import App from './App';
+      registerRootComponent(App);
+    `),
+    /gesture handler import order/i,
+  );
+});
+
 test('native v2 mounts the Hermes root inside native providers', () => {
-  assert.match(indexSource, /import ['"]react-native-gesture-handler['"]/);
   assertNativeRootComposition(appSource);
 });
 

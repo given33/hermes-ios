@@ -11,6 +11,7 @@ const RUNTIME_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx']);
 const FORBIDDEN_WEB_RUNTIME = [
   { name: 'react-native-webview package', pattern: /react-native-webview/i },
   { name: 'WebView component', pattern: /<\s*WebView\b|\bReactNativeWebView\b/i },
+  { name: 'WKWebView runtime', pattern: /\bWKWebView\b/ },
   { name: 'injected JavaScript bridge', pattern: /\binjectedJavaScript\b/i },
   { name: 'browser DOM global', pattern: /\b(?:document|window)\s*(?:\.|\[)/i },
   {
@@ -38,6 +39,29 @@ export function assertNoWebRuntime(sources: readonly NativeRuntimeSource[]): voi
         throw new Error(`Forbidden web runtime (${marker.name}) in ${path}`);
       }
     }
+  }
+}
+
+export function assertGestureHandlerImportFirst(source: string): void {
+  const sourceFile = ts.createSourceFile(
+    'index.ts',
+    source,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const firstStatement = sourceFile.statements[0];
+
+  if (
+    !firstStatement ||
+    !ts.isImportDeclaration(firstStatement) ||
+    firstStatement.importClause !== undefined ||
+    !ts.isStringLiteral(firstStatement.moduleSpecifier) ||
+    firstStatement.moduleSpecifier.text !== 'react-native-gesture-handler'
+  ) {
+    throw new Error(
+      "Gesture handler import order violation: index.ts must begin with import 'react-native-gesture-handler'",
+    );
   }
 }
 
