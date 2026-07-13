@@ -28,6 +28,20 @@
     "plugins": [
       "expo-dev-client",
       [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/Collapse-Bold.otf",
+            "./assets/fonts/Collapse-Regular.otf",
+            "./assets/fonts/Mondwest-Regular.ttf",
+            "./assets/fonts/RulesCompressed-Medium.ttf",
+            "./assets/fonts/RulesCompressed-Regular.ttf",
+            "./assets/fonts/RulesExpanded-Bold.ttf",
+            "./assets/fonts/RulesExpanded-Regular.ttf"
+          ]
+        }
+      ],
+      [
         "expo-secure-store",
         {
           "configureAndroidBackup": true,

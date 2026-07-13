@@ -1,0 +1,121 @@
+{
+  "sourcePackage": "@nous-research/ui@0.18.2",
+  "sourcePackageLicense": "MIT (code/package metadata; fonts retain embedded EULAs)",
+  "sourceCommit": "e2a9b5369",
+  "conversion": "WOFF2 decompression to sfnt; glyph outlines are unchanged",
+  "command": "py -3.14 scripts/convert-webui-fonts.py --source <hermes-agent>/web/public/fonts",
+  "fontToolsVersion": "4.63.0",
+  "brotliVersion": "1.2.0",
+  "fonts": [
+    {
+      "sourceFile": "hermes-agent/web/public/fonts/Collapse-Bold.woff2",
+      "sourceSha256": "cb1bc6803168cffb3ef7b8113f95f82480a6d0f46d6e37edc854259377c6c00b",
+      "outputFile": "Collapse-Bold.otf",
+      "outputSha256": "4e2612bccf0d76621235c75806dcb5dbc5a397cc58fd9b5e8d4b1c3745fa3912",
+      "sfnt": "OTTO",
+      "outlineTable": "CFF",
+      "glyphCount": 735,
+      "nameMetadata": {
+        "copyright": "Copyright © 2023 by Keussel, Blaze Type. All rights reserved.",
+        "family": "Collapse",
+        "subfamily": "Bold",
+        "postscriptName": "Collapse-Bold",
+        "license": "Check blazetype.eu for licencing details.",
+        "licenseUrl": "https://blazetype.eu/eula"
+      }
+    },
+    {
+      "sourceFile": "hermes-agent/web/public/fonts/Collapse-Regular.woff2",
+      "sourceSha256": "ce8c481f56da3a46074ab696c16481bea49ea83e75e7eb7cb42fd2114593f33a",
+      "outputFile": "Collapse-Regular.otf",
+      "outputSha256": "6a4851b1ed5e40118acf0009499e6422a41ccbda011dc5bb2a2bacf7b648cdb4",
+      "sfnt": "OTTO",
+      "outlineTable": "CFF",
+      "glyphCount": 735,
+      "nameMetadata": {
+        "copyright": "Copyright © 2023 by Keussel, Blaze Type. All rights reserved.",
+        "family": "Collapse",
+        "subfamily": "Regular",
+        "postscriptName": "Collapse-Regular",
+        "license": "Check blazetype.eu for licencing details.",
+        "licenseUrl": "https://blazetype.eu/eula"
+      }
+    },
+    {
+      "sourceFile": "hermes-agent/web/public/fonts/Mondwest-Regular.woff2",
+      "sourceSha256": "9cf6e6e1cba70f7e991a92ce4225785725b6cc9a48cc77cbfaabeba26c18f072",
+      "outputFile": "Mondwest-Regular.ttf",
+      "outputSha256": "ae2992db2c9b209ca3bb62cf6e1bd7815a56cdc6fca7c5ff1ec7f6bd95839fd6",
+      "sfnt": "TrueType",
+      "outlineTable": "glyf",
+      "glyphCount": 602,
+      "nameMetadata": {
+        "copyright": "Copyright © 2020 by Pangram Pangram® Foundry. All rights reserved.",
+        "family": "Mondwest",
+        "subfamily": "Regular",
+        "postscriptName": "Mondwest-Regular",
+        "license": "Pangram Pangram® Foundry\nAll Rights Reserved"
+      }
+    },
+    {
+      "sourceFile": "hermes-agent/web/public/fonts/RulesCompressed-Medium.woff2",
+      "sourceSha256": "d865cf7154121265d3d65c0931ec27dc289aa438cd62ffad2f38e05ae79956a3",
+      "outputFile": "RulesCompressed-Medium.ttf",
+      "outputSha256": "1b805e13c9e09da2c6c98c2d01f76a1da682001ecf91aa865a8d8fbcd0ee357f",
+      "sfnt": "TrueType",
+      "outlineTable": "glyf",
+      "glyphCount": 919,
+      "nameMetadata": {
+        "copyright": "Copyright 2022, Blaze Type, Matthieu Salvaggio, Léon Hugues",
+        "family": "Rules Compressed Medium",
+        "subfamily": "Regular",
+        "postscriptName": "RulesCompressed-Medium"
+      }
+    },
+    {
+      "sourceFile": "hermes-agent/web/public/fonts/RulesCompressed-Regular.woff2",
+      "sourceSha256": "3bcbc330183f49cd49c72d4cdb3d1fbc675cf4e3000b06fd1c606ffc31b73e5f",
+      "outputFile": "RulesCompressed-Regular.ttf",
+      "outputSha256": "1c47f0c4a927e2d7df881175744b4a9b620f4af8bb973a967b86273d3f23ddd7",
+      "sfnt": "TrueType",
+      "outlineTable": "glyf",
+      "glyphCount": 919,
+      "nameMetadata": {
+        "copyright": "Copyright 2022, Blaze Type, Matthieu Salvaggio, Léon Hugues",
+        "family": "Rules Compressed",
+        "subfamily": "Regular",
+        "postscriptName": "RulesCompressed-Regular"
+      }
+    },
+    {
+      "sourceFile": "hermes-agent/web/public/fonts/RulesExpanded-Bold.woff2",
+      "sourceSha256": "f2295406de2272086d5395af32b50ac51b15d75294c25a04094c8b1f85757931",
+      "outputFile": "RulesExpanded-Bold.ttf",
+      "outputSha256": "c5b21c3b43c6605672bd272de883a21de4cca4297fc1e6d9331d7441938aa018",
+      "sfnt": "TrueType",
+      "outlineTable": "glyf",
+      "glyphCount": 919,
+      "nameMetadata": {
+        "copyright": "Copyright 2022, Blaze Type, Matthieu Salvaggio, Léon Hugues",
+        "family": "Rules Expanded",
+        "subfamily": "Bold",
+        "postscriptName": "RulesExpanded-Bold"
+      }
+    },
+    {
+      "sourceFile": "hermes-agent/web/public/fonts/RulesExpanded-Regular.woff2",
+      "sourceSha256": "e8062ac4889b0f05de94035571e86991b6efd03539775cfe0790e37da75434db",
+      "outputFile": "RulesExpanded-Regular.ttf",
+      "outputSha256": "eb3dca49db280af72144d55f3f4d0f8cf3cc7a97a8b91baba49b6e9dba417325",
+      "sfnt": "TrueType",
+      "outlineTable": "glyf",
+      "glyphCount": 919,
+      "nameMetadata": {
+        "copyright": "Copyright 2022, Blaze Type, Matthieu Salvaggio, Léon Hugues",
+        "family": "Rules Expanded",
+        "subfamily": "Regular",
+        "postscriptName": "RulesExpanded-Regular"
+      }
+    }
+  ]
+}
