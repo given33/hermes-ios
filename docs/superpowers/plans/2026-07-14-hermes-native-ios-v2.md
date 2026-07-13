@@ -14,10 +14,10 @@
 - Do not render any app screen through `react-native-webview`, `WKWebView`, an iframe, remotely supplied HTML, or a browser DOM.
 - The first production native release is `v2.0.0`; beta builds use `com.given33.hermesagent.nativebeta`, while the final release returns to `com.given33.hermesagent`.
 - Support iOS/iPadOS 16 and later, iPhone and iPad, portrait and landscape, with iPhone drawer navigation and iPad persistent sidebar navigation.
-- Preserve the current live navigation set: Chat, Sessions, Models, Logs, Cron, Skills, Plugins, MCP, Channels, Webhooks, Pairing, Profiles, Config, Keys, System, Docs, Kanban, and Achievements.
+- Preserve customized `web/src/App.tsx` route composition exactly: built-in Chat/Sessions/Analytics/Models/Logs/Cron/Skills/Plugins/MCP/Channels/Webhooks/Pairing/Profiles/Config/Keys/System/Docs sidebar entries; reachable but non-sidebar Files and profile-builder routes; Analytics visibility gated by `dashboard.show_token_analytics`; and manifest-driven plugin insertion, hidden routes, and overrides (including Kanban/Achievements at the frozen baseline).
 - Preserve current custom behavior: unified conversations, automatic simple/work routing, DBB3-hosted execution, dispatcher/worker/reviewer/reporter role messages, structured tool activity, attachments, model/profile selection, cancellation, recovery, and GitHub IPA update checks.
 - All submitted turns remain server-owned and continue when the app backgrounds, locks, exits, loses network, or is killed; reopening reconstructs the complete server timeline.
-- Persist only `baseUrl` and `apiKey` on the device, both in iOS Keychain/Secure Store. Conversation content, logs, configuration, attachments, and pending work remain server-authoritative. Offline unsent text may live only in memory and is lost if the process is killed.
+- Persist `baseUrl` and `apiKey` in iOS Keychain/Secure Store. The user additionally permits local persistence for the WebUI theme/font preference and for a bounded, secret-redacted log mirror used by the native Logs screen. Conversation content, messages, attachments, task results, configuration, Profiles, and pending work remain server-authoritative. Offline unsent text may live only in memory and is lost if the process is killed.
 - After first provisioning, Face ID directly unlocks the saved API key. Do not require Face ID for foreground resumes or privileged actions. Preserve the WebUI's existing confirmation dialogs for destructive actions.
 - Task-completion notifications include completion status and the full result. Tapping a notification requires Face ID and opens the corresponding conversation.
 - Keep existing high-privilege capabilities, including gateway restart, Hermes update, key/config changes, session/profile deletion, plugin/skill management, and Kanban operations.
@@ -353,6 +353,7 @@ git commit -m "feat: add Face ID protected Hermes connection"
 - Create: `src/design/tokens.ts`
 - Create: `src/design/typography.ts`
 - Create: `src/design/theme-state.tsx`
+- Add: `@react-native-async-storage/async-storage` as the native localStorage-equivalent for the WebUI theme/font preference keys only
 - Create: `assets/fonts/*` from every font used by the customized WebUI, retaining the exact tracked/downloaded font outlines in an iOS-compatible container
 - Create: `src/components/ui/NativeButton.tsx`
 - Create: `src/components/ui/NativeInput.tsx`
@@ -361,7 +362,9 @@ git commit -m "feat: add Face ID protected Hermes connection"
 - Create: `src/app/navigation/HermesDrawer.tsx`
 - Create: `src/app/navigation/HermesSidebar.tsx`
 - Create: `src/app/navigation/HermesNavigator.tsx`
+- Create: `src/app/navigation/route-composition.ts`
 - Create: `src/app/useAdaptiveLayout.ts`
+- Modify: `src/app/route-registry.ts`
 - Test: `tests/design-contract.test.ts`
 - Test: `tests/route-registry.test.ts`
 
@@ -370,6 +373,8 @@ git commit -m "feat: add Face ID protected Hermes connection"
 - Produces: shared Hermes primitives used by every later screen, mechanically translated from the customized WebUI rather than independently styled.
 - Consumes as canonical design source: `web/src/index.css`, `web/src/themes/{types,presets,context,fonts}.ts[x]`, `web/src/App.tsx`, `web/src/components/*`, `web/src/pages/*`, and `web/public/fonts/*` at Hermes Agent `4272ccd44`.
 - Preserves every built-in/custom theme token and theme-switching state exposed by the customized WebUI. The native default is the exact `defaultTheme` snapshot, not a new iOS palette.
+- Mirrors the WebUI's `hermes-dashboard-theme` and `hermes-dashboard-font` local preferences through AsyncStorage to avoid a startup flash, then reconciles with `/api/dashboard/themes` and `/api/dashboard/font`, which remain authoritative across devices. Do not use AsyncStorage for conversations, messages, attachments, task results, config, or Profiles.
+- Produces the same route/nav composition functions as customized `App.tsx`: non-sidebar routes remain deep-linkable, Analytics visibility follows config, plugin `position` hints are preserved, hidden plugins stay out of navigation, and plugin overrides replace rather than duplicate built-ins.
 
 - [ ] **Step 1: Extract the canonical WebUI design snapshot and write failing contract tests**
 
@@ -396,6 +401,12 @@ test('adaptive layout preserves native phone/iPad behavior and exact WebUI dimen
   assert.equal(shell.collapsedSidebarWidth, 56); // WebUI w-14
   assert.equal(shell.headerHeight, 56); // WebUI h-14
 });
+
+test('route composition follows customized App.tsx instead of an old static list', () => {
+  assert.equal(routeByPath('/files').visibleInSidebar, false);
+  assert.equal(routeByPath('/analytics').visibilityFlag, 'dashboard.show_token_analytics');
+  assert.deepEqual(composePluginRoutes(manifests), expectedManifestOrder);
+});
 ```
 
 - [ ] **Step 2: Verify RED, then implement the exact theme/token resolver**
@@ -406,13 +417,15 @@ Expected: FAIL because tokens and layout resolver do not exist.
 
 Port the complete built-in theme registry and the customized WebUI's color derivations, typography, radius, density, terminal colors, series colors, and theme override semantics. Server-supplied theme choice remains server-authoritative; do not create a separate native-only theme model.
 
+Port the WebUI's local preference/server reconciliation order exactly: seed theme/font from the two local preference keys, fetch server values, migrate/validate ids, update the visible theme, and persist changes both locally and through the existing theme/font API routes.
+
 - [ ] **Step 3: Reuse the tracked WebUI typefaces and implement native primitives**
 
 Use the tracked `web/public/fonts` files and the exact font URLs declared by the customized WebUI theme registry as the source of truth. The relevant packages and repository are MIT licensed. Convert/bundle the same outlines in an iOS-supported font container, register them through Expo, and map every WebUI font family/style/weight exactly, including Collapse, Rules Compressed, Rules Expanded, Mondwest, JetBrains Mono, and fonts selected by built-in themes. Install missing tooling or runtime packages. Do not use a system fallback, metrically similar font, or visual approximation when the WebUI selects a named font. Implement each primitive from its actual `@nous-research/ui`/customized-WebUI counterpart, copying radius, border, bevel, opacity, spacing, text case, and interaction states literally. A 44-point native hit target may wrap the unchanged visible control without changing its visible geometry.
 
 - [ ] **Step 4: Implement adaptive navigation**
 
-On iPhone, the menu button opens a drawer and the content remains full-width. On iPad, render the native adaptation with the WebUI's exact 256-point expanded and 56-point collapsed sidebar widths plus a flexible detail pane. Preserve the `App.tsx` ordering and dimensions: brand/collapse header, profile switcher, core navigation, plugin navigation, system actions, theme/language controls, auth widget, and status footer. Use native navigation and sheets while leaving visible labels, icons, hierarchy, colors, and states unchanged.
+On iPhone, the menu button opens a drawer and the content remains full-width. On iPad, render the native adaptation with the WebUI's exact 256-point expanded and 56-point collapsed sidebar widths plus a flexible detail pane. Preserve the `App.tsx` ordering and dimensions: brand/collapse header, profile switcher, core navigation, plugin navigation, system actions, theme/language controls, auth widget, and status footer. Port `buildNavItems`, `partitionSidebarNav`, and `buildRoutes` behavior rather than hardcoding only the currently installed plugins. Use native navigation and sheets while leaving visible labels, icons, hierarchy, colors, and states unchanged.
 
 - [ ] **Step 5: Run tests, typecheck, and commit**
 
@@ -529,12 +542,15 @@ git commit -m "feat: port unified Hermes chat to native iOS"
 
 ---
 
-### Task 7: Port Sessions, Models, Logs, Cron, and Profiles Management
+### Task 7: Port Sessions, Files, Analytics, Models, Logs, Cron, and Profiles Management
 
 **Files:**
 - Create: `src/features/sessions/SessionsScreen.tsx`
+- Create: `src/features/files/FilesScreen.tsx`
+- Create: `src/features/analytics/AnalyticsScreen.tsx`
 - Create: `src/features/models/ModelsScreen.tsx`
 - Create: `src/features/logs/LogsScreen.tsx`
+- Create: `src/features/logs/local-log-store.ts`
 - Create: `src/features/cron/CronScreen.tsx`
 - Create: `src/features/profiles/ProfilesScreen.tsx`
 - Create: `src/components/resources/ResourceList.tsx`
@@ -543,7 +559,8 @@ git commit -m "feat: port unified Hermes chat to native iOS"
 
 **Interfaces:**
 - Consumes: the corresponding methods and types copied from `web/src/lib/api.ts` without DOM dependencies.
-- Produces: complete list/detail/create/edit/delete flows for the five destinations.
+- Produces: every built-in route and management flow in this group, including the WebUI's reachable `/files` route and conditionally visible `/analytics` route.
+- Produces: a bounded local log mirror for native display. DBB3 remains the authoritative server log source; local files must redact the mobile API key and authorization headers, use a documented size/retention cap, and contain no conversation or task-result cache.
 
 - [ ] **Step 1: Write failing endpoint-mapping and action tests**
 
@@ -553,9 +570,9 @@ Assert each screen maps to its existing API paths, profile scoping is preserved,
 
 Use full-width flat sections, stable rows, native sheets for editors, segmented controls for modes, toggles for booleans, and icon buttons for row actions.
 
-- [ ] **Step 3: Implement all five screens**
+- [ ] **Step 3: Implement all seven screens**
 
-Sessions must search, open, rename, export, and delete. Models must select provider/model and edit auxiliary/fallback behavior. Logs must filter and refresh without polling while backgrounded. Cron must create/edit/pause/resume/run/delete. Profiles must create/clone/rename/delete, change model/description/SOUL, and open scoped management.
+Sessions must search, open, rename, export, and delete. Files and Analytics must preserve their actual route reachability and `dashboard.show_token_analytics` navigation rule from customized `App.tsx`. Models must select provider/model and edit auxiliary/fallback behavior. Logs must filter and refresh without polling while backgrounded, and may save/display the bounded redacted local mirror explicitly permitted by the user. Cron must create/edit/pause/resume/run/delete. Profiles must create/clone/rename/delete, change model/description/SOUL, and open scoped management.
 
 - [ ] **Step 4: Run tests and commit**
 
