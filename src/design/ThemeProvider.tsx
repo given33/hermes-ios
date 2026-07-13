@@ -14,7 +14,7 @@ import {
 import type { HermesApiClient } from '../api/HermesApiClient';
 import { FONT_CHOICES, type FontChoice } from './font-catalog';
 import {
-  executeLifecycleThemePlan,
+  getThemeEffectPlanQueue,
   startThemeReconciliation,
   type ThemeReconciliationHandle,
 } from './theme-reconciliation';
@@ -83,13 +83,9 @@ export function ThemeProvider({
     [client, preferenceStore],
   );
 
-  const executeEffects = useCallback(
-    (plan: ThemeStatePlan) => {
-      const lifecycle = reconciliationRef.current;
-      if (!lifecycle) return Promise.resolve();
-      return executeLifecycleThemePlan(plan, effectExecutor, lifecycle);
-    },
-    [effectExecutor],
+  const effectQueue = useMemo(
+    () => getThemeEffectPlanQueue(preferenceStore),
+    [preferenceStore],
   );
 
   const commitPlan = useCallback((plan: ThemeStatePlan) => {
@@ -103,6 +99,7 @@ export function ThemeProvider({
       store: preferenceStore,
       client,
       effects: effectExecutor,
+      queue: effectQueue,
       getState: () => stateRef.current,
       commit: commitPlan,
       markReady: () => setReady(true),
@@ -114,26 +111,28 @@ export function ThemeProvider({
         reconciliationRef.current = null;
       }
     };
-  }, [client, commitPlan, effectExecutor, preferenceStore]);
+  }, [client, commitPlan, effectExecutor, effectQueue, preferenceStore]);
 
   const setTheme = useCallback(
     async (name: string) => {
-      reconciliationRef.current?.markThemeMutation();
+      const reconciliation = reconciliationRef.current;
+      reconciliation?.markThemeMutation();
       const plan = planThemeMutation(stateRef.current, name);
       commitPlan(plan);
-      await executeEffects(plan);
+      await reconciliation?.runThemePlan(plan);
     },
-    [commitPlan, executeEffects],
+    [commitPlan],
   );
 
   const setFont = useCallback(
     async (id: string) => {
-      reconciliationRef.current?.markFontMutation();
+      const reconciliation = reconciliationRef.current;
+      reconciliation?.markFontMutation();
       const plan = planFontMutation(stateRef.current, id);
       commitPlan(plan);
-      await executeEffects(plan);
+      await reconciliation?.runFontPlan(plan);
     },
-    [commitPlan, executeEffects],
+    [commitPlan],
   );
 
   const value = useMemo<ThemeContextValue>(() => ({

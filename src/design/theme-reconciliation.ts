@@ -13,6 +13,41 @@ import type {
   ThemeListResponse,
 } from './theme-types';
 
+type ThemeEffectField = 'theme' | 'font';
+
+export class ThemeEffectPlanQueue {
+  private themeTail: Promise<void> = Promise.resolve();
+  private fontTail: Promise<void> = Promise.resolve();
+
+  run(
+    field: ThemeEffectField,
+    plan: ThemeStatePlan,
+    effects: ThemeStateEffectExecutor,
+    guard: () => boolean,
+  ): Promise<void> {
+    const task = () => executeThemeStateEffects(plan.effects, effects, guard);
+    const previous = field === 'theme' ? this.themeTail : this.fontTail;
+    const queued = previous.then(task, task);
+    const settled = queued.catch(() => {});
+    if (field === 'theme') {
+      this.themeTail = settled;
+    } else {
+      this.fontTail = settled;
+    }
+    return queued;
+  }
+}
+
+const EFFECT_QUEUES_BY_STORE = new WeakMap<object, ThemeEffectPlanQueue>();
+
+export function getThemeEffectPlanQueue(store: object): ThemeEffectPlanQueue {
+  const existing = EFFECT_QUEUES_BY_STORE.get(store);
+  if (existing) return existing;
+  const queue = new ThemeEffectPlanQueue();
+  EFFECT_QUEUES_BY_STORE.set(store, queue);
+  return queue;
+}
+
 export interface ThemeReconciliationOptions {
   store: {
     read(): Promise<StoredThemePreferences>;
@@ -22,6 +57,7 @@ export interface ThemeReconciliationOptions {
     getFontPref(): Promise<DashboardFontResponse>;
   };
   effects: ThemeStateEffectExecutor;
+  queue: ThemeEffectPlanQueue;
   getState(): ThemeState;
   commit(plan: ThemeStatePlan): void;
   markReady(): void;
@@ -32,15 +68,9 @@ export interface ThemeReconciliationHandle {
   isActive(): boolean;
   markThemeMutation(): void;
   markFontMutation(): void;
+  runThemePlan(plan: ThemeStatePlan): Promise<void>;
+  runFontPlan(plan: ThemeStatePlan): Promise<void>;
   completed: Promise<void>;
-}
-
-export function executeLifecycleThemePlan(
-  plan: ThemeStatePlan,
-  effects: ThemeStateEffectExecutor,
-  lifecycle: Pick<ThemeReconciliationHandle, 'isActive'>,
-): Promise<void> {
-  return executeThemeStateEffects(plan.effects, effects, lifecycle.isActive);
 }
 
 export function startThemeReconciliation(
@@ -51,10 +81,30 @@ export function startThemeReconciliation(
   let fontMutationEpoch = 0;
   const isActive = () => active;
 
-  const applyPlan = async (plan: ThemeStatePlan) => {
-    if (!active) return;
+  const runThemePlanAt = (plan: ThemeStatePlan, epoch: number) =>
+    options.queue.run(
+      'theme',
+      plan,
+      options.effects,
+      () => active && themeMutationEpoch === epoch,
+    );
+  const runFontPlanAt = (plan: ThemeStatePlan, epoch: number) =>
+    options.queue.run(
+      'font',
+      plan,
+      options.effects,
+      () => active && fontMutationEpoch === epoch,
+    );
+
+  const applyThemePlan = async (plan: ThemeStatePlan, epoch: number) => {
+    if (!active || themeMutationEpoch !== epoch) return;
     options.commit(plan);
-    await executeThemeStateEffects(plan.effects, options.effects, isActive);
+    await runThemePlanAt(plan, epoch);
+  };
+  const applyFontPlan = async (plan: ThemeStatePlan, epoch: number) => {
+    if (!active || fontMutationEpoch !== epoch) return;
+    options.commit(plan);
+    await runFontPlanAt(plan, epoch);
   };
 
   const reconcileThemes = async () => {
@@ -62,7 +112,10 @@ export function startThemeReconciliation(
     try {
       const response = await options.client.getThemes();
       if (!active || requestEpoch !== themeMutationEpoch) return;
-      await applyPlan(planServerThemesReconcile(options.getState(), response));
+      await applyThemePlan(
+        planServerThemesReconcile(options.getState(), response),
+        requestEpoch,
+      );
     } catch {
       // Theme and font reconciliation fail independently, matching WebUI.
     }
@@ -73,7 +126,10 @@ export function startThemeReconciliation(
     try {
       const response = await options.client.getFontPref();
       if (!active || requestEpoch !== fontMutationEpoch) return;
-      await applyPlan(planServerFontReconcile(options.getState(), response));
+      await applyFontPlan(
+        planServerFontReconcile(options.getState(), response),
+        requestEpoch,
+      );
     } catch {
       // Theme and font reconciliation fail independently, matching WebUI.
     }
@@ -83,7 +139,10 @@ export function startThemeReconciliation(
     try {
       const preferences = await options.store.read();
       if (!active) return;
-      await applyPlan(planLocalSeed(options.getState(), preferences));
+      await applyThemePlan(
+        planLocalSeed(options.getState(), preferences),
+        themeMutationEpoch,
+      );
     } catch {
       // Keep built-in defaults and continue to the server authority.
     }
@@ -106,6 +165,12 @@ export function startThemeReconciliation(
     },
     markFontMutation() {
       fontMutationEpoch += 1;
+    },
+    runThemePlan(plan) {
+      return runThemePlanAt(plan, themeMutationEpoch);
+    },
+    runFontPlan(plan) {
+      return runFontPlanAt(plan, fontMutationEpoch);
     },
     completed,
   };

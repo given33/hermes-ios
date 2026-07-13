@@ -24,6 +24,8 @@ test('authenticated native content is reachable through the native ThemeProvider
   assert.match(providerSource, /@react-native-async-storage\/async-storage/);
   assert.match(providerSource, /ThemePreferenceStore/);
   assert.match(providerSource, /startThemeReconciliation/);
-  assert.match(providerSource, /executeLifecycleThemePlan/);
+  assert.match(providerSource, /getThemeEffectPlanQueue/);
+  assert.match(providerSource, /runThemePlan/);
+  assert.match(providerSource, /runFontPlan/);
   assert.doesNotMatch(providerSource, /AppState|conversation|message|attachment|task result/i);
 });
