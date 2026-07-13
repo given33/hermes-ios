@@ -33,6 +33,7 @@ import { isNewerVersion } from './src/version';
 const LAST_PAGE_KEY = 'hermes.lastPage';
 const BRAND_BACKGROUND = '#170d02';
 const BRAND_ACCENT = '#ffac02';
+const RELEASE_CHECK_DELAY_MS = 5_000;
 
 const NATIVE_BRIDGE = `
   (() => {
@@ -204,11 +205,13 @@ function HermesApp() {
   const wasOfflineRef = useRef(false);
   const appStateRef = useRef(AppState.currentState);
   const loadFailedRef = useRef(false);
+  const releaseCheckStartedRef = useRef(false);
   const lastViewportMetricsRef = useRef<Record<string, unknown> | null>(null);
-  const [sourceUrl, setSourceUrl] = useState(buildHermesUrl());
+  const [sourceUrl, setSourceUrl] = useState<string | null>(null);
   const [webViewKey, setWebViewKey] = useState(0);
   const [isOnline, setIsOnline] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+  const [webReady, setWebReady] = useState(false);
 
   useEffect(() => {
     loadFailedRef.current = loadFailed;
@@ -216,11 +219,20 @@ function HermesApp() {
 
   useEffect(() => {
     let active = true;
-    void SecureStore.getItemAsync(LAST_PAGE_KEY).then((savedUrl) => {
-      if (active && savedUrl?.startsWith(HERMES_ORIGIN) && isHermesNavigation(savedUrl)) {
-        setSourceUrl(savedUrl);
-      }
-    });
+    void SecureStore.getItemAsync(LAST_PAGE_KEY)
+      .then((savedUrl) => {
+        if (!active) return;
+        if (savedUrl?.startsWith(HERMES_ORIGIN) && isHermesNavigation(savedUrl)) {
+          const restoredUrl = new URL(savedUrl);
+          restoredUrl.searchParams.set('client', 'ios');
+          setSourceUrl(restoredUrl.toString());
+        } else {
+          setSourceUrl(buildHermesUrl());
+        }
+      })
+      .catch(() => {
+        if (active) setSourceUrl(buildHermesUrl());
+      });
     return () => {
       active = false;
     };
@@ -233,6 +245,7 @@ function HermesApp() {
     if (connected && wasOfflineRef.current) {
       if (loadFailedRef.current) {
         setLoadFailed(false);
+        setWebReady(false);
         setWebViewKey((current) => current + 1);
       } else {
         webViewRef.current?.injectJavaScript(`
@@ -262,6 +275,7 @@ function HermesApp() {
         `);
         if (loadFailedRef.current) {
           setLoadFailed(false);
+          setWebReady(false);
           setWebViewKey((current) => current + 1);
         }
       } else if (previousState === 'active') {
@@ -275,33 +289,40 @@ function HermesApp() {
   }, []);
 
   useEffect(() => {
+    if (!webReady || releaseCheckStartedRef.current) return;
+    releaseCheckStartedRef.current = true;
+
     const controller = new AbortController();
     const installedVersion = Constants.expoConfig?.version ?? '0.0.0';
-
-    void fetch(`${GITHUB_LATEST_RELEASE_API}?t=${Date.now()}`, {
-      cache: 'no-store',
-      headers: { Accept: 'application/vnd.github+json' },
-      signal: controller.signal,
-    })
-      .then((response) => (response.ok ? response.json() : null))
-      .then((release: LatestRelease | null) => {
-        if (!release || !isNewerVersion(release.tag_name, installedVersion)) return;
-        const ipa = selectIpaAsset(release.assets);
-        if (!ipa) return;
-
-        Alert.alert(
-          '发现新版本',
-          `Hermes Agent ${release.tag_name} 已发布。可下载 IPA 后使用你的签名软件更新。`,
-          [
-            { text: '稍后', style: 'cancel' },
-            { text: '下载 IPA', onPress: () => void Linking.openURL(ipa.browser_download_url) },
-          ],
-        );
+    const timer = setTimeout(() => {
+      void fetch(`${GITHUB_LATEST_RELEASE_API}?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { Accept: 'application/vnd.github+json' },
+        signal: controller.signal,
       })
-      .catch(() => undefined);
+        .then((response) => (response.ok ? response.json() : null))
+        .then((release: LatestRelease | null) => {
+          if (!release || !isNewerVersion(release.tag_name, installedVersion)) return;
+          const ipa = selectIpaAsset(release.assets);
+          if (!ipa) return;
 
-    return () => controller.abort();
-  }, []);
+          Alert.alert(
+            '发现新版本',
+            `Hermes Agent ${release.tag_name} 已发布。可下载 IPA 后使用你的签名软件更新。`,
+            [
+              { text: '稍后', style: 'cancel' },
+              { text: '下载 IPA', onPress: () => void Linking.openURL(ipa.browser_download_url) },
+            ],
+          );
+        })
+        .catch(() => undefined);
+    }, RELEASE_CHECK_DELAY_MS);
+
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [webReady]);
 
   const downloadAttachment = async (url: string, preferredName?: string) => {
     try {
@@ -328,13 +349,15 @@ function HermesApp() {
 
   const reconnect = () => {
     setLoadFailed(false);
+    setWebReady(false);
     setWebViewKey((current) => current + 1);
   };
 
   return (
     <View style={styles.root}>
       <StatusBar style="light" translucent backgroundColor="transparent" />
-      <WebView
+      {sourceUrl ? (
+        <WebView
           key={webViewKey}
           ref={webViewRef}
           source={{ uri: sourceUrl }}
@@ -376,7 +399,9 @@ function HermesApp() {
                 filename?: string;
                 metrics?: Record<string, unknown>;
               };
-              if (message.type === 'download' && message.url) {
+              if (message.type === 'ready') {
+                setWebReady(true);
+              } else if (message.type === 'download' && message.url) {
                 void downloadAttachment(message.url, message.filename);
               } else if (message.type === 'viewport-metrics' && message.metrics) {
                 lastViewportMetricsRef.current = message.metrics;
@@ -407,7 +432,14 @@ function HermesApp() {
               <Text style={styles.loadingText}>正在连接 Hermes...</Text>
             </View>
           )}
-      />
+        />
+      ) : (
+        <View style={styles.loading}>
+          <Image source={require('./assets/splash-icon.png')} style={styles.logo} />
+          <ActivityIndicator color={BRAND_ACCENT} size="small" />
+          <Text style={styles.loadingText}>正在准备 Hermes...</Text>
+        </View>
+      )}
 
       {(!isOnline || loadFailed) && (
           <View style={[styles.networkBanner, { top: insets.top + 8 }]}>

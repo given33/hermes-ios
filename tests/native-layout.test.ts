@@ -60,8 +60,28 @@ test('release checks bypass stale GitHub API caches', () => {
   assert.match(appSource, /GITHUB_LATEST_RELEASE_API.*Date\.now\(\)/s);
 });
 
-test('the 1.0.6 release increments both app and native build versions', () => {
-  assert.equal(appConfig.expo.version, '1.0.6');
-  assert.equal(appConfig.expo.ios.buildNumber, '7');
-  assert.equal(packageConfig.version, '1.0.6');
+test('cold startup restores the saved route before mounting one web view', () => {
+  assert.match(appSource, /useState<string \| null>\(null\)/);
+  assert.match(
+    appSource,
+    /SecureStore\.getItemAsync\(LAST_PAGE_KEY\)[\s\S]*setSourceUrl\(/,
+  );
+  assert.match(appSource, /sourceUrl\s*\?\s*\([\s\S]*<WebView/);
+  assert.doesNotMatch(appSource, /useState\(buildHermesUrl\(\)\)/);
+});
+
+test('release checks wait until the first Hermes page is ready', () => {
+  assert.match(appSource, /const \[webReady, setWebReady\] = useState\(false\)/);
+  assert.match(appSource, /message\.type === 'ready'[\s\S]*setWebReady\(true\)/);
+  assert.match(appSource, /releaseCheckStartedRef\.current/);
+  assert.match(
+    appSource,
+    /if \(!webReady \|\| releaseCheckStartedRef\.current\) return/,
+  );
+});
+
+test('the 1.0.7 release increments both app and native build versions', () => {
+  assert.equal(appConfig.expo.version, '1.0.7');
+  assert.equal(appConfig.expo.ios.buildNumber, '8');
+  assert.equal(packageConfig.version, '1.0.7');
 });
