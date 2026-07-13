@@ -3,14 +3,14 @@
     "name": "Hermes Agent",
     "slug": "hermes-agent-ios",
     "scheme": "hermes-agent",
-    "version": "1.0.7",
+    "version": "2.0.0-beta.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "bundleIdentifier": "com.given33.hermesagent",
-      "buildNumber": "8",
+      "bundleIdentifier": "com.given33.hermesagent.nativebeta",
+      "buildNumber": "9",
       "supportsTablet": true,
       "requireFullScreen": false,
       "infoPlist": {
@@ -27,7 +27,28 @@
     },
     "plugins": [
       "expo-dev-client",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": true,
+          "faceIDPermission": "允许 Hermes Agent 使用面容 ID 保护敏感凭据。"
+        }
+      ],
+      "expo-notifications",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "允许 Hermes Agent 使用面容 ID 验证身份。"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "用于从照片图库选择图片并上传到 Hermes 会话。",
+          "cameraPermission": "用于在 Hermes 会话中拍照并上传。",
+          "microphonePermission": "用于在 Hermes 会话中录制并上传音频。"
+        }
+      ],
       [
         "expo-splash-screen",
         {
