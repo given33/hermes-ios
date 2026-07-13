@@ -160,7 +160,9 @@ export class HermesApiClient {
   }
 
   private assertResponseSameOrigin(response: Response): void {
-    if (!response.url) return;
+    if (!response.url) {
+      throw new Error('Hermes response origin could not be verified');
+    }
     let finalUrl: URL;
     try {
       finalUrl = new URL(response.url);

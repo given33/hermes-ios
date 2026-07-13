@@ -4,7 +4,12 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { LOGIN_VISUAL_CONTRACT } from '../src/auth/login-visual-contract';
+import {
+  INITIAL_PROVIDER_BUTTON_INTERACTION,
+  LOGIN_VISUAL_CONTRACT,
+  providerButtonVisualState,
+  reduceProviderButtonInteraction,
+} from '../src/auth/login-visual-contract';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -45,7 +50,7 @@ test('login dither uses the repeating-conic top-right and bottom-left phase', ()
   });
 });
 
-test('provider button contract preserves base, active invert, bevel, and interaction timing', () => {
+test('provider button contract preserves base, hover brightness, active invert, and timing', () => {
   const button = LOGIN_VISUAL_CONTRACT.providerButton;
 
   assert.deepEqual(button.base, {
@@ -68,6 +73,17 @@ test('provider button contract preserves base, active invert, bevel, and interac
       left: 'rgba(0, 0, 0, 0.5)',
     },
   });
+  assert.deepEqual(button.hover, {
+    brightness: 1.08,
+    backgroundColor: '#ffba02',
+    textColor: '#190e02',
+    bevel: {
+      top: 'rgb(255, 231, 139)',
+      right: 'rgb(138, 93, 1)',
+      bottom: 'rgb(138, 93, 1)',
+      left: 'rgb(255, 231, 139)',
+    },
+  });
   assert.deepEqual(button.filterTransition, {
     durationMs: 120,
     easing: [0, 0, 0.58, 1],
@@ -80,6 +96,33 @@ test('provider button contract preserves base, active invert, bevel, and interac
   assert.equal(button.disabledVisualOverride, null);
 });
 
+test('provider button interaction keeps active above hover and restores the right state', () => {
+  const reduce = (
+    state: typeof INITIAL_PROVIDER_BUTTON_INTERACTION,
+    event: Parameters<typeof reduceProviderButtonInteraction>[1],
+  ) => reduceProviderButtonInteraction(state, event);
+  let state = INITIAL_PROVIDER_BUTTON_INTERACTION;
+  assert.equal(providerButtonVisualState(state), 'base');
+
+  state = reduce(state, 'hover-in');
+  assert.equal(providerButtonVisualState(state), 'hover');
+  state = reduce(state, 'press-in');
+  assert.equal(providerButtonVisualState(state), 'active');
+  state = reduce(state, 'press-out');
+  assert.equal(providerButtonVisualState(state), 'hover');
+
+  state = reduce(state, 'press-in');
+  state = reduce(state, 'hover-out');
+  assert.equal(providerButtonVisualState(state), 'active');
+  state = reduce(state, 'press-out');
+  assert.equal(providerButtonVisualState(state), 'base');
+
+  state = reduce(state, 'hover-in');
+  state = reduce(state, 'reset');
+  assert.deepEqual(state, INITIAL_PROVIDER_BUTTON_INTERACTION);
+  assert.equal(providerButtonVisualState(state), 'base');
+});
+
 test('LoginScreen consumes the pure visual contract instead of duplicating source values', () => {
   const source = readFileSync(resolve(projectRoot, 'src/auth/LoginScreen.tsx'), 'utf8');
 
@@ -87,9 +130,14 @@ test('LoginScreen consumes the pure visual contract instead of duplicating sourc
   assert.match(source, /LOGIN_VISUAL_CONTRACT/);
   assert.match(source, /Animated\.timing\(filterProgress/);
   assert.match(source, /PROVIDER_BUTTON\.active\.bevel\.top/);
-  assert.match(source, /onPressIn=\{\(\) => animateFilter\(1\)\}/);
-  assert.match(source, /onPressOut=\{\(\) => animateFilter\(0\)\}/);
+  assert.match(source, /PROVIDER_BUTTON\.hover\.backgroundColor/);
+  assert.match(source, /onHoverIn=/);
+  assert.match(source, /onHoverOut=/);
+  assert.match(source, /onPressIn=/);
+  assert.match(source, /onPressOut=/);
+  assert.match(source, /reduceProviderButtonInteraction/);
   assert.match(source, /providerButtonFocusRing/);
+  assert.doesNotMatch(source, /enableNativeCSSParsing|react-native-reanimated/);
   assert.doesNotMatch(source, /const LOGIN_DITHER_SIZE/);
   assert.doesNotMatch(source, /buttonDisabled:\s*\{[^}]*opacity/s);
 });

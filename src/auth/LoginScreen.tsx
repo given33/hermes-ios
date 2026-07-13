@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -32,7 +32,12 @@ import Svg, {
 import { HERMES_ORIGIN } from '../config';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { useAuth } from './AuthProvider';
-import { LOGIN_VISUAL_CONTRACT } from './login-visual-contract';
+import {
+  INITIAL_PROVIDER_BUTTON_INTERACTION,
+  LOGIN_VISUAL_CONTRACT,
+  providerButtonVisualState,
+  reduceProviderButtonInteraction,
+} from './login-visual-contract';
 
 const {
   cardShadow: LOGIN_CARD_SHADOW,
@@ -46,6 +51,11 @@ const LOGIN_EASE_OUT = Easing.bezier(...LOGIN_ENTRANCE.easing);
 const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
   ...PROVIDER_BUTTON.filterTransition.easing,
 );
+const PROVIDER_BUTTON_ANIMATION_TARGET = {
+  base: 0,
+  hover: 1,
+  active: 2,
+} as const;
 
 export function LoginScreen() {
   const { state, provision, unlock, logout } = useAuth();
@@ -276,53 +286,76 @@ function ProviderButton({
 }) {
   const filterProgress = useRef(new Animated.Value(0)).current;
   const [focusVisible, setFocusVisible] = useState(false);
-  const animateFilter = useCallback(
-    (toValue: 0 | 1) => {
-      Animated.timing(filterProgress, {
-        duration: PROVIDER_BUTTON.filterTransition.durationMs,
-        easing: PROVIDER_BUTTON_EASE_OUT,
-        toValue,
-        useNativeDriver: false,
-      }).start();
-    },
-    [filterProgress],
+  const [interaction, dispatchInteraction] = useReducer(
+    reduceProviderButtonInteraction,
+    INITIAL_PROVIDER_BUTTON_INTERACTION,
   );
+  const visualState = providerButtonVisualState(interaction);
+
+  useEffect(() => {
+    const animation = Animated.timing(filterProgress, {
+      duration: PROVIDER_BUTTON.filterTransition.durationMs,
+      easing: PROVIDER_BUTTON_EASE_OUT,
+      toValue: PROVIDER_BUTTON_ANIMATION_TARGET[visualState],
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [filterProgress, visualState]);
 
   useEffect(() => {
     if (!disabled) return;
-    filterProgress.setValue(0);
+    dispatchInteraction('reset');
     setFocusVisible(false);
-  }, [disabled, filterProgress]);
+  }, [disabled]);
 
   const backgroundColor = filterProgress.interpolate({
-    inputRange: [0, 1],
+    inputRange: [0, 1, 2],
     outputRange: [
       PROVIDER_BUTTON.base.backgroundColor,
+      PROVIDER_BUTTON.hover.backgroundColor,
       PROVIDER_BUTTON.active.backgroundColor,
     ],
   });
   const textColor = filterProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [PROVIDER_BUTTON.base.textColor, PROVIDER_BUTTON.active.textColor],
+    inputRange: [0, 1, 2],
+    outputRange: [
+      PROVIDER_BUTTON.base.textColor,
+      PROVIDER_BUTTON.hover.textColor,
+      PROVIDER_BUTTON.active.textColor,
+    ],
   });
   const bevelTopColor = filterProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [PROVIDER_BUTTON.base.bevel.top, PROVIDER_BUTTON.active.bevel.top],
+    inputRange: [0, 1, 2],
+    outputRange: [
+      PROVIDER_BUTTON.base.bevel.top,
+      PROVIDER_BUTTON.hover.bevel.top,
+      PROVIDER_BUTTON.active.bevel.top,
+    ],
   });
   const bevelRightColor = filterProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [PROVIDER_BUTTON.base.bevel.right, PROVIDER_BUTTON.active.bevel.right],
+    inputRange: [0, 1, 2],
+    outputRange: [
+      PROVIDER_BUTTON.base.bevel.right,
+      PROVIDER_BUTTON.hover.bevel.right,
+      PROVIDER_BUTTON.active.bevel.right,
+    ],
   });
   const bevelBottomColor = filterProgress.interpolate({
-    inputRange: [0, 1],
+    inputRange: [0, 1, 2],
     outputRange: [
       PROVIDER_BUTTON.base.bevel.bottom,
+      PROVIDER_BUTTON.hover.bevel.bottom,
       PROVIDER_BUTTON.active.bevel.bottom,
     ],
   });
   const bevelLeftColor = filterProgress.interpolate({
-    inputRange: [0, 1],
-    outputRange: [PROVIDER_BUTTON.base.bevel.left, PROVIDER_BUTTON.active.bevel.left],
+    inputRange: [0, 1, 2],
+    outputRange: [
+      PROVIDER_BUTTON.base.bevel.left,
+      PROVIDER_BUTTON.hover.bevel.left,
+      PROVIDER_BUTTON.active.bevel.left,
+    ],
   });
 
   return (
@@ -333,9 +366,11 @@ function ProviderButton({
       focusable={!disabled}
       onBlur={() => setFocusVisible(false)}
       onFocus={() => setFocusVisible(true)}
+      onHoverIn={() => dispatchInteraction('hover-in')}
+      onHoverOut={() => dispatchInteraction('hover-out')}
       onPress={onPress}
-      onPressIn={() => animateFilter(1)}
-      onPressOut={() => animateFilter(0)}
+      onPressIn={() => dispatchInteraction('press-in')}
+      onPressOut={() => dispatchInteraction('press-out')}
       style={styles.providerButtonFrame}
     >
       <Animated.View style={[styles.primaryButton, { backgroundColor }]}>

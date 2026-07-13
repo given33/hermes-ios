@@ -1,3 +1,54 @@
+const PROVIDER_BUTTON_BASE_BEVEL = {
+  top: 'rgba(255, 255, 255, 0.5)',
+  right: 'rgba(0, 0, 0, 0.5)',
+  bottom: 'rgba(0, 0, 0, 0.5)',
+  left: 'rgba(255, 255, 255, 0.5)',
+} as const;
+
+export interface ProviderButtonInteractionState {
+  readonly hovered: boolean;
+  readonly pressed: boolean;
+}
+
+export type ProviderButtonInteractionEvent =
+  | 'hover-in'
+  | 'hover-out'
+  | 'press-in'
+  | 'press-out'
+  | 'reset';
+
+export type ProviderButtonVisualState = 'base' | 'hover' | 'active';
+
+export const INITIAL_PROVIDER_BUTTON_INTERACTION: ProviderButtonInteractionState =
+  Object.freeze({ hovered: false, pressed: false });
+
+export function reduceProviderButtonInteraction(
+  state: ProviderButtonInteractionState,
+  event: ProviderButtonInteractionEvent,
+): ProviderButtonInteractionState {
+  switch (event) {
+    case 'hover-in':
+      return state.hovered ? state : { ...state, hovered: true };
+    case 'hover-out':
+      return state.hovered ? { ...state, hovered: false } : state;
+    case 'press-in':
+      return state.pressed ? state : { ...state, pressed: true };
+    case 'press-out':
+      return state.pressed ? { ...state, pressed: false } : state;
+    case 'reset':
+      return state.hovered || state.pressed
+        ? INITIAL_PROVIDER_BUTTON_INTERACTION
+        : state;
+  }
+}
+
+export function providerButtonVisualState(
+  state: ProviderButtonInteractionState,
+): ProviderButtonVisualState {
+  if (state.pressed) return 'active';
+  return state.hovered ? 'hover' : 'base';
+}
+
 export const LOGIN_VISUAL_CONTRACT = {
   colors: {
     background: '#170d02',
@@ -34,11 +85,18 @@ export const LOGIN_VISUAL_CONTRACT = {
     base: {
       backgroundColor: '#ffac02',
       textColor: '#170d02',
+      bevel: PROVIDER_BUTTON_BASE_BEVEL,
+    },
+    hover: {
+      brightness: 1.08,
+      backgroundColor: '#ffba02',
+      textColor: '#190e02',
+      // CSS brightness is applied after the translucent bevel is composited.
       bevel: {
-        top: 'rgba(255, 255, 255, 0.5)',
-        right: 'rgba(0, 0, 0, 0.5)',
-        bottom: 'rgba(0, 0, 0, 0.5)',
-        left: 'rgba(255, 255, 255, 0.5)',
+        top: 'rgb(255, 231, 139)',
+        right: 'rgb(138, 93, 1)',
+        bottom: 'rgb(138, 93, 1)',
+        left: 'rgb(255, 231, 139)',
       },
     },
     active: {

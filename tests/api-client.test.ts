@@ -13,10 +13,13 @@ interface FetchCall {
   init: RequestInit;
 }
 
-function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+function jsonResponse(url: string, body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   headers.set('Content-Type', 'application/json');
-  return new Response(JSON.stringify(body), { ...init, headers });
+  return withResponseUrl(
+    new Response(JSON.stringify(body), { ...init, headers }),
+    url,
+  );
 }
 
 function withResponseUrl(response: Response, url: string): Response {
@@ -50,7 +53,7 @@ test('rejects cross-origin request paths before bearer credentials reach fetch',
     'mobile-secret',
     async (input, init) => {
       calls.push({ url: String(input), init: init ?? {} });
-      return jsonResponse({ ok: true });
+      return jsonResponse('https://hermes.test/api/config', { ok: true });
     },
   );
 
@@ -66,7 +69,7 @@ test('adds bearer auth and merges profile, query, and caller headers without key
     'mobile-secret',
     async (input, init) => {
       calls.push({ url: String(input), init: init ?? {} });
-      return jsonResponse({ ok: true });
+      return jsonResponse('https://hermes.test/api/config', { ok: true });
     },
   );
 
@@ -105,7 +108,7 @@ test('a short valid key is not confused with ordinary request URL characters', a
     'a',
     async (input, init) => {
       calls.push({ url: String(input), init: init ?? {} });
-      return jsonResponse({ ok: true });
+      return jsonResponse('https://hermes.test/api/status', { ok: true });
     },
   );
 
@@ -143,7 +146,7 @@ test('rejects a native-followed cross-origin response before reading its body', 
   let bodyRead = false;
   let requestInit: RequestInit | undefined;
   const response = withResponseUrl(
-    jsonResponse({ detail: 'mobile secret' }),
+    jsonResponse('https://hermes.test/api/config', { detail: 'mobile secret' }),
     'https://attacker.test/collect?token=mobile+secret',
   );
   Object.defineProperty(response, 'text', {
@@ -175,11 +178,46 @@ test('rejects a native-followed cross-origin response before reading its body', 
   assert.equal(requestInit?.redirect, undefined);
 });
 
+test('rejects a response without a final URL before reading its body', async () => {
+  let bodyRead = false;
+  const response = new Response('{"detail":"mobile-secret"}', {
+    headers: { 'Content-Type': 'application/json' },
+  });
+  Object.defineProperty(response, 'text', {
+    configurable: true,
+    value: async () => {
+      bodyRead = true;
+      return '{"detail":"mobile-secret"}';
+    },
+  });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async () => response,
+  );
+
+  await assert.rejects(client.request('/api/config'), (error: unknown) => {
+    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${
+      error instanceof Error ? error.stack ?? '' : ''
+    }`;
+    assert.match(serialized, /origin.*verified/i);
+    assert.doesNotMatch(serialized, /mobile-secret/);
+    return true;
+  });
+  assert.equal(bodyRead, false);
+});
+
 test('parses JSON, text, and empty successful responses', async () => {
   const responses = [
-    jsonResponse({ version: '2' }),
-    new Response('ready', { headers: { 'Content-Type': 'text/plain' } }),
-    new Response(null, { status: 204 }),
+    jsonResponse('https://hermes.test/api/json', { version: '2' }),
+    withResponseUrl(
+      new Response('ready', { headers: { 'Content-Type': 'text/plain' } }),
+      'https://hermes.test/api/text',
+    ),
+    withResponseUrl(
+      new Response(null, { status: 204 }),
+      'https://hermes.test/api/empty',
+    ),
   ];
   const client = new HermesApiClient(
     'https://hermes.test',
@@ -217,6 +255,7 @@ test('non-2xx errors expose status but redact keys, headers, and echoed secrets'
     'mobile-secret',
     async () =>
       jsonResponse(
+        'https://hermes.test/api/config',
         {
           detail: 'Authorization: Bearer mobile-secret',
           error: 'invalid mobile-secret',
@@ -244,7 +283,12 @@ test('error redaction covers URLSearchParams space and tilde encoding', async ()
     const client = new HermesApiClient(
       'https://hermes.test',
       apiKey,
-      async () => jsonResponse({ detail: `invalid ${echoed}` }, { status: 401 }),
+      async () =>
+        jsonResponse(
+          'https://hermes.test/api/config',
+          { detail: `invalid ${echoed}` },
+          { status: 401 },
+        ),
     );
 
     await assert.rejects(client.request('/api/config'), (error: unknown) => {
@@ -286,7 +330,10 @@ test('each WebSocket URL mints a fresh ticket and contains only ticket plus opti
     async (input, init) => {
       calls.push({ url: String(input), init: init ?? {} });
       ticketNumber += 1;
-      return jsonResponse({ ticket: `ticket-${ticketNumber}`, ttl_seconds: 30 });
+      return jsonResponse('https://hermes.test/api/auth/ws-ticket', {
+        ticket: `ticket-${ticketNumber}`,
+        ttl_seconds: 30,
+      });
     },
   );
 
@@ -318,7 +365,10 @@ test('WebSocket URL converts http to ws and rejects every other socket path', as
     'mobile-secret',
     async () => {
       calls += 1;
-      return jsonResponse({ ticket: 'short-lived', ttl_seconds: 30 });
+      return jsonResponse('http://hermes.test/api/auth/ws-ticket', {
+        ticket: 'short-lived',
+        ttl_seconds: 30,
+      });
     },
   );
 
