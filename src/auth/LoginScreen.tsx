@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -32,22 +32,20 @@ import Svg, {
 import { HERMES_ORIGIN } from '../config';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { useAuth } from './AuthProvider';
+import { LOGIN_VISUAL_CONTRACT } from './login-visual-contract';
 
-const LOGIN_BACKGROUND = '#170d02';
-const LOGIN_ACCENT = '#ffac02';
-const LOGIN_FOREGROUND = '#ffffff';
-const LOGIN_ERROR = '#ff6b6b';
-const LOGIN_DITHER_SIZE = 3;
-const LOGIN_DITHER_OPACITY = 0.04;
-const LOGIN_GLOW_OPACITY = 0.06;
-const LOGIN_GLOW_STOP = '55%';
-const LOGIN_GLOW_RADIUS_X = '70.710678%';
-const LOGIN_GLOW_RADIUS_Y = '141.421356%';
-const LOGIN_EASE_OUT = Easing.bezier(0, 0, 0.58, 1);
-const CARD_SHADOW_SPREAD = 20;
-const CARD_SHADOW_BLUR_SIGMA = 30;
-const CARD_SHADOW_OFFSET_Y = 24;
-const CARD_SHADOW_OPACITY = 0.6;
+const {
+  cardShadow: LOGIN_CARD_SHADOW,
+  colors: LOGIN_COLORS,
+  dither: LOGIN_DITHER,
+  entrance: LOGIN_ENTRANCE,
+  glow: LOGIN_GLOW,
+  providerButton: PROVIDER_BUTTON,
+} = LOGIN_VISUAL_CONTRACT;
+const LOGIN_EASE_OUT = Easing.bezier(...LOGIN_ENTRANCE.easing);
+const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
+  ...PROVIDER_BUTTON.filterTransition.easing,
+);
 
 export function LoginScreen() {
   const { state, provision, unlock, logout } = useAuth();
@@ -55,7 +53,7 @@ export function LoginScreen() {
   const { height } = useWindowDimensions();
   const apiKeyInput = useRef<TextInputHandle>(null);
   const entranceOpacity = useRef(new Animated.Value(0)).current;
-  const entranceOffset = useRef(new Animated.Value(6)).current;
+  const entranceOffset = useRef(new Animated.Value(LOGIN_ENTRANCE.translateY)).current;
   const [baseUrl, setBaseUrl] = useState(
     state.status === 'locked' ? state.baseUrl : HERMES_ORIGIN,
   );
@@ -74,13 +72,13 @@ export function LoginScreen() {
   useEffect(() => {
     const animation = Animated.parallel([
       Animated.timing(entranceOpacity, {
-        duration: 600,
+        duration: LOGIN_ENTRANCE.durationMs,
         easing: LOGIN_EASE_OUT,
         toValue: 1,
         useNativeDriver: true,
       }),
       Animated.timing(entranceOffset, {
-        duration: 600,
+        duration: LOGIN_ENTRANCE.durationMs,
         easing: LOGIN_EASE_OUT,
         toValue: 0,
         useNativeDriver: true,
@@ -148,7 +146,7 @@ export function LoginScreen() {
 
                 {loading ? (
                   <View accessibilityRole="progressbar" style={styles.loadingRow}>
-                    <ActivityIndicator color={LOGIN_ACCENT} size="small" />
+                    <ActivityIndicator color={LOGIN_COLORS.accent} size="small" />
                     <Text style={styles.loadingText}>正在准备</Text>
                   </View>
                 ) : locked ? (
@@ -159,7 +157,7 @@ export function LoginScreen() {
                         {error}
                       </Text>
                     ) : null}
-                    <PrimaryButton
+                    <ProviderButton
                       busy={busy}
                       disabled={busy}
                       label={busy ? '正在验证' : '使用 FACE ID 登录'}
@@ -242,7 +240,7 @@ export function LoginScreen() {
                         {error}
                       </Text>
                     ) : null}
-                    <PrimaryButton
+                    <ProviderButton
                       busy={busy}
                       disabled={!canSubmit}
                       label={busy ? '正在连接' : '登录'}
@@ -265,7 +263,7 @@ export function LoginScreen() {
   );
 }
 
-function PrimaryButton({
+function ProviderButton({
   busy,
   disabled,
   label,
@@ -276,44 +274,100 @@ function PrimaryButton({
   label: string;
   onPress(): void;
 }) {
+  const filterProgress = useRef(new Animated.Value(0)).current;
+  const [focusVisible, setFocusVisible] = useState(false);
+  const animateFilter = useCallback(
+    (toValue: 0 | 1) => {
+      Animated.timing(filterProgress, {
+        duration: PROVIDER_BUTTON.filterTransition.durationMs,
+        easing: PROVIDER_BUTTON_EASE_OUT,
+        toValue,
+        useNativeDriver: false,
+      }).start();
+    },
+    [filterProgress],
+  );
+
+  useEffect(() => {
+    if (!disabled) return;
+    filterProgress.setValue(0);
+    setFocusVisible(false);
+  }, [disabled, filterProgress]);
+
+  const backgroundColor = filterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [
+      PROVIDER_BUTTON.base.backgroundColor,
+      PROVIDER_BUTTON.active.backgroundColor,
+    ],
+  });
+  const textColor = filterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [PROVIDER_BUTTON.base.textColor, PROVIDER_BUTTON.active.textColor],
+  });
+  const bevelTopColor = filterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [PROVIDER_BUTTON.base.bevel.top, PROVIDER_BUTTON.active.bevel.top],
+  });
+  const bevelRightColor = filterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [PROVIDER_BUTTON.base.bevel.right, PROVIDER_BUTTON.active.bevel.right],
+  });
+  const bevelBottomColor = filterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [
+      PROVIDER_BUTTON.base.bevel.bottom,
+      PROVIDER_BUTTON.active.bevel.bottom,
+    ],
+  });
+  const bevelLeftColor = filterProgress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [PROVIDER_BUTTON.base.bevel.left, PROVIDER_BUTTON.active.bevel.left],
+  });
+
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ busy, disabled }}
       disabled={disabled}
+      focusable={!disabled}
+      onBlur={() => setFocusVisible(false)}
+      onFocus={() => setFocusVisible(true)}
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.primaryButton,
-        disabled && styles.buttonDisabled,
-        pressed && !disabled && styles.primaryButtonPressed,
-      ]}
+      onPressIn={() => animateFilter(1)}
+      onPressOut={() => animateFilter(0)}
+      style={styles.providerButtonFrame}
     >
-      {({ pressed }) => (
-        <>
-          <View pointerEvents="none" style={styles.buttonBevel} />
-          {busy ? (
-            <ActivityIndicator
-              color={pressed ? '#e8f2fd' : LOGIN_BACKGROUND}
-              size="small"
-            />
-          ) : null}
-          <Text
-            style={[
-              styles.primaryButtonText,
-              pressed && !disabled && styles.primaryButtonTextPressed,
-            ]}
-          >
-            {label}
-          </Text>
-        </>
-      )}
+      <Animated.View style={[styles.primaryButton, { backgroundColor }]}>
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.buttonBevel,
+            {
+              borderTopColor: bevelTopColor,
+              borderRightColor: bevelRightColor,
+              borderBottomColor: bevelBottomColor,
+              borderLeftColor: bevelLeftColor,
+            },
+          ]}
+        />
+        {busy ? (
+          <ActivityIndicator color={PROVIDER_BUTTON.base.textColor} size="small" />
+        ) : null}
+        <Animated.Text style={[styles.primaryButtonText, { color: textColor }]}>
+          {label}
+        </Animated.Text>
+      </Animated.View>
+      {focusVisible ? (
+        <View pointerEvents="none" style={styles.providerButtonFocusRing} />
+      ) : null}
     </Pressable>
   );
 }
 
 function CardShadow({ height, width }: { height: number; width: number }) {
-  const shadowWidth = Math.max(0, width - CARD_SHADOW_SPREAD * 2);
-  const shadowHeight = Math.max(0, height - CARD_SHADOW_SPREAD * 2);
+  const shadowWidth = Math.max(0, width - LOGIN_CARD_SHADOW.spread * 2);
+  const shadowHeight = Math.max(0, height - LOGIN_CARD_SHADOW.spread * 2);
   if (!shadowWidth || !shadowHeight) return null;
 
   return (
@@ -328,16 +382,16 @@ function CardShadow({ height, width }: { height: number; width: number }) {
           <FeGaussianBlur
             in="SourceAlpha"
             result="blurred-shadow"
-            stdDeviation={CARD_SHADOW_BLUR_SIGMA}
+            stdDeviation={LOGIN_CARD_SHADOW.blurSigma}
           />
           <FeOffset
-            dy={CARD_SHADOW_OFFSET_Y}
+            dy={LOGIN_CARD_SHADOW.offsetY}
             in="blurred-shadow"
             result="offset-shadow"
           />
           <FeFlood
             floodColor="#000000"
-            floodOpacity={CARD_SHADOW_OPACITY}
+            floodOpacity={LOGIN_CARD_SHADOW.opacity}
             result="shadow-color"
           />
           <FeComposite
@@ -353,8 +407,8 @@ function CardShadow({ height, width }: { height: number; width: number }) {
         filter="url(#login-card-shadow)"
         height={shadowHeight}
         width={shadowWidth}
-        x={CARD_SHADOW_SPREAD}
-        y={CARD_SHADOW_SPREAD}
+        x={LOGIN_CARD_SHADOW.spread}
+        y={LOGIN_CARD_SHADOW.spread}
       />
     </Svg>
   );
@@ -374,39 +428,37 @@ function LoginBackdrop() {
       <Svg height="100%" width="100%">
         <Defs>
           <Pattern
-            height={LOGIN_DITHER_SIZE}
+            height={LOGIN_DITHER.size}
             id="login-dither"
             patternUnits="userSpaceOnUse"
-            width={LOGIN_DITHER_SIZE}
+            width={LOGIN_DITHER.size}
           >
-            <Rect
-              fill={LOGIN_ACCENT}
-              fillOpacity={LOGIN_DITHER_OPACITY}
-              height={LOGIN_DITHER_SIZE / 2}
-              width={LOGIN_DITHER_SIZE / 2}
-            />
-            <Rect
-              fill={LOGIN_ACCENT}
-              fillOpacity={LOGIN_DITHER_OPACITY}
-              height={LOGIN_DITHER_SIZE / 2}
-              width={LOGIN_DITHER_SIZE / 2}
-              x={LOGIN_DITHER_SIZE / 2}
-              y={LOGIN_DITHER_SIZE / 2}
-            />
+            {LOGIN_DITHER.cells.map((cell, index) => (
+              <Rect
+                fill={LOGIN_COLORS.accent}
+                fillOpacity={LOGIN_DITHER.opacity}
+                key={`login-dither-${index}`}
+                {...cell}
+              />
+            ))}
           </Pattern>
           <RadialGradient
             cx="50%"
             cy="0%"
             id="login-top-glow"
-            rx={LOGIN_GLOW_RADIUS_X}
-            ry={LOGIN_GLOW_RADIUS_Y}
+            rx={LOGIN_GLOW.radiusX}
+            ry={LOGIN_GLOW.radiusY}
           >
             <Stop
               offset="0%"
-              stopColor={LOGIN_ACCENT}
-              stopOpacity={LOGIN_GLOW_OPACITY}
+              stopColor={LOGIN_COLORS.accent}
+              stopOpacity={LOGIN_GLOW.opacity}
             />
-            <Stop offset={LOGIN_GLOW_STOP} stopColor={LOGIN_ACCENT} stopOpacity={0} />
+            <Stop
+              offset={LOGIN_GLOW.stop}
+              stopColor={LOGIN_COLORS.accent}
+              stopOpacity={0}
+            />
           </RadialGradient>
         </Defs>
         <Rect fill="url(#login-dither)" height="100%" width="100%" />
@@ -419,7 +471,7 @@ function LoginBackdrop() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: LOGIN_BACKGROUND,
+    backgroundColor: LOGIN_COLORS.background,
   },
   backdrop: {
     position: 'absolute',
@@ -448,7 +500,7 @@ const styles = StyleSheet.create({
     marginBottom: 28,
   },
   brandText: {
-    color: LOGIN_ACCENT,
+    color: LOGIN_COLORS.accent,
     fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
     fontSize: 16.8,
     letterSpacing: 5.376,
@@ -460,7 +512,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 9.24,
     marginBottom: 3.024,
     borderRadius: 1,
-    backgroundColor: LOGIN_ACCENT,
+    backgroundColor: LOGIN_COLORS.accent,
   },
   cardShell: {
     position: 'relative',
@@ -498,7 +550,7 @@ const styles = StyleSheet.create({
   },
   heading: {
     marginBottom: 6.4,
-    color: LOGIN_FOREGROUND,
+    color: LOGIN_COLORS.foreground,
     fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
     fontSize: 29.6,
     letterSpacing: 1.48,
@@ -550,13 +602,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 172, 2, 0.35)',
     borderRadius: 0,
     backgroundColor: '#110a02',
-    color: LOGIN_FOREGROUND,
+    color: LOGIN_COLORS.foreground,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 15.2,
     lineHeight: 22.8,
   },
   inputFocused: {
-    borderColor: LOGIN_ACCENT,
+    borderColor: LOGIN_COLORS.accent,
   },
   inputContainer: {
     position: 'relative',
@@ -568,14 +620,18 @@ const styles = StyleSheet.create({
     bottom: -1,
     left: -1,
     borderWidth: 1,
-    borderColor: LOGIN_ACCENT,
+    borderColor: LOGIN_COLORS.accent,
   },
   errorText: {
-    color: LOGIN_ERROR,
+    color: LOGIN_COLORS.error,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 13.12,
     letterSpacing: 0.2624,
     lineHeight: 19.68,
+  },
+  providerButtonFrame: {
+    position: 'relative',
+    marginTop: 4,
   },
   primaryButton: {
     minHeight: 48,
@@ -583,26 +639,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 9,
-    marginTop: 4,
     paddingHorizontal: 16,
     paddingVertical: 15.2,
     borderRadius: 0,
-    backgroundColor: LOGIN_ACCENT,
   },
   primaryButtonText: {
     flexShrink: 1,
-    color: LOGIN_BACKGROUND,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
     fontSize: 12.48,
     letterSpacing: 2.496,
     lineHeight: 18.72,
     textAlign: 'center',
-  },
-  primaryButtonPressed: {
-    backgroundColor: '#0053fd',
-  },
-  primaryButtonTextPressed: {
-    color: '#e8f2fd',
   },
   buttonBevel: {
     position: 'absolute',
@@ -614,10 +661,16 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderBottomWidth: 1,
     borderLeftWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.5)',
-    borderLeftColor: 'rgba(255, 255, 255, 0.5)',
-    borderRightColor: 'rgba(0, 0, 0, 0.5)',
-    borderBottomColor: 'rgba(0, 0, 0, 0.5)',
+  },
+  providerButtonFocusRing: {
+    position: 'absolute',
+    top: -(PROVIDER_BUTTON.focusVisible.offset + PROVIDER_BUTTON.focusVisible.width),
+    right: -(PROVIDER_BUTTON.focusVisible.offset + PROVIDER_BUTTON.focusVisible.width),
+    bottom: -(PROVIDER_BUTTON.focusVisible.offset + PROVIDER_BUTTON.focusVisible.width),
+    left: -(PROVIDER_BUTTON.focusVisible.offset + PROVIDER_BUTTON.focusVisible.width),
+    borderWidth: PROVIDER_BUTTON.focusVisible.width,
+    borderColor: PROVIDER_BUTTON.focusVisible.color,
+    borderRadius: 0,
   },
   secondaryButton: {
     minHeight: 44,
@@ -630,14 +683,11 @@ const styles = StyleSheet.create({
     borderRadius: 0,
   },
   secondaryButtonText: {
-    color: LOGIN_ACCENT,
+    color: LOGIN_COLORS.accent,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
     fontSize: 12.48,
     letterSpacing: 2.496,
     lineHeight: 18.72,
-  },
-  buttonDisabled: {
-    opacity: 0.45,
   },
   buttonPressed: {
     opacity: 0.78,

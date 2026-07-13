@@ -46,12 +46,16 @@ export function normalizeBaseUrl(input: string): string {
   if (url.username || url.password) {
     throw new Error('Hermes base URL must not contain user information');
   }
-  if (url.hash) {
-    throw new Error('Hermes base URL must not contain a fragment');
+  if (
+    url.pathname !== '/' ||
+    url.search ||
+    url.hash ||
+    url.href !== `${url.origin}/`
+  ) {
+    throw new Error('Hermes base URL must be a root origin');
   }
 
-  const pathname = url.pathname.replace(/\/+$/, '');
-  return `${url.origin}${pathname}${url.search}`;
+  return url.origin;
 }
 
 export class HermesApiClient {
@@ -67,7 +71,14 @@ export class HermesApiClient {
   }
 
   async request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
-    const { headers: callerHeaders, profile, query, ...requestInit } = options;
+    const {
+      headers: callerHeaders,
+      profile,
+      query,
+      redirect: unsupportedRedirect,
+      ...requestInit
+    } = options;
+    void unsupportedRedirect;
     const url = this.createSameOriginUrl(path);
     mergeQuery(url, query);
     if (profile !== undefined) url.searchParams.set('profile', profile);
@@ -77,11 +88,12 @@ export class HermesApiClient {
     if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     headers.set('Authorization', `Bearer ${this.apiKey}`);
 
-    const response = await this.fetchImpl(url.toString(), {
-      ...requestInit,
-      headers,
-      redirect: 'manual',
-    });
+    // React Native's whatwg-fetch ignores RequestInit.redirect. Its iOS native
+    // transport follows redirects while rebuilding the redirected request
+    // without the Authorization header, so validate the final URL before the
+    // response body is consumed instead of claiming manual redirect handling.
+    const response = await this.fetchImpl(url.toString(), { ...requestInit, headers });
+    this.assertResponseSameOrigin(response);
     const body = await response.text();
 
     if (!response.ok) {
@@ -134,15 +146,29 @@ export class HermesApiClient {
 
   private assertUrlHasNoApiKey(url: URL): void {
     const serialized = url.toString();
-    const encoded = encodeURIComponent(this.apiKey);
-    const longKeyLeaked =
+    const serializedLeak =
       this.apiKey.length >= 8 &&
-      (serialized.includes(this.apiKey) || serialized.includes(encoded));
-    const shortKeyLeaked =
-      this.apiKey.length < 8 &&
-      urlComponents(url).some((component) => component === this.apiKey);
-    if (longKeyLeaked || shortKeyLeaked) {
+      secretEncodings(this.apiKey).some((encoded) => serialized.includes(encoded));
+    const decodedLeak = urlComponents(url).some((component) =>
+      this.apiKey.length < 8
+        ? component === this.apiKey
+        : component.includes(this.apiKey),
+    );
+    if (serializedLeak || decodedLeak) {
       throw new Error('Hermes credentials must not appear in request URLs');
+    }
+  }
+
+  private assertResponseSameOrigin(response: Response): void {
+    if (!response.url) return;
+    let finalUrl: URL;
+    try {
+      finalUrl = new URL(response.url);
+    } catch {
+      throw new Error('Hermes response origin could not be verified');
+    }
+    if (finalUrl.origin !== new URL(this.baseUrl).origin) {
+      throw new Error('Hermes responses must remain same-origin');
     }
   }
 }
@@ -200,8 +226,29 @@ function firstString(...values: unknown[]): string | undefined {
 }
 
 function redactSecret(value: string, apiKey: string): string {
-  let redacted = value.split(apiKey).join('[redacted]');
-  const encoded = encodeURIComponent(apiKey);
-  if (encoded !== apiKey) redacted = redacted.split(encoded).join('[redacted]');
+  let redacted = value;
+  for (const encoded of secretEncodings(apiKey).sort(
+    (left, right) => right.length - left.length,
+  )) {
+    redacted = redacted.split(encoded).join('[redacted]');
+  }
   return redacted.replace(/\bauthorization\s*[:=][^\r\n]*/gi, '[redacted header]');
+}
+
+function secretEncodings(secret: string): string[] {
+  const uriEncoded = encodeURIComponent(secret);
+  const formEncoded = new URLSearchParams([['secret', secret]])
+    .toString()
+    .slice('secret='.length);
+  return [...new Set([
+    secret,
+    uriEncoded,
+    percentEscapesToLowerCase(uriEncoded),
+    formEncoded,
+    percentEscapesToLowerCase(formEncoded),
+  ])];
+}
+
+function percentEscapesToLowerCase(value: string): string {
+  return value.replace(/%[0-9A-F]{2}/g, (escape) => escape.toLowerCase());
 }

@@ -19,15 +19,25 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), { ...init, headers });
 }
 
+function withResponseUrl(response: Response, url: string): Response {
+  Object.defineProperty(response, 'url', { configurable: true, value: url });
+  return response;
+}
+
 test('normalizes the fixed server URL and rejects unsafe base URLs', () => {
   assert.equal(normalizeBaseUrl(' https://8.138.40.16/ '), 'https://8.138.40.16');
-  assert.equal(normalizeBaseUrl('http://hermes.test///'), 'http://hermes.test');
+  assert.equal(normalizeBaseUrl('http://hermes.test:8080'), 'http://hermes.test:8080');
 
   for (const unsafe of [
     'file:///tmp/hermes',
     'javascript:alert(1)',
     'https://user:password@hermes.test',
     'https://hermes.test/#fragment',
+    'https://hermes.test/api',
+    'https://hermes.test///',
+    'https://hermes.test?api_key=mobile-secret',
+    'https://hermes.test?',
+    'https://hermes.test#',
   ]) {
     assert.throws(() => normalizeBaseUrl(unsafe), /base url/i);
   }
@@ -105,6 +115,66 @@ test('a short valid key is not confused with ordinary request URL characters', a
   assert.doesNotMatch(calls[0].url, /[?&](?:api_?key|token)=/i);
 });
 
+test('rejects raw, URI-encoded, and form-encoded API keys in request URLs', () => {
+  const rawClient = new HermesApiClient('https://hermes.test', 'mobile-secret');
+  assert.throws(
+    () => rawClient.createAttachmentUrl('/api/files/mobile-secret'),
+    /credentials/i,
+  );
+
+  const spacedClient = new HermesApiClient('https://hermes.test', 'mobile secret');
+  assert.throws(
+    () => spacedClient.createAttachmentUrl('/api/files/mobile%20secret'),
+    /credentials/i,
+  );
+  assert.throws(
+    () => spacedClient.createAttachmentUrl('/api/files', { token: 'mobile secret' }),
+    /credentials/i,
+  );
+
+  const tildeClient = new HermesApiClient('https://hermes.test', 'mobile~secret');
+  assert.throws(
+    () => tildeClient.createAttachmentUrl('/api/files', { token: 'mobile~secret' }),
+    /credentials/i,
+  );
+});
+
+test('rejects a native-followed cross-origin response before reading its body', async () => {
+  let bodyRead = false;
+  let requestInit: RequestInit | undefined;
+  const response = withResponseUrl(
+    jsonResponse({ detail: 'mobile secret' }),
+    'https://attacker.test/collect?token=mobile+secret',
+  );
+  Object.defineProperty(response, 'text', {
+    configurable: true,
+    value: async () => {
+      bodyRead = true;
+      return '{"detail":"mobile secret"}';
+    },
+  });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile secret',
+    async (_input, init) => {
+      requestInit = init;
+      return response;
+    },
+  );
+
+  await assert.rejects(client.request('/api/config'), (error: unknown) => {
+    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${
+      error instanceof Error ? error.stack ?? '' : ''
+    }`;
+    assert.doesNotMatch(serialized, /attacker\.test/i);
+    assert.doesNotMatch(serialized, /mobile(?: secret|\+secret|%20secret)/i);
+    assert.match(serialized, /same-origin/i);
+    return true;
+  });
+  assert.equal(bodyRead, false);
+  assert.equal(requestInit?.redirect, undefined);
+});
+
 test('parses JSON, text, and empty successful responses', async () => {
   const responses = [
     jsonResponse({ version: '2' }),
@@ -164,6 +234,28 @@ test('non-2xx errors expose status but redact keys, headers, and echoed secrets'
     assert.doesNotMatch(serialized, /Authorization/i);
     return true;
   });
+});
+
+test('error redaction covers URLSearchParams space and tilde encoding', async () => {
+  for (const { apiKey, echoed } of [
+    { apiKey: 'mobile secret', echoed: 'mobile+secret' },
+    { apiKey: 'mobile~secret', echoed: 'mobile%7Esecret' },
+  ]) {
+    const client = new HermesApiClient(
+      'https://hermes.test',
+      apiKey,
+      async () => jsonResponse({ detail: `invalid ${echoed}` }, { status: 401 }),
+    );
+
+    await assert.rejects(client.request('/api/config'), (error: unknown) => {
+      assert.ok(error instanceof HermesApiError);
+      const serialized = `${String(error)}\n${JSON.stringify(error)}\n${error.stack ?? ''}`;
+      const normalized = serialized.toLowerCase();
+      assert.equal(normalized.includes(echoed.toLowerCase()), false);
+      assert.equal(normalized.includes(apiKey.toLowerCase()), false);
+      return true;
+    });
+  }
 });
 
 test('attachment helper builds only same-origin encoded URLs without credentials', () => {
