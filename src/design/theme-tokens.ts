@@ -95,7 +95,8 @@ function rgba(color: Rgb, alpha: number): string {
 }
 
 function layerColor(layer: ThemeLayer): string {
-  return rgba(parseHexColor(layer.hex), layer.alpha);
+  const percentage = Math.round(layer.alpha * 100);
+  return rgba(parseHexColor(layer.hex), percentage / 100);
 }
 
 function opaqueColor(hex: string): string {
