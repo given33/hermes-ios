@@ -27,6 +27,21 @@ export function isHermesNavigation(url: string): boolean {
   }
 }
 
+export function isHermesMainDocument(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.origin !== HERMES_ORIGIN) return false;
+    return (
+      parsed.pathname === '/' ||
+      parsed.pathname === '/chat' ||
+      parsed.pathname.startsWith('/chat/') ||
+      parsed.pathname === '/login'
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function selectIpaAsset(assets: ReleaseAsset[]): ReleaseAsset | undefined {
   return assets.find((asset) => asset.name.toLowerCase().endsWith('.ipa'));
 }

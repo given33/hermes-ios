@@ -3,14 +3,14 @@
     "name": "Hermes Agent",
     "slug": "hermes-agent-ios",
     "scheme": "hermes-agent",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.given33.hermesagent",
-      "buildNumber": "6",
+      "buildNumber": "7",
       "supportsTablet": true,
       "requireFullScreen": false,
       "infoPlist": {

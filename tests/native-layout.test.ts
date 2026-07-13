@@ -30,10 +30,29 @@ test('the web view owns the full screen safe area without native double padding'
   );
   assert.match(appSource, /Math\.min\(72,\s*Math\.max\(0,/);
   assert.match(appSource, /new MutationObserver\(bindComposerObserver\)/);
+  assert.match(appSource, /mutationObserver\?\.disconnect\(\)/);
   assert.match(appSource, /new ResizeObserver\(settleViewport\)/);
   assert.match(appSource, /window\.__HERMES_SYNC_VIEWPORT__\s*=\s*settleViewport/);
   assert.match(appSource, /type:\s*'viewport-metrics'/);
   assert.match(appSource, /new CustomEvent\('hermes:viewport-change'/);
+});
+
+test('the native bridge suspends network work and stops broad DOM observation', () => {
+  assert.match(appSource, /new CustomEvent\('hermes:app-background'\)/);
+  assert.match(appSource, /new CustomEvent\('hermes:app-resume'\)/);
+  assert.match(
+    appSource,
+    /if \(composer\)[\s\S]*mutationObserver\?\.disconnect\(\)/,
+  );
+  assert.doesNotMatch(appSource, /window\.dispatchEvent\(new Event\('focus'\)\)/);
+  assert.doesNotMatch(appSource, /document\.dispatchEvent\(new Event\('visibilitychange'\)\)/);
+});
+
+test('subresource 5xx responses do not mark the whole WebView as failed', () => {
+  assert.match(
+    appSource,
+    /nativeEvent\.statusCode >= 500 && isHermesMainDocument\(nativeEvent\.url\)/,
+  );
 });
 
 test('release checks bypass stale GitHub API caches', () => {
@@ -41,8 +60,8 @@ test('release checks bypass stale GitHub API caches', () => {
   assert.match(appSource, /GITHUB_LATEST_RELEASE_API.*Date\.now\(\)/s);
 });
 
-test('the 1.0.5 release increments both app and native build versions', () => {
-  assert.equal(appConfig.expo.version, '1.0.5');
-  assert.equal(appConfig.expo.ios.buildNumber, '6');
-  assert.equal(packageConfig.version, '1.0.5');
+test('the 1.0.6 release increments both app and native build versions', () => {
+  assert.equal(appConfig.expo.version, '1.0.6');
+  assert.equal(appConfig.expo.ios.buildNumber, '7');
+  assert.equal(packageConfig.version, '1.0.6');
 });

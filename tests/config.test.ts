@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   buildHermesUrl,
   getDownloadFilename,
+  isHermesMainDocument,
   isHermesNavigation,
   selectIpaAsset,
 } from '../src/config';
@@ -21,6 +22,17 @@ test('isHermesNavigation allows only the Hermes origin and app schemes', () => {
   assert.equal(isHermesNavigation('https://8.138.40.16/chat'), true);
   assert.equal(isHermesNavigation('hermes-agent://chat/abc'), true);
   assert.equal(isHermesNavigation('https://github.com/given33/hermes-ios'), false);
+});
+
+test('isHermesMainDocument ignores API and asset failures', () => {
+  assert.equal(isHermesMainDocument('https://8.138.40.16/chat?client=ios'), true);
+  assert.equal(isHermesMainDocument('https://8.138.40.16/'), true);
+  assert.equal(
+    isHermesMainDocument('https://8.138.40.16/api/plugins/collaboration/route'),
+    false,
+  );
+  assert.equal(isHermesMainDocument('https://8.138.40.16/assets/index.js'), false);
+  assert.equal(isHermesMainDocument('https://example.test/chat'), false);
 });
 
 test('selectIpaAsset chooses an IPA and ignores source archives', () => {

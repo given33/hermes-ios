@@ -24,6 +24,7 @@ import {
   getDownloadFilename,
   GITHUB_LATEST_RELEASE_API,
   HERMES_ORIGIN,
+  isHermesMainDocument,
   isHermesNavigation,
   selectIpaAsset,
 } from './src/config';
@@ -52,8 +53,10 @@ const NATIVE_BRIDGE = `
       window.visualViewport ? window.visualViewport.height : 0
     );
     let settleTimers = [];
+    let viewportFrame = 0;
     let composerObserver = null;
     let observedComposer = null;
+    let mutationObserver = null;
     let lastMetricsKey = '';
     const syncViewport = () => {
       const viewport = window.visualViewport;
@@ -110,24 +113,51 @@ const NATIVE_BRIDGE = `
         }));
       }
     };
+    const requestViewportSync = () => {
+      if (viewportFrame) return;
+      viewportFrame = requestAnimationFrame(() => {
+        viewportFrame = 0;
+        syncViewport();
+      });
+    };
     const settleViewport = () => {
       settleTimers.forEach(clearTimeout);
-      syncViewport();
-      settleTimers = [50, 150, 300, 600, 1000].map((delay) => setTimeout(syncViewport, delay));
+      requestViewportSync();
+      settleTimers = [120, 360].map((delay) => setTimeout(requestViewportSync, delay));
     };
     const bindComposerObserver = () => {
       const composer = document.querySelector('.hc-single-composer');
-      if (composer === observedComposer) return;
+      if (composer === observedComposer) {
+        if (composer) {
+          mutationObserver?.disconnect();
+          mutationObserver = null;
+        }
+        return;
+      }
       composerObserver && composerObserver.disconnect();
       observedComposer = composer;
       composerObserver = composer && window.ResizeObserver
         ? new ResizeObserver(settleViewport)
         : null;
       composerObserver && composerObserver.observe(composer);
+      if (composer) {
+        mutationObserver?.disconnect();
+        mutationObserver = null;
+      }
       settleViewport();
     };
-    const mutationObserver = new MutationObserver(bindComposerObserver);
-    mutationObserver.observe(document.documentElement, { childList: true, subtree: true });
+    const startComposerDiscovery = () => {
+      if (observedComposer && !observedComposer.isConnected) {
+        composerObserver && composerObserver.disconnect();
+        composerObserver = null;
+        observedComposer = null;
+      }
+      bindComposerObserver();
+      if (!observedComposer && !mutationObserver) {
+        mutationObserver = new MutationObserver(bindComposerObserver);
+        mutationObserver.observe(document.documentElement, { childList: true, subtree: true });
+      }
+    };
     window.__HERMES_SYNC_VIEWPORT__ = settleViewport;
     const resetViewport = () => {
       layoutHeight = Math.max(
@@ -138,12 +168,13 @@ const NATIVE_BRIDGE = `
     };
     window.addEventListener('resize', settleViewport);
     window.addEventListener('orientationchange', resetViewport);
-    window.addEventListener('pageshow', settleViewport);
+    window.addEventListener('pageshow', startComposerDiscovery);
+    window.addEventListener('popstate', startComposerDiscovery);
     window.visualViewport && window.visualViewport.addEventListener('resize', settleViewport);
-    window.visualViewport && window.visualViewport.addEventListener('scroll', syncViewport);
-    document.addEventListener('focusin', settleViewport);
+    window.visualViewport && window.visualViewport.addEventListener('scroll', requestViewportSync);
+    document.addEventListener('focusin', startComposerDiscovery);
     document.addEventListener('focusout', settleViewport);
-    bindComposerObserver();
+    startComposerDiscovery();
     settleViewport();
 
     document.addEventListener('click', (event) => {
@@ -171,11 +202,17 @@ function HermesApp() {
   const insets = useSafeAreaInsets();
   const webViewRef = useRef<WebView>(null);
   const wasOfflineRef = useRef(false);
+  const appStateRef = useRef(AppState.currentState);
+  const loadFailedRef = useRef(false);
   const lastViewportMetricsRef = useRef<Record<string, unknown> | null>(null);
   const [sourceUrl, setSourceUrl] = useState(buildHermesUrl());
   const [webViewKey, setWebViewKey] = useState(0);
   const [isOnline, setIsOnline] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
+
+  useEffect(() => {
+    loadFailedRef.current = loadFailed;
+  }, [loadFailed]);
 
   useEffect(() => {
     let active = true;
@@ -194,30 +231,48 @@ function HermesApp() {
     setIsOnline(connected);
 
     if (connected && wasOfflineRef.current) {
-      setLoadFailed(false);
-      setWebViewKey((current) => current + 1);
+      if (loadFailedRef.current) {
+        setLoadFailed(false);
+        setWebViewKey((current) => current + 1);
+      } else {
+        webViewRef.current?.injectJavaScript(`
+          window.dispatchEvent(new Event('online'));
+          window.dispatchEvent(new CustomEvent('hermes:app-resume'));
+          true;
+        `);
+      }
+    } else if (!connected && !wasOfflineRef.current) {
+      webViewRef.current?.injectJavaScript(`
+        window.dispatchEvent(new Event('offline'));
+        true;
+      `);
     }
     wasOfflineRef.current = !connected;
   }), []);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
-      webViewRef.current?.injectJavaScript(`
-        window.dispatchEvent(new Event('online'));
-        window.dispatchEvent(new Event('focus'));
-        window.dispatchEvent(new CustomEvent('hermes:app-resume'));
-        document.dispatchEvent(new Event('visibilitychange'));
-        window.__HERMES_SYNC_VIEWPORT__ && window.__HERMES_SYNC_VIEWPORT__();
-        true;
-      `);
-      if (loadFailed) {
-        setLoadFailed(false);
-        setWebViewKey((current) => current + 1);
+      const previousState = appStateRef.current;
+      appStateRef.current = state;
+      if (state === 'active') {
+        webViewRef.current?.injectJavaScript(`
+          window.dispatchEvent(new CustomEvent('hermes:app-resume'));
+          window.__HERMES_SYNC_VIEWPORT__ && window.__HERMES_SYNC_VIEWPORT__();
+          true;
+        `);
+        if (loadFailedRef.current) {
+          setLoadFailed(false);
+          setWebViewKey((current) => current + 1);
+        }
+      } else if (previousState === 'active') {
+        webViewRef.current?.injectJavaScript(`
+          window.dispatchEvent(new CustomEvent('hermes:app-background'));
+          true;
+        `);
       }
     });
     return () => subscription.remove();
-  }, [loadFailed]);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -305,7 +360,9 @@ function HermesApp() {
           thirdPartyCookiesEnabled
           onError={() => setLoadFailed(true)}
           onHttpError={({ nativeEvent }) => {
-            if (nativeEvent.statusCode >= 500) setLoadFailed(true);
+            if (nativeEvent.statusCode >= 500 && isHermesMainDocument(nativeEvent.url)) {
+              setLoadFailed(true);
+            }
           }}
           onLoad={() => setLoadFailed(false)}
           onFileDownload={({ nativeEvent }) => {
