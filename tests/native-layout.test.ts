@@ -26,8 +26,8 @@ test('release checks bypass stale GitHub API caches', () => {
   assert.match(appSource, /GITHUB_LATEST_RELEASE_API.*Date\.now\(\)/s);
 });
 
-test('the 1.0.1 release increments both app and native build versions', () => {
-  assert.equal(appConfig.expo.version, '1.0.1');
-  assert.equal(appConfig.expo.ios.buildNumber, '2');
-  assert.equal(packageConfig.version, '1.0.1');
+test('the 1.0.2 release increments both app and native build versions', () => {
+  assert.equal(appConfig.expo.version, '1.0.2');
+  assert.equal(appConfig.expo.ios.buildNumber, '3');
+  assert.equal(packageConfig.version, '1.0.2');
 });
