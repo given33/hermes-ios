@@ -208,27 +208,27 @@ struct HermesChatPage: View {
           proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
         }
       }
-      .onChange(of: messages.count) { _ in
+      .onChange(of: messages.count) {
         withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) {
           proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
         }
       }
-      .onChange(of: sending) { _ in
+      .onChange(of: sending) {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
           proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
         }
       }
-      .onChange(of: attachments.count) { _ in
+      .onChange(of: attachments.count) {
         withAnimation(.spring(response: 0.34, dampingFraction: 0.9)) {
           proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
         }
       }
-      .onChange(of: viewportHeight) { _ in
+      .onChange(of: viewportHeight) {
         withAnimation(.easeOut(duration: 0.2)) {
           proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
         }
       }
-      .onChange(of: composerFocused) { focused in
+      .onChange(of: composerFocused) { _, focused in
         guard focused else { return }
         Task { @MainActor in
           await Task.yield()

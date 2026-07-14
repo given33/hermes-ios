@@ -75,6 +75,8 @@ private struct HermesPressButtonStyle: ButtonStyle {
         .spring(response: 0.3, dampingFraction: 0.8),
         value: configuration.isPressed
       )
-      .onChange(of: configuration.isPressed, perform: onPressState)
+      .onChange(of: configuration.isPressed) { _, pressed in
+        onPressState(pressed)
+      }
   }
 }

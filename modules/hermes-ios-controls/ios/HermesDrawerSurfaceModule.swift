@@ -47,7 +47,7 @@ struct HermesDrawerSurfaceView: ExpoSwiftUI.View {
             }
           }
       )
-      .onChange(of: props.open) { next in
+      .onChange(of: props.open) { _, next in
         isOpen = next
       }
   }

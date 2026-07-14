@@ -44,7 +44,7 @@ struct HermesAlertPresenterView: ExpoSwiftUI.View {
           }
         }
       }
-      .onChange(of: props.open) { next in
+      .onChange(of: props.open) { _, next in
         if !next { appeared = false }
         isPresented = next
       }

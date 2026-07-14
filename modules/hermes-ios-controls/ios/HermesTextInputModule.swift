@@ -101,18 +101,18 @@ struct HermesTextInputView: ExpoSwiftUI.View {
     .onSubmit {
       props.onNativeSubmit(["value": text])
     }
-    .onChange(of: text) { next in
+    .onChange(of: text) { _, next in
       guard next != props.value else { return }
       props.onChangeText(["value": next])
     }
-    .onChange(of: focused) { next in
+    .onChange(of: focused) { _, next in
       if next {
         props.onNativeFocus()
       } else {
         props.onNativeBlur()
       }
     }
-    .onChange(of: props.focusRequest) { next in
+    .onChange(of: props.focusRequest) { _, next in
       if next > 0 { focused = true }
     }
     .onReceive(props.objectWillChange) {

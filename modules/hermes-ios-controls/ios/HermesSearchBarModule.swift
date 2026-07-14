@@ -58,7 +58,7 @@ struct HermesSearchBarView: ExpoSwiftUI.View {
     .padding(.horizontal, 9)
     .background(Color.hermes(props.backgroundColorValue))
     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-    .onChange(of: text) { next in
+    .onChange(of: text) { _, next in
       guard next != props.value else { return }
       props.onChangeText(["value": next])
     }

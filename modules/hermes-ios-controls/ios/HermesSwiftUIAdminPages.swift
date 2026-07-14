@@ -145,68 +145,74 @@ struct HermesKanbanPage: View {
     ScrollView(.horizontal) {
       HStack(alignment: .top, spacing: 12) {
         ForEach(columns.indices, id: \.self) { index in
-          VStack(alignment: .leading, spacing: 10) {
-            HStack {
-              Text(columnTitle(index))
-                .font(HermesFonts.display(14))
-              Spacer()
-              Text("\(columns[index].count)")
-                .font(HermesFonts.mono(11))
-                .foregroundStyle(appearance.palette.secondary)
-            }
-
-            ForEach(columns[index]) { card in
-              VStack(alignment: .leading, spacing: 6) {
-                Text(card.title).font(HermesFonts.bodyBold(14))
-                Text(card.detail)
-                  .font(HermesFonts.body(12))
-                  .foregroundStyle(appearance.palette.secondary)
-              }
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .padding(12)
-              .background(appearance.palette.elevated)
-              .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-              .draggable(card.id)
-              .contextMenu {
-                Button {
-                  move(card, from: index, to: min(2, index + 1))
-                } label: {
-                  Label(chinese ? "向后移动" : "Move Forward", systemImage: "arrow.right")
-                }
-                Button(role: .destructive) {
-                  columns[index].removeAll { $0.id == card.id }
-                } label: {
-                  Label(chinese ? "删除" : "Delete", systemImage: "trash")
-                }
-              }
-            }
-            Spacer(minLength: 20)
-          }
-          .padding(12)
-          .frame(width: 280, minHeight: 420, alignment: .top)
-          .background(appearance.palette.surface)
-          .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-          .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-              .stroke(appearance.palette.border)
-          }
-          .dropDestination(for: String.self) { cardIDs, _ in
-            for cardID in cardIDs {
-              guard let card = columns.flatMap({ $0 }).first(where: { $0.id == cardID }) else {
-                continue
-              }
-              for source in columns.indices {
-                columns[source].removeAll { $0.id == cardID }
-              }
-              columns[index].append(card)
-            }
-            return true
-          }
+          kanbanColumn(index)
         }
       }
       .padding(16)
     }
     .background(appearance.palette.background)
+  }
+
+  private func kanbanColumn(_ index: Int) -> some View {
+    let cards = columns[index]
+
+    return VStack(alignment: .leading, spacing: 10) {
+      columnHeader(index, count: cards.count)
+      ForEach(cards) { card in
+        kanbanCard(card, in: index)
+      }
+      Spacer(minLength: 20)
+    }
+    .padding(12)
+    .frame(width: 280)
+    .frame(minHeight: 420, alignment: .top)
+    .background(appearance.palette.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(appearance.palette.border)
+    }
+    .dropDestination(for: String.self) { cardIDs, _ in
+      handleDrop(cardIDs, into: index)
+    }
+  }
+
+  private func columnHeader(_ index: Int, count: Int) -> some View {
+    HStack {
+      Text(columnTitle(index))
+        .font(HermesFonts.display(14))
+      Spacer()
+      Text("\(count)")
+        .font(HermesFonts.mono(11))
+        .foregroundStyle(appearance.palette.secondary)
+    }
+  }
+
+  private func kanbanCard(_ card: HermesKanbanCard, in column: Int) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(card.title)
+        .font(HermesFonts.bodyBold(14))
+      Text(card.detail)
+        .font(HermesFonts.body(12))
+        .foregroundStyle(appearance.palette.secondary)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(12)
+    .background(appearance.palette.elevated)
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .draggable(card.id)
+    .contextMenu {
+      Button {
+        move(card, from: column, to: min(columns.count - 1, column + 1))
+      } label: {
+        Label(chinese ? "向后移动" : "Move Forward", systemImage: "arrow.right")
+      }
+      Button(role: .destructive) {
+        remove(card, from: column)
+      } label: {
+        Label(chinese ? "删除" : "Delete", systemImage: "trash")
+      }
+    }
   }
 
   private func columnTitle(_ index: Int) -> String {
@@ -221,6 +227,30 @@ struct HermesKanbanPage: View {
       columns[source].removeAll { $0.id == card.id }
       columns[target].append(card)
     }
+  }
+
+  private func remove(_ card: HermesKanbanCard, from column: Int) {
+    withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+      columns[column].removeAll { $0.id == card.id }
+    }
+  }
+
+  private func handleDrop(_ cardIDs: [String], into destination: Int) -> Bool {
+    let allCards = columns.flatMap { $0 }
+    let droppedCards = cardIDs.compactMap { cardID in
+      allCards.first { $0.id == cardID }
+    }
+    guard !droppedCards.isEmpty else { return false }
+
+    withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+      for card in droppedCards {
+        for source in columns.indices {
+          columns[source].removeAll { $0.id == card.id }
+        }
+        columns[destination].append(card)
+      }
+    }
+    return true
   }
 }
 
@@ -419,7 +449,7 @@ private struct HermesProfileEditor: View {
     .navigationTitle(profile.name)
     .navigationBarTitleDisplayMode(.inline)
     .tint(appearance.palette.accent)
-    .onChange(of: profile) { updated in
+    .onChange(of: profile) { _, updated in
       onChange(updated)
     }
   }

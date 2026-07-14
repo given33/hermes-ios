@@ -82,7 +82,7 @@ private struct HermesSwiftUILoginScreen: View {
         appeared = true
       }
     }
-    .onChange(of: props.baseUrl) { next in
+    .onChange(of: props.baseUrl) { _, next in
       if focusedField != .baseUrl { baseUrl = next }
     }
   }

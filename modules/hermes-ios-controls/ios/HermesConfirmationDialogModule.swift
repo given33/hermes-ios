@@ -55,10 +55,10 @@ struct HermesConfirmationDialogView: ExpoSwiftUI.View {
         }
         SwiftUI.Button(props.cancelTitle, role: .cancel) {}
       }
-      .onChange(of: props.open) { next in
+      .onChange(of: props.open) { _, next in
         isPresented = next
       }
-      .onChange(of: isPresented) { next in
+      .onChange(of: isPresented) { _, next in
         props.onOpenChange(["open": next])
       }
   }
