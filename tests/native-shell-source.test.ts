@@ -25,6 +25,13 @@ test('phone drawer and iPad rail consume the frozen shell motion contract', () =
   assert.match(source, /resolveMobileDrawerTranslation/);
   assert.match(source, /Gesture\.Pan\(\)/);
   assert.match(source, /styles\.openEdge/);
+  assert.match(source, /top: insets\.top \+ SHELL_METRICS\.headerHeight/);
+  assert.doesNotMatch(
+    source.slice(source.indexOf('openEdge: {')),
+    /openEdge:\s*\{[^}]*top:\s*0/s,
+  );
+  assert.match(source, /\.onEnd\(\(event, success\) =>/);
+  assert.match(source, /if \(!success\)/);
 });
 
 test('navigation keeps icon and text on one exact shared color animation', () => {
@@ -54,4 +61,25 @@ test('sidebar preserves the customized WebUI ownership order', () => {
     assert.ok(next > offset, `${marker} must follow the prior shell slot`);
     offset = next;
   }
+});
+
+test('safe areas and modal accessibility cover phone and tablet shells', () => {
+  const source = read('src/app/NativeShell.tsx');
+  assert.match(source, /paddingLeft: safeLeft \+ typography\.spacingUnit \* 4/);
+  assert.match(source, /paddingRight: safeRight \+ typography\.spacingUnit \* 4/);
+  assert.match(source, /paddingLeft: insets\.left/);
+  assert.match(source, /paddingRight: insets\.right/);
+  assert.match(source, /paddingBottom: insets\.bottom/);
+  assert.match(source, /SHELL_METRICS\.sidebarWidth \+ insets\.left/);
+  assert.match(source, /accessibilityElementsHidden=\{!state\.mobileOpen\}/);
+  assert.match(source, /accessibilityViewIsModal=\{state\.mobileOpen\}/);
+  assert.match(source, /'no-hide-descendants'/);
+});
+
+test('every requested path is resolved before route, selection, and slot state', () => {
+  const source = read('src/app/NativeShell.tsx');
+  assert.match(source, /resolveNativeShellPath\(\s*composition\.routes,\s*initialPath/s);
+  assert.match(source, /path: resolveNativeShellPath\(composition\.routes, path\)/);
+  assert.match(source, /resolveNativeShellPath\(\s*composition\.routes,\s*state\.activePath/s);
+  assert.doesNotMatch(source, /activeRoute[\s\S]*\?\? composition\.routes/);
 });

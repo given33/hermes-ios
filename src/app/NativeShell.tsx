@@ -86,6 +86,7 @@ import {
   createNativeShellState,
   reduceNativeShellState,
   resolveMobileDrawerTranslation,
+  resolveNativeShellPath,
   resolveShellTypography,
   resolveVisibleSidebarWidth,
 } from './shell-contracts';
@@ -168,13 +169,22 @@ export function NativeShell({
     () => composeRouteRegistry({ config, locale, manifests }),
     [config, locale, manifests],
   );
+  const resolvedInitialPath = resolveNativeShellPath(
+    composition.routes,
+    initialPath,
+  );
   const [state, dispatch] = useReducer(
     reduceNativeShellState,
     undefined,
-    () => createNativeShellState(layout.mode, initialPath),
+    () => createNativeShellState(layout.mode, resolvedInitialPath),
   );
-  const sidebarWidth = useSharedValue(resolveVisibleSidebarWidth(state));
-  const drawerTranslation = useSharedValue(resolveMobileDrawerTranslation(state));
+  const drawerExtent = SHELL_METRICS.sidebarWidth + insets.left;
+  const visibleSidebarWidth = resolveVisibleSidebarWidth(state) + insets.left;
+  const initialDrawerTranslation = resolveMobileDrawerTranslation(state) < 0
+    ? -drawerExtent
+    : 0;
+  const sidebarWidth = useSharedValue(visibleSidebarWidth);
+  const drawerTranslation = useSharedValue(initialDrawerTranslation);
   const typography = resolveShellTypography(tokens);
   const rootBackground = opaque(tokens.colors.background);
   const borderStrong = multiplyAlpha(tokens.colors.foreground, 0.2);
@@ -185,24 +195,40 @@ export function NativeShell({
   }, [layout.mode]);
 
   useEffect(() => {
-    sidebarWidth.value = withTiming(resolveVisibleSidebarWidth(state), {
+    const resolvedPath = resolveNativeShellPath(
+      composition.routes,
+      state.activePath,
+    );
+    if (resolvedPath !== state.activePath) {
+      dispatch({ type: 'navigate', path: resolvedPath });
+    }
+  }, [composition.routes, state.activePath]);
+
+  useEffect(() => {
+    sidebarWidth.value = withTiming(visibleSidebarWidth, {
       duration: SHELL_METRICS.desktopWidthDurationMs,
       easing: WEB_TRANSITION_EASING,
     });
-  }, [sidebarWidth, state.collapsed, state.mode]);
+  }, [sidebarWidth, state.collapsed, state.mode, visibleSidebarWidth]);
 
   useEffect(() => {
-    drawerTranslation.value = withTiming(resolveMobileDrawerTranslation(state), {
+    const target = resolveMobileDrawerTranslation(state) < 0
+      ? -drawerExtent
+      : 0;
+    drawerTranslation.value = withTiming(target, {
       duration: SHELL_METRICS.mobileDrawerDurationMs,
       easing: WEB_TRANSITION_EASING,
     });
-  }, [drawerTranslation, state.mobileOpen, state.mode]);
+  }, [drawerExtent, drawerTranslation, state.mobileOpen, state.mode]);
 
   const openMobile = useCallback(() => dispatch({ type: 'open-mobile' }), []);
   const closeMobile = useCallback(() => dispatch({ type: 'close-mobile' }), []);
   const navigate = useCallback(
-    (path: string) => dispatch({ type: 'navigate', path }),
-    [],
+    (path: string) => dispatch({
+      type: 'navigate',
+      path: resolveNativeShellPath(composition.routes, path),
+    }),
+    [composition.routes],
   );
   const toggleCollapsed = useCallback(
     () => dispatch({ type: 'toggle-collapsed' }),
@@ -217,7 +243,7 @@ export function NativeShell({
   const overlayStyle = useAnimatedStyle(() => ({
     opacity: interpolate(
       drawerTranslation.value,
-      [-SHELL_METRICS.sidebarWidth, 0],
+      [-drawerExtent, 0],
       [0, 1],
       'clamp',
     ),
@@ -228,21 +254,28 @@ export function NativeShell({
       .failOffsetY([-12, 12])
       .onUpdate((event) => {
         drawerTranslation.value = Math.max(
-          -SHELL_METRICS.sidebarWidth,
-          Math.min(0, -SHELL_METRICS.sidebarWidth + event.translationX),
+          -drawerExtent,
+          Math.min(0, -drawerExtent + event.translationX),
         );
       })
-      .onEnd((event) => {
-        if (event.translationX > SHELL_METRICS.sidebarWidth * 0.25) {
+      .onEnd((event, success) => {
+        if (!success) {
+          drawerTranslation.value = withTiming(-drawerExtent, {
+            duration: SHELL_METRICS.mobileDrawerDurationMs,
+            easing: WEB_TRANSITION_EASING,
+          });
+          return;
+        }
+        if (event.translationX > drawerExtent * 0.25) {
           runOnJS(openMobile)();
         } else {
-          drawerTranslation.value = withTiming(-SHELL_METRICS.sidebarWidth, {
+          drawerTranslation.value = withTiming(-drawerExtent, {
             duration: SHELL_METRICS.mobileDrawerDurationMs,
             easing: WEB_TRANSITION_EASING,
           });
         }
       }),
-    [drawerTranslation, openMobile],
+    [drawerExtent, drawerTranslation, openMobile],
   );
   const closeGesture = useMemo(
     () => Gesture.Pan()
@@ -250,12 +283,19 @@ export function NativeShell({
       .failOffsetY([-12, 12])
       .onUpdate((event) => {
         drawerTranslation.value = Math.max(
-          -SHELL_METRICS.sidebarWidth,
+          -drawerExtent,
           Math.min(0, event.translationX),
         );
       })
-      .onEnd((event) => {
-        if (event.translationX < -SHELL_METRICS.sidebarWidth * 0.25) {
+      .onEnd((event, success) => {
+        if (!success) {
+          drawerTranslation.value = withTiming(0, {
+            duration: SHELL_METRICS.mobileDrawerDurationMs,
+            easing: WEB_TRANSITION_EASING,
+          });
+          return;
+        }
+        if (event.translationX < -drawerExtent * 0.25) {
           runOnJS(closeMobile)();
         } else {
           drawerTranslation.value = withTiming(0, {
@@ -264,12 +304,11 @@ export function NativeShell({
           });
         }
       }),
-    [closeMobile, drawerTranslation],
+    [closeMobile, drawerExtent, drawerTranslation],
   );
   const activeRoute = composition.routes.find(
     (route) => route.path === state.activePath,
-  ) ?? composition.routes.find((route) => route.path === '/sessions')
-    ?? composition.routes[0];
+  );
   const allNavigationItems = [
     ...composition.coreItems,
     ...composition.pluginItems,
@@ -289,8 +328,11 @@ export function NativeShell({
       {state.mode === 'compact' ? (
         <MobileHeader
           borderColor={borderStrong}
+          hidden={state.mobileOpen}
           locale={locale}
           onOpen={openMobile}
+          safeLeft={insets.left}
+          safeRight={insets.right}
           safeTop={insets.top}
           typography={typography}
         />
@@ -322,7 +364,30 @@ export function NativeShell({
           </Reanimated.View>
         ) : null}
 
-        <View style={styles.content}>
+        <View
+          accessibilityElementsHidden={
+            state.mode === 'compact' && state.mobileOpen
+          }
+          importantForAccessibility={
+            state.mode === 'compact' && state.mobileOpen
+              ? 'no-hide-descendants'
+              : 'auto'
+          }
+          style={[
+            styles.content,
+            state.mode === 'compact'
+              ? {
+                  paddingBottom: insets.bottom,
+                  paddingLeft: insets.left,
+                  paddingRight: insets.right,
+                }
+              : {
+                  paddingBottom: insets.bottom,
+                  paddingRight: insets.right,
+                  paddingTop: insets.top,
+                },
+          ]}
+        >
           {activeRoute
             ? renderRoute?.(activeRoute, activeLabel)
               ?? <RoutePreview label={activeLabel} />
@@ -333,6 +398,10 @@ export function NativeShell({
       {state.mode === 'compact' ? (
         <Fragment>
           <Reanimated.View
+            accessibilityElementsHidden={!state.mobileOpen}
+            importantForAccessibility={
+              state.mobileOpen ? 'yes' : 'no-hide-descendants'
+            }
             pointerEvents={state.mobileOpen ? 'auto' : 'none'}
             style={[styles.overlay, { backgroundColor: SHELL_METRICS.overlayColor }, overlayStyle]}
           >
@@ -345,12 +414,22 @@ export function NativeShell({
 
           {!state.mobileOpen ? (
             <GestureDetector gesture={openGesture}>
-              <View style={styles.openEdge} />
+              <View
+                style={[
+                  styles.openEdge,
+                  { top: insets.top + SHELL_METRICS.headerHeight },
+                ]}
+              />
             </GestureDetector>
           ) : null}
 
           <GestureDetector gesture={closeGesture}>
             <Reanimated.View
+              accessibilityElementsHidden={!state.mobileOpen}
+              accessibilityViewIsModal={state.mobileOpen}
+              importantForAccessibility={
+                state.mobileOpen ? 'yes' : 'no-hide-descendants'
+              }
               style={[
                 styles.mobileSidebar,
                 drawerWidthStyle,
@@ -382,14 +461,20 @@ export function NativeShell({
 
 function MobileHeader({
   borderColor,
+  hidden,
   locale,
   onOpen,
+  safeLeft,
+  safeRight,
   safeTop,
   typography,
 }: {
   borderColor: string;
+  hidden: boolean;
   locale: NativeRouteLocale;
   onOpen(): void;
+  safeLeft: number;
+  safeRight: number;
   safeTop: number;
   typography: ReturnType<typeof resolveShellTypography>;
 }) {
@@ -397,6 +482,8 @@ function MobileHeader({
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
   return (
     <View
+      accessibilityElementsHidden={hidden}
+      importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
       style={[
         styles.mobileHeader,
         {
@@ -405,7 +492,8 @@ function MobileHeader({
           gap: typography.spacingUnit * 2,
           height: safeTop + SHELL_METRICS.headerHeight,
           paddingBottom: typography.spacingUnit * 2,
-          paddingHorizontal: typography.spacingUnit * 4,
+          paddingLeft: safeLeft + typography.spacingUnit * 4,
+          paddingRight: safeRight + typography.spacingUnit * 4,
           paddingTop: safeTop,
         },
       ]}
@@ -477,6 +565,7 @@ function Sidebar({
           backgroundColor: rootBackground,
           borderRightColor: borderStrong,
           paddingBottom: insets.bottom,
+          paddingLeft: insets.left,
           paddingTop: insets.top,
         },
       ]}
@@ -896,7 +985,6 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     position: 'absolute',
-    top: 0,
     width: 24,
     zIndex: 45,
   },

@@ -1,4 +1,5 @@
 import type { NativeThemeTokens } from '../design/theme-types';
+import type { ComposedRoute } from './route-composition';
 import {
   ADAPTIVE_LAYOUT_METRICS,
   type AdaptiveLayoutMode,
@@ -196,6 +197,27 @@ export function resolveVisibleSidebarWidth(state: NativeShellState): number {
 export function resolveMobileDrawerTranslation(state: NativeShellState): number {
   if (state.mode === 'split' || state.mobileOpen) return 0;
   return -SHELL_METRICS.sidebarWidth;
+}
+
+export function resolveNativeShellPath(
+  routes: readonly ComposedRoute[],
+  requestedPath: string,
+): string {
+  const fallback = routes.find(
+    (route) => route.path === '/sessions' && !route.redirectTo,
+  ) ?? routes.find((route) => !route.redirectTo);
+  let path = requestedPath;
+  const visited = new Set<string>();
+
+  while (!visited.has(path)) {
+    visited.add(path);
+    const route = routes.find((candidate) => candidate.path === path);
+    if (!route) return fallback?.path ?? requestedPath;
+    if (!route.redirectTo) return route.path;
+    path = route.redirectTo;
+  }
+
+  return fallback?.path ?? requestedPath;
 }
 
 function parseRootSize(value: string): number {

@@ -8,6 +8,7 @@ import {
   createNativeShellState,
   reduceNativeShellState,
   resolveMobileDrawerTranslation,
+  resolveNativeShellPath,
   resolveShellTypography,
   resolveVisibleSidebarWidth,
 } from '../src/app/shell-contracts';
@@ -129,4 +130,33 @@ test('split navigation alone owns the persistent collapsed state', () => {
   assert.equal(compact.collapsed, true);
   assert.equal(compact.mobileOpen, false);
   assert.equal(resolveVisibleSidebarWidth(compact), 256);
+});
+
+test('root, unknown, removed, and cyclic routes resolve to a real active path', () => {
+  const routes = [
+    {
+      key: 'root',
+      path: '/',
+      source: 'builtin' as const,
+      redirectTo: '/sessions',
+    },
+    {
+      key: 'sessions',
+      path: '/sessions',
+      source: 'builtin' as const,
+    },
+    {
+      key: 'skills',
+      path: '/skills',
+      source: 'builtin' as const,
+    },
+  ];
+  assert.equal(resolveNativeShellPath(routes, '/'), '/sessions');
+  assert.equal(resolveNativeShellPath(routes, '/skills'), '/skills');
+  assert.equal(resolveNativeShellPath(routes, '/removed-plugin'), '/sessions');
+  assert.equal(resolveNativeShellPath([
+    ...routes,
+    { key: 'a', path: '/a', source: 'plugin' as const, redirectTo: '/b' },
+    { key: 'b', path: '/b', source: 'plugin' as const, redirectTo: '/a' },
+  ], '/a'), '/sessions');
 });
