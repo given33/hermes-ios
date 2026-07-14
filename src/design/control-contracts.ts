@@ -107,6 +107,7 @@ export const CONTROL_METRICS = {
     headerGapSpacingUnits: 3,
     contentGapSpacingUnits: 1,
     warningIconSpacingUnits: 4,
+    warningIconMarginTopSpacingUnits: 0.5,
     titleFontSizeRem: 0.875,
     titleLineHeightRem: 1.25,
     titleLetterSpacingEm: 0.08,
@@ -189,6 +190,7 @@ export interface NativeConfirmDialogMetrics {
   headerGap: number;
   contentGap: number;
   warningIconSize: number;
+  warningIconMarginTop: number;
   titleFontSize: number;
   titleLineHeight: number;
   titleLetterSpacing: number;
@@ -493,6 +495,10 @@ export function resolveConfirmDialogMetrics(
     warningIconSize: tailwindSpacing(
       tokens,
       CONTROL_METRICS.confirmDialog.warningIconSpacingUnits,
+    ),
+    warningIconMarginTop: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.confirmDialog.warningIconMarginTopSpacingUnits,
     ),
     titleFontSize,
     titleLineHeight:

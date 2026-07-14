@@ -9,14 +9,9 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { TriangleAlert } from 'lucide-react-native';
-import {
-  BackdropFilter,
-  Blur,
-  Canvas,
-  Fill,
-} from '@shopify/react-native-skia';
 
 import { WEBUI_FONT_FAMILIES } from '../../app/webui-fonts';
+import { HermesLiveBlurView } from '../../../modules/hermes-live-blur';
 import {
   CONTROL_METRICS,
   INITIAL_CONFIRM_DIALOG_GATE,
@@ -64,7 +59,6 @@ export function ConfirmDialog({
   const gate = useRef<ConfirmDialogGateState>(INITIAL_CONFIRM_DIALOG_GATE);
   const callbacks = useRef({ onCancel, onConfirm });
   callbacks.current = { onCancel, onConfirm };
-
   useEffect(() => {
     gate.current = transitionConfirmDialogGate(gate.current, {
       type: 'sync',
@@ -132,13 +126,16 @@ export function ConfirmDialog({
           pointerEvents="none"
           style={[styles.overlay, { opacity: progress }]}
         >
-          <Canvas style={StyleSheet.absoluteFill}>
-            <BackdropFilter
-              filter={<Blur blur={CONTROL_METRICS.confirmDialog.backdropBlurRadius} />}
-            >
-              <Fill color={colors.overlay} />
-            </BackdropFilter>
-          </Canvas>
+          <HermesLiveBlurView
+            blurRadius={CONTROL_METRICS.confirmDialog.backdropBlurRadius}
+            style={StyleSheet.absoluteFill}
+          />
+          <View
+            style={[
+              StyleSheet.absoluteFill,
+              { backgroundColor: colors.overlay },
+            ]}
+          />
         </Animated.View>
 
         <Animated.View
@@ -173,7 +170,13 @@ export function ConfirmDialog({
             ]}
           >
             {destructive ? (
-              <View accessibilityElementsHidden style={styles.warningIcon}>
+              <View
+                accessibilityElementsHidden
+                style={{
+                  flexShrink: 0,
+                  marginTop: metrics.warningIconMarginTop,
+                }}
+              >
                 <TriangleAlert
                   color={tokens.colors.destructive}
                   size={metrics.warningIconSize}
@@ -258,10 +261,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     borderBottomWidth: CONTROL_METRICS.confirmDialog.borderWidth,
     flexDirection: 'row',
-  },
-  warningIcon: {
-    flexShrink: 0,
-    marginTop: 2,
   },
   copy: {
     flex: 1,

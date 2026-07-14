@@ -2,6 +2,7 @@ import {
   Children,
   cloneElement,
   forwardRef,
+  Fragment,
   isValidElement,
   useEffect,
   useState,
@@ -31,7 +32,6 @@ import {
 } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
 
-const AnimatedPressable = Reanimated.createAnimatedComponent(Pressable);
 const TRANSITION_EASING = Easing.bezier(
   ...CONTROL_METRICS.tailwind.transitionEasing,
 );
@@ -69,15 +69,15 @@ export const NativeListItem = forwardRef<View, NativeListItemProps>(
     const [hovered, setHovered] = useState(false);
     const [pressed, setPressed] = useState(false);
     const isDisabled = disabled === true;
-    const initialTextColor = isDisabled
+    const resolvedTextColor = isDisabled
       ? colors.disabledText
-      : active
+      : active || hovered || pressed
         ? colors.activeText
         : colors.inactiveText;
     const animatedBackground = useSharedValue(
       active ? colors.activeBackground : 'rgba(0, 0, 0, 0)',
     );
-    const animatedText = useSharedValue(initialTextColor);
+    const animatedText = useSharedValue(resolvedTextColor);
     const animatedOutline = useSharedValue('rgba(0, 0, 0, 0)');
 
     useEffect(() => {
@@ -131,7 +131,7 @@ export const NativeListItem = forwardRef<View, NativeListItemProps>(
     );
 
     return (
-      <AnimatedPressable
+      <Pressable
         {...props}
         accessibilityRole={props.accessibilityRole ?? 'button'}
         accessibilityState={{
@@ -175,25 +175,36 @@ export const NativeListItem = forwardRef<View, NativeListItemProps>(
           styles.item,
           {
             gap: metrics.gap,
-            outlineWidth: focused ? CONTROL_METRICS.listItem.focusRingWidth : 0,
             paddingHorizontal: metrics.paddingHorizontal,
             paddingVertical: metrics.paddingVertical,
           },
-          animatedItemStyle,
           typeof style === 'function' ? style(state) : style,
         ]}
       >
-        {() => Children.map(
+        <Reanimated.View
+          pointerEvents="none"
+          style={[
+            StyleSheet.absoluteFill,
+            {
+              outlineWidth: focused
+                ? CONTROL_METRICS.listItem.focusRingWidth
+                : 0,
+            },
+            animatedItemStyle,
+          ]}
+        />
+        {Children.map(
           children,
           (child) => renderListItemChild(
             child,
             animatedTextStyle,
+            resolvedTextColor,
             metrics.fontSize,
             metrics.lineHeight,
             textStyle,
           ),
         )}
-      </AnimatedPressable>
+      </Pressable>
     );
   },
 );
@@ -201,10 +212,11 @@ export const NativeListItem = forwardRef<View, NativeListItemProps>(
 function renderListItemChild(
   child: ReactNode,
   animatedColor: StyleProp<TextStyle>,
+  resolvedColor: string,
   fontSize: number,
   lineHeight: number,
   textStyle: StyleProp<TextStyle>,
-) {
+): ReactNode {
   if (typeof child === 'string' || typeof child === 'number') {
     return (
       <Reanimated.Text
@@ -220,19 +232,55 @@ function renderListItemChild(
     );
   }
   if (!isValidElement(child)) return child;
+  if (child.type === Fragment) {
+    const fragment = child as ReactElement<{ children?: ReactNode }>;
+    return (
+      <Fragment>
+        {Children.map(fragment.props.children, (nested) => renderListItemChild(
+          nested,
+          animatedColor,
+          resolvedColor,
+          fontSize,
+          lineHeight,
+          textStyle,
+        ))}
+      </Fragment>
+    );
+  }
   if (child.type === Text) {
-    const text = child as ReactElement<{ style?: StyleProp<TextStyle> }>;
-    return cloneElement(text, {
-      style: [
-        styles.text,
-        { fontSize, lineHeight },
+    const text = child as ReactElement<{
+      children?: ReactNode;
+      style?: StyleProp<TextStyle>;
+    }>;
+    return (
+      <Reanimated.Text
+        {...text.props}
+        style={[
+          styles.text,
+          { fontSize, lineHeight },
+          animatedColor,
+          text.props.style,
+          textStyle,
+        ]}
+      />
+    );
+  }
+  if (child.type === View) {
+    const view = child as ReactElement<{ children?: ReactNode }>;
+    return cloneElement(view, {
+      children: Children.map(view.props.children, (nested) => renderListItemChild(
+        nested,
         animatedColor,
-        text.props.style,
+        resolvedColor,
+        fontSize,
+        lineHeight,
         textStyle,
-      ],
+      )),
     });
   }
-  return child;
+  return cloneElement(child as ReactElement<{ color?: string }>, {
+    color: resolvedColor,
+  });
 }
 
 const styles = StyleSheet.create({

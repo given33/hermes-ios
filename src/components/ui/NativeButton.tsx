@@ -2,6 +2,7 @@ import {
   Children,
   cloneElement,
   forwardRef,
+  Fragment,
   isValidElement,
   useEffect,
   useId,
@@ -411,28 +412,108 @@ function renderChild(
   fontSize: number,
   letterSpacing: number,
   textStyle: StyleProp<TextStyle>,
-) {
+): ReactNode {
   if (typeof child === 'string' || typeof child === 'number') {
     return (
       <Text
-        style={[
-          styles.text,
-          {
-            color,
-            fontFamily,
-            fontSize,
-            fontWeight: fontFamily?.startsWith('Hermes') ? undefined : '700',
-            letterSpacing,
-            lineHeight: fontSize,
-          },
+        style={buttonTextStyles(
+          color,
+          fontFamily,
+          fontSize,
+          letterSpacing,
           textStyle,
-        ]}
+        )}
       >
         {child}
       </Text>
     );
   }
-  return renderIcon(child, color, iconSize);
+  if (!isValidElement(child)) return child;
+  if (child.type === Fragment) {
+    const fragment = child as ReactElement<{ children?: ReactNode }>;
+    return (
+      <Fragment>
+        {Children.map(fragment.props.children, (nested) => renderChild(
+          nested,
+          color,
+          iconSize,
+          fontFamily,
+          fontSize,
+          letterSpacing,
+          textStyle,
+        ))}
+      </Fragment>
+    );
+  }
+  if (child.type === Text) {
+    const text = child as ReactElement<{
+      children?: ReactNode;
+      style?: StyleProp<TextStyle>;
+    }>;
+    return cloneElement(text, {
+      style: buttonTextStyles(
+        color,
+        fontFamily,
+        fontSize,
+        letterSpacing,
+        [text.props.style, textStyle],
+      ),
+    });
+  }
+  if (child.type === View) {
+    const view = child as ReactElement<{ children?: ReactNode }>;
+    return cloneElement(view, {
+      children: Children.map(view.props.children, (nested) => renderChild(
+        nested,
+        color,
+        iconSize,
+        fontFamily,
+        fontSize,
+        letterSpacing,
+        textStyle,
+      )),
+    });
+  }
+  const composite = child as ReactElement<{
+    color?: ColorValue;
+    size?: number;
+    style?: StyleProp<TextStyle>;
+  }>;
+  return cloneElement(composite, {
+    color,
+    size: iconSize,
+    style: [
+      buttonTextStyles(
+        color,
+        fontFamily,
+        fontSize,
+        letterSpacing,
+        textStyle,
+      ),
+      composite.props.style,
+    ],
+  });
+}
+
+function buttonTextStyles(
+  color: string,
+  fontFamily: string | undefined,
+  fontSize: number,
+  letterSpacing: number,
+  textStyle: StyleProp<TextStyle>,
+): StyleProp<TextStyle> {
+  return [
+    styles.text,
+    {
+      color,
+      fontFamily,
+      fontSize,
+      fontWeight: fontFamily?.startsWith('Hermes') ? undefined : '700',
+      letterSpacing,
+      lineHeight: fontSize,
+    },
+    textStyle,
+  ];
 }
 
 function renderIcon(node: ReactNode, color: string, size: number) {
