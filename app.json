@@ -17,6 +17,7 @@
         "CFBundleDisplayName": "Hermes Agent",
         "CFBundleAllowMixedLocalizations": true,
         "CFBundleDevelopmentRegion": "zh_CN",
+        "CADisableMinimumFrameDurationOnPhone": true,
         "ITSAppUsesNonExemptEncryption": false,
         "NSCameraUsageDescription": "用于在 Hermes 会话中拍照并上传。",
         "NSMicrophoneUsageDescription": "用于在 Hermes 会话中录制并上传音频。",
@@ -31,7 +32,7 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "16.0"
+            "deploymentTarget": "18.0"
           }
         }
       ],

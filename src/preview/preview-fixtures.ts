@@ -41,29 +41,6 @@ export const PREVIEW_SESSIONS = [
   },
 ] as const;
 
-export const PREVIEW_MESSAGES = [
-  {
-    role: 'user',
-    content: 'Keep the customized WebUI as the source of truth, but make the iOS client fully native.',
-    time: '14:02',
-  },
-  {
-    role: 'assistant',
-    content: 'I will preserve the route map, visual tokens, fonts, controls, motion curves, and plugin ordering. Backend calls stay outside this frontend preview.',
-    time: '14:02',
-  },
-  {
-    role: 'tool',
-    content: 'read_file: web/src/App.tsx\nread_file: web/src/themes/context.tsx\nstatus: complete',
-    time: '14:03',
-  },
-  {
-    role: 'assistant',
-    content: 'The adaptive shell now matches the WebUI information architecture on iPhone and iPad. The next layer is the native page surface.',
-    time: '14:04',
-  },
-] as const;
-
 export const PREVIEW_FILES = [
   { name: 'config.yaml', kind: 'file', size: '8.4 KB', modified: 'Today 13:48' },
   { name: 'profiles', kind: 'folder', size: '--', modified: 'Today 12:31' },

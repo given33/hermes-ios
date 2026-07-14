@@ -1,0 +1,16 @@
+{
+  "platforms": ["apple"],
+  "apple": {
+    "modules": [
+      "HermesSearchBarModule",
+      "HermesSelectionModule",
+      "HermesPressFeedbackModule",
+      "HermesAlertPresenterModule",
+      "HermesTextInputModule",
+      "HermesDrawerSurfaceModule",
+      "HermesConfirmationDialogModule",
+      "HermesSwiftUIFrontendModule",
+      "HermesSwiftUILoginModule"
+    ]
+  }
+}

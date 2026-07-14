@@ -42,7 +42,7 @@ export function assertNoWebRuntime(sources: readonly NativeRuntimeSource[]): voi
   }
 }
 
-export function assertGestureHandlerImportFirst(source: string): void {
+export function assertPureSwiftUIEntry(source: string): void {
   const sourceFile = ts.createSourceFile(
     'index.ts',
     source,
@@ -50,18 +50,22 @@ export function assertGestureHandlerImportFirst(source: string): void {
     true,
     ts.ScriptKind.TS,
   );
-  const firstStatement = sourceFile.statements[0];
+  const importsGestureHandler = sourceFile.statements.some(
+    (statement) =>
+      ts.isImportDeclaration(statement)
+      && ts.isStringLiteral(statement.moduleSpecifier)
+      && statement.moduleSpecifier.text === 'react-native-gesture-handler',
+  );
+  const registersApp = sourceFile.statements.some(
+    (statement) =>
+      ts.isExpressionStatement(statement)
+      && ts.isCallExpression(statement.expression)
+      && statement.expression.expression.getText() === 'registerRootComponent'
+      && statement.expression.arguments[0]?.getText() === 'App',
+  );
 
-  if (
-    !firstStatement ||
-    !ts.isImportDeclaration(firstStatement) ||
-    firstStatement.importClause !== undefined ||
-    !ts.isStringLiteral(firstStatement.moduleSpecifier) ||
-    firstStatement.moduleSpecifier.text !== 'react-native-gesture-handler'
-  ) {
-    throw new Error(
-      "Gesture handler import order violation: index.ts must begin with import 'react-native-gesture-handler'",
-    );
+  if (importsGestureHandler || !registersApp) {
+    throw new Error('Pure SwiftUI entry violation: register App without the RN gesture runtime');
   }
 }
 
@@ -97,11 +101,8 @@ export function assertNativeRootComposition(source: string): void {
   }
 
   const root = unwrapParentheses(returnStatement.expression);
-  const safeAreaProvider = onlyJsxElementChild(root, 'GestureHandlerRootView');
-  const hermesNativeApp = onlyJsxChild(safeAreaProvider, 'SafeAreaProvider');
-
-  if (!ts.isJsxSelfClosingElement(hermesNativeApp) || hermesNativeApp.tagName.getText() !== 'HermesNativeApp') {
-    rootCompositionError('SafeAreaProvider must contain only HermesNativeApp');
+  if (!ts.isJsxSelfClosingElement(root) || root.tagName.getText() !== 'HermesNativeApp') {
+    rootCompositionError('App must directly return only HermesNativeApp');
   }
 }
 

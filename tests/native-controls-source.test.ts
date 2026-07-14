@@ -27,27 +27,50 @@ test('arc border stays native, exact, and continuously animated', () => {
   assert.match(button, /from 'react-native-svg'/);
   assert.match(button, /withRepeat\(/);
   assert.match(button, /withTiming\(1/);
+  assert.match(button, /cancelAnimation\(progress\);[\s\S]*if \(visible\)/);
+  assert.match(button, /\[progress, visible\]/);
   assert.match(button, /Easing\.linear/);
+  assert.match(button, /if \(visible\)/);
   assert.match(button, /resolveCssGradientGeometry/);
   assert.match(contract, /arcBorderDurationMs: 2230/);
   assert.match(contract, /arcBorderBackgroundSizePercent: 300/);
   assert.match(contract, /brightness: 100 - 99 \* foregroundAlpha/);
-  assert.doesNotMatch(button, /reduceMotion|AccessibilityInfo|isReduceMotionEnabled/);
+  assert.doesNotMatch(
+    button,
+    /ReduceMotion|useReducedMotion|reduceMotion|AccessibilityInfo|isReduceMotionEnabled/,
+  );
   assert.doesNotMatch(button, /filter:\s*\[/);
   assert.match(button, /textTransform: 'uppercase'/);
-  assert.match(button, /Easing\.bezier\(\.\.\.CONTROL_METRICS\.tailwind\.transitionEasing\)/);
+  assert.match(button, /Easing\.bezier\(\.\.\.IOS_MOTION\.curve\.standard\)/);
 });
 
-test('input and list item animate canonical transition-colors timing', () => {
+test('native button gives small and CJK labels enough painted line space', () => {
+  const button = read('src/components/ui/NativeButton.tsx');
+
+  assert.match(button, /Math\.max\(metrics\.visibleHeight, size === 'sm' \? 30 : 40\)/);
+  assert.match(button, /metrics\.fontSize \* \(size === 'sm' \? 1\.35 : 1\.2\)/);
+  assert.match(button, /containsCjk\(displayChild\)/);
+  assert.match(button, /\? 0\s*:\s*letterSpacing/);
+});
+
+test('input and list item use the shared iOS control motion', () => {
   const input = read('src/components/ui/NativeInput.tsx');
   const listItem = read('src/components/ui/NativeListItem.tsx');
   const animatedIcon = read('src/components/ui/AnimatedTintedIcon.tsx');
+  const controlsBridge = read('modules/hermes-ios-controls/index.ts');
+  const controlsConfig = JSON.parse(
+    read('modules/hermes-ios-controls/expo-module.config.json'),
+  ) as { apple?: { modules?: string[] } };
+  const nativePressFeedback = read(
+    'modules/hermes-ios-controls/ios/HermesPressFeedbackModule.swift',
+  );
   const packageJson = JSON.parse(read('package.json')) as {
     dependencies: Record<string, string>;
   };
   for (const source of [input, listItem]) {
-    assert.match(source, /CONTROL_METRICS\.tailwind\.transitionDurationMs/);
-    assert.match(source, /CONTROL_METRICS\.tailwind\.transitionEasing/);
+    assert.match(source, /IOS_MOTION\.duration\.control/);
+    assert.match(source, /IOS_MOTION\.curve\.standard/);
+    assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
     assert.match(source, /withTiming\(/);
   }
   assert.doesNotMatch(listItem, /createAnimatedComponent\(Pressable\)/);
@@ -55,6 +78,28 @@ test('input and list item animate canonical transition-colors timing', () => {
   assert.match(listItem, /<Reanimated\.View/);
   assert.match(listItem, /<Reanimated\.Text/);
   assert.match(listItem, /<AnimatedTintedIcon/);
+  assert.match(listItem, /pressProgress\.value = withSpring\(1/);
+  assert.match(listItem, /pressProgress\.value = withSpring\(0/);
+  assert.match(listItem, /playHaptic\(haptic\)/);
+  assert.match(listItem, /Platform\.OS === 'ios' && hasNativePressFeedback/);
+  assert.match(listItem, /<HermesPressFeedbackView/);
+  assert.match(listItem, /onNativePress=/);
+  assert.match(listItem, /onPressState=/);
+  assert.match(controlsBridge, /optionalView<HermesPressFeedbackProps>\('HermesPressFeedback'\)/);
+  assert.match(controlsBridge, /requireNativeView<P>\(name\)/);
+  assert.ok(controlsConfig.apple?.modules?.includes('HermesPressFeedbackModule'));
+  assert.match(nativePressFeedback, /import SwiftUI/);
+  assert.match(nativePressFeedback, /ExpoSwiftUI\.View/);
+  assert.match(nativePressFeedback, /SwiftUI\.Button/);
+  assert.match(nativePressFeedback, /HermesPressButtonStyle: ButtonStyle/);
+  assert.match(nativePressFeedback, /\.spring\(response: 0\.3, dampingFraction: 0\.8\)/);
+  assert.match(nativePressFeedback, /\.sensoryFeedback\(\.selection/);
+  assert.match(nativePressFeedback, /\.sensoryFeedback\(\.impact\(weight: \.medium\)/);
+  assert.doesNotMatch(nativePressFeedback, /UIViewPropertyAnimator|UIImpactFeedbackGenerator/);
+  assert.match(
+    nativePressFeedback,
+    /private func commitPress\(\)[\s\S]*hapticTrigger \+= 1[\s\S]*props\.onNativePress\(\)/,
+  );
   assert.match(animatedIcon, /from '@react-native-masked-view\/masked-view'/);
   assert.match(animatedIcon, /<MaskedView/);
   assert.match(animatedIcon, /StyleSheet\.flatten\(icon\.props\.style\)/);
@@ -73,10 +118,36 @@ test('input and list item animate canonical transition-colors timing', () => {
   );
 });
 
-test('confirm dialog keeps canonical blur, fonts, and native modal behavior', () => {
+test('signed login inputs use SwiftUI focus and keep Expo Go fallback focus', () => {
+  const login = read('src/auth/LoginScreen.tsx');
+  const nativeInput = read(
+    'modules/hermes-ios-controls/ios/HermesTextInputModule.swift',
+  );
+
+  assert.match(login, /Platform\.OS === 'ios' && hasNativeTextInput/);
+  assert.match(login, /<HermesTextInputView/);
+  assert.match(login, /setApiKeyFocusRequest\(\(current\) => current \+ 1\)/);
+  assert.match(login, /apiKeyInput\.current\?\.focus\(\)/);
+  assert.match(nativeInput, /@FocusState private var focused: Bool/);
+  assert.match(nativeInput, /\.onChange\(of: props\.focusRequest\)/);
+  assert.match(nativeInput, /SecureField\(/);
+  assert.match(nativeInput, /TextField\(/);
+  assert.doesNotMatch(nativeInput, /import UIKit|UIViewPropertyAnimator/);
+});
+
+test('confirm dialog keeps canonical fonts and uses SwiftUI presentation and Material', () => {
   const dialog = read('src/components/ui/ConfirmDialog.tsx');
   const nativeBlur = read(
     'modules/hermes-live-blur/ios/HermesLiveBlurView.swift',
+  );
+  const liquidGlass = read(
+    'modules/hermes-live-blur/ios/HermesLiquidGlassView.swift',
+  );
+  const liquidGlassModule = read(
+    'modules/hermes-live-blur/ios/HermesLiquidGlassModule.swift',
+  );
+  const alertPresenter = read(
+    'modules/hermes-ios-controls/ios/HermesAlertPresenterModule.swift',
   );
   const moduleConfig = JSON.parse(
     read('modules/hermes-live-blur/expo-module.config.json'),
@@ -87,33 +158,55 @@ test('confirm dialog keeps canonical blur, fonts, and native modal behavior', ()
 
   assert.equal(packageJson.dependencies['@shopify/react-native-skia'], undefined);
   assert.equal(packageJson.dependencies['react-native-view-shot'], undefined);
-  assert.equal(packageJson.dependencies['expo-blur'], undefined);
-  assert.equal(packageJson.dependencies['expo-modules-core'], '~3.0.30');
+  assert.equal(packageJson.dependencies['expo-blur'], '~15.0.8');
+  assert.equal(packageJson.dependencies['expo-modules-core'], undefined);
   assert.deepEqual(moduleConfig.platforms, ['apple']);
-  assert.deepEqual(moduleConfig.apple?.modules, ['HermesLiveBlurModule']);
+  assert.deepEqual(moduleConfig.apple?.modules, [
+    'HermesLiveBlurModule',
+    'HermesLiquidGlassModule',
+  ]);
   assert.match(dialog, /<HermesLiveBlurView/);
   assert.match(dialog, /blurRadius=\{CONTROL_METRICS\.confirmDialog\.backdropBlurRadius\}/);
   assert.doesNotMatch(dialog, /tint=|intensity=/);
   assert.doesNotMatch(dialog, /captureScreen|base64|tmpfile|BackdropFilter/);
-  assert.match(nativeBlur, /backdropLayer\.filters = \[gaussianFilter\]/);
-  assert.match(nativeBlur, /for tintView in effectView\.subviews\.dropFirst\(\)/);
-  assert.match(nativeBlur, /gaussianFilter\.setValue\(blurRadius, forKey: "inputRadius"\)/);
+  assert.match(nativeBlur, /import SwiftUI/);
+  assert.match(nativeBlur, /\.fill\(\.regularMaterial\)/);
+  assert.match(read('modules/hermes-live-blur/index.ts'), /createElement\(BlurView/);
   assert.doesNotMatch(nativeBlur, /UIGraphics|snapshot|write|Data\(/);
   assert.match(dialog, /RulesExpandedBold/);
   assert.match(dialog, /MondwestRegular/);
   assert.match(dialog, /presentationStyle="overFullScreen"/);
-  assert.match(dialog, /DIALOG_DURATION_MS = 150/);
+  assert.match(dialog, /DIALOG_DURATION_MS = IOS_MOTION\.duration\.modal/);
+  assert.doesNotMatch(dialog, /ReduceMotion|useReducedMotion|reduceMotion/);
   assert.match(dialog, /transitionConfirmDialogGate/);
+  assert.match(liquidGlassModule, /Name\("HermesLiquidGlass"\)/);
+  assert.match(liquidGlass, /import SwiftUI/);
+  assert.match(liquidGlass, /\.fill\(\.ultraThinMaterial\)/);
+  assert.match(liquidGlass, /\.spring\(response: 0\.3, dampingFraction: 0\.86\)/);
+  assert.match(alertPresenter, /\.fullScreenCover\(isPresented: \$isPresented\)/);
+  assert.match(alertPresenter, /\.fill\(\.regularMaterial\)/);
+  assert.match(alertPresenter, /\.spring\(response: 0\.3, dampingFraction: 0\.82\)/);
+  assert.doesNotMatch(
+    liquidGlass,
+    /reduceTransparency|reduceMotion|isReduceTransparency|isReduceMotion/,
+  );
+  assert.match(liquidGlass, /RoundedRectangle\([\s\S]*style: \.continuous/);
+  assert.doesNotMatch([nativeBlur, liquidGlass, alertPresenter].join('\n'), /import UIKit|UIViewPropertyAnimator|UIVisualEffectView/);
 });
 
-test('live blur and the app share an explicit iOS 16 deployment target', () => {
+test('the app and every local Apple module require iOS 18', () => {
   const appConfig = JSON.parse(read('app.json')) as {
     expo: { plugins: Array<string | [string, Record<string, unknown>]> };
   };
   const packageJson = JSON.parse(read('package.json')) as {
     dependencies: Record<string, string>;
   };
-  const podspec = read('modules/hermes-live-blur/ios/HermesLiveBlur.podspec');
+  const podspecs = [
+    'modules/hermes-ios-controls/ios/HermesIOSControls.podspec',
+    'modules/hermes-live-blur/ios/HermesLiveBlur.podspec',
+    'modules/hermes-quick-look/ios/HermesQuickLook.podspec',
+    'modules/hermes-swipe-actions/ios/HermesSwipeActions.podspec',
+  ].map(read);
   const buildProperties = appConfig.expo.plugins.find(
     (plugin): plugin is [string, { ios: { deploymentTarget: string } }] =>
       Array.isArray(plugin) && plugin[0] === 'expo-build-properties',
@@ -121,8 +214,10 @@ test('live blur and the app share an explicit iOS 16 deployment target', () => {
 
   assert.equal(packageJson.dependencies['expo-build-properties'], '~1.0.10');
   assert.ok(buildProperties);
-  assert.equal(buildProperties[1].ios.deploymentTarget, '16.0');
-  assert.match(podspec, /s\.platforms\s*=\s*\{ :ios => '16\.0' \}/);
+  assert.equal(buildProperties[1].ios.deploymentTarget, '18.0');
+  for (const podspec of podspecs) {
+    assert.match(podspec, /s\.platforms\s*=\s*\{ :ios => '18\.0' \}/);
+  }
 });
 
 test('local native effects always launch through a development client', () => {

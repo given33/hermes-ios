@@ -1,8 +1,21 @@
 import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import {
+  hasNativeSearchBar,
+  hasNativeSelection,
+  HermesSearchBarView,
+  HermesSelectionView,
+} from '../../modules/hermes-ios-controls';
+import {
+  BottomSheet as SwiftUIBottomSheet,
+  Host as SwiftUIHost,
+  LinearProgress as SwiftUILinearProgress,
+  Picker as SwiftUIPicker,
+  Switch as SwiftUISwitch,
+} from '@expo/ui/swift-ui';
+import { disabled as swiftUIDisabled } from '@expo/ui/swift-ui/modifiers';
+import {
   Check,
   ChevronRight,
-  Search,
   X,
   type LucideIcon,
 } from 'lucide-react-native';
@@ -18,7 +31,8 @@ import {
 } from 'react';
 import {
   Modal,
-  Pressable,
+  Platform,
+  PlatformColor,
   ScrollView,
   StyleSheet,
   Text,
@@ -29,12 +43,12 @@ import {
   type ViewStyle,
 } from 'react-native';
 import Reanimated, {
-  Easing,
   interpolateColor,
   useAnimatedStyle,
   useSharedValue,
-  withTiming,
+  withSpring,
 } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, {
   Defs,
   Line,
@@ -45,6 +59,7 @@ import Svg, {
 
 import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
+import { IOSPressable } from '../components/ios/IOSPressable';
 import {
   CONTROL_METRICS,
   multiplyAlpha,
@@ -52,11 +67,8 @@ import {
 } from '../design/control-contracts';
 import { resolveNativeFontStack } from '../design/native-font-faces';
 import { useTheme } from '../design/ThemeProvider';
-
-const TRANSITION = {
-  duration: CONTROL_METRICS.tailwind.transitionDurationMs,
-  easing: Easing.bezier(...CONTROL_METRICS.tailwind.transitionEasing),
-};
+import { IOS_MOTION } from '../design/ios-motion';
+import { useNativeLocalization } from '../i18n/NativeLocalization';
 
 export function PreviewPage({
   actions,
@@ -71,7 +83,9 @@ export function PreviewPage({
   title: string;
 }>) {
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   const spacing = 4 * tokens.layout.spacingMultiplier;
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
@@ -84,13 +98,22 @@ export function PreviewPage({
         {
           gap: spacing * 5,
           padding: width < 620 ? spacing * 4 : spacing * 6,
+          paddingBottom: (width < 620 ? spacing * 4 : spacing * 6) + insets.bottom,
         },
       ]}
+      decelerationRate="normal"
       keyboardShouldPersistTaps="handled"
+      scrollEventThrottle={8}
       showsVerticalScrollIndicator={false}
       style={styles.page}
     >
-      <View style={[styles.pageHeader, { gap: spacing * 3 }]}> 
+      <View
+        style={[
+          styles.pageHeader,
+          { gap: spacing * 3 },
+          width < 620 && styles.pageHeaderCompact,
+        ]}
+      >
         <View style={[styles.pageHeadingCopy, { gap: spacing }]}> 
           {eyebrow ? (
             <Text
@@ -103,7 +126,7 @@ export function PreviewPage({
                 textTransform: 'uppercase',
               }}
             >
-              {eyebrow}
+              {t(eyebrow)}
             </Text>
           ) : null}
           <Text
@@ -117,7 +140,7 @@ export function PreviewPage({
               lineHeight: rootSize * 1.45,
             }}
           >
-            {title}
+            {t(title)}
           </Text>
           {subtitle ? (
             <Text
@@ -128,11 +151,15 @@ export function PreviewPage({
                 lineHeight: rootSize * 1.35,
               }}
             >
-              {subtitle}
+              {t(subtitle)}
             </Text>
           ) : null}
         </View>
-        {actions ? <View style={styles.pageActions}>{actions}</View> : null}
+        {actions ? (
+          <View style={[styles.pageActions, width < 620 && styles.pageActionsCompact]}>
+            {actions}
+          </View>
+        ) : null}
       </View>
       {children}
     </ScrollView>
@@ -152,6 +179,7 @@ export function PreviewCard({
   title?: string;
 }>) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   const spacing = 4 * tokens.layout.spacingMultiplier;
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 600);
@@ -191,7 +219,7 @@ export function PreviewCard({
                   lineHeight: rootSize * 1.3,
                 }}
               >
-                {title}
+                {t(title)}
               </Text>
             ) : null}
             {subtitle ? (
@@ -203,7 +231,7 @@ export function PreviewCard({
                   lineHeight: rootSize * 1.18,
                 }}
               >
-                {subtitle}
+                {t(subtitle)}
               </Text>
             ) : null}
           </View>
@@ -243,6 +271,7 @@ export function PreviewText({
   variant?: 'body' | 'muted' | 'mono' | 'heading' | 'label' | 'tiny';
 }>) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   const mono = variant === 'mono';
   const display = variant === 'heading' || variant === 'label';
@@ -277,7 +306,9 @@ export function PreviewText({
         style,
       ]}
     >
-      {children}
+      {Children.map(children, (child) => (
+        typeof child === 'string' ? t(child) : child
+      ))}
     </Text>
   );
 }
@@ -306,6 +337,7 @@ export function PreviewBadge({
   tone = 'default',
 }: PropsWithChildren<{ tone?: BadgeTone }>) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const color = tone === 'success'
     ? tokens.colors.success
     : tone === 'warning'
@@ -337,7 +369,9 @@ export function PreviewBadge({
           lineHeight: rootSize,
         }}
       >
-        {children}
+        {Children.map(children, (child) => (
+          typeof child === 'string' ? t(child) : child
+        ))}
       </Text>
       {tone !== 'outline' ? <Grain color={color} /> : null}
     </View>
@@ -372,6 +406,7 @@ export function PreviewMetric({
   value: string;
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   const display = resolveNativeFontStack(tokens.typography.fontDisplay, 600);
   const mono = resolveNativeFontStack(tokens.typography.fontMono, 600);
@@ -389,7 +424,7 @@ export function PreviewMetric({
             textTransform: 'uppercase',
           }}
         >
-          {label}
+          {t(label)}
         </Text>
         {Icon ? <Icon color={color} size={16} strokeWidth={1.75} /> : null}
       </View>
@@ -403,7 +438,7 @@ export function PreviewMetric({
           lineHeight: rootSize * 1.9,
         }}
       >
-        {value}
+        {t(value)}
       </Text>
       {hint ? (
         <Text
@@ -414,7 +449,7 @@ export function PreviewMetric({
             lineHeight: rootSize,
           }}
         >
-          {hint}
+          {t(hint)}
         </Text>
       ) : null}
     </PreviewCard>
@@ -433,9 +468,14 @@ export function PreviewToggle({
   value: boolean;
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const progress = useSharedValue(value ? 1 : 0);
   useEffect(() => {
-    progress.value = withTiming(value ? 1 : 0, TRANSITION);
+    progress.value = withSpring(value ? 1 : 0, {
+      damping: IOS_MOTION.spring.damping,
+      mass: 0.72,
+      stiffness: IOS_MOTION.spring.stiffness,
+    });
   }, [progress, value]);
   const track = useAnimatedStyle(() => ({
     backgroundColor: interpolateColor(
@@ -452,20 +492,36 @@ export function PreviewToggle({
     ),
     transform: [{ translateX: progress.value * 16 }],
   }));
+  if (Platform.OS === 'ios') {
+    return (
+      <SwiftUIHost style={styles.nativeSwitch}>
+        <SwiftUISwitch
+          color={tokens.colors.primary}
+          label={t(accessibilityLabel)}
+          modifiers={[swiftUIDisabled(disabled)]}
+          onValueChange={onChange}
+          value={value}
+        />
+      </SwiftUIHost>
+    );
+  }
   return (
-    <Pressable
-      accessibilityLabel={accessibilityLabel}
+    <IOSPressable
+      accessibilityLabel={t(accessibilityLabel)}
       accessibilityRole="switch"
       accessibilityState={{ checked: value, disabled }}
       disabled={disabled}
       hitSlop={8}
+      haptic="selection"
       onPress={() => onChange(!value)}
+      opacityTo={0.86}
+      scaleTo={0.94}
       style={{ opacity: disabled ? 0.45 : 1 }}
     >
       <Reanimated.View style={[styles.switchTrack, track]}>
         <Reanimated.View style={[styles.switchThumb, thumb]} />
       </Reanimated.View>
-    </Pressable>
+    </IOSPressable>
   );
 }
 
@@ -481,6 +537,7 @@ export function PreviewSettingRow({
   trailing?: ReactNode;
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const body = resolveNativeFontStack(tokens.typography.fontSans, 500);
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   const content = (
@@ -494,7 +551,7 @@ export function PreviewSettingRow({
             lineHeight: rootSize * 1.25,
           }}
         >
-          {label}
+          {t(label)}
         </Text>
         {detail ? (
           <Text
@@ -505,7 +562,7 @@ export function PreviewSettingRow({
               lineHeight: rootSize * 1.12,
             }}
           >
-            {detail}
+            {t(detail)}
           </Text>
         ) : null}
       </View>
@@ -516,12 +573,13 @@ export function PreviewSettingRow({
   );
   if (!onPress) return <View style={styles.settingRow}>{content}</View>;
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [
-      styles.settingRow,
-      pressed && { backgroundColor: tokens.colors.muted },
-    ]}>
+    <IOSPressable
+      onPress={onPress}
+      pressedStyle={{ backgroundColor: tokens.colors.muted }}
+      style={styles.settingRow}
+    >
       {content}
-    </Pressable>
+    </IOSPressable>
   );
 }
 
@@ -533,6 +591,17 @@ export function PreviewProgress({
   value: number;
 }) {
   const { tokens } = useTheme();
+  const progress = Math.max(0, Math.min(100, value)) / 100;
+  if (Platform.OS === 'ios') {
+    return (
+      <SwiftUIHost style={styles.nativeProgress}>
+        <SwiftUILinearProgress
+          color={color ?? tokens.colors.primary}
+          progress={progress}
+        />
+      </SwiftUIHost>
+    );
+  }
   return (
     <View style={[styles.progressTrack, { backgroundColor: tokens.colors.muted }]}> 
       <View
@@ -540,7 +609,7 @@ export function PreviewProgress({
           styles.progressFill,
           {
             backgroundColor: color ?? tokens.colors.primary,
-            width: `${Math.max(0, Math.min(100, value))}%`,
+            width: `${progress * 100}%`,
           },
         ]}
       />
@@ -558,16 +627,40 @@ export function PreviewSegmented<T extends string>({
   value: T;
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const font = resolveNativeFontStack(tokens.typography.fontSans, 500);
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
+  const selectedIndex = Math.max(0, options.findIndex((option) => option.value === value));
+  if (Platform.OS === 'ios') {
+    return (
+      <SwiftUIHost
+        style={[
+          styles.nativeSegmented,
+          { width: Math.max(128, options.length * 78) },
+        ]}
+      >
+        <SwiftUIPicker
+          color={tokens.colors.primary}
+          onOptionSelected={(event) => {
+          const selected = options[event.nativeEvent.index];
+          if (selected) onChange(selected.value);
+          }}
+          options={options.map((option) => t(option.label))}
+          selectedIndex={selectedIndex}
+          variant="segmented"
+        />
+      </SwiftUIHost>
+    );
+  }
   return (
     <View style={[styles.segmented, { borderColor: tokens.colors.border }]}> 
       {options.map((option) => {
         const selected = option.value === value;
         return (
-          <Pressable
+          <IOSPressable
             accessibilityRole="tab"
             accessibilityState={{ selected }}
+            haptic="selection"
             key={option.value}
             onPress={() => onChange(option.value)}
             style={[
@@ -586,9 +679,9 @@ export function PreviewSegmented<T extends string>({
                 lineHeight: rootSize,
               }}
             >
-              {option.label}
+              {t(option.label)}
             </Text>
-          </Pressable>
+          </IOSPressable>
         );
       })}
     </View>
@@ -605,17 +698,32 @@ export function PreviewSearch({
   value: string;
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
+  const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
+  const font = resolveNativeFontStack(tokens.typography.fontMono, 400);
+  if (Platform.OS === 'ios' && hasNativeSearchBar) {
+    return (
+      <HermesSearchBarView
+        backgroundColorValue={multiplyAlpha(tokens.colors.foreground, 0.08)}
+        fontName={font}
+        fontSize={rootSize * 0.8}
+        onChangeText={(event) => onChangeText(event.nativeEvent.value)}
+        placeholder={t(placeholder)}
+        placeholderColor={tokens.colors.textTertiary}
+        style={styles.nativeSearch}
+        textColor={tokens.colors.foreground}
+        tintColor={tokens.colors.primary}
+        value={value}
+      />
+    );
+  }
   return (
     <View style={styles.searchWrap}>
-      <Search
-        color={tokens.colors.textTertiary}
-        pointerEvents="none"
-        size={15}
-        style={styles.searchIcon}
-      />
       <NativeInput
+        clearButtonMode="while-editing"
         onChangeText={onChangeText}
         placeholder={placeholder}
+        returnKeyType="search"
         style={styles.searchInput}
         value={value}
       />
@@ -633,6 +741,7 @@ export function PreviewDataRow({
   value: ReactNode;
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   return (
     <View style={[styles.dataRow, { borderBottomColor: tokens.colors.border }]}> 
@@ -645,7 +754,7 @@ export function PreviewDataRow({
           lineHeight: rootSize * 1.15,
         }}
       >
-        {label}
+        {t(label)}
       </Text>
       {typeof value === 'string' || typeof value === 'number' ? (
         <Text
@@ -661,7 +770,7 @@ export function PreviewDataRow({
             textAlign: 'right',
           }}
         >
-          {value}
+          {typeof value === 'string' ? t(value) : value}
         </Text>
       ) : value}
     </View>
@@ -716,6 +825,7 @@ export function PreviewBarChart({
   values: readonly { label: string; value: number }[];
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const max = Math.max(...values.map((item) => item.value), 1);
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   return (
@@ -742,7 +852,7 @@ export function PreviewBarChart({
               lineHeight: rootSize,
             }}
           >
-            {item.label}
+            {t(item.label)}
           </Text>
         </View>
       ))}
@@ -761,9 +871,78 @@ export function PreviewModal({
   title: string;
 }>) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const { height, width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const display = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
+  const iosSheet = Platform.OS === 'ios';
+  const panel = (
+    <View
+      accessibilityViewIsModal
+      style={[
+        styles.modalPanel,
+        iosSheet && styles.modalSheetPanel,
+        {
+          backgroundColor: opaque(tokens.colors.background),
+          borderColor: tokens.colors.border,
+        },
+        iosSheet ? {
+          height: Math.min(height * 0.82, 760),
+          width,
+        } : {
+          maxHeight: height - 64,
+          width: Math.min(560, width - 32),
+        },
+      ]}
+    >
+      <View style={[styles.modalHeader, { borderBottomColor: tokens.colors.border }]}>
+        <Text
+          accessibilityRole="header"
+          style={{
+            color: tokens.colors.foreground,
+            fontFamily: display,
+            fontSize: rootSize,
+            lineHeight: rootSize * 1.35,
+          }}
+        >
+          {t(title)}
+        </Text>
+        <NativeButton accessibilityLabel="Close" ghost onPress={onClose} size="icon">
+          <X />
+        </NativeButton>
+      </View>
+      <ScrollView
+        contentContainerStyle={[
+          styles.modalContent,
+          iosSheet && { paddingBottom: 16 + insets.bottom },
+        ]}
+        decelerationRate="normal"
+        keyboardShouldPersistTaps="handled"
+        scrollEventThrottle={8}
+      >
+        {children}
+      </ScrollView>
+    </View>
+  );
+
+  if (iosSheet) {
+    return (
+      <SwiftUIHost style={styles.swiftUISheetHost}>
+        <SwiftUIBottomSheet
+          isOpened={open}
+          onIsOpenedChange={(isOpened) => {
+            if (!isOpened && open) onClose();
+          }}
+          presentationDetents={['medium', 'large']}
+          presentationDragIndicator="visible"
+        >
+          {panel}
+        </SwiftUIBottomSheet>
+      </SwiftUIHost>
+    );
+  }
+
   return (
     <Modal
       animationType="fade"
@@ -773,7 +952,9 @@ export function PreviewModal({
       transparent
       visible={open}
     >
-      <View style={styles.modalRoot}>
+      <View
+        style={styles.modalRoot}
+      >
         <HermesLiveBlurView blurRadius={4} style={StyleSheet.absoluteFill} />
         <View
           pointerEvents="none"
@@ -782,42 +963,14 @@ export function PreviewModal({
             { backgroundColor: 'rgba(0, 0, 0, 0.7)' },
           ]}
         />
-        <Pressable onPress={onClose} style={StyleSheet.absoluteFill} />
-        <View
-          accessibilityViewIsModal
-          style={[
-            styles.modalPanel,
-            {
-              backgroundColor: opaque(tokens.colors.background),
-              borderColor: tokens.colors.border,
-              maxHeight: height - 64,
-              width: Math.min(560, width - 32),
-            },
-          ]}
-        >
-          <View style={[styles.modalHeader, { borderBottomColor: tokens.colors.border }]}> 
-            <Text
-              accessibilityRole="header"
-              style={{
-                color: tokens.colors.foreground,
-                fontFamily: display,
-                fontSize: rootSize,
-                lineHeight: rootSize * 1.35,
-              }}
-            >
-              {title}
-            </Text>
-            <NativeButton accessibilityLabel="Close" ghost onPress={onClose} size="icon">
-              <X />
-            </NativeButton>
-          </View>
-          <ScrollView
-            contentContainerStyle={styles.modalContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            {children}
-          </ScrollView>
-        </View>
+        <IOSPressable
+          haptic="none"
+          onPress={onClose}
+          opacityTo={1}
+          scaleTo={1}
+          style={StyleSheet.absoluteFill}
+        />
+        {panel}
       </View>
     </Modal>
   );
@@ -837,20 +990,10 @@ export function PreviewChoice({
   swatches?: readonly string[];
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={[
-        styles.choice,
-        {
-          backgroundColor: selected ? tokens.colors.muted : 'transparent',
-          borderColor: selected ? tokens.colors.primary : tokens.colors.border,
-        },
-      ]}
-    >
+  const content = (
+    <>
       {swatches ? (
         <View style={styles.swatches}>
           {swatches.map((color, index) => (
@@ -870,7 +1013,7 @@ export function PreviewChoice({
             lineHeight: rootSize * 1.2,
           }}
         >
-          {label}
+          {t(label)}
         </Text>
         {description ? (
           <Text
@@ -881,24 +1024,62 @@ export function PreviewChoice({
               lineHeight: rootSize,
             }}
           >
-            {description}
+            {t(description)}
           </Text>
         ) : null}
       </View>
-      <View
-        style={[
-          styles.choiceCheck,
-          {
-            backgroundColor: selected ? tokens.colors.primary : 'transparent',
-            borderColor: selected ? tokens.colors.primary : tokens.colors.border,
-          },
-        ]}
-      >
-        {selected ? (
-          <Check color={tokens.colors.primaryForeground} size={12} strokeWidth={3} />
-        ) : null}
-      </View>
-    </Pressable>
+    </>
+  );
+  return (
+    <IOSPressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      haptic="selection"
+      onPress={onPress}
+      style={styles.choicePressable}
+    >
+      {Platform.OS === 'ios' && hasNativeSelection ? (
+        <HermesSelectionView
+          borderWidth={1}
+          checkmarkBackgroundColor={tokens.colors.primary}
+          checkmarkTintColor={tokens.colors.primaryForeground}
+          cornerRadius={0}
+          selected={selected}
+          selectedBackgroundColor={tokens.colors.muted}
+          selectedBorderColor={tokens.colors.primary}
+          style={styles.choice}
+          unselectedBackgroundColor="transparent"
+          unselectedBorderColor={tokens.colors.border}
+        >
+          {content}
+        </HermesSelectionView>
+      ) : (
+        <View
+          style={[
+            styles.choice,
+            {
+              backgroundColor: selected ? tokens.colors.muted : 'transparent',
+              borderColor: selected ? tokens.colors.primary : tokens.colors.border,
+            },
+          ]}
+        >
+          {content}
+          <View
+            style={[
+              styles.choiceCheck,
+              {
+                backgroundColor: selected ? tokens.colors.primary : 'transparent',
+                borderColor: selected ? tokens.colors.primary : tokens.colors.border,
+              },
+            ]}
+          >
+            {selected ? (
+              <Check color={tokens.colors.primaryForeground} size={12} strokeWidth={3} />
+            ) : null}
+          </View>
+        </View>
+      )}
+    </IOSPressable>
   );
 }
 
@@ -912,6 +1093,7 @@ export function PreviewEmpty({
   title: string;
 }) {
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   return (
     <View style={styles.empty}>
@@ -921,7 +1103,7 @@ export function PreviewEmpty({
         fontFamily: resolveNativeFontStack(tokens.typography.fontSans, 600),
         fontSize: rootSize * 0.9,
       }}>
-        {title}
+        {t(title)}
       </Text>
       <Text style={{
         color: tokens.colors.textSecondary,
@@ -930,7 +1112,7 @@ export function PreviewEmpty({
         lineHeight: rootSize * 1.15,
         textAlign: 'center',
       }}>
-        {detail}
+        {t(detail)}
       </Text>
     </View>
   );
@@ -957,6 +1139,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
+  pageHeaderCompact: {
+    flexDirection: 'column',
+  },
   pageHeadingCopy: {
     flex: 1,
     minWidth: 0,
@@ -966,6 +1151,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexShrink: 0,
     gap: 8,
+  },
+  pageActionsCompact: {
+    alignSelf: 'stretch',
+    justifyContent: 'flex-start',
+    width: '100%',
   },
   card: {
     borderWidth: 1,
@@ -1024,6 +1214,10 @@ const styles = StyleSheet.create({
     height: 16,
     width: 16,
   },
+  nativeSwitch: {
+    height: 31,
+    width: 51,
+  },
   settingRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -1046,6 +1240,10 @@ const styles = StyleSheet.create({
   progressFill: {
     height: '100%',
   },
+  nativeProgress: {
+    height: 6,
+    width: '100%',
+  },
   segmented: {
     alignItems: 'stretch',
     alignSelf: 'flex-start',
@@ -1060,17 +1258,21 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
+  nativeSegmented: {
+    alignSelf: 'flex-start',
+    height: 34,
+  },
   searchWrap: {
     justifyContent: 'center',
     minWidth: 180,
   },
-  searchIcon: {
-    left: 10,
-    position: 'absolute',
-    zIndex: 2,
-  },
   searchInput: {
-    paddingLeft: 32,
+    paddingHorizontal: 10,
+  },
+  nativeSearch: {
+    height: 38,
+    minWidth: 180,
+    width: '100%',
   },
   dataRow: {
     alignItems: 'center',
@@ -1112,6 +1314,19 @@ const styles = StyleSheet.create({
     boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.35)',
     overflow: 'hidden',
   },
+  modalSheetPanel: {
+    borderWidth: 0,
+    boxShadow: 'none',
+    flex: 1,
+    width: '100%',
+  },
+  swiftUISheetHost: {
+    height: 1,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+    width: 1,
+  },
   modalHeader: {
     alignItems: 'center',
     borderBottomWidth: 1,
@@ -1130,7 +1345,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     minHeight: 54,
-    padding: 10,
+    paddingBottom: 10,
+    paddingLeft: 10,
+    paddingRight: 42,
+    paddingTop: 10,
+  },
+  choicePressable: {
+    alignSelf: 'stretch',
   },
   choiceCopy: {
     flex: 1,

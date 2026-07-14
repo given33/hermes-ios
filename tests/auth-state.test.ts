@@ -299,11 +299,15 @@ test('native auth root is integrated without an AppState foreground re-prompt li
   assert.match(providerSource, /bootstrapSavedConnection/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(appSource, /<AuthProvider>/);
-  assert.match(appSource, /<LoginScreen/);
+  assert.match(appSource, /<HermesSwiftUILoginView/);
+  assert.match(appSource, /<HermesSwiftUIFrontendView/);
+  assert.doesNotMatch(appSource, /<LoginScreen|<NativeShell|<ThemeProvider/);
   assert.match(loginSource, /TextInput/);
   assert.match(loginSource, /secureTextEntry/);
   assert.match(loginSource, /autoComplete="off"/);
-  assert.match(loginSource, /textContentType="none"/);
+  assert.match(loginSource, /textContentType=\{secure \? 'none' : 'URL'\}/);
+  assert.match(loginSource, /hasNativeTextInput/);
+  assert.match(loginSource, /HermesTextInputView/);
   assert.match(loginSource, /KeyboardAvoidingView/);
   assert.match(loginSource, /react-native-svg/);
   assert.match(loginSource, /RadialGradient/);
@@ -344,7 +348,6 @@ test('native auth root is integrated without an AppState foreground re-prompt li
   assert.match(loginSource, /FeOffset/);
   assert.match(loginSource, /FeFlood/);
   assert.match(loginSource, /FeComposite/);
-  assert.match(appSource, /<NativeShell \/>/);
   assert.match(shellSource, /opaque\(tokens\.colors\.background\)/);
   assert.doesNotMatch(
     `${providerSource}\n${appSource}\n${loginSource}\n${shellSource}`,

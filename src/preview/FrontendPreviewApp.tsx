@@ -1,26 +1,33 @@
 import {
   ChevronDown,
   Circle,
-  CloudDownload,
+  Download,
   Globe2,
   Languages,
-  LogOut,
   Palette,
-  Power,
   RotateCw,
   Server,
   UserRound,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
-import Reanimated, { FadeInRight, FadeOutRight } from 'react-native-reanimated';
+import { StyleSheet, View } from 'react-native';
+import Reanimated, {
+  Easing,
+  FadeInRight,
+  FadeOutRight,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { HermesQuickLookHost } from '../../modules/hermes-quick-look';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
 import { multiplyAlpha } from '../design/control-contracts';
 import { THEME_DEFAULT_FONT_ID } from '../design/font-catalog';
+import { resolveNativeFontStack } from '../design/native-font-faces';
 import { useTheme } from '../design/ThemeProvider';
+import { IOS_MOTION } from '../design/ios-motion';
+import { NativeLocalizationProvider } from '../i18n/NativeLocalization';
 import { NativeShell, type NativeShellSlotContext } from '../app/NativeShell';
 import {
   BASELINE_PLUGIN_MANIFESTS,
@@ -38,13 +45,13 @@ import {
 } from './PreviewAutomationPages';
 import {
   AnalyticsPreviewPage,
-  ChatPreviewPage,
   FilesPreviewPage,
   LogsPreviewPage,
   ModelsPreviewPage,
   SessionsPreviewPage,
   type PreviewPageProps,
 } from './PreviewCorePages';
+import { ChatPreviewPage } from './PreviewChatPage';
 import {
   AchievementsPreviewPage,
   CollaborationPreviewPage,
@@ -101,6 +108,7 @@ export function FrontendPreviewApp() {
     system: (context: NativeShellSlotContext) => (
       <SystemSlot
         context={context}
+        locale={locale}
         onRestart={() => setSystemAction('restart')}
         onUpdate={() => setSystemAction('update')}
       />
@@ -113,20 +121,24 @@ export function FrontendPreviewApp() {
         onTheme={() => setPicker('appearance')}
       />
     ),
-    auth: () => <AuthSlot profile={profile} />,
     footer: () => <FooterSlot />,
   };
 
   return (
-    <View style={styles.root}>
+    <NativeLocalizationProvider locale={locale}>
+      <View style={styles.root}>
+      <HermesQuickLookHost />
       <NativeShell
         config={{ dashboard: { show_token_analytics: true } }}
+        initialPath="/chat"
         locale={locale}
         manifests={BASELINE_PLUGIN_MANIFESTS}
         renderRoute={(route, _label, context) => (
           <PreviewRoute
+            locale={locale}
             navigate={context.navigate}
             notify={notify}
+            openNavigation={context.openNavigation}
             route={route}
           />
         )}
@@ -135,8 +147,12 @@ export function FrontendPreviewApp() {
 
       {toast ? (
         <Reanimated.View
-          entering={FadeInRight.duration(200)}
-          exiting={FadeOutRight.duration(200)}
+          entering={FadeInRight
+            .duration(IOS_MOTION.duration.toast)
+            .easing(Easing.bezier(...IOS_MOTION.curve.decelerate))}
+          exiting={FadeOutRight
+            .duration(IOS_MOTION.duration.control)
+            .easing(Easing.bezier(...IOS_MOTION.curve.standard))}
           pointerEvents="none"
           style={[
             styles.toast,
@@ -176,35 +192,49 @@ export function FrontendPreviewApp() {
         open={picker === 'language'}
       />
       <ConfirmDialog
-        confirmLabel={systemAction === 'update' ? 'Update' : 'Restart'}
+        cancelLabel={locale === 'zh' ? '取消' : 'Cancel'}
+        confirmLabel={systemAction === 'update'
+          ? locale === 'zh' ? '立即更新' : 'Update now'
+          : locale === 'zh' ? '重启网关' : 'Restart gateway'}
         description={systemAction === 'update'
-          ? 'Hermes will update and restart the gateway when complete.'
-          : 'The gateway will briefly disconnect while it restarts.'}
+          ? locale === 'zh'
+            ? "这将运行 'hermes update'，完成后重启网关。"
+            : "This will run 'hermes update' and restart the gateway when it finishes."
+          : locale === 'zh'
+            ? '这将重启 Hermes 网关进程。已连接的渠道和活跃会话随后会自动重新连接。'
+            : 'This restarts the Hermes gateway process. Connected channels and active sessions will reconnect afterward.'}
         onCancel={() => setSystemAction(null)}
         onConfirm={() => {
-          notify(systemAction === 'update' ? 'Update preview completed' : 'Gateway restart preview completed');
+          notify(systemAction === 'update'
+            ? locale === 'zh' ? 'Hermes 更新已开始' : 'Hermes update started'
+            : locale === 'zh' ? '网关重启已开始' : 'Gateway restart started');
           setSystemAction(null);
         }}
         open={systemAction !== null}
-        title={systemAction === 'update' ? 'Update Hermes?' : 'Restart gateway?'}
+        title={systemAction === 'update'
+          ? locale === 'zh' ? '更新 Hermes？' : 'Update Hermes?'
+          : locale === 'zh' ? '重启网关？' : 'Restart gateway?'}
       />
-    </View>
+      </View>
+    </NativeLocalizationProvider>
   );
 }
 
 function PreviewRoute({
+  locale,
   navigate,
   notify,
+  openNavigation,
   route,
-}: PreviewPageProps & { route: ComposedRoute }) {
-  const props = { navigate, notify };
+}: PreviewPageProps & { openNavigation?(): void; route: ComposedRoute }) {
+  const props = { locale, navigate, notify };
   if (route.source === 'plugin') {
     if (route.pluginName === 'hermes-achievements') return <AchievementsPreviewPage {...props} />;
     if (route.pluginName === 'kanban') return <KanbanPreviewPage {...props} />;
     if (route.pluginName === 'collaboration') return <CollaborationPreviewPage {...props} />;
   }
   switch (route.routeId) {
-    case 'chat': return <ChatPreviewPage {...props} />;
+    case 'chat': return <ChatPreviewPage {...props} openNavigation={openNavigation} />;
     case 'sessions': return <SessionsPreviewPage {...props} />;
     case 'files': return <FilesPreviewPage {...props} />;
     case 'analytics': return <AnalyticsPreviewPage {...props} />;
@@ -243,15 +273,11 @@ function ProfileSlot({
         accessibilityLabel={`Managing profile: ${profile}`}
         ghost
         onPress={onOpen}
+        prefix={!context.collapsed ? <UserRound /> : undefined}
         size={context.collapsed ? 'icon' : 'sm'}
+        suffix={!context.collapsed ? <ChevronDown /> : undefined}
       >
-        <UserRound />
-        {!context.collapsed ? (
-          <>
-            <PreviewText numberOfLines={1} style={styles.profileLabel}>{profile}</PreviewText>
-            <ChevronDown />
-          </>
-        ) : null}
+        {context.collapsed ? <UserRound /> : profile}
       </NativeButton>
     </View>
   );
@@ -259,10 +285,12 @@ function ProfileSlot({
 
 function SystemSlot({
   context,
+  locale,
   onRestart,
   onUpdate,
 }: {
   context: NativeShellSlotContext;
+  locale: NativeRouteLocale;
   onRestart(): void;
   onUpdate(): void;
 }) {
@@ -278,16 +306,69 @@ function SystemSlot({
   }
   return (
     <View style={[styles.systemSlot, { borderTopColor: tokens.colors.border }]}> 
-      <Pressable onPress={() => context.navigate('/system')} style={styles.statusLine}>
-        <Circle color={tokens.colors.success} fill={tokens.colors.success} size={8} />
-        <PreviewText style={styles.profileLabel} variant="tiny">Gateway running</PreviewText>
-        <PreviewText variant="tiny">2 active</PreviewText>
-      </Pressable>
-      <PreviewRow>
-        <NativeButton onPress={onRestart} outlined size="sm"><RotateCw />Restart</NativeButton>
-        <NativeButton onPress={onUpdate} outlined size="sm"><CloudDownload />Update</NativeButton>
-      </PreviewRow>
+      <PreviewText style={styles.systemHeading} variant="label">
+        {locale === 'zh' ? '系统' : 'System'}
+      </PreviewText>
+      <IOSPressable onPress={() => context.navigate('/sessions')} style={styles.statusSummary}>
+        <PreviewText variant="tiny">
+          {locale === 'zh' ? '网关状态：' : 'Gateway status: '}
+          <PreviewText color={tokens.colors.success} variant="tiny">
+            {locale === 'zh' ? '运行中' : 'Running'}
+          </PreviewText>
+        </PreviewText>
+        <PreviewText variant="tiny">
+          {locale === 'zh' ? '活跃会话：2' : 'Active sessions: 2'}
+        </PreviewText>
+      </IOSPressable>
+      <SystemActionRow
+        icon={RotateCw}
+        label={locale === 'zh' ? '重启网关' : 'Restart gateway'}
+        onPress={onRestart}
+      />
+      <SystemActionRow
+        icon={Download}
+        label={locale === 'zh' ? '更新 Hermes' : 'Update Hermes'}
+        onPress={onUpdate}
+      />
     </View>
+  );
+}
+
+function SystemActionRow({
+  icon: Icon,
+  label,
+  onPress,
+}: {
+  icon: typeof RotateCw;
+  label: string;
+  onPress(): void;
+}) {
+  const { tokens } = useTheme();
+  const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
+  const font = resolveNativeFontStack(tokens.typography.fontDisplay, 400);
+  return (
+    <IOSPressable
+      accessibilityRole="button"
+      onPress={onPress}
+      pressedStyle={{
+        backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.05),
+      }}
+      style={[
+        styles.systemAction,
+      ]}
+    >
+      <Icon color={tokens.colors.textSecondary} size={rootSize * 0.875} />
+      <PreviewText
+        style={{
+          color: tokens.colors.textSecondary,
+          fontFamily: font,
+          fontSize: rootSize * 0.75,
+          letterSpacing: rootSize * 0.075,
+        }}
+      >
+        {label}
+      </PreviewText>
+    </IOSPressable>
   );
 }
 
@@ -302,41 +383,72 @@ function ControlsSlot({
   onLanguage(): void;
   onTheme(): void;
 }) {
-  const { tokens } = useTheme();
+  const { availableThemes, themeName, tokens } = useTheme();
+  const themeLabel = availableThemes.find((theme) => theme.name === themeName)?.label
+    ?? themeName;
   return (
     <View style={[styles.controlsSlot, { borderTopColor: tokens.colors.border }]}> 
-      <NativeButton accessibilityLabel="Theme and font" ghost onPress={onTheme} size={context.collapsed ? 'icon' : 'sm'}>
-        <Palette />
-        {!context.collapsed ? <PreviewText>Theme</PreviewText> : null}
-      </NativeButton>
-      <NativeButton accessibilityLabel="Language" ghost onPress={onLanguage} size={context.collapsed ? 'icon' : 'sm'}>
-        <Languages />
-        {!context.collapsed ? <PreviewText>{locale === 'zh' ? '中文' : 'English'}</PreviewText> : null}
-      </NativeButton>
+      <SidebarControl
+        accessibilityLabel="Theme and font"
+        collapsed={context.collapsed}
+        icon={Palette}
+        label={themeLabel}
+        onPress={onTheme}
+      />
+      <SidebarControl
+        accessibilityLabel="Language"
+        collapsed={context.collapsed}
+        icon={Languages}
+        label={locale === 'zh' ? '中文' : 'EN'}
+        onPress={onLanguage}
+      />
     </View>
   );
 }
 
-function AuthSlot({ profile }: { profile: string }) {
+function SidebarControl({
+  accessibilityLabel,
+  collapsed,
+  icon: Icon,
+  label,
+  onPress,
+}: {
+  accessibilityLabel: string;
+  collapsed: boolean;
+  icon: typeof Palette;
+  label: string;
+  onPress(): void;
+}) {
+  const { tokens } = useTheme();
   return (
-    <View style={styles.authSlot}>
-      <PreviewRow>
-        <View style={styles.authAvatar}><UserRound size={15} /></View>
-        <View style={styles.profileLabel}>
-          <PreviewText numberOfLines={1}>{profile}</PreviewText>
-          <PreviewText variant="tiny">Frontend preview</PreviewText>
-        </View>
-        <NativeButton accessibilityLabel="Sign out" disabled ghost size="icon"><LogOut /></NativeButton>
-      </PreviewRow>
-    </View>
+    <IOSPressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      onPress={onPress}
+      pressedStyle={{
+        backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.06),
+      }}
+      style={[
+        styles.sidebarControl,
+        collapsed && styles.sidebarControlCollapsed,
+      ]}
+    >
+      <Icon color={tokens.colors.textSecondary} size={17} />
+      {!collapsed ? (
+        <PreviewText numberOfLines={1} style={styles.sidebarControlLabel} variant="tiny">
+          {label}
+        </PreviewText>
+      ) : null}
+    </IOSPressable>
   );
 }
 
 function FooterSlot() {
+  const { tokens } = useTheme();
   return (
-    <View style={styles.footerSlot}>
-      <PreviewText variant="tiny">v2.0.0-beta.1</PreviewText>
-      <PreviewText variant="tiny">Nous Research</PreviewText>
+    <View style={[styles.footerSlot, { borderTopColor: tokens.colors.border }]}>
+      <PreviewText style={styles.footerVersion} variant="tiny">v0.9.3</PreviewText>
+      <PreviewText numberOfLines={1} style={styles.footerCredit} variant="tiny">Nous Research</PreviewText>
     </View>
   );
 }
@@ -459,42 +571,75 @@ const styles = StyleSheet.create({
   },
   systemSlot: {
     borderTopWidth: 1,
-    gap: 7,
-    padding: 8,
+    paddingBottom: 4,
+    paddingTop: 4,
   },
   collapsedSystem: {
     alignItems: 'center',
     borderTopWidth: 1,
     paddingVertical: 6,
   },
-  statusLine: {
+  systemHeading: {
+    paddingHorizontal: 20,
+    paddingVertical: 2,
+  },
+  statusSummary: {
+    gap: 3,
+    paddingBottom: 6,
+    paddingHorizontal: 20,
+    paddingTop: 2,
+  },
+  systemAction: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 7,
-    minHeight: 24,
+    gap: 12,
+    minHeight: 38,
+    paddingHorizontal: 20,
+    paddingVertical: 8,
   },
   controlsSlot: {
     borderTopWidth: 1,
     flexDirection: 'row',
-    justifyContent: 'space-around',
-    padding: 6,
+    gap: 2,
+    justifyContent: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  authSlot: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  authAvatar: {
+  sidebarControl: {
     alignItems: 'center',
-    height: 28,
+    flexDirection: 'row',
+    flexShrink: 1,
+    gap: 6,
+    height: 32,
     justifyContent: 'center',
-    width: 28,
+    minWidth: 0,
+    paddingHorizontal: 8,
+  },
+  sidebarControlCollapsed: {
+    paddingHorizontal: 0,
+  },
+  sidebarControlLabel: {
+    flexShrink: 1,
+    minWidth: 0,
+    textTransform: 'uppercase',
   },
   footerSlot: {
     alignItems: 'center',
+    borderTopWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingBottom: 6,
-    paddingHorizontal: 12,
+    minHeight: 40,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+  },
+  footerVersion: {
+    flexShrink: 0,
+  },
+  footerCredit: {
+    flexShrink: 1,
+    marginLeft: 12,
+    textAlign: 'right',
+    textTransform: 'uppercase',
   },
   toast: {
     borderWidth: 1,

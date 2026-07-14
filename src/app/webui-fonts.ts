@@ -1,4 +1,10 @@
 import { useFonts } from 'expo-font';
+import {
+  SpaceGrotesk_400Regular,
+  SpaceGrotesk_500Medium,
+  SpaceGrotesk_600SemiBold,
+  SpaceGrotesk_700Bold,
+} from '@expo-google-fonts/space-grotesk';
 
 import { GENERATED_NATIVE_FONT_ASSETS } from './native-font-assets.generated';
 
@@ -20,6 +26,10 @@ const WEBUI_FONT_ASSETS = {
   [WEBUI_FONT_FAMILIES.RulesExpandedRegular]: require('../../assets/fonts/RulesExpanded-Regular.ttf'),
   [WEBUI_FONT_FAMILIES.RulesExpandedBold]: require('../../assets/fonts/RulesExpanded-Bold.ttf'),
   [WEBUI_FONT_FAMILIES.MondwestRegular]: require('../../assets/fonts/Mondwest-Regular.ttf'),
+  SpaceGrotesk_400Regular,
+  SpaceGrotesk_500Medium,
+  SpaceGrotesk_600SemiBold,
+  SpaceGrotesk_700Bold,
   ...GENERATED_NATIVE_FONT_ASSETS,
 };
 

@@ -5,7 +5,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  assertGestureHandlerImportFirst,
+  assertPureSwiftUIEntry,
   assertNativeRootComposition,
   assertNoWebRuntime,
   readNativeRuntimeSources,
@@ -68,31 +68,31 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
   );
 });
 
-test('native v2 loads gesture handler before any other entry statement', () => {
-  assertGestureHandlerImportFirst(indexSource);
+test('native v2 entry registers the SwiftUI host without the RN gesture runtime', () => {
+  assertPureSwiftUIEntry(indexSource);
 });
 
-test('gesture handler entry guard rejects reordered imports', () => {
+test('pure SwiftUI entry guard rejects the RN gesture runtime', () => {
   assert.throws(
-    () => assertGestureHandlerImportFirst(`
+    () => assertPureSwiftUIEntry(`
       import { registerRootComponent } from 'expo';
       import 'react-native-gesture-handler';
       import App from './App';
       registerRootComponent(App);
     `),
-    /gesture handler import order/i,
+    /pure SwiftUI entry/i,
   );
 });
 
-test('native v2 mounts the Hermes root inside native providers', () => {
+test('native v2 directly mounts the SwiftUI host without RN view wrappers', () => {
   assertNativeRootComposition(appSource);
 });
 
-test('native root guard rejects reordered layers and extra wrappers', () => {
+test('native root guard rejects provider and view wrappers', () => {
   assert.throws(
     () => assertNativeRootComposition(`
       export default function App() {
-        return <SafeAreaProvider><GestureHandlerRootView><HermesNativeApp /></GestureHandlerRootView></SafeAreaProvider>;
+        return <SafeAreaProvider><HermesNativeApp /></SafeAreaProvider>;
       }
     `),
     /native root composition/i,
@@ -100,7 +100,7 @@ test('native root guard rejects reordered layers and extra wrappers', () => {
   assert.throws(
     () => assertNativeRootComposition(`
       export default function App() {
-        return <GestureHandlerRootView><SafeAreaProvider><View><HermesNativeApp /></View></SafeAreaProvider></GestureHandlerRootView>;
+        return <View><HermesNativeApp /></View>;
       }
     `),
     /native root composition/i,

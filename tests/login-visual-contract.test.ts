@@ -171,6 +171,9 @@ test('LoginScreen consumes the pure visual contract instead of duplicating sourc
   assert.match(source, /onPressIn=/);
   assert.match(source, /onPressOut=/);
   assert.match(source, /reduceProviderButtonInteraction/);
+  assert.match(source, /IOS_MOTION\.duration\.content/);
+  assert.match(source, /IOS_MOTION\.duration\.press/);
+  assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
   assert.match(source, /providerButtonFocusRing/);
   assert.match(source, /accessibilityLabel=\{label\}/);
   assert.ok((source.match(/accessible=\{false\}/g) ?? []).length >= 2);
@@ -179,7 +182,7 @@ test('LoginScreen consumes the pure visual contract instead of duplicating sourc
     (source.match(/importantForAccessibility="no-hide-descendants"/g) ?? []).length >= 2,
   );
   assert.doesNotMatch(source, /(?:hoverOpacity|activeOpacity)\.setValue/);
-  assert.doesNotMatch(source, /enableNativeCSSParsing|react-native-reanimated/);
+  assert.doesNotMatch(source, /enableNativeCSSParsing/);
   assert.doesNotMatch(source, /inputRange:\s*\[0,\s*1,\s*2\]/);
   assert.doesNotMatch(source, /const LOGIN_DITHER_SIZE/);
   assert.doesNotMatch(source, /buttonDisabled:\s*\{[^}]*opacity/s);

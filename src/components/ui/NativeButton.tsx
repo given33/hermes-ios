@@ -13,11 +13,13 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
   type ColorValue,
+  type GestureResponderEvent,
   type PressableProps,
   type StyleProp,
   type TextStyle,
@@ -31,6 +33,7 @@ import Reanimated, {
   useAnimatedStyle,
   useSharedValue,
   withRepeat,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import Svg, { Defs, LinearGradient, Mask, Rect, Stop } from 'react-native-svg';
@@ -49,6 +52,13 @@ import {
 } from '../../design/control-contracts';
 import { resolveNativeFontStack } from '../../design/native-font-faces';
 import { useTheme } from '../../design/ThemeProvider';
+import { IOS_MOTION } from '../../design/ios-motion';
+import { useNativeLocalization } from '../../i18n/NativeLocalization';
+import {
+  hasNativePressFeedback,
+  HermesPressFeedbackView,
+} from '../../../modules/hermes-ios-controls';
+import { playHaptic, type IOSHaptic } from '../ios/IOSPressable';
 
 const AnimatedRect = Reanimated.createAnimatedComponent(Rect);
 
@@ -58,6 +68,7 @@ export interface NativeButtonProps
   borderRadius?: number;
   children?: ReactNode;
   contentStyle?: StyleProp<ViewStyle>;
+  haptic?: IOSHaptic;
   loading?: boolean;
   prefix?: ReactNode;
   size?: NativeButtonSize;
@@ -77,6 +88,7 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
       destructive = false,
       disabled = false,
       ghost = false,
+      haptic,
       invert = false,
       loading = false,
       onBlur,
@@ -84,6 +96,7 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
       onHoverIn,
       onHoverOut,
       onLayout,
+      onPress,
       onPressIn,
       onPressOut,
       outlined = false,
@@ -97,11 +110,13 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
     ref,
   ) {
     const { tokens } = useTheme();
+    const { t } = useNativeLocalization();
     const [interaction, dispatch] = useReducer(
       reduceNativeButtonInteraction,
       INITIAL_NATIVE_BUTTON_INTERACTION,
     );
     const [layout, setLayout] = useState({ height: 0, width: 0 });
+    const pressProgress = useSharedValue(0);
     const blocked = disabled === true || loading;
     const visualState = resolveNativeButtonVisualState(
       interaction,
@@ -113,68 +128,35 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
     const metrics = resolveButtonMetrics(tokens, size);
     const runtimeFont = resolveNativeFontStack(tokens.typography.fontMono, 700);
     const square = size === 'icon' || size === 'xs';
+    // CSS `leading-0` lets glyph ink paint outside the line box. React Native
+    // clips that ink, so small text buttons need an explicit painted height.
+    const paintedHeight = square
+      ? metrics.visibleHeight
+      : Math.max(metrics.visibleHeight, size === 'sm' ? 30 : 40);
+    const paintedLineHeight = Math.max(
+      metrics.fontSize,
+      metrics.fontSize * (size === 'sm' ? 1.35 : 1.2),
+    );
+    const pressStyle = useAnimatedStyle(() => ({
+      opacity: 1 - pressProgress.value * 0.08,
+      transform: [{ scale: 1 - pressProgress.value * 0.025 }],
+    }));
 
     useEffect(() => {
       if (blocked) dispatch('reset');
     }, [blocked]);
 
-    return (
-      <Pressable
-        {...props}
-        accessibilityLabel={accessibilityLabel}
-        accessibilityRole={props.accessibilityRole ?? 'button'}
-        accessibilityState={{
-          ...accessibilityState,
-          busy: loading || accessibilityState?.busy,
-          disabled: blocked,
-        }}
-        disabled={blocked}
-        focusable={!blocked}
-        hitSlop={props.hitSlop ?? metrics.hitSlop}
-        onBlur={(event) => {
-          dispatch('blur');
-          onBlur?.(event);
-        }}
-        onFocus={(event) => {
-          dispatch('focus');
-          onFocus?.(event);
-        }}
-        onHoverIn={(event) => {
-          dispatch('hover-in');
-          onHoverIn?.(event);
-        }}
-        onHoverOut={(event) => {
-          dispatch('hover-out');
-          onHoverOut?.(event);
-        }}
-        onLayout={(event) => {
-          const { height, width } = event.nativeEvent.layout;
-          setLayout((current) => (
-            current.height === height && current.width === width
-              ? current
-              : { height, width }
-          ));
-          onLayout?.(event);
-        }}
-        onPressIn={(event) => {
-          dispatch('press-in');
-          onPressIn?.(event);
-        }}
-        onPressOut={(event) => {
-          dispatch('press-out');
-          onPressOut?.(event);
-        }}
-        ref={ref}
-        style={(state) => [
-          styles.pressable,
-          {
-            borderRadius,
-            height: metrics.visibleHeight,
-            width: square ? metrics.visibleHeight : undefined,
-          },
-          typeof style === 'function' ? style(state) : style,
-        ]}
-      >
+    const handleLayout: NonNullable<PressableProps['onLayout']> = (event) => {
+      const { height, width } = event.nativeEvent.layout;
+      setLayout((current) => (
+        current.height === height && current.width === width
+          ? current
+          : { height, width }
+      ));
+      onLayout?.(event);
+    };
+    const buttonContent = (
+      <>
         <ArcBorder
           borderRadius={borderRadius}
           filter={visual.filter}
@@ -184,7 +166,7 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
           width={layout.width}
         />
 
-        <View
+        <Reanimated.View
           pointerEvents="none"
           style={[
             styles.content,
@@ -193,12 +175,13 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
               borderColor: visual.borderColor,
               borderRadius,
               borderWidth: visual.id === 'outlined-destructive' ? 1 : 0,
-              height: metrics.visibleHeight,
+              height: paintedHeight,
               paddingLeft: square ? 0 : metrics.paddingLeft,
               paddingRight: square ? 0 : metrics.paddingRight,
-              width: square ? metrics.visibleHeight : undefined,
+              width: square ? paintedHeight : undefined,
             },
             contentStyle,
+            pressStyle,
           ]}
         >
           {visual.bevel ? <ButtonBevel bevel={visual.bevel} /> : null}
@@ -225,8 +208,10 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
             metrics.iconSize,
             runtimeFont,
             metrics.fontSize,
+            paintedLineHeight,
             metrics.letterSpacing,
             textStyle,
+            t,
           ))}
 
           {suffix ? (
@@ -245,7 +230,119 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
               </View>
             </>
           ) : null}
-        </View>
+        </Reanimated.View>
+      </>
+    );
+    const baseRootStyle = [
+      styles.pressable,
+      {
+        borderRadius,
+        height: paintedHeight,
+        width: square ? paintedHeight : undefined,
+      },
+    ];
+
+    if (Platform.OS === 'ios' && hasNativePressFeedback) {
+      return (
+        <HermesPressFeedbackView
+          {...props}
+          accessibilityLabel={accessibilityLabel ? t(accessibilityLabel) : undefined}
+          accessibilityRole={props.accessibilityRole ?? 'button'}
+          accessibilityState={{
+            ...accessibilityState,
+            busy: loading || accessibilityState?.busy,
+            disabled: blocked,
+          }}
+          disabled={blocked}
+          haptic={haptic ?? (destructive ? 'medium' : 'none')}
+          hitSlop={props.hitSlop ?? metrics.hitSlop}
+          onLayout={handleLayout}
+          onNativePress={(event) => {
+            onPress?.(event as unknown as GestureResponderEvent);
+          }}
+          onPressState={(event) => {
+            const pressed = event.nativeEvent.pressed;
+            dispatch(pressed ? 'press-in' : 'press-out');
+            if (pressed) {
+              onPressIn?.(event as unknown as GestureResponderEvent);
+            } else {
+              onPressOut?.(event as unknown as GestureResponderEvent);
+            }
+          }}
+          opacityTo={0.92}
+          ref={ref}
+          scaleTo={0.975}
+          style={[
+            baseRootStyle,
+            typeof style === 'function'
+              ? style({ pressed: interaction.pressed })
+              : style,
+          ]}
+        >
+          {buttonContent}
+        </HermesPressFeedbackView>
+      );
+    }
+
+    return (
+      <Pressable
+        {...props}
+        accessibilityLabel={accessibilityLabel ? t(accessibilityLabel) : undefined}
+        accessibilityRole={props.accessibilityRole ?? 'button'}
+        accessibilityState={{
+          ...accessibilityState,
+          busy: loading || accessibilityState?.busy,
+          disabled: blocked,
+        }}
+        disabled={blocked}
+        focusable={!blocked}
+        hitSlop={props.hitSlop ?? metrics.hitSlop}
+        onBlur={(event) => {
+          dispatch('blur');
+          onBlur?.(event);
+        }}
+        onFocus={(event) => {
+          dispatch('focus');
+          onFocus?.(event);
+        }}
+        onHoverIn={(event) => {
+          dispatch('hover-in');
+          onHoverIn?.(event);
+        }}
+        onHoverOut={(event) => {
+          dispatch('hover-out');
+          onHoverOut?.(event);
+        }}
+        onLayout={handleLayout}
+        onPressIn={(event) => {
+          dispatch('press-in');
+          pressProgress.value = withSpring(1, {
+            damping: IOS_MOTION.spring.damping,
+            mass: 0.72,
+            stiffness: IOS_MOTION.spring.stiffness + 80,
+          });
+          onPressIn?.(event);
+        }}
+        onPress={(event) => {
+          void playHaptic(haptic ?? (destructive ? 'medium' : 'none'));
+          onPress?.(event);
+        }}
+        onPressOut={(event) => {
+          dispatch('press-out');
+          pressProgress.value = withSpring(0, {
+            damping: IOS_MOTION.spring.damping,
+            mass: 0.72,
+            stiffness: IOS_MOTION.spring.stiffness + 80,
+          });
+          onPressOut?.(event);
+        }}
+        ref={ref}
+        style={(state) => [
+          baseRootStyle,
+          typeof style === 'function' ? style(state) : style,
+        ]}
+      >
+        {buttonContent}
       </Pressable>
     );
   },
@@ -292,23 +389,26 @@ function ArcBorder({
 
   useEffect(() => {
     opacity.value = withTiming(visible ? 1 : 0, {
-      duration: CONTROL_METRICS.button.arcBorderOpacityDurationMs,
-      easing: Easing.bezier(...CONTROL_METRICS.tailwind.transitionEasing),
+      duration: IOS_MOTION.duration.control,
+      easing: Easing.bezier(...IOS_MOTION.curve.standard),
     });
   }, [opacity, visible]);
 
   useEffect(() => {
-    progress.value = 0;
-    progress.value = withRepeat(
-      withTiming(1, {
-        duration: CONTROL_METRICS.button.arcBorderDurationMs,
-        easing: Easing.linear,
-      }),
-      -1,
-      false,
-    );
+    cancelAnimation(progress);
+    if (visible) {
+      progress.value = 0;
+      progress.value = withRepeat(
+        withTiming(1, {
+          duration: CONTROL_METRICS.button.arcBorderDurationMs,
+          easing: Easing.linear,
+        }),
+        -1,
+        false,
+      );
+    }
     return () => cancelAnimation(progress);
-  }, [progress]);
+  }, [progress, visible]);
 
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const movingRectProps = useAnimatedProps(() => ({
@@ -410,21 +510,27 @@ function renderChild(
   iconSize: number,
   fontFamily: string | undefined,
   fontSize: number,
+  lineHeight: number,
   letterSpacing: number,
   textStyle: StyleProp<TextStyle>,
+  translate: (value: string) => string,
 ): ReactNode {
   if (typeof child === 'string' || typeof child === 'number') {
+    const displayChild = typeof child === 'string' ? translate(child) : child;
     return (
       <Text
         style={buttonTextStyles(
           color,
           fontFamily,
           fontSize,
-          letterSpacing,
+          lineHeight,
+          typeof displayChild === 'string' && containsCjk(displayChild)
+            ? 0
+            : letterSpacing,
           textStyle,
         )}
       >
-        {child}
+        {displayChild}
       </Text>
     );
   }
@@ -439,8 +545,10 @@ function renderChild(
           iconSize,
           fontFamily,
           fontSize,
+          lineHeight,
           letterSpacing,
           textStyle,
+          translate,
         ))}
       </Fragment>
     );
@@ -455,9 +563,21 @@ function renderChild(
         color,
         fontFamily,
         fontSize,
-        letterSpacing,
+        lineHeight,
+        containsCjk(textContent(text.props.children)) ? 0 : letterSpacing,
         [text.props.style, textStyle],
       ),
+      children: Children.map(text.props.children, (nested) => renderChild(
+        nested,
+        color,
+        iconSize,
+        fontFamily,
+        fontSize,
+        lineHeight,
+        letterSpacing,
+        textStyle,
+        translate,
+      )),
     });
   }
   if (child.type === View) {
@@ -469,8 +589,10 @@ function renderChild(
         iconSize,
         fontFamily,
         fontSize,
+        lineHeight,
         letterSpacing,
         textStyle,
+        translate,
       )),
     });
   }
@@ -487,6 +609,7 @@ function renderChild(
         color,
         fontFamily,
         fontSize,
+        lineHeight,
         letterSpacing,
         textStyle,
       ),
@@ -499,6 +622,7 @@ function buttonTextStyles(
   color: string,
   fontFamily: string | undefined,
   fontSize: number,
+  lineHeight: number,
   letterSpacing: number,
   textStyle: StyleProp<TextStyle>,
 ): StyleProp<TextStyle> {
@@ -510,10 +634,24 @@ function buttonTextStyles(
       fontSize,
       fontWeight: fontFamily?.startsWith('Hermes') ? undefined : '700',
       letterSpacing,
-      lineHeight: fontSize,
+      lineHeight,
     },
     textStyle,
   ];
+}
+
+function textContent(node: ReactNode): string {
+  let value = '';
+  Children.forEach(node, (child) => {
+    if (typeof child === 'string' || typeof child === 'number') {
+      value += String(child);
+    }
+  });
+  return value;
+}
+
+function containsCjk(value: string): boolean {
+  return /[\u3400-\u9fff\uf900-\ufaff]/.test(value);
 }
 
 function renderIcon(node: ReactNode, color: string, size: number) {

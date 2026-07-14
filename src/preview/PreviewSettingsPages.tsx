@@ -1,5 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
+import { File, Paths } from 'expo-file-system';
 import * as Linking from 'expo-linking';
+import * as Sharing from 'expo-sharing';
 import {
   Activity,
   Archive,
@@ -42,9 +44,12 @@ import {
   Wrench,
 } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { IOSContextMenu } from '../components/ios/IOSContextMenu';
+import { IOSPressable } from '../components/ios/IOSPressable';
+import { IOSSwipeActions } from '../components/ios/IOSSwipeActions';
 import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
 import { useTheme } from '../design/ThemeProvider';
@@ -74,7 +79,8 @@ import {
 
 type SystemConfirm = 'restart' | 'update' | 'memory' | 'credential' | null;
 
-export function SystemPreviewPage({ notify }: PreviewPageProps) {
+export function SystemPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
+  const isChinese = locale === 'zh';
   const [confirm, setConfirm] = useState<SystemConfirm>(null);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [credentialOpen, setCredentialOpen] = useState(false);
@@ -86,7 +92,7 @@ export function SystemPreviewPage({ notify }: PreviewPageProps) {
     setRunningAction(name);
     setTimeout(() => {
       setRunningAction(null);
-      notify(`${name} preview completed`);
+      notify(`${name} completed`);
     }, 900);
   };
   const importConfig = async () => {
@@ -97,34 +103,34 @@ export function SystemPreviewPage({ notify }: PreviewPageProps) {
     <PreviewPage
       actions={(
         <PreviewRow>
-          <NativeButton onPress={() => setConsoleOpen(true)} outlined size="sm"><Terminal />Console</NativeButton>
-          <NativeButton accessibilityLabel="Refresh system status" ghost onPress={() => notify('System status refreshed')} size="icon"><RefreshCw /></NativeButton>
+          <NativeButton onPress={() => setConsoleOpen(true)} outlined prefix={<Terminal />} size="sm">{isChinese ? '控制台' : 'Console'}</NativeButton>
+          <NativeButton accessibilityLabel={isChinese ? '刷新系统状态' : 'Refresh system status'} ghost onPress={() => notify(isChinese ? '系统状态已刷新' : 'System status refreshed')} size="icon"><RefreshCw /></NativeButton>
         </PreviewRow>
       )}
-      subtitle="Monitor the Hermes gateway, inspect resources, and run administrative actions."
-      title="System"
+      subtitle={isChinese ? '监控 Hermes 网关、查看资源并执行管理操作。' : 'Monitor the Hermes gateway, inspect resources, and run administrative actions.'}
+      title={isChinese ? '系统监控' : 'System'}
     >
       {runningAction ? (
-        <PreviewCard title={runningAction} subtitle="Frontend preview action in progress">
+        <PreviewCard title={runningAction} subtitle={isChinese ? '管理操作正在进行' : 'Administrative action in progress'}>
           <PreviewProgress value={68} />
           <PreviewText variant="mono">$ hermes {runningAction.toLowerCase().replaceAll(' ', '-')} --preview</PreviewText>
         </PreviewCard>
       ) : null}
       <PreviewGrid minItemWidth={170}>
-        <PreviewMetric accent="#4ade80" icon={Server} label="Gateway" value="Running" hint="PID 18421" />
-        <PreviewMetric icon={Cpu} label="CPU" value="18%" hint="8 cores" />
-        <PreviewMetric icon={MemoryStick} label="Memory" value="2.4 GB" hint="of 16 GB" />
-        <PreviewMetric icon={HardDrive} label="Disk" value="42%" hint="86 GB free" />
+        <PreviewMetric accent="#4ade80" icon={Server} label={isChinese ? '网关' : 'Gateway'} value={isChinese ? '运行中' : 'Running'} hint="PID 18421" />
+        <PreviewMetric icon={Cpu} label="CPU" value="18%" hint={isChinese ? '8 核' : '8 cores'} />
+        <PreviewMetric icon={MemoryStick} label={isChinese ? '内存' : 'Memory'} value="2.4 GB" hint={isChinese ? '共 16 GB' : 'of 16 GB'} />
+        <PreviewMetric icon={HardDrive} label={isChinese ? '磁盘' : 'Disk'} value="42%" hint={isChinese ? '剩余 86 GB' : '86 GB free'} />
       </PreviewGrid>
       <PreviewGrid minItemWidth={320}>
-        <PreviewCard title="Gateway" subtitle="Running on 0.0.0.0:8080">
-          <PreviewDataRow label="Status" value={<PreviewBadge tone="success">RUNNING</PreviewBadge>} />
-          <PreviewDataRow label="Version" mono value="0.9.3" />
-          <PreviewDataRow label="Uptime" mono value="4d 7h 21m" />
-          <PreviewDataRow label="Active sessions" mono value="2" />
+        <PreviewCard title={isChinese ? '网关' : 'Gateway'} subtitle={isChinese ? '正在 0.0.0.0:8080 上运行' : 'Running on 0.0.0.0:8080'}>
+          <PreviewDataRow label={isChinese ? '状态' : 'Status'} value={<PreviewBadge tone="success">{isChinese ? '运行中' : 'RUNNING'}</PreviewBadge>} />
+          <PreviewDataRow label={isChinese ? '版本' : 'Version'} mono value="0.9.3" />
+          <PreviewDataRow label={isChinese ? '运行时间' : 'Uptime'} mono value="4d 7h 21m" />
+          <PreviewDataRow label={isChinese ? '活跃会话' : 'Active sessions'} mono value="2" />
           <PreviewRow>
-            <NativeButton onPress={() => setConfirm('restart')} outlined><RotateCw />Restart gateway</NativeButton>
-            <NativeButton onPress={() => setConfirm('update')}><CloudDownload />Update Hermes</NativeButton>
+            <NativeButton onPress={() => setConfirm('restart')} outlined prefix={<RotateCw />}>{isChinese ? '重启网关' : 'Restart gateway'}</NativeButton>
+            <NativeButton onPress={() => setConfirm('update')} prefix={<CloudDownload />}>{isChinese ? '更新 Hermes' : 'Update Hermes'}</NativeButton>
           </PreviewRow>
         </PreviewCard>
         <PreviewCard title="Runtime" subtitle="Python and operating system details">
@@ -141,8 +147,8 @@ export function SystemPreviewPage({ notify }: PreviewPageProps) {
           <PreviewDataRow label="Agent memories" mono value="438" />
           <PreviewDataRow label="Checkpoints" mono value="92" />
           <PreviewRow>
-            <NativeButton destructive ghost onPress={() => setConfirm('memory')} size="sm"><Trash2 />Reset memory</NativeButton>
-            <NativeButton ghost onPress={() => notify('Previewed checkpoint pruning')} size="sm"><Archive />Prune checkpoints</NativeButton>
+            <NativeButton destructive ghost onPress={() => setConfirm('memory')} prefix={<Trash2 />} size="sm">Reset memory</NativeButton>
+            <NativeButton ghost onPress={() => notify('Checkpoint pruning started')} prefix={<Archive />} size="sm">Prune checkpoints</NativeButton>
           </PreviewRow>
         </PreviewCard>
         <PreviewCard title="Credentials" subtitle="Stored provider credentials available to Hermes.">
@@ -150,7 +156,7 @@ export function SystemPreviewPage({ notify }: PreviewPageProps) {
           <PreviewSettingRow detail="1 key" label="OpenRouter" trailing={<PreviewBadge tone="success">CONFIGURED</PreviewBadge>} />
           <PreviewSettingRow detail="No credentials" label="OpenAI" trailing={<PreviewBadge tone="outline">EMPTY</PreviewBadge>} />
           <PreviewRow>
-            <NativeButton onPress={() => setCredentialOpen(true)} outlined size="sm"><Plus />Add credential</NativeButton>
+            <NativeButton onPress={() => setCredentialOpen(true)} outlined prefix={<Plus />} size="sm">Add credential</NativeButton>
             <NativeButton accessibilityLabel="Remove credential" destructive ghost onPress={() => setConfirm('credential')} size="icon"><Trash2 /></NativeButton>
           </PreviewRow>
         </PreviewCard>
@@ -158,30 +164,41 @@ export function SystemPreviewPage({ notify }: PreviewPageProps) {
       <PreviewGrid minItemWidth={320}>
         <PreviewCard title="Configuration transfer" subtitle="Export, import, or restore Hermes data.">
           <PreviewRow>
-            <NativeButton onPress={() => notify('Configuration export prepared')} outlined><Download />Export</NativeButton>
-            <NativeButton onPress={importConfig} outlined><Import />Import</NativeButton>
+            <NativeButton onPress={() => notify('Configuration export prepared')} outlined prefix={<Download />}>Export</NativeButton>
+            <NativeButton onPress={importConfig} outlined prefix={<Import />}>Import</NativeButton>
           </PreviewRow>
           <PreviewSettingRow detail="/var/backups/hermes-2026-07-14.tar.gz" label="Latest backup" />
         </PreviewCard>
         <PreviewCard title="Shell hooks" subtitle="Run a command when matching terminal events occur.">
           <PreviewSettingRow detail="terminal · 10s timeout" label="notify-complete.sh" trailing={<PreviewBadge tone="success">ACTIVE</PreviewBadge>} />
-          <NativeButton onPress={() => setHookOpen(true)} outlined><Plus />Add hook</NativeButton>
+          <NativeButton onPress={() => setHookOpen(true)} outlined prefix={<Plus />}>Add hook</NativeButton>
         </PreviewCard>
       </PreviewGrid>
       <ConfirmDialog
-        confirmLabel={confirm === 'update' ? 'Update' : confirm === 'restart' ? 'Restart' : 'Remove'}
-        description={confirm === 'update'
-          ? 'Hermes will update from the configured source and restart the gateway when complete.'
+        cancelLabel={isChinese ? '取消' : 'Cancel'}
+        confirmLabel={confirm === 'update'
+          ? isChinese ? '立即更新' : 'Update now'
           : confirm === 'restart'
-            ? 'Active tasks continue on the server where supported. The gateway will briefly disconnect.'
+            ? isChinese ? '重启网关' : 'Restart gateway'
+            : isChinese ? '移除' : 'Remove'}
+        description={confirm === 'update'
+          ? isChinese ? 'Hermes 将从已配置的来源更新，并在完成后重启网关。' : 'Hermes will update from the configured source and restart the gateway when complete.'
+          : confirm === 'restart'
+            ? isChinese ? '支持的活跃任务会继续在服务器运行，网关会短暂断开。' : 'Active tasks continue on the server where supported. The gateway will briefly disconnect.'
             : confirm === 'memory'
-              ? 'This permanently removes the selected memory store and cannot be undone.'
-              : 'This credential will no longer be available to Hermes.'}
+              ? isChinese ? '这会永久移除所选记忆存储，且无法撤销。' : 'This permanently removes the selected memory store and cannot be undone.'
+              : isChinese ? 'Hermes 将无法再使用此凭据。' : 'This credential will no longer be available to Hermes.'}
         destructive={confirm === 'memory' || confirm === 'credential'}
         onCancel={() => setConfirm(null)}
         onConfirm={() => runAction(confirm === 'update' ? 'Update Hermes' : confirm === 'restart' ? 'Restart Gateway' : confirm === 'memory' ? 'Reset Memory' : 'Remove Credential')}
         open={confirm !== null}
-        title={confirm === 'update' ? 'Update Hermes?' : confirm === 'restart' ? 'Restart gateway?' : confirm === 'memory' ? 'Reset memory?' : 'Remove credential?'}
+        title={confirm === 'update'
+          ? isChinese ? '更新 Hermes？' : 'Update Hermes?'
+          : confirm === 'restart'
+            ? isChinese ? '重启网关？' : 'Restart gateway?'
+            : confirm === 'memory'
+              ? isChinese ? '重置记忆？' : 'Reset memory?'
+              : isChinese ? '移除凭据？' : 'Remove credential?'}
       />
       <PreviewModal onClose={() => setConsoleOpen(false)} open={consoleOpen} title="Hermes console">
         <View style={styles.console}>
@@ -206,7 +223,7 @@ export function SystemPreviewPage({ notify }: PreviewPageProps) {
         <NativeInput placeholder="Matcher, e.g. terminal" />
         <NativeInput placeholder="Timeout in seconds" value="10" />
         <NativeButton onPress={() => {
-          notify('Shell hook staged locally');
+          notify('Shell hook added');
           setHookOpen(false);
         }}>Add hook</NativeButton>
       </PreviewModal>
@@ -217,36 +234,122 @@ export function SystemPreviewPage({ notify }: PreviewPageProps) {
 export function ProfilesPreviewPage({ navigate, notify }: PreviewPageProps) {
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
   const [soulProfile, setSoulProfile] = useState<string | null>(null);
+  const [actionsProfile, setActionsProfile] = useState<
+    (typeof PREVIEW_PROFILES)[number] | null
+  >(null);
+  const setActive = (profile: (typeof PREVIEW_PROFILES)[number]) => {
+    notify(`Active profile: ${profile.name}`);
+  };
+  const editSoul = (profile: (typeof PREVIEW_PROFILES)[number]) => {
+    setSoulProfile(profile.name);
+  };
+  const copyCommand = (profile: (typeof PREVIEW_PROFILES)[number]) => {
+    notify(`hermes --profile ${profile.name} copied`);
+  };
+  const openProfileActions = (profile: (typeof PREVIEW_PROFILES)[number]) => {
+    setActionsProfile(profile);
+  };
   return (
     <PreviewPage
-      actions={<NativeButton onPress={() => navigate('/profiles/new')} size="sm"><Plus />New profile</NativeButton>}
+      actions={<NativeButton onPress={() => navigate('/profiles/new')} prefix={<Plus />} size="sm">New profile</NativeButton>}
       subtitle="Create specialized agents with scoped models, keys, memories, skills, and schedules."
       title="Profiles"
     >
       <PreviewGrid minItemWidth={300}>
         {PREVIEW_PROFILES.map((profile) => (
-          <PreviewCard
-            action={profile.active ? <PreviewBadge tone="success">DEFAULT</PreviewBadge> : null}
+          <IOSSwipeActions
+            actions={[
+              {
+                icon: 'pencil',
+                id: 'edit',
+                label: 'Edit',
+                onPress: () => editSoul(profile),
+              },
+              {
+                destructive: true,
+                icon: 'trash',
+                id: 'delete',
+                label: 'Delete',
+                onPress: () => setDeleteTarget(profile.name),
+              },
+            ]}
+            containerStyle={styles.swipeContainer}
             key={profile.name}
+          >
+          <IOSContextMenu
+            actions={[
+              {
+                id: 'active',
+                onPress: () => setActive(profile),
+                systemImage: 'checkmark.circle',
+                title: 'Set active',
+              },
+              {
+                id: 'soul',
+                onPress: () => editSoul(profile),
+                systemImage: 'pencil',
+                title: 'Edit SOUL.md',
+              },
+              {
+                id: 'copy',
+                onPress: () => copyCommand(profile),
+                systemImage: 'doc.on.doc',
+                title: 'Copy command',
+              },
+              {
+                destructive: true,
+                id: 'delete',
+                onPress: () => setDeleteTarget(profile.name),
+                systemImage: 'trash',
+                title: 'Delete profile',
+              },
+            ]}
+          >
+          <PreviewCard
+            action={(
+              <PreviewRow style={styles.profileHeaderActions}>
+                {profile.active ? <PreviewBadge tone="success">DEFAULT</PreviewBadge> : null}
+                <NativeButton
+                  accessibilityLabel="Profile actions"
+                  ghost
+                  onPress={() => openProfileActions(profile)}
+                  size="icon"
+                >
+                  <MoreHorizontal />
+                </NativeButton>
+              </PreviewRow>
+            )}
             subtitle={profile.description}
             title={profile.name}
           >
             <PreviewDataRow label="Model" mono value={profile.model} />
             <PreviewDataRow label="Skills" mono value={String(profile.skills)} />
             <PreviewDataRow label="Environment" value={profile.env ? 'Configured' : 'Inherited'} />
-            <PreviewRow>
-              {!profile.active ? (
-                <NativeButton onPress={() => notify(`Previewed active profile: ${profile.name}`)} outlined size="sm">Set active</NativeButton>
-              ) : null}
-              <NativeButton onPress={() => setSoulProfile(profile.name)} outlined size="sm"><Edit3 />SOUL.md</NativeButton>
-              <NativeButton accessibilityLabel="Copy CLI command" ghost onPress={() => notify(`hermes --profile ${profile.name} copied`)} size="icon"><Copy /></NativeButton>
-              {!profile.active ? (
-                <NativeButton accessibilityLabel="Delete profile" destructive ghost onPress={() => setDeleteTarget(profile.name)} size="icon"><Trash2 /></NativeButton>
-              ) : null}
-            </PreviewRow>
           </PreviewCard>
+          </IOSContextMenu>
+          </IOSSwipeActions>
         ))}
       </PreviewGrid>
+      <ProfileActionsSheet
+        onClose={() => setActionsProfile(null)}
+        onCopy={() => {
+          notify(`hermes --profile ${actionsProfile?.name} copied`);
+          setActionsProfile(null);
+        }}
+        onDelete={() => {
+          setDeleteTarget(actionsProfile?.name ?? null);
+          setActionsProfile(null);
+        }}
+        onEditSoul={() => {
+          setSoulProfile(actionsProfile?.name ?? null);
+          setActionsProfile(null);
+        }}
+        onSetActive={() => {
+          notify(`Active profile: ${actionsProfile?.name}`);
+          setActionsProfile(null);
+        }}
+        profile={actionsProfile}
+      />
       <PreviewModal onClose={() => setSoulProfile(null)} open={soulProfile !== null} title={`Edit ${soulProfile ?? ''} SOUL.md`}>
         <NativeInput
           multiline
@@ -254,7 +357,7 @@ export function ProfilesPreviewPage({ navigate, notify }: PreviewPageProps) {
           value="# iOS Native Agent\n\nYou preserve the customized Hermes WebUI contracts while using native iOS interaction patterns."
         />
         <NativeButton onPress={() => {
-          notify(`${soulProfile} SOUL.md staged locally`);
+          notify(`${soulProfile} SOUL.md saved`);
           setSoulProfile(null);
         }}>Save SOUL</NativeButton>
       </PreviewModal>
@@ -263,13 +366,92 @@ export function ProfilesPreviewPage({ navigate, notify }: PreviewPageProps) {
         destructive
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {
-          notify(`Previewed profile deletion: ${deleteTarget}`);
+          notify(`Deleted profile: ${deleteTarget}`);
           setDeleteTarget(null);
         }}
         open={deleteTarget !== null}
         title="Delete profile?"
       />
     </PreviewPage>
+  );
+}
+
+function ProfileActionsSheet({
+  onClose,
+  onCopy,
+  onDelete,
+  onEditSoul,
+  onSetActive,
+  profile,
+}: {
+  onClose(): void;
+  onCopy(): void;
+  onDelete(): void;
+  onEditSoul(): void;
+  onSetActive(): void;
+  profile: (typeof PREVIEW_PROFILES)[number] | null;
+}) {
+  return (
+    <PreviewModal
+      onClose={onClose}
+      open={profile !== null}
+      title={`${profile?.name ?? ''} actions`}
+    >
+      {!profile?.active ? (
+        <ProfileActionItem
+          icon={Check}
+          label="Set active"
+          onPress={onSetActive}
+        />
+      ) : null}
+      <ProfileActionItem
+        icon={Edit3}
+        label="SOUL.md"
+        onPress={onEditSoul}
+      />
+      <ProfileActionItem
+        icon={Copy}
+        label="Copy CLI command"
+        onPress={onCopy}
+      />
+      {!profile?.active ? (
+        <ProfileActionItem
+          destructive
+          icon={Trash2}
+          label="Delete profile"
+          onPress={onDelete}
+        />
+      ) : null}
+    </PreviewModal>
+  );
+}
+
+function ProfileActionItem({
+  destructive = false,
+  icon: Icon,
+  label,
+  onPress,
+}: {
+  destructive?: boolean;
+  icon: typeof Check;
+  label: string;
+  onPress(): void;
+}) {
+  const { tokens } = useTheme();
+  const color = destructive ? tokens.colors.destructive : tokens.colors.foreground;
+  return (
+    <IOSPressable
+      accessibilityRole="button"
+      onPress={onPress}
+      pressedStyle={{ backgroundColor: tokens.colors.muted }}
+      style={[
+        styles.profileActionItem,
+        { borderBottomColor: tokens.colors.border },
+      ]}
+    >
+      <Icon color={color} size={17} />
+      <PreviewText color={color} variant="label">{label}</PreviewText>
+    </IOSPressable>
   );
 }
 
@@ -288,7 +470,7 @@ export function ProfileBuilderPreviewPage({ navigate, notify }: PreviewPageProps
     const index = order.indexOf(step);
     if (index < order.length - 1) setStep(order[index + 1]!);
     else {
-      notify(`Profile '${name || 'untitled'}' preview completed`);
+      notify(`Profile '${name || 'untitled'}' created`);
       navigate('/profiles');
     }
   };
@@ -341,7 +523,7 @@ export function ProfileBuilderPreviewPage({ navigate, notify }: PreviewPageProps
           <>
             <NativeInput placeholder="Server name" />
             <NativeInput placeholder="URL (https://.../mcp)" />
-            <PreviewRow><NativeButton outlined><Plus />Add server</NativeButton></PreviewRow>
+            <PreviewRow><NativeButton outlined prefix={<Plus />}>Add server</NativeButton></PreviewRow>
           </>
         )}
         <PreviewRow style={styles.builderFooter}>
@@ -358,58 +540,94 @@ export function ProfileBuilderPreviewPage({ navigate, notify }: PreviewPageProps
   );
 }
 
-export function ConfigPreviewPage({ notify }: PreviewPageProps) {
+export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
+  const isChinese = locale === 'zh';
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'form' | 'yaml'>('form');
   const [section, setSection] = useState('General');
   const [resetOpen, setResetOpen] = useState(false);
+  const normalizedQuery = query.trim().toLowerCase();
   const sections = PREVIEW_CONFIG_SECTIONS.filter((group) => (
-    group.name.toLowerCase().includes(query.toLowerCase())
-    || group.fields.some(([key, value]) => `${key} ${value}`.toLowerCase().includes(query.toLowerCase()))
+    `${group.name} ${isChinese ? configSectionZh(group.name) : ''}`
+      .toLowerCase()
+      .includes(normalizedQuery)
+    || group.fields.some(([key, value]) => (
+      `${key} ${value} ${isChinese ? configFieldZh(key) : ''}`
+        .toLowerCase()
+        .includes(normalizedQuery)
+    ))
   ));
+  const exportConfig = async () => {
+    const file = new File(Paths.cache, 'hermes-config-preview.json');
+    file.write(JSON.stringify({
+      generatedAt: new Date().toISOString(),
+      sections: PREVIEW_CONFIG_SECTIONS,
+    }, null, 2));
+    if (await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(file.uri, {
+        dialogTitle: isChinese ? '导出 Hermes 配置' : 'Export Hermes config',
+        mimeType: 'application/json',
+        UTI: 'public.json',
+      });
+    }
+    notify(isChinese ? '配置 JSON 已导出' : 'Config JSON exported');
+  };
+  const importConfigFile = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: true,
+      type: ['application/json', 'application/yaml', 'text/yaml'],
+    });
+    if (!result.canceled) {
+      notify(isChinese
+        ? `已选择配置：${result.assets[0]?.name ?? '文件'}`
+        : `Selected config: ${result.assets[0]?.name ?? 'file'}`);
+    }
+  };
   return (
     <PreviewPage
       actions={(
         <PreviewRow>
-          <NativeButton accessibilityLabel="Export JSON" ghost onPress={() => notify('Config JSON export prepared')} size="icon"><Download /></NativeButton>
-          <NativeButton accessibilityLabel="Import JSON" ghost onPress={() => notify('Config import picker opened')} size="icon"><Upload /></NativeButton>
-          <NativeButton onPress={() => notify('Configuration staged locally')} size="sm"><Save />Save</NativeButton>
+          <NativeButton accessibilityLabel={isChinese ? '导出 JSON' : 'Export JSON'} ghost haptic="light" onPress={() => void exportConfig()} size="icon"><Download /></NativeButton>
+          <NativeButton accessibilityLabel={isChinese ? '导入 JSON' : 'Import JSON'} ghost haptic="light" onPress={() => void importConfigFile()} size="icon"><Upload /></NativeButton>
+          <NativeButton onPress={() => notify(isChinese ? '配置已保存' : 'Configuration saved')} prefix={<Save />} size="sm">{isChinese ? '保存' : 'Save'}</NativeButton>
         </PreviewRow>
       )}
       subtitle="~/.hermes/config.yaml"
-      title="Config"
+      title={isChinese ? '配置' : 'Config'}
     >
       <PreviewCard>
         <PreviewRow style={styles.toolbarBetween}>
-          <PreviewSearch onChangeText={setQuery} placeholder="Search..." value={query} />
+          <PreviewSearch onChangeText={setQuery} placeholder={isChinese ? '搜索...' : 'Search...'} value={query} />
           <PreviewSegmented<'form' | 'yaml'>
             onChange={setMode}
-            options={[{ label: 'Form', value: 'form' }, { label: 'YAML', value: 'yaml' }]}
+            options={[{ label: isChinese ? '表单' : 'Form', value: 'form' }, { label: 'YAML', value: 'yaml' }]}
             value={mode}
           />
         </PreviewRow>
       </PreviewCard>
       {mode === 'yaml' ? (
-        <PreviewCard title="Raw YAML config">
+        <PreviewCard title={isChinese ? '原始 YAML 配置' : 'Raw YAML config'}>
           <NativeInput multiline style={styles.yamlInput} value={'default_model: anthropic/claude-sonnet-4\nmax_iterations: 50\ntimezone: Asia/Shanghai\n\nterminal:\n  shell: /bin/zsh\n  stream_output: true\n\nmemory:\n  provider: builtin\n  auto_compact_threshold: 0.82'} />
         </PreviewCard>
       ) : (
         <View style={styles.configLayout}>
-          <PreviewCard style={styles.configSidebar} title="Sections">
+          <PreviewCard style={styles.configSidebar} title={isChinese ? '分类' : 'Sections'}>
             {PREVIEW_CONFIG_SECTIONS.map((group) => (
-              <PreviewSettingRow key={group.name} label={group.name} onPress={() => setSection(group.name)} trailing={section === group.name ? <Check size={16} /> : undefined} />
+              <PreviewSettingRow key={group.name} label={isChinese ? configSectionZh(group.name) : group.name} onPress={() => setSection(group.name)} trailing={section === group.name ? <Check size={16} /> : undefined} />
             ))}
           </PreviewCard>
           <View style={styles.configMain}>
             {sections.filter((group) => query || group.name === section).map((group) => (
               <PreviewCard
-                action={<NativeButton accessibilityLabel={`Reset ${group.name}`} ghost onPress={() => setResetOpen(true)} size="icon"><RotateCw /></NativeButton>}
+                action={<NativeButton accessibilityLabel={isChinese ? `将${configSectionZh(group.name)}恢复为默认值` : `Reset ${group.name}`} ghost onPress={() => setResetOpen(true)} size="icon"><RotateCw /></NativeButton>}
                 key={group.name}
-                title={group.name}
+                title={isChinese ? configSectionZh(group.name) : group.name}
               >
                 {group.fields.map(([key, value]) => (
                   <View key={key} style={styles.fieldGroup}>
-                    <PreviewText variant="label">{key.replaceAll('_', ' ')}</PreviewText>
+                    <PreviewText variant="label">
+                      {isChinese ? configFieldZh(key) : key.replaceAll('_', ' ')}
+                    </PreviewText>
                     {value === 'true' ? (
                       <PreviewToggle accessibilityLabel={key} onChange={() => {}} value />
                     ) : (
@@ -423,20 +641,44 @@ export function ConfigPreviewPage({ notify }: PreviewPageProps) {
         </View>
       )}
       <ConfirmDialog
-        description="This restores every field in this section to its default. It remains local until Save is pressed."
+        cancelLabel={isChinese ? '取消' : 'Cancel'}
+        confirmLabel={isChinese ? '恢复默认值' : 'Restore defaults'}
+        description={isChinese
+          ? `确定要将${configSectionZh(section)}的所有设置恢复为默认值吗？此操作仅更新表单，在按下「保存」按钮前不会写入 config.yaml。`
+          : 'This restores every field in this section to its default. It remains local until Save is pressed.'}
         onCancel={() => setResetOpen(false)}
         onConfirm={() => {
-          notify(`${section} restored to defaults in preview`);
+          notify(isChinese ? `${configSectionZh(section)}已恢复默认值` : `${section} restored to defaults`);
           setResetOpen(false);
         }}
         open={resetOpen}
-        title="Restore defaults?"
+        title={isChinese ? '恢复默认值？' : 'Restore defaults?'}
       />
     </PreviewPage>
   );
 }
 
+function configSectionZh(section: string): string {
+  return ({ General: '通用', Memory: '记忆', Terminal: '终端' } as Record<string, string>)[section]
+    ?? section;
+}
+
+function configFieldZh(field: string): string {
+  return ({
+    auto_compact_threshold: '自动压缩阈值',
+    context_engine: '上下文引擎',
+    default_model: '默认模型',
+    max_iterations: '最大迭代次数',
+    provider: '提供商',
+    shell: 'Shell',
+    stream_output: '流式输出',
+    terminal_font_size: '终端字体大小',
+    timezone: '时区',
+  } as Record<string, string>)[field] ?? field.replaceAll('_', ' ');
+}
+
 export function EnvPreviewPage({ notify }: PreviewPageProps) {
+  const { tokens } = useTheme();
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [editing, setEditing] = useState<string | null>(null);
   const [clearTarget, setClearTarget] = useState<string | null>(null);
@@ -460,37 +702,82 @@ export function EnvPreviewPage({ notify }: PreviewPageProps) {
             title={group.name}
           >
             {entries.map(([key, isSet, preview]) => (
-              <View key={key}>
+              <IOSSwipeActions
+                actions={[
+                  {
+                    icon: 'pencil',
+                    id: 'edit',
+                    label: isSet ? 'Replace' : 'Set',
+                    onPress: () => setEditing(key),
+                  },
+                  ...(isSet ? [{
+                    destructive: true,
+                    icon: 'trash',
+                    id: 'clear',
+                    label: 'Clear',
+                    onPress: () => setClearTarget(key),
+                  }] : []),
+                ]}
+                key={key}
+              >
+              <View>
                 <View style={styles.envRow}>
-                  <View style={styles.flexCopy}>
-                    <PreviewText variant="mono">{key}</PreviewText>
-                    <PreviewText variant="tiny">
-                      {isSet ? (revealed[key] ? preview : preview.replace(/./g, '•')) : 'Not set'}
-                    </PreviewText>
+                  <View style={styles.envKeyHeader}>
+                    <PreviewText style={styles.flexCopy} variant="mono">{key}</PreviewText>
+                    <PreviewBadge tone={isSet ? 'success' : 'outline'}>{isSet ? 'SET' : 'EMPTY'}</PreviewBadge>
                   </View>
-                  <PreviewBadge tone={isSet ? 'success' : 'outline'}>{isSet ? 'SET' : 'EMPTY'}</PreviewBadge>
-                  {isSet ? (
-                    <NativeButton accessibilityLabel={revealed[key] ? `Hide ${key}` : `Reveal ${key}`} ghost onPress={() => setRevealed((current) => ({ ...current, [key]: !current[key] }))} size="icon">
-                      {revealed[key] ? <EyeOff /> : <Eye />}
+                  <View style={styles.envValueRow}>
+                    <View
+                      style={[
+                        styles.envValue,
+                        { borderColor: tokens.colors.border },
+                      ]}
+                    >
+                      <PreviewText numberOfLines={1} variant="tiny">
+                        {isSet ? (revealed[key] ? preview : preview.replace(/./g, '•')) : 'Not set'}
+                      </PreviewText>
+                    </View>
+                    {isSet ? (
+                      <NativeButton accessibilityLabel={revealed[key] ? `Hide ${key}` : `Reveal ${key}`} ghost onPress={() => setRevealed((current) => ({ ...current, [key]: !current[key] }))} size="icon">
+                        {revealed[key] ? <EyeOff /> : <Eye />}
+                      </NativeButton>
+                    ) : null}
+                    <NativeButton
+                      onPress={() => setEditing(key)}
+                      outlined
+                      prefix={<Edit3 />}
+                      size="sm"
+                    >
+                      {isSet ? 'Replace' : 'Set'}
                     </NativeButton>
-                  ) : null}
-                  <NativeButton onPress={() => setEditing(key)} outlined size="sm">{isSet ? 'Replace' : 'Set'}</NativeButton>
-                  {isSet ? <NativeButton accessibilityLabel={`Clear ${key}`} destructive ghost onPress={() => setClearTarget(key)} size="icon"><Trash2 /></NativeButton> : null}
+                    {isSet ? (
+                      <NativeButton
+                        destructive
+                        onPress={() => setClearTarget(key)}
+                        outlined
+                        prefix={<Trash2 />}
+                        size="sm"
+                      >
+                        Clear
+                      </NativeButton>
+                    ) : null}
+                  </View>
                 </View>
                 <PreviewDivider />
               </View>
+              </IOSSwipeActions>
             ))}
           </PreviewCard>
         );
       })}
       <PreviewCard title="Custom keys" subtitle="Inject environment variables for skills, MCP servers, or custom tools.">
-        <NativeButton onPress={() => setEditing('CUSTOM_KEY')} outlined><Plus />Add custom key</NativeButton>
+        <NativeButton onPress={() => setEditing('CUSTOM_KEY')} outlined prefix={<Plus />}>Add custom key</NativeButton>
       </PreviewCard>
       <PreviewModal onClose={() => setEditing(null)} open={editing !== null} title={`${editing?.startsWith('CUSTOM') ? 'Add custom key' : 'Set key'}`}>
         {editing?.startsWith('CUSTOM') ? <NativeInput placeholder="MY_SERVICE_API_KEY" /> : <PreviewText variant="mono">{editing}</PreviewText>}
         <NativeInput placeholder="Enter value..." secureTextEntry />
         <NativeButton onPress={() => {
-          notify(`${editing} staged locally`);
+          notify(`${editing} saved`);
           setEditing(null);
         }}>Save</NativeButton>
       </PreviewModal>
@@ -499,7 +786,7 @@ export function EnvPreviewPage({ notify }: PreviewPageProps) {
         destructive
         onCancel={() => setClearTarget(null)}
         onConfirm={() => {
-          notify(`Previewed key removal: ${clearTarget}`);
+          notify(`Removed key: ${clearTarget}`);
           setClearTarget(null);
         }}
         open={clearTarget !== null}
@@ -513,7 +800,7 @@ export function DocsPreviewPage() {
   const docsUrl = 'https://hermes-agent.nousresearch.com/docs/';
   return (
     <PreviewPage
-      actions={<NativeButton onPress={() => Linking.openURL(docsUrl)} size="sm"><ExternalLink />Open documentation</NativeButton>}
+      actions={<NativeButton onPress={() => Linking.openURL(docsUrl)} prefix={<ExternalLink />} size="sm">Open documentation</NativeButton>}
       subtitle="The official Hermes Agent documentation opens in the system browser."
       title="Documentation"
     >
@@ -539,6 +826,9 @@ export function DocsPreviewPage() {
 }
 
 const styles = StyleSheet.create({
+  swipeContainer: {
+    borderRadius: 4,
+  },
   console: {
     backgroundColor: '#000000',
     gap: 8,
@@ -580,14 +870,46 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   envRow: {
+    gap: 8,
+    minHeight: 76,
+    paddingVertical: 8,
+  },
+  envKeyHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    minWidth: 0,
+  },
+  envValueRow: {
     alignItems: 'center',
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
-    minHeight: 58,
+    width: '100%',
+  },
+  envValue: {
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 30,
+    minWidth: 88,
+    paddingHorizontal: 10,
   },
   flexCopy: {
     flex: 1,
-    minWidth: 160,
+    minWidth: 0,
+  },
+  profileHeaderActions: {
+    flexWrap: 'nowrap',
+    gap: 3,
+  },
+  profileActionItem: {
+    alignItems: 'center',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 46,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
 });

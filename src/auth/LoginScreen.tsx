@@ -1,11 +1,16 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import {
+  useEffect,
+  useReducer,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 import {
   ActivityIndicator,
   Animated,
   Easing,
   KeyboardAvoidingView,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -30,7 +35,13 @@ import Svg, {
 } from 'react-native-svg';
 
 import { HERMES_ORIGIN } from '../config';
+import { IOSPressable } from '../components/ios/IOSPressable';
+import {
+  hasNativeTextInput,
+  HermesTextInputView,
+} from '../../modules/hermes-ios-controls';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
+import { IOS_MOTION } from '../design/ios-motion';
 import { useAuth } from './AuthProvider';
 import {
   INITIAL_PROVIDER_BUTTON_INTERACTION,
@@ -47,9 +58,9 @@ const {
   glow: LOGIN_GLOW,
   providerButton: PROVIDER_BUTTON,
 } = LOGIN_VISUAL_CONTRACT;
-const LOGIN_EASE_OUT = Easing.bezier(...LOGIN_ENTRANCE.easing);
+const LOGIN_EASE_OUT = Easing.bezier(...IOS_MOTION.curve.decelerate);
 const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
-  ...PROVIDER_BUTTON.filterTransition.easing,
+  ...IOS_MOTION.curve.standard,
 );
 
 export function LoginScreen() {
@@ -57,6 +68,7 @@ export function LoginScreen() {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const apiKeyInput = useRef<TextInputHandle>(null);
+  const [apiKeyFocusRequest, setApiKeyFocusRequest] = useState(0);
   const entranceOpacity = useRef(new Animated.Value(0)).current;
   const entranceOffset = useRef(new Animated.Value(LOGIN_ENTRANCE.translateY)).current;
   const [baseUrl, setBaseUrl] = useState(
@@ -77,13 +89,13 @@ export function LoginScreen() {
   useEffect(() => {
     const animation = Animated.parallel([
       Animated.timing(entranceOpacity, {
-        duration: LOGIN_ENTRANCE.durationMs,
+        duration: IOS_MOTION.duration.content,
         easing: LOGIN_EASE_OUT,
         toValue: 1,
         useNativeDriver: true,
       }),
       Animated.timing(entranceOffset, {
-        duration: LOGIN_ENTRANCE.durationMs,
+        duration: IOS_MOTION.duration.content,
         easing: LOGIN_EASE_OUT,
         toValue: 0,
         useNativeDriver: true,
@@ -115,8 +127,10 @@ export function LoginScreen() {
               paddingBottom: Math.max(insets.bottom, verticalPadding),
             },
           ]}
+          decelerationRate="normal"
           keyboardDismissMode="interactive"
           keyboardShouldPersistTaps="handled"
+          scrollEventThrottle={8}
         >
           <Animated.View
             style={[
@@ -168,17 +182,15 @@ export function LoginScreen() {
                       label={busy ? '正在验证' : '使用 FACE ID 登录'}
                       onPress={() => void unlock()}
                     />
-                    <Pressable
+                    <IOSPressable
                       accessibilityRole="button"
                       disabled={busy}
                       onPress={() => void logout()}
-                      style={({ pressed }) => [
-                        styles.secondaryButton,
-                        pressed && !busy && styles.buttonPressed,
-                      ]}
+                      pressedStyle={!busy ? styles.buttonPressed : undefined}
+                      style={styles.secondaryButton}
                     >
                       <Text style={styles.secondaryButtonText}>更换连接</Text>
-                    </Pressable>
+                    </IOSPressable>
                   </View>
                 ) : (
                   <View style={styles.form}>
@@ -186,28 +198,23 @@ export function LoginScreen() {
                     <View style={styles.field}>
                       <Text style={styles.fieldLabel}>BASE URL</Text>
                       <View style={styles.inputContainer}>
-                        <TextInput
+                        <LoginTextField
                           accessibilityLabel="Base URL"
-                          autoCapitalize="none"
-                          autoCorrect={false}
                           editable={!busy}
-                          keyboardType="url"
+                          focused={focusedField === 'baseUrl'}
                           onBlur={() => setFocusedField(null)}
                           onChangeText={setBaseUrl}
                           onFocus={() => setFocusedField('baseUrl')}
-                          onSubmitEditing={() => apiKeyInput.current?.focus()}
+                          onSubmit={() => {
+                            setApiKeyFocusRequest((current) => current + 1);
+                            apiKeyInput.current?.focus();
+                          }}
                           placeholder="https://8.138.40.16"
-                          placeholderTextColor="rgba(255, 255, 255, 0.32)"
                           returnKeyType="next"
-                          selectTextOnFocus={false}
-                          style={[
-                            styles.input,
-                            focusedField === 'baseUrl' && styles.inputFocused,
-                          ]}
-                          textContentType="URL"
                           value={baseUrl}
                         />
-                        {focusedField === 'baseUrl' ? (
+                        {focusedField === 'baseUrl'
+                          && !(Platform.OS === 'ios' && hasNativeTextInput) ? (
                           <View pointerEvents="none" style={styles.inputFocusRing} />
                         ) : null}
                       </View>
@@ -215,27 +222,22 @@ export function LoginScreen() {
                     <View style={styles.field}>
                       <Text style={styles.fieldLabel}>API 密钥</Text>
                       <View style={styles.inputContainer}>
-                        <TextInput
-                          ref={apiKeyInput}
+                        <LoginTextField
                           accessibilityLabel="API 密钥"
-                          autoComplete="off"
-                          autoCapitalize="none"
-                          autoCorrect={false}
                           editable={!busy}
+                          focusRequest={apiKeyFocusRequest}
+                          focused={focusedField === 'apiKey'}
+                          inputRef={apiKeyInput}
                           onBlur={() => setFocusedField(null)}
                           onChangeText={setApiKey}
                           onFocus={() => setFocusedField('apiKey')}
-                          onSubmitEditing={submit}
+                          onSubmit={submit}
                           returnKeyType="done"
-                          secureTextEntry
-                          style={[
-                            styles.input,
-                            focusedField === 'apiKey' && styles.inputFocused,
-                          ]}
-                          textContentType="none"
+                          secure
                           value={apiKey}
                         />
-                        {focusedField === 'apiKey' ? (
+                        {focusedField === 'apiKey'
+                          && !(Platform.OS === 'ios' && hasNativeTextInput) ? (
                           <View pointerEvents="none" style={styles.inputFocusRing} />
                         ) : null}
                       </View>
@@ -268,6 +270,96 @@ export function LoginScreen() {
   );
 }
 
+function LoginTextField({
+  accessibilityLabel,
+  editable,
+  focusRequest = 0,
+  focused,
+  inputRef,
+  onBlur,
+  onChangeText,
+  onFocus,
+  onSubmit,
+  placeholder = '',
+  returnKeyType,
+  secure = false,
+  value,
+}: {
+  accessibilityLabel: string;
+  editable: boolean;
+  focusRequest?: number;
+  focused: boolean;
+  inputRef?: RefObject<TextInputHandle | null>;
+  onBlur(): void;
+  onChangeText(value: string): void;
+  onFocus(): void;
+  onSubmit(): void;
+  placeholder?: string;
+  returnKeyType: 'done' | 'next';
+  secure?: boolean;
+  value: string;
+}) {
+  if (Platform.OS === 'ios' && hasNativeTextInput) {
+    return (
+      <HermesTextInputView
+        accessibilityLabel={accessibilityLabel}
+        autoCapitalize="none"
+        autoCorrect={false}
+        backgroundColorValue="#110a02"
+        borderColor="#ffac0259"
+        borderWidth={1}
+        controlled
+        editable={editable}
+        focusBorderColor={LOGIN_COLORS.accent}
+        focusRequest={focusRequest}
+        focusRingColor={LOGIN_COLORS.accent}
+        focusRingWidth={1}
+        fontName={WEBUI_FONT_FAMILIES.CollapseRegular}
+        fontSize={15.2}
+        multiline={false}
+        onChangeText={(event) => onChangeText(event.nativeEvent.value)}
+        onNativeBlur={onBlur}
+        onNativeFocus={onFocus}
+        onNativeSubmit={onSubmit}
+        paddingHorizontal={12.8}
+        paddingVertical={11.2}
+        placeholder={placeholder}
+        placeholderColor="#ffffff52"
+        returnKeyType={returnKeyType}
+        secure={secure}
+        style={styles.swiftUIInput}
+        textColor={LOGIN_COLORS.foreground}
+        tintColor={LOGIN_COLORS.accent}
+        value={value}
+      />
+    );
+  }
+
+  return (
+    <TextInput
+      accessibilityLabel={accessibilityLabel}
+      autoCapitalize="none"
+      autoComplete="off"
+      autoCorrect={false}
+      editable={editable}
+      keyboardType={secure ? 'default' : 'url'}
+      onBlur={onBlur}
+      onChangeText={onChangeText}
+      onFocus={onFocus}
+      onSubmitEditing={onSubmit}
+      placeholder={placeholder}
+      placeholderTextColor="rgba(255, 255, 255, 0.32)"
+      ref={inputRef}
+      returnKeyType={returnKeyType}
+      secureTextEntry={secure}
+      selectTextOnFocus={false}
+      style={[styles.input, focused && styles.inputFocused]}
+      textContentType={secure ? 'none' : 'URL'}
+      value={value}
+    />
+  );
+}
+
 function ProviderButton({
   busy,
   disabled,
@@ -290,7 +382,7 @@ function ProviderButton({
 
   useEffect(() => {
     const animation = Animated.timing(hoverOpacity, {
-      duration: PROVIDER_BUTTON.filterTransition.durationMs,
+      duration: IOS_MOTION.duration.press,
       easing: PROVIDER_BUTTON_EASE_OUT,
       toValue: layerTargets.hoverOpacity,
       useNativeDriver: true,
@@ -301,7 +393,7 @@ function ProviderButton({
 
   useEffect(() => {
     const animation = Animated.timing(activeOpacity, {
-      duration: PROVIDER_BUTTON.filterTransition.durationMs,
+      duration: IOS_MOTION.duration.press,
       easing: PROVIDER_BUTTON_EASE_OUT,
       toValue: layerTargets.activeOpacity,
       useNativeDriver: true,
@@ -317,7 +409,7 @@ function ProviderButton({
   }, [disabled]);
 
   return (
-    <Pressable
+    <IOSPressable
       accessibilityLabel={label}
       accessibilityRole="button"
       accessibilityState={{ busy, disabled }}
@@ -436,7 +528,7 @@ function ProviderButton({
       {focusVisible ? (
         <View pointerEvents="none" style={styles.providerButtonFocusRing} />
       ) : null}
-    </Pressable>
+    </IOSPressable>
   );
 }
 
@@ -684,6 +776,10 @@ const styles = StyleSheet.create({
   },
   inputFocused: {
     borderColor: LOGIN_COLORS.accent,
+  },
+  swiftUIInput: {
+    height: 47.2,
+    width: '100%',
   },
   inputContainer: {
     position: 'relative',

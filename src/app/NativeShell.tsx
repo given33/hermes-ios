@@ -12,7 +12,6 @@ import {
   Globe,
   Heart,
   KeyRound,
-  Menu,
   MessageSquare,
   Package,
   PanelLeftClose,
@@ -34,6 +33,12 @@ import {
   type LucideIcon,
 } from 'lucide-react-native';
 import {
+  DefaultTheme,
+  NavigationContainer,
+  useNavigationContainerRef,
+} from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import {
   Fragment,
   useCallback,
   useEffect,
@@ -43,7 +48,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  Pressable,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -59,19 +64,25 @@ import Reanimated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedTintedIcon } from '../components/ui/AnimatedTintedIcon';
+import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
 import {
-  CONTROL_METRICS,
   multiplyAlpha,
   opaque,
 } from '../design/control-contracts';
 import { resolveNativeFontStack } from '../design/native-font-faces';
 import { useTheme } from '../design/ThemeProvider';
+import { IOS_MOTION } from '../design/ios-motion';
+import {
+  hasNativeDrawerSurface,
+  HermesDrawerSurfaceView,
+} from '../../modules/hermes-ios-controls';
 import {
   composeRouteRegistry,
   type ComposedNavigationItem,
@@ -123,18 +134,25 @@ const NAV_ICONS: Record<NativeNavigationIconName, LucideIcon> = {
   Zap,
 };
 
-const WEB_TRANSITION_EASING = Easing.bezier(
-  ...SHELL_METRICS.transitionEasing,
-);
 const COLOR_TRANSITION_EASING = Easing.bezier(
-  ...CONTROL_METRICS.tailwind.transitionEasing,
+  ...IOS_MOTION.curve.standard,
 );
+const IOS_NAVIGATION_EASING = Easing.bezier(...IOS_MOTION.curve.navigation);
+const IOS_DRAWER_SPRING = {
+  damping: IOS_MOTION.spring.damping,
+  mass: IOS_MOTION.spring.mass,
+  overshootClamping: true,
+  stiffness: IOS_MOTION.spring.stiffness,
+} as const;
+type CompactStackParamList = Record<string, undefined>;
+const CompactStack = createNativeStackNavigator<CompactStackParamList>();
 
 export interface NativeShellSlotContext {
   collapsed: boolean;
   compact: boolean;
   activePath: string;
   navigate(path: string): void;
+  openNavigation(): void;
 }
 
 export interface NativeShellSlots {
@@ -169,6 +187,7 @@ export function NativeShell({
   const insets = useSafeAreaInsets();
   const layout = useAdaptiveLayout();
   const { tokens } = useTheme();
+  const compactNavigationRef = useNavigationContainerRef<CompactStackParamList>();
   const composition = useMemo(
     () => composeRouteRegistry({ config, locale, manifests }),
     [config, locale, manifests],
@@ -189,8 +208,13 @@ export function NativeShell({
     : 0;
   const sidebarWidth = useSharedValue(visibleSidebarWidth);
   const drawerTranslation = useSharedValue(initialDrawerTranslation);
+  const [canGoBack, setCanGoBack] = useState(false);
   const typography = resolveShellTypography(tokens);
   const rootBackground = opaque(tokens.colors.background);
+  const sidebarBackground = multiplyAlpha(
+    rootBackground,
+    state.mode === 'compact' ? 0.96 : 1,
+  );
   const borderStrong = multiplyAlpha(tokens.colors.foreground, 0.2);
   const borderSoft = multiplyAlpha(tokens.colors.foreground, 0.1);
 
@@ -210,8 +234,8 @@ export function NativeShell({
 
   useEffect(() => {
     sidebarWidth.value = withTiming(visibleSidebarWidth, {
-      duration: SHELL_METRICS.desktopWidthDurationMs,
-      easing: WEB_TRANSITION_EASING,
+      duration: IOS_MOTION.duration.rail,
+      easing: IOS_NAVIGATION_EASING,
     });
   }, [sidebarWidth, state.collapsed, state.mode, visibleSidebarWidth]);
 
@@ -219,21 +243,33 @@ export function NativeShell({
     const target = resolveMobileDrawerTranslation(state) < 0
       ? -drawerExtent
       : 0;
-    drawerTranslation.value = withTiming(target, {
-      duration: SHELL_METRICS.mobileDrawerDurationMs,
-      easing: WEB_TRANSITION_EASING,
-    });
+    drawerTranslation.value = withSpring(target, IOS_DRAWER_SPRING);
   }, [drawerExtent, drawerTranslation, state.mobileOpen, state.mode]);
 
   const openMobile = useCallback(() => dispatch({ type: 'open-mobile' }), []);
   const closeMobile = useCallback(() => dispatch({ type: 'close-mobile' }), []);
   const navigate = useCallback(
-    (path: string) => dispatch({
-      type: 'navigate',
-      path: resolveNativeShellPath(composition.routes, path),
-    }),
-    [composition.routes],
+    (path: string) => {
+      const resolved = resolveNativeShellPath(composition.routes, path);
+      if (
+        compactNavigationRef.isReady()
+        && compactNavigationRef.getCurrentRoute()?.name !== resolved
+      ) {
+        compactNavigationRef.navigate(resolved);
+      }
+      dispatch({ type: 'navigate', path: resolved });
+    },
+    [compactNavigationRef, composition.routes],
   );
+  const syncCompactNavigation = useCallback(() => {
+    const current = compactNavigationRef.getCurrentRoute()?.name;
+    setCanGoBack(compactNavigationRef.canGoBack());
+    if (!current) return;
+    const resolved = resolveNativeShellPath(composition.routes, current);
+    if (resolved !== state.activePath) {
+      dispatch({ type: 'navigate', path: resolved });
+    }
+  }, [compactNavigationRef, composition.routes, state.activePath]);
   const toggleCollapsed = useCallback(
     () => dispatch({ type: 'toggle-collapsed' }),
     [],
@@ -264,18 +300,21 @@ export function NativeShell({
       })
       .onEnd((event, success) => {
         if (!success) {
-          drawerTranslation.value = withTiming(-drawerExtent, {
-            duration: SHELL_METRICS.mobileDrawerDurationMs,
-            easing: WEB_TRANSITION_EASING,
-          });
+          drawerTranslation.value = withSpring(-drawerExtent, IOS_DRAWER_SPRING);
           return;
         }
-        if (event.translationX > drawerExtent * 0.25) {
-          runOnJS(openMobile)();
+        const projectedTranslation = event.translationX + event.velocityX * 0.12;
+        if (projectedTranslation > drawerExtent * 0.25) {
+          drawerTranslation.value = withSpring(0, {
+            ...IOS_DRAWER_SPRING,
+            velocity: event.velocityX,
+          }, (finished) => {
+            if (finished) runOnJS(openMobile)();
+          });
         } else {
-          drawerTranslation.value = withTiming(-drawerExtent, {
-            duration: SHELL_METRICS.mobileDrawerDurationMs,
-            easing: WEB_TRANSITION_EASING,
+          drawerTranslation.value = withSpring(-drawerExtent, {
+            ...IOS_DRAWER_SPRING,
+            velocity: event.velocityX,
           });
         }
       }),
@@ -293,18 +332,21 @@ export function NativeShell({
       })
       .onEnd((event, success) => {
         if (!success) {
-          drawerTranslation.value = withTiming(0, {
-            duration: SHELL_METRICS.mobileDrawerDurationMs,
-            easing: WEB_TRANSITION_EASING,
-          });
+          drawerTranslation.value = withSpring(0, IOS_DRAWER_SPRING);
           return;
         }
-        if (event.translationX < -drawerExtent * 0.25) {
-          runOnJS(closeMobile)();
+        const projectedTranslation = event.translationX + event.velocityX * 0.12;
+        if (projectedTranslation < -drawerExtent * 0.25) {
+          drawerTranslation.value = withSpring(-drawerExtent, {
+            ...IOS_DRAWER_SPRING,
+            velocity: event.velocityX,
+          }, (finished) => {
+            if (finished) runOnJS(closeMobile)();
+          });
         } else {
-          drawerTranslation.value = withTiming(0, {
-            duration: SHELL_METRICS.mobileDrawerDurationMs,
-            easing: WEB_TRANSITION_EASING,
+          drawerTranslation.value = withSpring(0, {
+            ...IOS_DRAWER_SPRING,
+            velocity: event.velocityX,
           });
         }
       }),
@@ -317,37 +359,19 @@ export function NativeShell({
     ...composition.coreItems,
     ...composition.pluginItems,
   ];
-  const activeLabel = allNavigationItems.find(
-    (item) => item.path === activeRoute?.path,
-  )?.label ?? activeRoute?.path ?? '';
   const slotContext: NativeShellSlotContext = {
     collapsed: state.mode === 'split' && state.collapsed,
     compact: state.mode === 'compact',
     activePath: state.activePath,
     navigate,
+    openNavigation: openMobile,
   };
+  const unifiedChatActive = activeRoute?.routeId === 'chat';
+  const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
 
   return (
     <View style={[styles.root, { backgroundColor: rootBackground }]}>
-      {state.mode === 'compact' ? (
-        <MobileHeader
-          borderColor={borderStrong}
-          hidden={state.mobileOpen}
-          locale={locale}
-          onOpen={openMobile}
-          safeLeft={insets.left}
-          safeRight={insets.right}
-          safeTop={insets.top}
-          typography={typography}
-        />
-      ) : null}
-
-      <View
-        style={[
-          styles.body,
-          state.mode === 'compact' && { paddingTop: insets.top + SHELL_METRICS.headerHeight },
-        ]}
-      >
+      <View style={styles.body}>
         {state.mode === 'split' ? (
           <Reanimated.View style={[styles.splitSidebar, drawerWidthStyle]}>
             <Sidebar
@@ -359,7 +383,7 @@ export function NativeShell({
               locale={locale}
               navigate={navigate}
               onToggleCollapsed={toggleCollapsed}
-              rootBackground={rootBackground}
+              sidebarBackground={sidebarBackground}
               slotContext={slotContext}
               slots={slots}
               state={state}
@@ -379,23 +403,108 @@ export function NativeShell({
           }
           style={[
             styles.content,
-            state.mode === 'compact'
+            state.mode === 'split'
               ? {
-                  paddingBottom: insets.bottom,
-                  paddingLeft: insets.left,
-                  paddingRight: insets.right,
-                }
-              : {
-                  paddingBottom: insets.bottom,
                   paddingRight: insets.right,
                   paddingTop: insets.top,
-                },
+                }
+              : null,
           ]}
         >
-          {activeRoute
-            ? renderRoute?.(activeRoute, activeLabel, slotContext)
-              ?? <RoutePreview label={activeLabel} />
-            : null}
+          <NavigationContainer
+            onReady={syncCompactNavigation}
+            onStateChange={syncCompactNavigation}
+            ref={compactNavigationRef}
+            theme={{
+              ...DefaultTheme,
+              colors: {
+                ...DefaultTheme.colors,
+                background: rootBackground,
+                border: borderStrong,
+                card: rootBackground,
+                notification: tokens.colors.destructive,
+                primary: tokens.colors.primary,
+                text: tokens.colors.foreground,
+              },
+            }}
+          >
+            <CompactStack.Navigator
+              initialRouteName={state.activePath}
+              screenOptions={{
+                animation: 'default',
+                animationMatchesGesture: true,
+                contentStyle: { backgroundColor: rootBackground },
+                gestureDirection: 'horizontal',
+                gestureEnabled: true,
+                headerBackButtonDisplayMode: 'minimal',
+                headerBackButtonMenuEnabled: true,
+                headerShadowVisible: true,
+                headerStyle: { backgroundColor: rootBackground },
+                headerTintColor: tokens.colors.foreground,
+                headerTitleAlign: 'left',
+                headerTitleStyle: {
+                  fontFamily: displayFont,
+                  // react-native-screens stores native-stack title sizes as NSInteger.
+                  fontSize: Math.round(typography.mobileBrand.fontSize),
+                },
+              }}
+            >
+              {composition.routes.map((route) => {
+                const label = allNavigationItems.find(
+                  (item) => item.path === route.path,
+                )?.label ?? route.path;
+                const chatRoute = route.routeId === 'chat';
+                return (
+                  <CompactStack.Screen
+                    key={route.path}
+                    name={route.path}
+                    options={({ navigation }) => ({
+                      headerBackVisible: navigation.canGoBack(),
+                      unstable_headerLeftItems:
+                        state.mode === 'compact' && !navigation.canGoBack()
+                          ? () => [{
+                              accessibilityLabel: locale === 'zh'
+                                ? '\u6253\u5f00\u5bfc\u822a'
+                                : 'Open navigation',
+                              icon: {
+                                name: 'line.3.horizontal',
+                                type: 'sfSymbol',
+                              },
+                              label: locale === 'zh' ? '\u5bfc\u822a' : 'Navigation',
+                              onPress: openMobile,
+                              tintColor: tokens.colors.foreground,
+                              type: 'button',
+                            }]
+                          : undefined,
+                      headerShown: state.mode === 'compact' && !chatRoute,
+                      title: label || 'Hermes Agent',
+                    })}
+                  >
+                    {() => {
+                      const routeContext: NativeShellSlotContext = {
+                        ...slotContext,
+                        activePath: route.path,
+                      };
+                      return (
+                        <View
+                          style={[
+                            styles.routeStage,
+                            state.mode === 'compact' && !chatRoute ? {
+                              paddingLeft: insets.left,
+                              paddingRight: insets.right,
+                            } : null,
+                          ]}
+                        >
+                          {renderRoute?.(route, label, routeContext)
+                            ?? <RoutePreview label={label} />}
+                        </View>
+                      );
+                    }}
+                  </CompactStack.Screen>
+                );
+              })}
+            </CompactStack.Navigator>
+          </NavigationContainer>
         </View>
       </View>
 
@@ -407,38 +516,51 @@ export function NativeShell({
               state.mobileOpen ? 'yes' : 'no-hide-descendants'
             }
             pointerEvents={state.mobileOpen ? 'auto' : 'none'}
-            style={[styles.overlay, { backgroundColor: SHELL_METRICS.overlayColor }, overlayStyle]}
+            style={[
+              styles.overlay,
+              {
+                backgroundColor: SHELL_METRICS.overlayColor,
+                left: drawerExtent,
+              },
+              overlayStyle,
+            ]}
           >
-            <Pressable
+            <IOSPressable
               accessibilityLabel={locale === 'zh' ? '\u5173\u95ed\u5bfc\u822a' : 'Close navigation'}
+              haptic="none"
               onPress={closeMobile}
+              opacityTo={1}
+              scaleTo={1}
               style={StyleSheet.absoluteFill}
             />
           </Reanimated.View>
 
-          {!state.mobileOpen ? (
+          {!state.mobileOpen && !canGoBack ? (
             <GestureDetector gesture={openGesture}>
               <View
                 style={[
                   styles.openEdge,
-                  { top: insets.top + SHELL_METRICS.headerHeight },
+                  { top: unifiedChatActive ? insets.top : insets.top + SHELL_METRICS.headerHeight },
                 ]}
               />
             </GestureDetector>
           ) : null}
 
-          <GestureDetector gesture={closeGesture}>
-            <Reanimated.View
+          {Platform.OS === 'ios' && hasNativeDrawerSurface ? (
+            <HermesDrawerSurfaceView
               accessibilityElementsHidden={!state.mobileOpen}
               accessibilityViewIsModal={state.mobileOpen}
               importantForAccessibility={
                 state.mobileOpen ? 'yes' : 'no-hide-descendants'
               }
+              onRequestClose={closeMobile}
+              open={state.mobileOpen}
+              pointerEvents={state.mobileOpen ? 'auto' : 'none'}
               style={[
                 styles.mobileSidebar,
-                drawerWidthStyle,
-                drawerTranslationStyle,
+                { width: drawerExtent },
               ]}
+              width={drawerExtent}
             >
               <Sidebar
                 borderSoft={borderSoft}
@@ -449,81 +571,47 @@ export function NativeShell({
                 locale={locale}
                 navigate={navigate}
                 onToggleCollapsed={toggleCollapsed}
-                rootBackground={rootBackground}
+                sidebarBackground={sidebarBackground}
                 slotContext={slotContext}
                 slots={slots}
                 state={state}
                 typography={typography}
               />
-            </Reanimated.View>
-          </GestureDetector>
+            </HermesDrawerSurfaceView>
+          ) : (
+            <GestureDetector gesture={closeGesture}>
+              <Reanimated.View
+                accessibilityElementsHidden={!state.mobileOpen}
+                accessibilityViewIsModal={state.mobileOpen}
+                importantForAccessibility={
+                  state.mobileOpen ? 'yes' : 'no-hide-descendants'
+                }
+                style={[
+                  styles.mobileSidebar,
+                  drawerWidthStyle,
+                  drawerTranslationStyle,
+                ]}
+              >
+                <Sidebar
+                  borderSoft={borderSoft}
+                  borderStrong={borderStrong}
+                  closeMobile={closeMobile}
+                  composition={composition}
+                  insets={insets}
+                  locale={locale}
+                  navigate={navigate}
+                  onToggleCollapsed={toggleCollapsed}
+                  sidebarBackground={sidebarBackground}
+                  slotContext={slotContext}
+                  slots={slots}
+                  state={state}
+                  typography={typography}
+                />
+              </Reanimated.View>
+            </GestureDetector>
+          )}
         </Fragment>
       ) : null}
-    </View>
-  );
-}
-
-function MobileHeader({
-  borderColor,
-  hidden,
-  locale,
-  onOpen,
-  safeLeft,
-  safeRight,
-  safeTop,
-  typography,
-}: {
-  borderColor: string;
-  hidden: boolean;
-  locale: NativeRouteLocale;
-  onOpen(): void;
-  safeLeft: number;
-  safeRight: number;
-  safeTop: number;
-  typography: ReturnType<typeof resolveShellTypography>;
-}) {
-  const { tokens } = useTheme();
-  const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
-  return (
-    <View
-      accessibilityElementsHidden={hidden}
-      importantForAccessibility={hidden ? 'no-hide-descendants' : 'auto'}
-      style={[
-        styles.mobileHeader,
-        {
-          backgroundColor: opaque(tokens.colors.background),
-          borderBottomColor: borderColor,
-          gap: typography.spacingUnit * 2,
-          height: safeTop + SHELL_METRICS.headerHeight,
-          paddingBottom: typography.spacingUnit * 2,
-          paddingLeft: safeLeft + typography.spacingUnit * 4,
-          paddingRight: safeRight + typography.spacingUnit * 4,
-          paddingTop: safeTop,
-        },
-      ]}
-    >
-      <NativeButton
-        accessibilityLabel={locale === 'zh' ? '\u6253\u5f00\u5bfc\u822a' : 'Open navigation'}
-        ghost
-        onPress={onOpen}
-        size="icon"
-      >
-        <Menu />
-      </NativeButton>
-      <Text
-        style={[
-          styles.mobileBrand,
-          {
-            color: tokens.colors.foreground,
-            fontFamily: displayFont,
-            fontSize: typography.mobileBrand.fontSize,
-            fontWeight: displayFont ? undefined : '700',
-            lineHeight: typography.mobileBrand.lineHeight,
-          },
-        ]}
-      >
-        Hermes Agent
-      </Text>
     </View>
   );
 }
@@ -537,7 +625,7 @@ function Sidebar({
   locale,
   navigate,
   onToggleCollapsed,
-  rootBackground,
+  sidebarBackground,
   slotContext,
   slots,
   state,
@@ -551,7 +639,7 @@ function Sidebar({
   locale: NativeRouteLocale;
   navigate(path: string): void;
   onToggleCollapsed(): void;
-  rootBackground: string;
+  sidebarBackground: string;
   slotContext: NativeShellSlotContext;
   slots?: NativeShellSlots;
   state: ReturnType<typeof createNativeShellState>;
@@ -566,7 +654,7 @@ function Sidebar({
       style={[
         styles.sidebar,
         {
-          backgroundColor: rootBackground,
+          backgroundColor: sidebarBackground,
           borderRightColor: borderStrong,
           paddingBottom: insets.bottom,
           paddingLeft: insets.left,
@@ -631,10 +719,12 @@ function Sidebar({
 
       <ScrollView
         bounces={false}
+        decelerationRate="normal"
         contentContainerStyle={{
           paddingVertical: typography.spacingUnit * 2,
         }}
         showsVerticalScrollIndicator={false}
+        scrollEventThrottle={8}
         style={[styles.navigation, { borderTopColor: borderSoft }]}
       >
         {composition.coreItems.map((item, index) => (
@@ -732,7 +822,7 @@ function ShellNavigationItem({
 
   useEffect(() => {
     color.value = withTiming(targetColor, {
-      duration: CONTROL_METRICS.tailwind.transitionDurationMs,
+      duration: IOS_MOTION.duration.control,
       easing: COLOR_TRANSITION_EASING,
     });
   }, [color, targetColor]);
@@ -741,7 +831,7 @@ function ShellNavigationItem({
     hoverOpacity.value = withTiming(
       hovered || pressed ? SHELL_METRICS.hoverLayerOpacity : 0,
       {
-        duration: SHELL_METRICS.hoverOpacityDurationMs,
+        duration: IOS_MOTION.duration.press,
         easing: COLOR_TRANSITION_EASING,
       },
     );
@@ -753,7 +843,7 @@ function ShellNavigationItem({
         ? SHELL_METRICS.collapsedLabelOpacity
         : SHELL_METRICS.expandedLabelOpacity,
       {
-        duration: SHELL_METRICS.labelOpacityDurationMs,
+        duration: IOS_MOTION.duration.control,
         easing: COLOR_TRANSITION_EASING,
       },
     );
@@ -771,7 +861,7 @@ function ShellNavigationItem({
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 400);
 
   return (
-    <Pressable
+    <IOSPressable
       accessibilityLabel={collapsed ? item.label : undefined}
       accessibilityRole="link"
       accessibilityState={{ selected: active }}
@@ -848,7 +938,7 @@ function ShellNavigationItem({
           ]}
         />
       ) : null}
-    </Pressable>
+    </IOSPressable>
   );
 }
 
@@ -903,17 +993,11 @@ const styles = StyleSheet.create({
     minWidth: 0,
     overflow: 'hidden',
   },
-  mobileHeader: {
-    alignItems: 'center',
-    borderBottomWidth: SHELL_METRICS.borderWidth,
-    flexDirection: 'row',
-    left: 0,
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    zIndex: 40,
+  routeStage: {
+    flex: 1,
+    minHeight: 0,
+    minWidth: 0,
   },
-  mobileBrand: {},
   splitSidebar: {
     flexShrink: 0,
     height: '100%',

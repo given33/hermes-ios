@@ -3,6 +3,7 @@ import {
   Animated,
   Easing,
   Modal,
+  Platform,
   StyleSheet,
   Text,
   View,
@@ -13,6 +14,10 @@ import { TriangleAlert } from 'lucide-react-native';
 import { WEBUI_FONT_FAMILIES } from '../../app/webui-fonts';
 import { HermesLiveBlurView } from '../../../modules/hermes-live-blur';
 import {
+  hasNativeAlertPresenter,
+  HermesAlertPresenterView,
+} from '../../../modules/hermes-ios-controls';
+import {
   CONTROL_METRICS,
   INITIAL_CONFIRM_DIALOG_GATE,
   resolveConfirmDialogMetrics,
@@ -22,10 +27,12 @@ import {
   type ConfirmDialogGateState,
 } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
+import { IOS_MOTION } from '../../design/ios-motion';
+import { useNativeLocalization } from '../../i18n/NativeLocalization';
 import { NativeButton } from './NativeButton';
 
-const DIALOG_DURATION_MS = 150;
-const DIALOG_EASING = Easing.bezier(0.25, 0.1, 0.25, 1);
+const DIALOG_DURATION_MS = IOS_MOTION.duration.modal;
+const DIALOG_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 
 export interface ConfirmDialogProps {
   cancelLabel?: string;
@@ -52,6 +59,7 @@ export function ConfirmDialog({
 }: ConfirmDialogProps) {
   const { width } = useWindowDimensions();
   const { tokens } = useTheme();
+  const { t } = useNativeLocalization();
   const colors = resolveControlColors(tokens).dialog;
   const metrics = resolveConfirmDialogMetrics(tokens);
   const [mounted, setMounted] = useState(open);
@@ -105,6 +113,114 @@ export function ConfirmDialog({
       width - metrics.viewportHorizontalInset * 2,
     ),
   );
+  const dialogContents = (
+    <>
+      <View
+        style={[
+          styles.header,
+          {
+            borderBottomColor: colors.border,
+            gap: metrics.headerGap,
+            padding: metrics.headerPadding,
+          },
+        ]}
+      >
+        {destructive ? (
+          <View
+            accessibilityElementsHidden
+            style={{
+              flexShrink: 0,
+              marginTop: metrics.warningIconMarginTop,
+            }}
+          >
+            <TriangleAlert
+              color={tokens.colors.destructive}
+              size={metrics.warningIconSize}
+              strokeWidth={2}
+            />
+          </View>
+        ) : null}
+
+        <View style={[styles.copy, { gap: metrics.contentGap }]}>
+          <Text
+            accessibilityRole="header"
+            style={[
+              styles.title,
+              {
+                color: colors.foregroundBase,
+                fontSize: metrics.titleFontSize,
+                letterSpacing: metrics.titleLetterSpacing,
+                lineHeight: metrics.titleLineHeight,
+              },
+            ]}
+          >
+            {t(title).toUpperCase()}
+          </Text>
+          {description ? (
+            <Text
+              style={[
+                styles.description,
+                {
+                  color: colors.description,
+                  fontSize: metrics.descriptionFontSize,
+                  lineHeight: metrics.descriptionLineHeight,
+                },
+              ]}
+            >
+              {t(description)}
+            </Text>
+          ) : null}
+        </View>
+      </View>
+
+      <View
+        style={[
+          styles.footer,
+          { gap: metrics.footerGap, padding: metrics.footerPadding },
+        ]}
+      >
+        <NativeButton
+          disabled={loading}
+          onPress={() => trigger({ type: 'cancel' })}
+          outlined
+        >
+          {t(cancelLabel)}
+        </NativeButton>
+        <NativeButton
+          destructive={destructive}
+          loading={loading}
+          onPress={() => trigger({ type: 'confirm' })}
+        >
+          {loading ? '\u2026' : t(confirmLabel)}
+        </NativeButton>
+      </View>
+    </>
+  );
+
+  if (Platform.OS === 'ios' && hasNativeAlertPresenter) {
+    return (
+      <HermesAlertPresenterView
+        open={open}
+        overlayColor={colors.overlay}
+        style={styles.swiftUIHost}
+      >
+        <View
+          accessibilityRole="alert"
+          accessibilityViewIsModal
+          style={[
+            styles.dialog,
+            {
+              backgroundColor: colors.background,
+              borderColor: colors.border,
+              width: contentWidth,
+            },
+          ]}
+        >
+          {dialogContents}
+        </View>
+      </HermesAlertPresenterView>
+    );
+  }
 
   return (
     <Modal
@@ -159,85 +275,7 @@ export function ConfirmDialog({
             },
           ]}
         >
-          <View
-            style={[
-              styles.header,
-              {
-                borderBottomColor: colors.border,
-                gap: metrics.headerGap,
-                padding: metrics.headerPadding,
-              },
-            ]}
-          >
-            {destructive ? (
-              <View
-                accessibilityElementsHidden
-                style={{
-                  flexShrink: 0,
-                  marginTop: metrics.warningIconMarginTop,
-                }}
-              >
-                <TriangleAlert
-                  color={tokens.colors.destructive}
-                  size={metrics.warningIconSize}
-                  strokeWidth={2}
-                />
-              </View>
-            ) : null}
-
-            <View style={[styles.copy, { gap: metrics.contentGap }]}>
-              <Text
-                accessibilityRole="header"
-                style={[
-                  styles.title,
-                  {
-                    color: colors.foregroundBase,
-                    fontSize: metrics.titleFontSize,
-                    letterSpacing: metrics.titleLetterSpacing,
-                    lineHeight: metrics.titleLineHeight,
-                  },
-                ]}
-              >
-                {title.toUpperCase()}
-              </Text>
-              {description ? (
-                <Text
-                  style={[
-                    styles.description,
-                    {
-                      color: colors.description,
-                      fontSize: metrics.descriptionFontSize,
-                      lineHeight: metrics.descriptionLineHeight,
-                    },
-                  ]}
-                >
-                  {description}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-
-          <View
-            style={[
-              styles.footer,
-              { gap: metrics.footerGap, padding: metrics.footerPadding },
-            ]}
-          >
-            <NativeButton
-              disabled={loading}
-              onPress={() => trigger({ type: 'cancel' })}
-              outlined
-            >
-              {cancelLabel}
-            </NativeButton>
-            <NativeButton
-              destructive={destructive}
-              loading={loading}
-              onPress={() => trigger({ type: 'confirm' })}
-            >
-              {loading ? '\u2026' : confirmLabel}
-            </NativeButton>
-          </View>
+          {dialogContents}
         </Animated.View>
       </View>
     </Modal>
@@ -252,6 +290,13 @@ const styles = StyleSheet.create({
   },
   overlay: {
     ...StyleSheet.absoluteFillObject,
+  },
+  swiftUIHost: {
+    height: 1,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+    width: 1,
   },
   dialog: {
     borderWidth: CONTROL_METRICS.confirmDialog.borderWidth,

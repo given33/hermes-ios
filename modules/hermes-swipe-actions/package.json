@@ -1,0 +1,7 @@
+{
+  "name": "hermes-swipe-actions",
+  "version": "1.0.0",
+  "description": "Hermes native SwiftUI swipe actions",
+  "main": "index.ts",
+  "private": true
+}

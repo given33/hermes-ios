@@ -1,0 +1,8 @@
+{
+  "name": "hermes-quick-look",
+  "version": "1.0.0",
+  "description": "Hermes native iOS Quick Look attachment preview",
+  "main": "index.ts",
+  "license": "MIT",
+  "private": true
+}

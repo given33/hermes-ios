@@ -1,4 +1,5 @@
 import type { NativeThemeTokens } from '../design/theme-types';
+import { IOS_MOTION } from '../design/ios-motion';
 import type { ComposedRoute } from './route-composition';
 import {
   ADAPTIVE_LAYOUT_METRICS,
@@ -19,11 +20,11 @@ export const SHELL_METRICS = {
   sidebarWidth: ADAPTIVE_LAYOUT_METRICS.sidebarWidth,
   collapsedSidebarWidth: ADAPTIVE_LAYOUT_METRICS.collapsedSidebarWidth,
   headerHeight: ADAPTIVE_LAYOUT_METRICS.headerHeight,
-  mobileDrawerDurationMs: 200,
-  desktopWidthDurationMs: 300,
-  labelOpacityDurationMs: 300,
-  hoverOpacityDurationMs: 200,
-  transitionEasing: [0.23, 1, 0.32, 1] as const,
+  mobileDrawerDurationMs: IOS_MOTION.duration.drawer,
+  desktopWidthDurationMs: IOS_MOTION.duration.rail,
+  labelOpacityDurationMs: IOS_MOTION.duration.control,
+  hoverOpacityDurationMs: IOS_MOTION.duration.press,
+  transitionEasing: IOS_MOTION.curve.navigation,
   overlayColor: 'rgba(0, 0, 0, 0.7)',
   borderWidth: 1,
   activeIndicatorWidth: 1,

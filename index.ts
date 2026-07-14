@@ -1,8 +1,6 @@
-import 'react-native-gesture-handler';
-
 import { registerRootComponent } from 'expo';
 
 import App from './App';
 
-// registerRootComponent initializes the development client and signed native builds.
+// Expo owns process startup; the registered app immediately mounts the SwiftUI host.
 registerRootComponent(App);

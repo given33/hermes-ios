@@ -8,6 +8,7 @@ import {
   ChevronDown,
   CircleDollarSign,
   Clock3,
+  Copy,
   Download,
   File,
   FileText,
@@ -15,13 +16,14 @@ import {
   FolderPlus,
   Image,
   MessageSquare,
+  MessageSquarePlus,
   MoreHorizontal,
   Paperclip,
+  PanelRight,
   Play,
   Plus,
   RefreshCw,
   Search,
-  Send,
   Settings2,
   SlidersHorizontal,
   Sparkles,
@@ -32,25 +34,31 @@ import {
   Wrench,
   X,
 } from 'lucide-react-native';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import {
-  Pressable,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';
 
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
+import { IOSContextMenu } from '../components/ios/IOSContextMenu';
+import { IOSActionSheet } from '../components/ios/IOSActionSheet';
+import { IOSPressable } from '../components/ios/IOSPressable';
+import { IOSSwipeActions } from '../components/ios/IOSSwipeActions';
 import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
 import { multiplyAlpha } from '../design/control-contracts';
 import { useTheme } from '../design/ThemeProvider';
+import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import {
   PREVIEW_FILES,
   PREVIEW_LOGS,
-  PREVIEW_MESSAGES,
   PREVIEW_MODELS,
   PREVIEW_SESSIONS,
   PREVIEW_TOKEN_DAYS,
@@ -76,47 +84,83 @@ import {
 } from './PreviewPrimitives';
 
 export interface PreviewPageProps {
+  locale?: 'en' | 'zh';
   navigate(path: string): void;
   notify(message: string): void;
 }
 
-export function ChatPreviewPage({ notify }: PreviewPageProps) {
+export function ChatPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
   const { width } = useWindowDimensions();
   const { tokens } = useTheme();
   const [draft, setDraft] = useState('');
   const [toolsOpen, setToolsOpen] = useState(false);
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const [attachmentCount, setAttachmentCount] = useState(0);
+  const [model, setModel] = useState('claude-sonnet-4');
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [reasoning, setReasoning] = useState<'low' | 'medium' | 'high'>('medium');
+  const isChinese = locale === 'zh';
+  const terminalFontSize = terminalFontSizeForWidth(width - 24);
+  const terminalLineHeight = terminalFontSize * (width < 1024 ? 1.02 : 1.15);
+  const terminalFont = 'HermesTerminal-JetBrainsMono-400-Normal';
+  const terminalBold = 'HermesTerminal-JetBrainsMono-700-Normal';
+  const terminalBackground = tokens.terminal.background;
+  const terminalForeground = tokens.terminal.foreground;
+  const terminalMuted = terminalForeground.startsWith('#')
+    ? `${terminalForeground}99`
+    : terminalForeground;
+  const openModelPicker = () => {
+    if (Platform.OS !== 'ios') {
+      notify(isChinese ? '模型选择仅在 iOS 可用' : 'Model selection is available on iOS');
+      return;
+    }
+    setModelPickerOpen(true);
+  };
   const modelPanel = (
     <View style={styles.modelPanelContent}>
-      <PreviewText variant="label">Model</PreviewText>
-      <PreviewSettingRow
-        detail="Anthropic · 200K context"
-        label="claude-sonnet-4"
-        trailing={<ChevronDown color={tokens.colors.textSecondary} size={16} />}
-      />
-      <PreviewDivider />
-      <PreviewText variant="label">Reasoning effort</PreviewText>
-      <PreviewSegmented<'low' | 'medium' | 'high'>
-        onChange={setReasoning}
-        options={[
-          { label: 'Low', value: 'low' },
-          { label: 'Medium', value: 'medium' },
-          { label: 'High', value: 'high' },
-        ]}
-        value={reasoning}
-      />
-      <PreviewDivider />
-      <PreviewText variant="label">Enabled tools</PreviewText>
-      {['Web Search', 'Terminal', 'File tools', 'Browser'].map((tool) => (
-        <PreviewSettingRow
-          key={tool}
-          label={tool}
-          trailing={<Check color={tokens.colors.success} size={16} />}
+      <NativeButton
+        contentStyle={styles.fullWidthButton}
+        onPress={() => notify(isChinese ? '已新建对话' : 'New chat created')}
+        outlined
+        prefix={<MessageSquarePlus />}
+        style={styles.fullWidthPressable}
+      >
+        {isChinese ? '新建对话' : 'New chat'}
+      </NativeButton>
+      <PreviewCard style={styles.chatSideCard}>
+        <View style={styles.chatSideRow}>
+          <View style={styles.chatSideCopy}>
+            <PreviewText variant="label">{isChinese ? '模型' : 'Model'}</PreviewText>
+            <IOSPressable haptic="selection" onPress={openModelPicker} style={styles.modelPickerRow}>
+              <PreviewText numberOfLines={1} style={styles.chatSideCopy}>{model}</PreviewText>
+              <ChevronDown color={tokens.colors.textSecondary} size={14} />
+            </IOSPressable>
+          </View>
+          <PreviewBadge tone="success">{isChinese ? '在线' : 'LIVE'}</PreviewBadge>
+        </View>
+      </PreviewCard>
+      <PreviewCard style={styles.chatSideCard}>
+        <View style={styles.chatSideRow}>
+          <View style={styles.chatSideCopy}>
+            <PreviewText variant="label">{isChinese ? '工具事件流' : 'Tool events'}</PreviewText>
+            <PreviewText numberOfLines={1} variant="tiny">
+              {isChinese ? '等待下一次工具调用' : 'Waiting for the next tool call'}
+            </PreviewText>
+          </View>
+          <PreviewBadge tone="success">{isChinese ? '在线' : 'LIVE'}</PreviewBadge>
+        </View>
+      </PreviewCard>
+      <PreviewCard style={styles.chatSideCard} title={isChinese ? '推理强度' : 'Reasoning effort'}>
+        <PreviewSegmented<'low' | 'medium' | 'high'>
+          onChange={setReasoning}
+          options={[
+            { label: isChinese ? '低' : 'Low', value: 'low' },
+            { label: isChinese ? '中' : 'Medium', value: 'medium' },
+            { label: isChinese ? '高' : 'High', value: 'high' },
+          ]}
+          value={reasoning}
         />
-      ))}
-      <PreviewDivider />
-      <PreviewDataRow label="Context" mono value="42.6K / 200K" />
-      <PreviewProgress value={21.3} />
+      </PreviewCard>
     </View>
   );
 
@@ -124,16 +168,35 @@ export function ChatPreviewPage({ notify }: PreviewPageProps) {
     const result = camera
       ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1 })
       : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
-    if (!result.canceled) notify(`${result.assets.length} image ready for preview`);
+    if (!result.canceled) {
+      setAttachmentCount((count) => count + result.assets.length);
+      setAttachmentsOpen(false);
+      notify(isChinese ? `已选择 ${result.assets.length} 张图片` : `${result.assets.length} image selected`);
+    }
   };
 
   const pickFile = async () => {
     const result = await DocumentPicker.getDocumentAsync({ multiple: true });
-    if (!result.canceled) notify(`${result.assets.length} file ready for preview`);
+    if (!result.canceled) {
+      setAttachmentCount((count) => count + result.assets.length);
+      setAttachmentsOpen(false);
+      notify(isChinese ? `已选择 ${result.assets.length} 个文件` : `${result.assets.length} file selected`);
+    }
+  };
+
+  const sendPreview = () => {
+    if (!draft.trim() && attachmentCount === 0) return;
+    notify(isChinese ? '消息已发送' : 'Message sent');
+    setDraft('');
+    setAttachmentCount(0);
   };
 
   return (
-    <View style={styles.chatRoot}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={0}
+      style={styles.chatRoot}
+    >
       <View style={styles.chatMain}>
         <View
           style={[
@@ -141,135 +204,297 @@ export function ChatPreviewPage({ notify }: PreviewPageProps) {
             { borderBottomColor: tokens.colors.border },
           ]}
         >
-          <View style={styles.chatTitle}>
-            <PreviewText numberOfLines={1} variant="heading">
-              iOS native migration plan
-            </PreviewText>
-            <PreviewRow>
-              <PreviewBadge tone="success">CONNECTED</PreviewBadge>
-              <PreviewText variant="tiny">default</PreviewText>
-            </PreviewRow>
-          </View>
-          {width < 900 ? (
-            <NativeButton
-              accessibilityLabel="Model and tools"
-              ghost
+          <PreviewText
+            numberOfLines={1}
+            style={{ fontFamily: WEBUI_FONT_FAMILIES.RulesExpandedBold }}
+            variant="heading"
+          >
+            {isChinese ? '单聊' : 'Chat'}
+          </PreviewText>
+          {width < 1024 ? (
+            <IOSPressable
+              accessibilityLabel={isChinese ? '打开模型与工具' : 'Open model and tools'}
               onPress={() => setToolsOpen(true)}
-              size="icon"
+              pressedStyle={{ backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.05) }}
+              style={[
+                styles.modelToolsButton,
+                {
+                  backgroundColor: 'transparent',
+                  borderColor: multiplyAlpha(tokens.colors.foreground, 0.2),
+                },
+              ]}
             >
-              <SlidersHorizontal />
-            </NativeButton>
+              <PanelRight color={tokens.colors.textSecondary} size={13} />
+              <PreviewText variant="tiny">
+                {isChinese ? '模型与工具' : 'Model & tools'}
+              </PreviewText>
+            </IOSPressable>
           ) : null}
         </View>
-
-        <ScrollView
-          contentContainerStyle={styles.messageList}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-          style={styles.messageScroll}
-        >
-          {PREVIEW_MESSAGES.map((message, index) => {
-            const isUser = message.role === 'user';
-            const isTool = message.role === 'tool';
-            const Icon = isUser ? User : isTool ? Wrench : Bot;
-            return (
-              <View
-                key={`${message.time}-${index}`}
-                style={[
-                  styles.message,
-                  {
-                    backgroundColor: isUser
-                      ? tokens.colors.secondary
-                      : isTool
-                        ? multiplyAlpha(tokens.colors.warning, 0.06)
-                        : 'transparent',
-                    borderColor: tokens.colors.border,
-                  },
-                ]}
-              >
-                <View
-                  style={[
-                    styles.avatar,
-                    { backgroundColor: tokens.colors.muted },
-                  ]}
-                >
-                  <Icon
-                    color={isTool ? tokens.colors.warning : tokens.colors.foreground}
-                    size={15}
-                  />
-                </View>
-                <View style={styles.messageCopy}>
-                  <PreviewRow style={styles.messageMeta}>
-                    <PreviewText variant="label">
-                      {isUser ? 'You' : isTool ? 'Tool' : 'Hermes'}
-                    </PreviewText>
-                    <PreviewText variant="tiny">{message.time}</PreviewText>
-                  </PreviewRow>
-                  <PreviewText variant={isTool ? 'mono' : 'body'}>
-                    {message.content}
-                  </PreviewText>
-                </View>
-              </View>
-            );
-          })}
-        </ScrollView>
-
         <View
           style={[
-            styles.composer,
+            styles.terminalWindow,
             {
-              backgroundColor: tokens.colors.card,
-              borderColor: tokens.colors.border,
+              backgroundColor: terminalBackground,
+              shadowColor: '#000000',
             },
           ]}
         >
-          <TextInput
-            multiline
-            onChangeText={setDraft}
-            placeholder="Message Hermes..."
-            placeholderTextColor={tokens.colors.textTertiary}
-            style={[
-              styles.composerInput,
-              { color: tokens.colors.foreground },
-            ]}
-            value={draft}
-          />
-          <View style={styles.composerToolbar}>
-            <PreviewRow>
-              <NativeButton accessibilityLabel="Attach file" ghost onPress={pickFile} size="icon">
-                <Paperclip />
-              </NativeButton>
-              <NativeButton accessibilityLabel="Photo library" ghost onPress={() => pickPhoto(false)} size="icon">
-                <Image />
-              </NativeButton>
-              <NativeButton accessibilityLabel="Camera" ghost onPress={() => pickPhoto(true)} size="icon">
-                <Camera />
-              </NativeButton>
-            </PreviewRow>
-            <NativeButton
-              accessibilityLabel="Send"
-              disabled={!draft.trim()}
-              onPress={() => {
-                notify('Preview message staged locally');
-                setDraft('');
-              }}
-              size="icon"
-            >
-              <Send />
-            </NativeButton>
+          <ScrollView
+            contentContainerStyle={styles.terminalTranscript}
+            decelerationRate="normal"
+            keyboardDismissMode="interactive"
+            keyboardShouldPersistTaps="handled"
+            scrollEventThrottle={8}
+            showsVerticalScrollIndicator
+            style={styles.terminalScroll}
+          >
+            <TerminalLine bold color={terminalForeground} fontFamily={terminalBold} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {'⚕  HERMES AGENT  v0.9.3'}
+            </TerminalLine>
+            <TerminalLine color={terminalMuted} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {'model  anthropic/claude-sonnet-4  ·  profile  default'}
+            </TerminalLine>
+            <TerminalLine color={terminalMuted} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {'cwd    ~/.hermes-ios'}
+            </TerminalLine>
+            <TerminalSpacer lineHeight={terminalLineHeight} />
+            <TerminalLine color={terminalForeground} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {isChinese
+                ? '欢迎使用 Hermes Agent！输入消息，或使用 /help 查看命令。'
+                : 'Welcome to Hermes Agent! Type your message or /help for commands.'}
+            </TerminalLine>
+            <TerminalSpacer lineHeight={terminalLineHeight} />
+            <TerminalLine color="#87ceeb" fontFamily={terminalBold} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {'❯  '}{isChinese ? '帮我检查当前项目的状态。' : 'Check the current project status.'}
+            </TerminalLine>
+            <TerminalSpacer lineHeight={terminalLineHeight} />
+            <TerminalLine color="#ffd700" fontFamily={terminalBold} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {'⚕  Hermes Agent'}
+            </TerminalLine>
+            <TerminalLine color={terminalForeground} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {isChinese
+                ? '我先查看工作目录和 Git 状态。'
+                : 'I will inspect the working directory and Git status.'}
+            </TerminalLine>
+            <TerminalLine color={terminalForeground} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
+              {isChinese
+                ? '$ git status --short'
+                : '$ git status --short'}
+            </TerminalLine>
+          </ScrollView>
+
+          <View style={styles.terminalInputChrome}>
+            <TerminalStatusBar
+              fontFamily={terminalFont}
+              fontSize={terminalFontSize}
+              layoutWidth={width - 40}
+              lineHeight={terminalLineHeight}
+            />
+            <TerminalRule
+              fontFamily={terminalFont}
+              fontSize={terminalFontSize}
+              lineHeight={terminalLineHeight}
+            />
+            {attachmentCount > 0 ? (
+              <View style={styles.terminalAttachmentRow}>
+                <Paperclip color="#87ceeb" size={terminalFontSize + 3} />
+                <PreviewText style={{ color: '#87ceeb', fontFamily: terminalBold, fontSize: terminalFontSize }}>
+                  {isChinese ? `${attachmentCount} 个附件` : `${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}`}
+                </PreviewText>
+              </View>
+            ) : null}
+            <View style={styles.terminalInputRow}>
+              <PreviewText style={{ color: terminalForeground, fontFamily: terminalFont, fontSize: terminalFontSize, lineHeight: terminalLineHeight }}>
+                {'❯ '}
+              </PreviewText>
+              <TextInput
+                autoCapitalize="none"
+                autoCorrect={false}
+                blurOnSubmit={false}
+                multiline
+                onChangeText={setDraft}
+                onSubmitEditing={sendPreview}
+                placeholder={isChinese ? '输入消息' : 'Type a message'}
+                placeholderTextColor="#888888"
+                returnKeyType="send"
+                selectionColor={terminalForeground}
+                style={[
+                  styles.terminalInput,
+                  {
+                    color: terminalForeground,
+                    fontFamily: terminalFont,
+                    fontSize: terminalFontSize,
+                    lineHeight: terminalLineHeight,
+                  },
+                ]}
+                submitBehavior="submit"
+                value={draft}
+              />
+              <IOSPressable
+                accessibilityLabel={isChinese ? '添加附件' : 'Add attachment'}
+                hitSlop={8}
+                onPress={() => setAttachmentsOpen(true)}
+                scaleTo={0.9}
+                style={styles.terminalIconButton}
+              >
+                <Paperclip color={terminalMuted} size={terminalFontSize + 5} />
+              </IOSPressable>
+            </View>
+            {width >= 1024 ? (
+              <TerminalRule
+                fontFamily={terminalFont}
+                fontSize={terminalFontSize}
+                lineHeight={terminalLineHeight}
+              />
+            ) : null}
           </View>
+
+          <IOSPressable
+            accessibilityLabel={isChinese ? '复制上一条回复' : 'Copy last response'}
+            onPress={() => notify(isChinese ? '已复制上一条回复' : 'Last response copied')}
+            style={[styles.copyLastButton, { borderColor: `${terminalForeground}55` }]}
+          >
+            <Copy color={terminalForeground} size={terminalFontSize + 2} />
+            {width >= 400 ? (
+              <PreviewText style={{ color: terminalForeground, fontFamily: terminalFont, fontSize: terminalFontSize }}>
+                {isChinese ? '复制上一条回复' : 'copy last response'}
+              </PreviewText>
+            ) : null}
+          </IOSPressable>
         </View>
       </View>
-      {width >= 900 ? (
+      {width >= 1024 ? (
         <View style={[styles.modelPanel, { borderLeftColor: tokens.colors.border }]}> 
           {modelPanel}
         </View>
       ) : null}
-      <PreviewModal onClose={() => setToolsOpen(false)} open={toolsOpen} title="Model & Tools">
+      <PreviewModal onClose={() => setToolsOpen(false)} open={toolsOpen} title={isChinese ? '模型与工具' : 'Model & Tools'}>
         {modelPanel}
       </PreviewModal>
+      <PreviewModal onClose={() => setAttachmentsOpen(false)} open={attachmentsOpen} title={isChinese ? '添加附件' : 'Add attachment'}>
+        <NativeButton onPress={() => void pickPhoto(false)} outlined prefix={<Image />}>
+          {isChinese ? '照片图库' : 'Photo library'}
+        </NativeButton>
+        <NativeButton onPress={() => void pickPhoto(true)} outlined prefix={<Camera />}>
+          {isChinese ? '拍照' : 'Take photo'}
+        </NativeButton>
+        <NativeButton onPress={() => void pickFile()} outlined prefix={<File />}>
+          {isChinese ? '系统文件' : 'System files'}
+        </NativeButton>
+      </PreviewModal>
+      <IOSActionSheet
+        actions={PREVIEW_MODELS.map((item) => ({
+          id: item.model,
+          title: item.model,
+        }))}
+        cancelLabel={isChinese ? '取消' : 'Cancel'}
+        onOpenChange={setModelPickerOpen}
+        onSelect={setModel}
+        open={modelPickerOpen}
+        title={isChinese ? '选择模型' : 'Select model'}
+      />
+    </KeyboardAvoidingView>
+  );
+}
+
+function TerminalLine({
+  children,
+  color,
+  fontFamily,
+  fontSize,
+  lineHeight,
+}: {
+  bold?: boolean;
+  children: ReactNode;
+  color: string;
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
+}) {
+  return (
+    <PreviewText
+      style={{ color, fontFamily, fontSize, lineHeight }}
+    >
+      {children}
+    </PreviewText>
+  );
+}
+
+function TerminalSpacer({ lineHeight }: { lineHeight: number }) {
+  return <View style={{ height: lineHeight }} />;
+}
+
+function TerminalStatusBar({
+  fontFamily,
+  fontSize,
+  layoutWidth,
+  lineHeight,
+}: {
+  fontFamily: string;
+  fontSize: number;
+  layoutWidth: number;
+  lineHeight: number;
+}) {
+  const estimatedColumns = Math.floor(layoutWidth / (fontSize * 0.6));
+  const model = 'claude-sonnet-4';
+  const baseStyle = { fontFamily, fontSize, lineHeight };
+  return (
+    <View style={[styles.terminalStatusBar, { height: lineHeight }]}>
+      <Text numberOfLines={1} style={[baseStyle, styles.terminalStatusText]}>
+        <Text style={[baseStyle, styles.terminalStatusBase]}>{' ⚕ '}</Text>
+        <Text style={[baseStyle, styles.terminalStatusStrong]}>{model}</Text>
+        <Text style={[baseStyle, styles.terminalStatusDim]}>
+          {estimatedColumns < 52 ? ' · 0s ' : estimatedColumns < 76 ? ' · ' : ' │ 21.5k/200k │ '}
+        </Text>
+        {estimatedColumns >= 52 ? (
+          <Text style={[baseStyle, styles.terminalStatusGood]}>
+            {estimatedColumns < 76 ? '21%' : '██░░░░░░░░ 21%'}
+          </Text>
+        ) : null}
+        {estimatedColumns >= 52 ? (
+          <Text style={[baseStyle, styles.terminalStatusDim]}>
+            {estimatedColumns < 76 ? ' · 0s ' : ' │ 0s '}
+          </Text>
+        ) : null}
+      </Text>
     </View>
   );
+}
+
+function TerminalRule({
+  fontFamily,
+  fontSize,
+  lineHeight,
+}: {
+  fontFamily: string;
+  fontSize: number;
+  lineHeight: number;
+}) {
+  return (
+    <Text
+      numberOfLines={1}
+      style={{
+        color: '#CD7F32',
+        fontFamily,
+        fontSize,
+        height: lineHeight,
+        lineHeight,
+      }}
+    >
+      {'─'.repeat(180)}
+    </Text>
+  );
+}
+
+function terminalFontSizeForWidth(layoutWidth: number): number {
+  if (layoutWidth < 300) return 7;
+  if (layoutWidth < 360) return 8;
+  if (layoutWidth < 420) return 9;
+  if (layoutWidth < 520) return 10;
+  if (layoutWidth < 720) return 11;
+  if (layoutWidth < 1024) return 12;
+  return 14;
 }
 
 export function SessionsPreviewPage({ navigate, notify }: PreviewPageProps) {
@@ -283,8 +508,7 @@ export function SessionsPreviewPage({ navigate, notify }: PreviewPageProps) {
   return (
     <PreviewPage
       actions={(
-        <NativeButton onPress={() => navigate('/chat')} size="sm">
-          <Plus />
+        <NativeButton onPress={() => navigate('/chat')} prefix={<Plus />} size="sm">
           New chat
         </NativeButton>
       )}
@@ -300,10 +524,50 @@ export function SessionsPreviewPage({ navigate, notify }: PreviewPageProps) {
       </PreviewCard>
       <View style={styles.sessionList}>
         {filtered.map((session) => (
-          <PreviewCard key={session.id}>
+          <IOSSwipeActions
+            actions={[
+              {
+                icon: 'pencil',
+                id: 'rename',
+                label: 'Rename',
+                onPress: () => notify(`Rename session: ${session.title}`),
+              },
+              {
+                destructive: true,
+                icon: 'trash',
+                id: 'delete',
+                label: 'Delete',
+                onPress: () => setDeleteTarget(session.title),
+              },
+            ]}
+            containerStyle={styles.swipeContainer}
+            key={session.id}
+          >
+          <PreviewCard>
             <View style={styles.sessionRow}>
-              <Pressable
-                accessibilityRole="button"
+              <IOSContextMenu
+                accessibilityLabel={`Open ${session.title}`}
+                actions={[
+                  {
+                    id: 'resume',
+                    onPress: () => navigate('/chat'),
+                    systemImage: 'play',
+                    title: 'Resume in chat',
+                  },
+                  {
+                    id: 'export',
+                    onPress: () => notify('Session export prepared'),
+                    systemImage: 'square.and.arrow.up',
+                    title: 'Export session',
+                  },
+                  {
+                    destructive: true,
+                    id: 'delete',
+                    onPress: () => setDeleteTarget(session.title),
+                    systemImage: 'trash',
+                    title: 'Delete session',
+                  },
+                ]}
                 onPress={() => navigate('/chat')}
                 style={styles.sessionMain}
               >
@@ -322,7 +586,7 @@ export function SessionsPreviewPage({ navigate, notify }: PreviewPageProps) {
                   <PreviewText variant="tiny">{session.tools} tools</PreviewText>
                   <PreviewText variant="tiny">{session.updated}</PreviewText>
                 </PreviewRow>
-              </Pressable>
+              </IOSContextMenu>
               <PreviewRow>
                 <NativeButton accessibilityLabel="Resume in chat" ghost onPress={() => navigate('/chat')} size="icon">
                   <Play />
@@ -336,6 +600,7 @@ export function SessionsPreviewPage({ navigate, notify }: PreviewPageProps) {
               </PreviewRow>
             </View>
           </PreviewCard>
+          </IOSSwipeActions>
         ))}
       </View>
       <ConfirmDialog
@@ -343,7 +608,7 @@ export function SessionsPreviewPage({ navigate, notify }: PreviewPageProps) {
         destructive
         onCancel={() => setDeleteTarget(null)}
         onConfirm={() => {
-          notify(`Previewed deletion: ${deleteTarget}`);
+          notify(`Deleted session: ${deleteTarget}`);
           setDeleteTarget(null);
         }}
         open={deleteTarget !== null}
@@ -365,12 +630,10 @@ export function FilesPreviewPage({ notify }: PreviewPageProps) {
     <PreviewPage
       actions={(
         <PreviewRow>
-          <NativeButton onPress={pickFiles} outlined size="sm">
-            <Upload />
+          <NativeButton onPress={pickFiles} outlined prefix={<Upload />} size="sm">
             Upload
           </NativeButton>
-          <NativeButton onPress={() => setFolderModal(true)} size="sm">
-            <FolderPlus />
+          <NativeButton onPress={() => setFolderModal(true)} prefix={<FolderPlus />} size="sm">
             New folder
           </NativeButton>
         </PreviewRow>
@@ -399,8 +662,46 @@ export function FilesPreviewPage({ notify }: PreviewPageProps) {
         {PREVIEW_FILES.map((entry) => {
           const Icon = entry.kind === 'folder' ? Folder : File;
           return (
-            <View key={entry.name} style={styles.fileRow}>
-              <Pressable
+            <IOSSwipeActions
+              actions={[
+                ...(entry.kind === 'file' ? [{
+                  icon: 'square.and.arrow.down',
+                  id: 'download',
+                  label: 'Save',
+                  onPress: () => notify(`Download prepared: ${entry.name}`),
+                }] : []),
+                {
+                  destructive: true,
+                  icon: 'trash',
+                  id: 'delete',
+                  label: 'Delete',
+                  onPress: () => notify(`Deleted: ${entry.name}`),
+                },
+              ]}
+              key={entry.name}
+            >
+            <View style={styles.fileRow}>
+              <IOSContextMenu
+                actions={[
+                  ...(entry.kind === 'file' ? [{
+                    id: 'preview',
+                    onPress: () => notify(`Previewing ${entry.name}`),
+                    systemImage: 'doc.text.magnifyingglass',
+                    title: 'Quick Look',
+                  }, {
+                    id: 'save',
+                    onPress: () => notify(`Download prepared: ${entry.name}`),
+                    systemImage: 'square.and.arrow.down',
+                    title: 'Save to Files',
+                  }] : []),
+                  {
+                    destructive: true,
+                    id: 'delete',
+                    onPress: () => notify(`Deleted: ${entry.name}`),
+                    systemImage: 'trash',
+                    title: 'Delete',
+                  },
+                ]}
                 onPress={() => entry.kind === 'folder'
                   ? setPath(`${path}/${entry.name}`)
                   : notify(`Previewing ${entry.name}`)}
@@ -410,7 +711,7 @@ export function FilesPreviewPage({ notify }: PreviewPageProps) {
                 <PreviewText numberOfLines={1} style={styles.fileName} variant="mono">
                   {entry.name}
                 </PreviewText>
-              </Pressable>
+              </IOSContextMenu>
               <PreviewText style={styles.fileMeta} variant="tiny">{entry.size}</PreviewText>
               <PreviewText style={styles.fileMeta} variant="tiny">{entry.modified}</PreviewText>
               <View style={styles.fileActions}>
@@ -419,11 +720,12 @@ export function FilesPreviewPage({ notify }: PreviewPageProps) {
                     <Download />
                   </NativeButton>
                 ) : null}
-                <NativeButton accessibilityLabel={`Delete ${entry.name}`} destructive ghost onPress={() => notify(`Previewed deletion: ${entry.name}`)} size="icon">
+                <NativeButton accessibilityLabel={`Delete ${entry.name}`} destructive ghost onPress={() => notify(`Deleted: ${entry.name}`)} size="icon">
                   <Trash2 />
                 </NativeButton>
               </View>
             </View>
+            </IOSSwipeActions>
           );
         })}
       </PreviewCard>
@@ -432,7 +734,7 @@ export function FilesPreviewPage({ notify }: PreviewPageProps) {
         <NativeButton
           disabled={!newFolder.trim()}
           onPress={() => {
-            notify(`Previewed folder creation: ${newFolder}`);
+            notify(`Created folder: ${newFolder}`);
             setFolderModal(false);
             setNewFolder('');
           }}
@@ -503,8 +805,7 @@ export function ModelsPreviewPage({ notify }: PreviewPageProps) {
   return (
     <PreviewPage
       actions={(
-        <NativeButton onPress={() => setSettingsOpen(true)} outlined size="sm">
-          <Settings2 />
+        <NativeButton onPress={() => setSettingsOpen(true)} outlined prefix={<Settings2 />} size="sm">
           Model settings
         </NativeButton>
       )}
@@ -546,7 +847,7 @@ export function ModelsPreviewPage({ notify }: PreviewPageProps) {
         <PreviewSettingRow detail="Skill search" label="Skills Hub" trailing={<PreviewBadge>qwen3-235b</PreviewBadge>} />
         <PreviewSettingRow detail="Automatic profile descriptions" label="Profile Describer" trailing={<PreviewBadge>default</PreviewBadge>} />
         <NativeButton onPress={() => {
-          notify('Model settings staged locally');
+          notify('Model settings saved');
           setSettingsOpen(false);
         }}>
           Save
@@ -557,29 +858,65 @@ export function ModelsPreviewPage({ notify }: PreviewPageProps) {
 }
 
 export function LogsPreviewPage({ notify }: PreviewPageProps) {
+  const { width } = useWindowDimensions();
+  const { tokens } = useTheme();
   const [live, setLive] = useState(true);
   const [level, setLevel] = useState<'all' | 'info' | 'warn'>('all');
   const visible = PREVIEW_LOGS.filter((row) => (
     level === 'all' || row[1].toLowerCase() === level
   ));
+  const compact = width < 620;
+  const logRows = visible.map((row, index) => (
+    <View
+      key={`${row[0]}-${index}`}
+      style={[
+        styles.logRow,
+        compact && styles.logRowCompact,
+        compact && { borderBottomColor: tokens.colors.border },
+      ]}
+    >
+      <View style={compact ? styles.logMetaRow : undefined}>
+        <PreviewText style={compact ? undefined : styles.logTime} variant="mono">
+          {row[0]}
+        </PreviewText>
+        {compact ? (
+          <>
+            <PreviewBadge tone={row[1] === 'WARN' ? 'warning' : 'outline'}>
+              {row[1]}
+            </PreviewBadge>
+            <PreviewText variant="mono">{row[2]}</PreviewText>
+          </>
+        ) : null}
+      </View>
+      {!compact ? (
+        <>
+          <PreviewBadge tone={row[1] === 'WARN' ? 'warning' : 'outline'}>
+            {row[1]}
+          </PreviewBadge>
+          <PreviewText style={styles.logComponent} variant="mono">{row[2]}</PreviewText>
+        </>
+      ) : null}
+      <PreviewText style={[styles.logMessage, compact && styles.logMessageCompact]} variant="mono">
+        {row[3]}
+      </PreviewText>
+    </View>
+  ));
   return (
     <PreviewPage
       actions={(
-        <PreviewRow>
-          <PreviewSettingRow
-            label="Auto refresh"
-            trailing={<PreviewToggle accessibilityLabel="Auto refresh logs" onChange={setLive} value={live} />}
-          />
+        <View style={styles.logHeaderControls}>
+          <PreviewText variant="label">Auto refresh</PreviewText>
+          <PreviewToggle accessibilityLabel="Auto refresh logs" onChange={setLive} value={live} />
           <NativeButton accessibilityLabel="Refresh logs" ghost onPress={() => notify('Logs refreshed')} size="icon">
             <RefreshCw />
           </NativeButton>
-        </PreviewRow>
+        </View>
       )}
       subtitle="Inspect gateway, agent, tool, scheduler, and plugin output."
       title="Logs"
     >
       <PreviewCard>
-        <PreviewRow>
+        <View style={styles.logToolbar}>
           <PreviewSegmented<'all' | 'info' | 'warn'>
             onChange={setLevel}
             options={[
@@ -589,32 +926,36 @@ export function LogsPreviewPage({ notify }: PreviewPageProps) {
             ]}
             value={level}
           />
-          <PreviewBadge tone={live ? 'success' : 'outline'}>{live ? 'LIVE' : 'PAUSED'}</PreviewBadge>
-          <PreviewBadge tone="outline">hermes.log</PreviewBadge>
-          <PreviewBadge tone="outline">500 lines</PreviewBadge>
-        </PreviewRow>
+          <PreviewRow>
+            <PreviewBadge tone={live ? 'success' : 'outline'}>{live ? 'LIVE' : 'PAUSED'}</PreviewBadge>
+            <PreviewBadge tone="outline">hermes.log</PreviewBadge>
+            <PreviewBadge tone="outline">500 lines</PreviewBadge>
+          </PreviewRow>
+        </View>
       </PreviewCard>
       <PreviewCard title="hermes.log">
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-          <View style={styles.logLines}>
-            {visible.map((row, index) => (
-              <View key={`${row[0]}-${index}`} style={styles.logRow}>
-                <PreviewText style={styles.logTime} variant="mono">{row[0]}</PreviewText>
-                <PreviewBadge tone={row[1] === 'WARN' ? 'warning' : 'outline'}>
-                  {row[1]}
-                </PreviewBadge>
-                <PreviewText style={styles.logComponent} variant="mono">{row[2]}</PreviewText>
-                <PreviewText style={styles.logMessage} variant="mono">{row[3]}</PreviewText>
-              </View>
-            ))}
-          </View>
-        </ScrollView>
+        {compact ? (
+          <View style={styles.logLinesCompact}>{logRows}</View>
+        ) : (
+          <ScrollView
+            decelerationRate="normal"
+            directionalLockEnabled
+            horizontal
+            scrollEventThrottle={8}
+            showsHorizontalScrollIndicator={false}
+          >
+            <View style={styles.logLines}>{logRows}</View>
+          </ScrollView>
+        )}
       </PreviewCard>
     </PreviewPage>
   );
 }
 
 const styles = StyleSheet.create({
+  swipeContainer: {
+    borderRadius: 4,
+  },
   chatRoot: {
     flex: 1,
     flexDirection: 'row',
@@ -630,75 +971,142 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 64,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    minHeight: 56,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  chatTitle: {
-    flex: 1,
-    gap: 3,
-    minWidth: 0,
-  },
-  messageScroll: {
-    flex: 1,
-  },
-  messageList: {
-    gap: 10,
-    padding: 16,
-  },
-  message: {
-    alignSelf: 'center',
+  modelToolsButton: {
+    alignItems: 'center',
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 10,
-    maxWidth: 840,
-    padding: 12,
-    width: '100%',
-  },
-  avatar: {
-    alignItems: 'center',
-    borderRadius: 15,
-    height: 30,
-    justifyContent: 'center',
-    width: 30,
-  },
-  messageCopy: {
-    flex: 1,
     gap: 6,
-    minWidth: 0,
+    minHeight: 30,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
   },
-  messageMeta: {
-    justifyContent: 'space-between',
-  },
-  composer: {
-    alignSelf: 'center',
-    borderWidth: 1,
-    marginBottom: 12,
-    maxWidth: 840,
-    minHeight: 112,
-  },
-  composerInput: {
+  terminalWindow: {
+    borderRadius: 8,
+    elevation: 8,
     flex: 1,
-    fontSize: 15,
-    lineHeight: 22,
-    minHeight: 54,
-    paddingHorizontal: 12,
-    paddingTop: 10,
+    marginBottom: 0,
+    marginHorizontal: 12,
+    marginTop: 4,
+    minHeight: 0,
+    overflow: 'hidden',
+    padding: 8,
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.4,
+    shadowRadius: 16,
+  },
+  terminalScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  terminalTranscript: {
+    flexGrow: 1,
+    justifyContent: 'flex-end',
+    paddingBottom: 12,
+    paddingRight: 2,
+  },
+  terminalInputChrome: {
+    flexShrink: 0,
+  },
+  terminalStatusBar: {
+    backgroundColor: '#1a1a2e',
+    overflow: 'hidden',
+  },
+  terminalStatusText: {
+    flexShrink: 0,
+  },
+  terminalStatusBase: {
+    color: '#C0C0C0',
+  },
+  terminalStatusStrong: {
+    color: '#FFD700',
+    fontWeight: '700',
+  },
+  terminalStatusDim: {
+    color: '#8B8682',
+  },
+  terminalStatusGood: {
+    color: '#8FBC8F',
+    fontWeight: '700',
+  },
+  terminalAttachmentRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    minHeight: 20,
+    paddingHorizontal: 3,
+  },
+  terminalInputRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 0,
+    minHeight: 22,
+    paddingHorizontal: 3,
+    paddingVertical: 2,
+  },
+  terminalInput: {
+    flex: 1,
+    maxHeight: 92,
+    minHeight: 20,
+    padding: 0,
     textAlignVertical: 'top',
   },
-  composerToolbar: {
+  terminalIconButton: {
     alignItems: 'center',
+    height: 24,
+    justifyContent: 'center',
+    marginLeft: 5,
+    width: 24,
+  },
+  copyLastButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.2)',
+    borderRadius: 3,
+    borderWidth: 1,
+    bottom: 42,
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    padding: 6,
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    position: 'absolute',
+    right: 8,
   },
   modelPanel: {
-    borderLeftWidth: 1,
-    width: 300,
+    width: 240,
   },
   modelPanelContent: {
     gap: 10,
-    padding: 16,
+    paddingBottom: 8,
+    paddingRight: 12,
+    paddingTop: 4,
+  },
+  fullWidthButton: {
+    justifyContent: 'flex-start',
+    width: '100%',
+  },
+  fullWidthPressable: {
+    width: '100%',
+  },
+  chatSideCard: {
+    minWidth: 0,
+  },
+  chatSideRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'space-between',
+  },
+  chatSideCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  modelPickerRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
   },
   sessionList: {
     gap: 10,
@@ -761,11 +1169,38 @@ const styles = StyleSheet.create({
   logLines: {
     minWidth: 780,
   },
+  logLinesCompact: {
+    gap: 0,
+    width: '100%',
+  },
+  logHeaderControls: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'flex-end',
+  },
+  logToolbar: {
+    alignItems: 'flex-start',
+    gap: 10,
+  },
   logRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
     minHeight: 36,
+  },
+  logRowCompact: {
+    alignItems: 'stretch',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'column',
+    gap: 5,
+    paddingVertical: 10,
+  },
+  logMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   logTime: {
     width: 112,
@@ -775,5 +1210,9 @@ const styles = StyleSheet.create({
   },
   logMessage: {
     minWidth: 420,
+  },
+  logMessageCompact: {
+    minWidth: 0,
+    width: '100%',
   },
 });

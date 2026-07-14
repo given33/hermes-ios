@@ -24,7 +24,7 @@ import {
   Zap,
 } from 'lucide-react-native';
 import { useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, Share, StyleSheet, View } from 'react-native';
 
 import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
@@ -60,9 +60,17 @@ export function AchievementsPreviewPage({ notify }: PreviewPageProps) {
     || (visibility === 'unlocked' && achievement.unlocked)
     || (visibility === 'discovered' && !achievement.unlocked)
   ));
+  const shareAchievement = async () => {
+    if (!shareTarget) return;
+    await Share.share({
+      message: `Hermes Achievement: ${shareTarget} - Unlocked`,
+      title: `Hermes Achievement: ${shareTarget}`,
+    });
+    notify('Achievement shared');
+  };
   return (
     <PreviewPage
-      actions={<NativeButton onPress={() => notify('Achievement scan preview started')} outlined size="sm"><RefreshCw />Rescan</NativeButton>}
+      actions={<NativeButton onPress={() => notify('Achievement scan preview started')} outlined prefix={<RefreshCw />} size="sm">Rescan</NativeButton>}
       eyebrow="Agentic Gamerscore"
       subtitle="Collectible Hermes badges earned from real session history."
       title="Hermes Achievements"
@@ -101,7 +109,7 @@ export function AchievementsPreviewPage({ notify }: PreviewPageProps) {
               <PreviewText variant="mono">{achievement.progress}%</PreviewText>
             </PreviewRow>
             <PreviewProgress color={achievement.unlocked ? '#ffbd38' : undefined} value={achievement.progress} />
-            <NativeButton onPress={() => setShareTarget(achievement.name)} outlined size="sm"><Share2 />Share</NativeButton>
+            <NativeButton onPress={() => setShareTarget(achievement.name)} outlined prefix={<Share2 />} size="sm">Share</NativeButton>
           </PreviewCard>
         ))}
       </PreviewGrid>
@@ -114,7 +122,7 @@ export function AchievementsPreviewPage({ notify }: PreviewPageProps) {
         </View>
         <PreviewRow>
           <NativeButton onPress={() => notify('Share image copied')} outlined>Copy image</NativeButton>
-          <NativeButton onPress={() => notify('Achievement share sheet opened')}><Share2 />Share</NativeButton>
+          <NativeButton haptic="light" onPress={() => void shareAchievement()} prefix={<Share2 />}>Share</NativeButton>
         </PreviewRow>
       </PreviewModal>
     </PreviewPage>
@@ -131,7 +139,7 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
     <PreviewPage
       actions={(
         <PreviewRow>
-          <NativeButton onPress={() => setNewTask(true)} size="sm"><Plus />New task</NativeButton>
+          <NativeButton onPress={() => setNewTask(true)} prefix={<Plus />} size="sm">New task</NativeButton>
           <NativeButton accessibilityLabel="Refresh board" ghost onPress={() => notify('Kanban board refreshed')} size="icon"><RefreshCw /></NativeButton>
         </PreviewRow>
       )}
@@ -147,7 +155,10 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
       </PreviewCard>
       <ScrollView
         contentContainerStyle={styles.board}
+        decelerationRate="normal"
+        directionalLockEnabled
         horizontal
+        scrollEventThrottle={8}
         showsHorizontalScrollIndicator={false}
       >
         {PREVIEW_KANBAN.map((column) => (
@@ -187,7 +198,7 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
         <PreviewSettingRow label="Priority" trailing={<PreviewBadge tone="warning">P1</PreviewBadge>} />
         <NativeInput placeholder="Workspace path, e.g. ~/projects/my-app" />
         <NativeButton disabled={!taskTitle.trim()} onPress={() => {
-          notify(`Previewed task creation: ${taskTitle}`);
+          notify(`Created task: ${taskTitle}`);
           setTaskTitle('');
           setNewTask(false);
         }}>Create task</NativeButton>
@@ -205,8 +216,8 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
         </PreviewCard>
         <NativeInput placeholder="Add comment..." />
         <PreviewRow>
-          <NativeButton onPress={() => notify(`${selectedTask} marked complete`)}><CheckCircle2 />Complete</NativeButton>
-          <NativeButton outlined><Archive />Archive</NativeButton>
+          <NativeButton onPress={() => notify(`${selectedTask} marked complete`)} prefix={<CheckCircle2 />}>Complete</NativeButton>
+          <NativeButton outlined prefix={<Archive />}>Archive</NativeButton>
         </PreviewRow>
       </PreviewModal>
     </PreviewPage>
@@ -239,7 +250,7 @@ export function CollaborationPreviewPage({ notify }: PreviewPageProps) {
           <PreviewRow>
             <NativeInput onChangeText={setDraft} placeholder={`Message #${channel}`} style={styles.flexInput} value={draft} />
             <NativeButton accessibilityLabel="Send message" disabled={!draft.trim()} onPress={() => {
-              notify('Group message staged locally');
+              notify('Group message sent');
               setDraft('');
             }} size="icon"><Send /></NativeButton>
           </PreviewRow>

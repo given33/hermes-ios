@@ -39,7 +39,7 @@ test('shell contract cites every customized WebUI source that owns its order', (
   ]);
 });
 
-test('shell freezes the agreed native adaptation and exact WebUI motion', () => {
+test('shell freezes the agreed native adaptation and iOS motion contract', () => {
   assert.deepEqual(
     {
       breakpoint: SHELL_METRICS.breakpoint,
@@ -49,11 +49,11 @@ test('shell freezes the agreed native adaptation and exact WebUI motion', () => 
     },
     { breakpoint: 768, sidebar: 256, collapsed: 56, header: 56 },
   );
-  assert.equal(SHELL_METRICS.mobileDrawerDurationMs, 200);
-  assert.equal(SHELL_METRICS.desktopWidthDurationMs, 300);
-  assert.equal(SHELL_METRICS.labelOpacityDurationMs, 300);
-  assert.equal(SHELL_METRICS.hoverOpacityDurationMs, 200);
-  assert.deepEqual(SHELL_METRICS.transitionEasing, [0.23, 1, 0.32, 1]);
+  assert.equal(SHELL_METRICS.mobileDrawerDurationMs, 360);
+  assert.equal(SHELL_METRICS.desktopWidthDurationMs, 350);
+  assert.equal(SHELL_METRICS.labelOpacityDurationMs, 220);
+  assert.equal(SHELL_METRICS.hoverOpacityDurationMs, 160);
+  assert.deepEqual(SHELL_METRICS.transitionEasing, [0.32, 0.72, 0, 1]);
   assert.equal(SHELL_METRICS.overlayColor, 'rgba(0, 0, 0, 0.7)');
   assert.equal(SHELL_METRICS.hoverLayerOpacity, 0.05);
 });

@@ -1,0 +1,7 @@
+{
+  "name": "hermes-ios-controls",
+  "version": "1.0.0",
+  "description": "Hermes native SwiftUI controls",
+  "main": "index.ts",
+  "private": true
+}
