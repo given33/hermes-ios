@@ -1,5 +1,7 @@
 import { useFonts } from 'expo-font';
 
+import { GENERATED_NATIVE_FONT_ASSETS } from './native-font-assets.generated';
+
 export const WEBUI_FONT_FAMILIES = {
   CollapseRegular: 'Collapse',
   CollapseBold: 'Collapse-Bold',
@@ -18,6 +20,7 @@ const WEBUI_FONT_ASSETS = {
   [WEBUI_FONT_FAMILIES.RulesExpandedRegular]: require('../../assets/fonts/RulesExpanded-Regular.ttf'),
   [WEBUI_FONT_FAMILIES.RulesExpandedBold]: require('../../assets/fonts/RulesExpanded-Bold.ttf'),
   [WEBUI_FONT_FAMILIES.MondwestRegular]: require('../../assets/fonts/Mondwest-Regular.ttf'),
+  ...GENERATED_NATIVE_FONT_ASSETS,
 };
 
 export function useWebUiFonts(): boolean {

@@ -44,7 +44,7 @@ test('font provenance pins source and output hashes plus the conversion toolchai
     }>;
   };
 
-  assert.match(provenance.command, /scripts\/convert-webui-fonts\.py/);
+  assert.match(provenance.command, /scripts\/sync-native-fonts\.py/);
   assert.equal(provenance.fontToolsVersion, '4.63.0');
   assert.equal(provenance.brotliVersion, '1.2.0');
   assert.match(provenance.sourcePackageLicense, /fonts retain embedded EULAs/);
@@ -73,10 +73,11 @@ test('Expo embeds the exact font assets and runtime maps each file explicitly', 
 
   assert.match(packageConfig.dependencies['expo-font'], /^~14\./);
   assert.ok(Array.isArray(fontPlugin));
-  assert.deepEqual(
-    (fontPlugin[1] as { fonts: string[] }).fonts,
-    fontNames.map((name) => `./assets/fonts/${name}`),
-  );
+  const configuredFonts = (fontPlugin[1] as { fonts: string[] }).fonts;
+  assert.equal(configuredFonts.length, 50);
+  for (const fontName of fontNames) {
+    assert.ok(configuredFonts.includes(`./assets/fonts/${fontName}`));
+  }
   for (const fontName of fontNames) {
     assert.match(fontSource, new RegExp(fontName.replace('.', '\\.')));
   }
@@ -87,6 +88,7 @@ test('Expo embeds the exact font assets and runtime maps each file explicitly', 
   assert.match(fontSource, /RulesExpandedRegular:\s*'Rules Expanded'/);
   assert.match(fontSource, /RulesExpandedBold:\s*'Rules Expanded-Bold'/);
   assert.match(fontSource, /MondwestRegular:\s*'Mondwest'/);
+  assert.match(fontSource, /GENERATED_NATIVE_FONT_ASSETS/);
 });
 
 test('LoginScreen uses the canonical display and body font mappings without weight guessing', () => {
