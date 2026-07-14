@@ -12,7 +12,17 @@ import {
 } from 'react';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
-import { FONT_CHOICES, type FontChoice } from './font-catalog';
+import {
+  FONT_CHOICES,
+  THEME_DEFAULT_FONT_ID,
+  applyFontPreference,
+  type FontChoice,
+} from './font-catalog';
+import {
+  BUILTIN_THEMES,
+  BUILTIN_THEME_ORDER,
+  type BuiltinThemeName,
+} from './theme-presets';
 import {
   getThemeEffectPlanQueue,
   startThemeReconciliation,
@@ -29,6 +39,7 @@ import {
   type ThemeStatePlan,
 } from './theme-state';
 import { ThemePreferenceStore } from './theme-store';
+import { deriveNativeThemeTokens } from './theme-tokens';
 import type {
   DashboardTheme,
   NativeThemeTokens,
@@ -150,6 +161,51 @@ export function ThemeProvider({
   return (
     <ThemeContext.Provider value={value}>
       {ready ? children : null}
+    </ThemeContext.Provider>
+  );
+}
+
+export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
+  const [themeName, setThemeName] = useState<BuiltinThemeName>('default');
+  const [fontId, setFontId] = useState(THEME_DEFAULT_FONT_ID);
+  const theme = BUILTIN_THEMES[themeName];
+  const availableThemes = useMemo(
+    () => BUILTIN_THEME_ORDER.map((name) => ({
+      name,
+      label: BUILTIN_THEMES[name].label,
+      description: BUILTIN_THEMES[name].description,
+      definition: BUILTIN_THEMES[name],
+    })),
+    [],
+  );
+  const setTheme = useCallback(async (name: string) => {
+    if (Object.prototype.hasOwnProperty.call(BUILTIN_THEMES, name)) {
+      setThemeName(name as BuiltinThemeName);
+    }
+  }, []);
+  const setFont = useCallback(async (id: string) => {
+    if (
+      id === THEME_DEFAULT_FONT_ID
+      || FONT_CHOICES.some((choice) => choice.id === id)
+    ) {
+      setFontId(id);
+    }
+  }, []);
+  const value = useMemo<ThemeContextValue>(() => ({
+    ready: true,
+    theme,
+    themeName,
+    tokens: applyFontPreference(deriveNativeThemeTokens(theme), fontId),
+    availableThemes,
+    fontId,
+    fontChoices: FONT_CHOICES,
+    setTheme,
+    setFont,
+  }), [availableThemes, fontId, setFont, setTheme, theme, themeName]);
+
+  return (
+    <ThemeContext.Provider value={value}>
+      {children}
     </ThemeContext.Provider>
   );
 }

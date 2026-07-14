@@ -9,7 +9,6 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import MaskedView from '@react-native-masked-view/masked-view';
 import type { LucideProps } from 'lucide-react-native';
 import {
   Pressable,
@@ -17,10 +16,8 @@ import {
   Text,
   View,
   type PressableProps,
-  type DimensionValue,
   type StyleProp,
   type TextStyle,
-  type ViewStyle,
 } from 'react-native';
 import Reanimated, {
   Easing,
@@ -36,6 +33,7 @@ import {
   resolveListItemMetrics,
 } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
+import { AnimatedTintedIcon } from './AnimatedTintedIcon';
 
 const TRANSITION_EASING = Easing.bezier(
   ...CONTROL_METRICS.tailwind.transitionEasing,
@@ -284,49 +282,14 @@ function renderListItemChild(
     });
   }
   return (
-    <AnimatedListItemIcon
-      animatedColor={animatedColorValue}
+    <AnimatedTintedIcon
+      color={animatedColorValue}
       icon={child as ReactElement<TintableIconProps>}
     />
   );
 }
 
 type TintableIconProps = LucideProps;
-
-function AnimatedListItemIcon({
-  animatedColor,
-  icon,
-}: {
-  animatedColor: SharedValue<string>;
-  icon: ReactElement<TintableIconProps>;
-}) {
-  const size = icon.props.size ?? 24;
-  const iconStyle = StyleSheet.flatten(icon.props.style) as ViewStyle | undefined;
-  const width = (
-    icon.props.width ?? iconStyle?.width ?? size
-  ) as DimensionValue;
-  const height = (
-    icon.props.height ?? iconStyle?.height ?? size
-  ) as DimensionValue;
-  const animatedFillStyle = useAnimatedStyle(() => ({
-    backgroundColor: animatedColor.value,
-  }));
-
-  return (
-    <MaskedView
-      maskElement={cloneElement(icon, {
-        color: '#000000',
-        height: height as LucideProps['height'],
-        style: undefined,
-        width: width as LucideProps['width'],
-      })}
-      pointerEvents="none"
-      style={[icon.props.style, { height, width }]}
-    >
-      <Reanimated.View style={[StyleSheet.absoluteFill, animatedFillStyle]} />
-    </MaskedView>
-  );
-}
 
 const styles = StyleSheet.create({
   item: {

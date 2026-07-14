@@ -290,6 +290,10 @@ test('native auth root is integrated without an AppState foreground re-prompt li
     resolve(projectRoot, 'src/auth/LoginScreen.tsx'),
     'utf8',
   );
+  const shellSource = readFileSync(
+    resolve(projectRoot, 'src/app/NativeShell.tsx'),
+    'utf8',
+  );
 
   assert.doesNotMatch(providerSource, /\bAppState\b/);
   assert.match(providerSource, /bootstrapSavedConnection/);
@@ -340,9 +344,10 @@ test('native auth root is integrated without an AppState foreground re-prompt li
   assert.match(loginSource, /FeOffset/);
   assert.match(loginSource, /FeFlood/);
   assert.match(loginSource, /FeComposite/);
-  assert.match(appSource, /#041c1c/i);
+  assert.match(appSource, /<NativeShell \/>/);
+  assert.match(shellSource, /opaque\(tokens\.colors\.background\)/);
   assert.doesNotMatch(
-    `${providerSource}\n${appSource}\n${loginSource}`,
+    `${providerSource}\n${appSource}\n${loginSource}\n${shellSource}`,
     /WebView|\bdocument\b|\bwindow\b/,
   );
 });

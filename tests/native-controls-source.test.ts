@@ -41,6 +41,7 @@ test('arc border stays native, exact, and continuously animated', () => {
 test('input and list item animate canonical transition-colors timing', () => {
   const input = read('src/components/ui/NativeInput.tsx');
   const listItem = read('src/components/ui/NativeListItem.tsx');
+  const animatedIcon = read('src/components/ui/AnimatedTintedIcon.tsx');
   const packageJson = JSON.parse(read('package.json')) as {
     dependencies: Record<string, string>;
   };
@@ -53,20 +54,19 @@ test('input and list item animate canonical transition-colors timing', () => {
   assert.match(listItem, /<Pressable/);
   assert.match(listItem, /<Reanimated\.View/);
   assert.match(listItem, /<Reanimated\.Text/);
-  assert.match(listItem, /function AnimatedListItemIcon/);
-  assert.match(listItem, /from '@react-native-masked-view\/masked-view'/);
-  assert.match(listItem, /<MaskedView/);
-  assert.match(listItem, /StyleSheet\.flatten\(icon\.props\.style\)/);
-  assert.match(listItem, /icon\.props\.width \?\? iconStyle\?\.width \?\? size/);
-  assert.match(listItem, /icon\.props\.height \?\? iconStyle\?\.height \?\? size/);
-  assert.match(listItem, /color: '#000000'/);
-  assert.match(listItem, /style: undefined/);
-  assert.match(listItem, /style=\{\[icon\.props\.style, \{ height, width \}\]\}/);
-  assert.match(listItem, /backgroundColor: animatedColor\.value/);
-  assert.match(listItem, /StyleSheet\.absoluteFill, animatedFillStyle/);
-  assert.doesNotMatch(listItem, /currentColor/);
-  assert.doesNotMatch(listItem, /createAnimatedComponent\(iconType\)/);
-  assert.doesNotMatch(listItem, /style=\{\[icon\.props\.style, animatedColor\]\}/);
+  assert.match(listItem, /<AnimatedTintedIcon/);
+  assert.match(animatedIcon, /from '@react-native-masked-view\/masked-view'/);
+  assert.match(animatedIcon, /<MaskedView/);
+  assert.match(animatedIcon, /StyleSheet\.flatten\(icon\.props\.style\)/);
+  assert.match(animatedIcon, /icon\.props\.width \?\? iconStyle\?\.width \?\? size/);
+  assert.match(animatedIcon, /icon\.props\.height \?\? iconStyle\?\.height \?\? size/);
+  assert.match(animatedIcon, /color: '#000000'/);
+  assert.match(animatedIcon, /style: undefined/);
+  assert.match(animatedIcon, /style=\{\[icon\.props\.style, \{ height, width \}\]\}/);
+  assert.match(animatedIcon, /backgroundColor: color\.value/);
+  assert.match(animatedIcon, /StyleSheet\.absoluteFill, animatedFillStyle/);
+  assert.doesNotMatch(animatedIcon, /currentColor/);
+  assert.doesNotMatch(animatedIcon, /createAnimatedComponent\(iconType\)/);
   assert.equal(
     packageJson.dependencies['@react-native-masked-view/masked-view'],
     '0.3.2',

@@ -3,8 +3,16 @@ import { StyleSheet, View } from 'react-native';
 
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { LoginScreen } from '../auth/LoginScreen';
-import { ThemeProvider } from '../design/ThemeProvider';
+import {
+  FrontendPreviewThemeProvider,
+  ThemeProvider,
+} from '../design/ThemeProvider';
+import { NativeShell } from './NativeShell';
+import { BASELINE_PLUGIN_MANIFESTS } from './route-composition';
 import { useWebUiFonts } from './webui-fonts';
+
+const FRONTEND_PREVIEW =
+  __DEV__ && process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1';
 
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();
@@ -13,9 +21,20 @@ export function HermesNativeApp() {
     <View style={styles.root}>
       <StatusBar style="light" />
       {fontsLoaded ? (
-        <AuthProvider>
-          <NativeAuthRoot />
-        </AuthProvider>
+        FRONTEND_PREVIEW ? (
+          <FrontendPreviewThemeProvider>
+            <View
+              accessibilityLabel="Hermes frontend preview"
+              style={styles.nativeContent}
+            >
+              <NativeShell manifests={BASELINE_PLUGIN_MANIFESTS} />
+            </View>
+          </FrontendPreviewThemeProvider>
+        ) : (
+          <AuthProvider>
+            <NativeAuthRoot />
+          </AuthProvider>
+        )
       ) : null}
     </View>
   );
@@ -27,7 +46,12 @@ function NativeAuthRoot() {
   if (!client) return null;
   return (
     <ThemeProvider client={client}>
-      <View accessibilityLabel="Hermes authenticated content" style={styles.contentSlot} />
+      <View
+        accessibilityLabel="Hermes authenticated content"
+        style={styles.nativeContent}
+      >
+        <NativeShell />
+      </View>
     </ThemeProvider>
   );
 }
@@ -37,8 +61,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#170d02',
   },
-  contentSlot: {
+  nativeContent: {
     flex: 1,
-    backgroundColor: '#041c1c',
   },
 });

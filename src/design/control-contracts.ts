@@ -921,11 +921,11 @@ function formatColor(color: ParsedColor): string {
   return `rgba(${Math.round(color.red)}, ${Math.round(color.green)}, ${Math.round(color.blue)}, ${alpha})`;
 }
 
-function multiplyAlpha(color: string, alpha: number): string {
+export function multiplyAlpha(color: string, alpha: number): string {
   const parsed = parseColor(color);
   return formatColor({ ...parsed, alpha: parsed.alpha * alpha });
 }
 
-function opaque(color: string): string {
+export function opaque(color: string): string {
   return formatColor({ ...parseColor(color), alpha: 1 });
 }
