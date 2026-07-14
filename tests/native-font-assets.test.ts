@@ -200,6 +200,28 @@ test('pure resolver separates Google theme faces from tracked terminal faces', a
   );
 });
 
+test('native CSS stacks select bundled faces before exact iOS fallbacks', async () => {
+  const { resolveNativeFontStack } = await import(
+    '../src/design/native-font-faces'
+  );
+  assert.equal(
+    resolveNativeFontStack('"JetBrains Mono", ui-monospace, monospace', 700),
+    'HermesGoogle-JetBrainsMono-700-Normal',
+  );
+  assert.equal(
+    resolveNativeFontStack('"DM Mono", ui-monospace, monospace', 700),
+    'HermesGoogle-DMMono-500-Normal',
+  );
+  assert.equal(
+    resolveNativeFontStack('ui-monospace, "SF Mono", Menlo, monospace', 700),
+    'Menlo',
+  );
+  assert.equal(
+    resolveNativeFontStack('system-ui, -apple-system, sans-serif', 400),
+    undefined,
+  );
+});
+
 test('every non-system picker and theme-only named face resolves natively', async () => {
   const { resolveNativeFontFamily } = await import(
     '../src/design/native-font-faces'
