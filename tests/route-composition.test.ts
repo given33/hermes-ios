@@ -343,24 +343,32 @@ test('baseline plugin positions are applied before sidebar partitioning', () => 
     ['/achievements', '/kanban'],
   );
   assert.deepEqual(
-    analyticsVisible.routes.slice(-3).map(({ key, path, hidden }) => ({
+    analyticsVisible.routes.slice(-3).map(({ key, path, pluginName }) => ({
       key,
       path,
-      hidden,
+      pluginName,
     })),
     [
       {
         key: 'plugin:hermes-achievements',
         path: '/achievements',
-        hidden: false,
+        pluginName: 'hermes-achievements',
       },
-      { key: 'plugin:kanban', path: '/kanban', hidden: false },
+      {
+        key: 'plugin:kanban',
+        path: '/kanban',
+        pluginName: 'kanban',
+      },
       {
         key: 'plugin:hidden:collaboration',
         path: '/collaboration',
-        hidden: true,
+        pluginName: 'collaboration',
       },
     ],
+  );
+  assert.equal(
+    analyticsVisible.routes.some((route) => 'hidden' in route),
+    false,
   );
   assert.deepEqual(BASELINE_PLUGIN_MANIFESTS[0].slots, ['chat:top']);
 });
@@ -413,7 +421,7 @@ test('navigation preserves position hints, duplicates, and built-in collisions',
   );
 });
 
-test('routes preserve WebUI override, hidden, collision, and duplicate semantics', () => {
+test('routes preserve reachability independently from sidebar visibility', () => {
   const manifests = [
     plugin('first-override', '/unused-first', { override: '/sessions' }),
     plugin('last-override', '/unused-last', { override: '/sessions' }),
@@ -439,26 +447,61 @@ test('routes preserve WebUI override, hidden, collision, and duplicate semantics
   assert.deepEqual(
     composition.routes
       .filter((route) => ['/sessions', '/models'].includes(route.path))
-      .map(({ key, path, pluginName, hidden }) => ({
+      .map(({ key, path, pluginName }) => ({
         key,
         path,
         pluginName,
-        hidden,
       })),
     [
       {
         key: 'override:last-override',
         path: '/sessions',
         pluginName: 'last-override',
-        hidden: false,
       },
       {
         key: 'override:hidden-override',
         path: '/models',
         pluginName: 'hidden-override',
-        hidden: true,
       },
     ],
+  );
+  assert.deepEqual(
+    composition.routes.find((route) => route.path === '/models'),
+    {
+      key: 'override:hidden-override',
+      path: '/models',
+      source: 'plugin',
+      pluginName: 'hidden-override',
+    },
+  );
+  assert.deepEqual(
+    composition.coreItems.find((item) => item.path === '/models'),
+    {
+      path: '/models',
+      label: 'Models',
+      icon: 'Cpu',
+      source: 'builtin',
+      routeId: 'models',
+    },
+  );
+  assert.deepEqual(
+    composition.routes.find((route) => route.path === '/hidden-addon'),
+    {
+      key: 'plugin:hidden:hidden-addon',
+      path: '/hidden-addon',
+      source: 'plugin',
+      pluginName: 'hidden-addon',
+    },
+  );
+  assert.equal(
+    [...composition.coreItems, ...composition.pluginItems].some(
+      (item) => item.path === '/hidden-addon',
+    ),
+    false,
+  );
+  assert.equal(
+    composition.routes.some((route) => 'hidden' in route),
+    false,
   );
   assert.deepEqual(
     composition.routes.slice(-3).map(({ key, path }) => ({ key, path })),

@@ -127,7 +127,6 @@ export interface ComposedRoute {
   routeId?: NativeRouteId;
   pluginName?: string;
   redirectTo?: string;
-  hidden: boolean;
 }
 
 export interface ComposedNavigationItem {
@@ -407,7 +406,6 @@ function buildRoutes(
         path: route.path,
         source: 'plugin',
         pluginName: override.name,
-        hidden: Boolean(override.tab.hidden),
       });
     } else {
       routes.push({
@@ -416,7 +414,6 @@ function buildRoutes(
         source: 'builtin',
         routeId: route.id,
         redirectTo: route.redirectTo,
-        hidden: false,
       });
     }
   }
@@ -430,7 +427,6 @@ function buildRoutes(
       path: manifest.tab.path,
       source: 'plugin',
       pluginName: manifest.name,
-      hidden: false,
     });
   }
 
@@ -443,7 +439,6 @@ function buildRoutes(
       path: manifest.tab.path,
       source: 'plugin',
       pluginName: manifest.name,
-      hidden: true,
     });
   }
 
