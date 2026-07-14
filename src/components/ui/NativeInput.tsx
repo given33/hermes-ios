@@ -4,9 +4,25 @@ import {
   TextInput,
   type TextInputProps,
 } from 'react-native';
+import Reanimated, {
+  Easing,
+  interpolateColor,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
-import { CONTROL_METRICS, resolveControlColors } from '../../design/control-contracts';
+import {
+  CONTROL_METRICS,
+  resolveControlColors,
+  resolveInputMetrics,
+} from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
+
+const AnimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
+const TRANSITION_EASING = Easing.bezier(
+  ...CONTROL_METRICS.tailwind.transitionEasing,
+);
 
 export interface NativeInputProps extends TextInputProps {
   disabled?: boolean;
@@ -28,24 +44,53 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
   ) {
     const { tokens } = useTheme();
     const colors = resolveControlColors(tokens).input;
+    const metrics = resolveInputMetrics(tokens);
     const [focused, setFocused] = useState(false);
+    const focusProgress = useSharedValue(0);
     const enabled = editable && !disabled;
 
     useEffect(() => {
-      if (!enabled) setFocused(false);
-    }, [enabled]);
+      if (!enabled) {
+        setFocused(false);
+        focusProgress.value = withTiming(0, {
+          duration: CONTROL_METRICS.tailwind.transitionDurationMs,
+          easing: TRANSITION_EASING,
+        });
+      }
+    }, [enabled, focusProgress]);
+
+    const focusStyle = useAnimatedStyle(() => ({
+      borderColor: interpolateColor(
+        focusProgress.value,
+        [0, 1],
+        [colors.border, colors.focusBorder],
+      ),
+      outlineColor: interpolateColor(
+        focusProgress.value,
+        [0, 1],
+        ['rgba(0, 0, 0, 0)', colors.focusRing],
+      ),
+    }));
 
     const handleFocus: NonNullable<TextInputProps['onFocus']> = (event) => {
       setFocused(true);
+      focusProgress.value = withTiming(1, {
+        duration: CONTROL_METRICS.tailwind.transitionDurationMs,
+        easing: TRANSITION_EASING,
+      });
       onFocus?.(event);
     };
     const handleBlur: NonNullable<TextInputProps['onBlur']> = (event) => {
       setFocused(false);
+      focusProgress.value = withTiming(0, {
+        duration: CONTROL_METRICS.tailwind.transitionDurationMs,
+        easing: TRANSITION_EASING,
+      });
       onBlur?.(event);
     };
 
     return (
-      <TextInput
+      <AnimatedTextInput
         {...props}
         accessibilityState={{
           ...props.accessibilityState,
@@ -63,15 +108,20 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
           styles.input,
           {
             backgroundColor: colors.background,
-            borderColor: focused ? colors.focusBorder : colors.border,
+            borderWidth: CONTROL_METRICS.input.borderWidth,
             color: tokens.colors.foreground,
-            height: multiline ? undefined : CONTROL_METRICS.input.visibleHeight,
-            minHeight: CONTROL_METRICS.input.visibleHeight,
+            fontFamily: 'Courier New',
+            fontSize: metrics.fontSize,
+            height: multiline ? undefined : metrics.visibleHeight,
+            lineHeight: metrics.lineHeight,
+            minHeight: metrics.visibleHeight,
             opacity: enabled ? 1 : CONTROL_METRICS.input.disabledOpacity,
-            outlineColor: focused ? colors.focusRing : 'transparent',
             outlineWidth: focused ? CONTROL_METRICS.input.focusRingWidth : 0,
+            paddingHorizontal: metrics.paddingHorizontal,
+            paddingVertical: metrics.paddingVertical,
             textAlignVertical: multiline ? 'top' : 'center',
           },
+          focusStyle,
           style,
         ]}
       />
@@ -82,10 +132,5 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
 const styles = StyleSheet.create({
   input: {
     borderRadius: 0,
-    borderWidth: CONTROL_METRICS.input.borderWidth,
-    fontFamily: 'Courier New',
-    fontSize: CONTROL_METRICS.input.fontSize,
-    paddingHorizontal: CONTROL_METRICS.input.paddingHorizontal,
-    paddingVertical: CONTROL_METRICS.input.paddingVertical,
   },
 });

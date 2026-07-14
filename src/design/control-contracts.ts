@@ -14,6 +14,11 @@ export const CONTROL_SOURCE_MAP = {
 
 export const CONTROL_METRICS = {
   minimumHitTarget: 44,
+  tailwind: {
+    spacingRem: 0.25,
+    transitionDurationMs: 150,
+    transitionEasing: [0.4, 0, 0.2, 1],
+  },
   button: {
     bevelWidth: 1,
     arcBorderWidth: 1.25,
@@ -41,9 +46,9 @@ export const CONTROL_METRICS = {
       ['foreground-threshold', 0.95],
       ['midground', 1],
     ],
-    prefixSuffixSpacerWidth: 20,
-    prefixSuffixOffset: 12,
-    prefixSuffixIconSize: 14,
+    prefixSuffixSpacerSpacingUnits: 5,
+    prefixSuffixOffsetSpacingUnits: 3,
+    prefixSuffixIconSpacingUnits: 3.5,
     sizes: {
       default: {
         fontSizeRem: 1,
@@ -52,28 +57,28 @@ export const CONTROL_METRICS = {
         paddingInlineStartEm: 0.9,
         paddingInlineEndEm: 0.75,
       },
-      icon: { iconSize: 14, padding: 8, visibleSize: 30 },
+      icon: { iconSpacingUnits: 3.5, paddingSpacingUnits: 2 },
       sm: {
         fontSizeRem: 0.7,
-        iconSize: 12,
+        iconSpacingUnits: 3,
         letterSpacingEm: 0.15,
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        visibleHeight: 12,
+        paddingHorizontalSpacingUnits: 3,
+        paddingVerticalSpacingUnits: 1.5,
       },
-      xs: { iconSize: 12, padding: 4, visibleSize: 20 },
+      xs: { iconSpacingUnits: 3, paddingSpacingUnits: 1 },
     },
     translation:
       'CSS inset shadows become four absolute 1pt edge layers; no drop shadow.',
   },
   input: {
-    visibleHeight: 36,
+    heightSpacingUnits: 9,
     borderWidth: 1,
     borderAlpha: 0.15,
     backgroundAlpha: 0.4,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    fontSize: 14,
+    paddingHorizontalSpacingUnits: 3,
+    paddingVerticalSpacingUnits: 1,
+    fontSizeRem: 0.875,
+    lineHeightRem: 1.25,
     placeholderAlpha: 0.5,
     focusRingWidth: 1,
     focusRingAlpha: 0.3,
@@ -81,10 +86,11 @@ export const CONTROL_METRICS = {
     disabledOpacity: 0.5,
   },
   listItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    gap: 8,
-    fontSize: 14,
+    paddingHorizontalSpacingUnits: 3,
+    paddingVerticalSpacingUnits: 2,
+    gapSpacingUnits: 2,
+    fontSizeRem: 0.875,
+    lineHeightRem: 1.25,
     activeBackgroundAlpha: 0.1,
     pressedBackgroundAlpha: 0.05,
     focusRingWidth: 1,
@@ -92,20 +98,22 @@ export const CONTROL_METRICS = {
   },
   confirmDialog: {
     overlayBlackAlpha: 0.6,
-    maxWidth: 448,
-    viewportHorizontalInset: 16,
+    backdropBlurRadius: 8,
+    maxWidthRem: 28,
+    viewportHorizontalInsetRem: 1,
     borderWidth: 1,
     borderAlpha: 0.15,
-    headerPadding: 16,
-    headerGap: 12,
-    contentGap: 4,
-    warningIconSize: 16,
-    titleFontSize: 14,
+    headerPaddingSpacingUnits: 4,
+    headerGapSpacingUnits: 3,
+    contentGapSpacingUnits: 1,
+    warningIconSpacingUnits: 4,
+    titleFontSizeRem: 0.875,
+    titleLineHeightRem: 1.25,
     titleLetterSpacingEm: 0.08,
-    descriptionFontSize: 12,
-    descriptionLineHeight: 19.5,
-    footerPadding: 12,
-    footerGap: 8,
+    descriptionFontSizeRem: 0.75,
+    descriptionLineHeightMultiplier: 1.625,
+    footerPaddingSpacingUnits: 3,
+    footerGapSpacingUnits: 2,
   },
   screenState: {
     paddingVertical: 48,
@@ -152,7 +160,42 @@ export interface NativeButtonMetrics {
   paddingLeft: number;
   paddingRight: number;
   iconSize: number;
+  prefixSuffixSpacerWidth: number;
+  prefixSuffixOffset: number;
+  prefixSuffixIconSize: number;
   hitSlop: { top: number; right: number; bottom: number; left: number };
+}
+
+export interface NativeInputMetrics {
+  visibleHeight: number;
+  paddingHorizontal: number;
+  paddingVertical: number;
+  fontSize: number;
+  lineHeight: number;
+}
+
+export interface NativeListItemMetrics {
+  paddingHorizontal: number;
+  paddingVertical: number;
+  gap: number;
+  fontSize: number;
+  lineHeight: number;
+}
+
+export interface NativeConfirmDialogMetrics {
+  maxWidth: number;
+  viewportHorizontalInset: number;
+  headerPadding: number;
+  headerGap: number;
+  contentGap: number;
+  warningIconSize: number;
+  titleFontSize: number;
+  titleLineHeight: number;
+  titleLetterSpacing: number;
+  descriptionFontSize: number;
+  descriptionLineHeight: number;
+  footerPadding: number;
+  footerGap: number;
 }
 
 export interface NativeButtonVariant {
@@ -262,6 +305,30 @@ function parseBaseSize(value: string): number {
   return match ? Number(match[1]) : 15;
 }
 
+function tailwindSpacing(tokens: NativeThemeTokens, units: number): number {
+  return parseBaseSize(tokens.typography.baseSize)
+    * CONTROL_METRICS.tailwind.spacingRem
+    * tokens.layout.spacingMultiplier
+    * units;
+}
+
+function buttonAffixMetrics(tokens: NativeThemeTokens) {
+  return {
+    prefixSuffixSpacerWidth: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.button.prefixSuffixSpacerSpacingUnits,
+    ),
+    prefixSuffixOffset: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.button.prefixSuffixOffsetSpacingUnits,
+    ),
+    prefixSuffixIconSize: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.button.prefixSuffixIconSpacingUnits,
+    ),
+  };
+}
+
 function hitSlop(visibleHeight: number, visibleWidth?: number) {
   const vertical = Math.max(0, (CONTROL_METRICS.minimumHitTarget - visibleHeight) / 2);
   const horizontal = visibleWidth === undefined
@@ -280,50 +347,69 @@ export function resolveButtonMetrics(
   size: NativeButtonSize = 'default',
 ): NativeButtonMetrics {
   const rootFontSize = parseBaseSize(tokens.typography.baseSize);
+  const affix = buttonAffixMetrics(tokens);
 
   if (size === 'icon') {
     const contract = CONTROL_METRICS.button.sizes.icon;
+    const iconSize = tailwindSpacing(tokens, contract.iconSpacingUnits);
+    const padding = tailwindSpacing(tokens, contract.paddingSpacingUnits);
+    const visibleSize = iconSize + padding * 2;
     return {
-      visibleHeight: contract.visibleSize,
+      visibleHeight: visibleSize,
       fontSize: rootFontSize,
       letterSpacing: rootFontSize * 0.2,
-      paddingTop: contract.padding,
-      paddingBottom: contract.padding,
-      paddingLeft: contract.padding,
-      paddingRight: contract.padding,
-      iconSize: contract.iconSize,
-      hitSlop: hitSlop(contract.visibleSize, contract.visibleSize),
+      paddingTop: padding,
+      paddingBottom: padding,
+      paddingLeft: padding,
+      paddingRight: padding,
+      iconSize,
+      ...affix,
+      hitSlop: hitSlop(visibleSize, visibleSize),
     };
   }
 
   if (size === 'sm') {
     const contract = CONTROL_METRICS.button.sizes.sm;
     const fontSize = rootFontSize * contract.fontSizeRem;
+    const paddingHorizontal = tailwindSpacing(
+      tokens,
+      contract.paddingHorizontalSpacingUnits,
+    );
+    const paddingVertical = tailwindSpacing(
+      tokens,
+      contract.paddingVerticalSpacingUnits,
+    );
+    const visibleHeight = paddingVertical * 2;
     return {
-      visibleHeight: contract.visibleHeight,
+      visibleHeight,
       fontSize,
       letterSpacing: fontSize * contract.letterSpacingEm,
-      paddingTop: contract.paddingVertical,
-      paddingBottom: contract.paddingVertical,
-      paddingLeft: contract.paddingHorizontal,
-      paddingRight: contract.paddingHorizontal,
-      iconSize: contract.iconSize,
-      hitSlop: hitSlop(contract.visibleHeight),
+      paddingTop: paddingVertical,
+      paddingBottom: paddingVertical,
+      paddingLeft: paddingHorizontal,
+      paddingRight: paddingHorizontal,
+      iconSize: tailwindSpacing(tokens, contract.iconSpacingUnits),
+      ...affix,
+      hitSlop: hitSlop(visibleHeight),
     };
   }
 
   if (size === 'xs') {
     const contract = CONTROL_METRICS.button.sizes.xs;
+    const iconSize = tailwindSpacing(tokens, contract.iconSpacingUnits);
+    const padding = tailwindSpacing(tokens, contract.paddingSpacingUnits);
+    const visibleSize = iconSize + padding * 2;
     return {
-      visibleHeight: contract.visibleSize,
+      visibleHeight: visibleSize,
       fontSize: rootFontSize,
       letterSpacing: rootFontSize * 0.2,
-      paddingTop: contract.padding,
-      paddingBottom: contract.padding,
-      paddingLeft: contract.padding,
-      paddingRight: contract.padding,
-      iconSize: contract.iconSize,
-      hitSlop: hitSlop(contract.visibleSize, contract.visibleSize),
+      paddingTop: padding,
+      paddingBottom: padding,
+      paddingLeft: padding,
+      paddingRight: padding,
+      iconSize,
+      ...affix,
+      hitSlop: hitSlop(visibleSize, visibleSize),
     };
   }
 
@@ -339,8 +425,92 @@ export function resolveButtonMetrics(
     paddingBottom: verticalPadding,
     paddingLeft: fontSize * contract.paddingInlineStartEm,
     paddingRight: fontSize * contract.paddingInlineEndEm,
-    iconSize: CONTROL_METRICS.button.prefixSuffixIconSize,
+    iconSize: affix.prefixSuffixIconSize,
+    ...affix,
     hitSlop: hitSlop(visibleHeight),
+  };
+}
+
+export function resolveInputMetrics(tokens: NativeThemeTokens): NativeInputMetrics {
+  return {
+    visibleHeight: tailwindSpacing(tokens, CONTROL_METRICS.input.heightSpacingUnits),
+    paddingHorizontal: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.input.paddingHorizontalSpacingUnits,
+    ),
+    paddingVertical: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.input.paddingVerticalSpacingUnits,
+    ),
+    fontSize: parseBaseSize(tokens.typography.baseSize) * CONTROL_METRICS.input.fontSizeRem,
+    lineHeight: parseBaseSize(tokens.typography.baseSize) * CONTROL_METRICS.input.lineHeightRem,
+  };
+}
+
+export function resolveListItemMetrics(
+  tokens: NativeThemeTokens,
+): NativeListItemMetrics {
+  return {
+    paddingHorizontal: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.listItem.paddingHorizontalSpacingUnits,
+    ),
+    paddingVertical: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.listItem.paddingVerticalSpacingUnits,
+    ),
+    gap: tailwindSpacing(tokens, CONTROL_METRICS.listItem.gapSpacingUnits),
+    fontSize: parseBaseSize(tokens.typography.baseSize)
+      * CONTROL_METRICS.listItem.fontSizeRem,
+    lineHeight: parseBaseSize(tokens.typography.baseSize)
+      * CONTROL_METRICS.listItem.lineHeightRem,
+  };
+}
+
+export function resolveConfirmDialogMetrics(
+  tokens: NativeThemeTokens,
+): NativeConfirmDialogMetrics {
+  const baseSize = parseBaseSize(tokens.typography.baseSize);
+  const titleFontSize = baseSize * CONTROL_METRICS.confirmDialog.titleFontSizeRem;
+  const descriptionFontSize = baseSize
+    * CONTROL_METRICS.confirmDialog.descriptionFontSizeRem;
+  return {
+    maxWidth: baseSize * CONTROL_METRICS.confirmDialog.maxWidthRem,
+    viewportHorizontalInset:
+      baseSize * CONTROL_METRICS.confirmDialog.viewportHorizontalInsetRem,
+    headerPadding: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.confirmDialog.headerPaddingSpacingUnits,
+    ),
+    headerGap: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.confirmDialog.headerGapSpacingUnits,
+    ),
+    contentGap: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.confirmDialog.contentGapSpacingUnits,
+    ),
+    warningIconSize: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.confirmDialog.warningIconSpacingUnits,
+    ),
+    titleFontSize,
+    titleLineHeight:
+      baseSize * CONTROL_METRICS.confirmDialog.titleLineHeightRem,
+    titleLetterSpacing:
+      titleFontSize * CONTROL_METRICS.confirmDialog.titleLetterSpacingEm,
+    descriptionFontSize,
+    descriptionLineHeight:
+      descriptionFontSize
+      * CONTROL_METRICS.confirmDialog.descriptionLineHeightMultiplier,
+    footerPadding: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.confirmDialog.footerPaddingSpacingUnits,
+    ),
+    footerGap: tailwindSpacing(
+      tokens,
+      CONTROL_METRICS.confirmDialog.footerGapSpacingUnits,
+    ),
   };
 }
 
@@ -418,8 +588,10 @@ export function resolveButtonVisual(
   if (state === 'disabled') {
     visual = {
       id,
-      backgroundColor: withAlpha(midground, 0.15),
-      borderColor: TRANSPARENT,
+      backgroundColor: multiplyAlpha(midground, 0.15),
+      borderColor: id === 'outlined-destructive'
+        ? multiplyAlpha(destructive, 0.4)
+        : TRANSPARENT,
       textColor: midground,
       bevel: null,
       arcVisible: false,
@@ -430,7 +602,7 @@ export function resolveButtonVisual(
       visual = {
         id,
         backgroundColor: state === 'hovered' || state === 'pressed'
-          ? withAlpha(midground, 0.1)
+          ? multiplyAlpha(midground, 0.1)
           : TRANSPARENT,
         borderColor: TRANSPARENT,
         textColor: midground,
@@ -443,7 +615,7 @@ export function resolveButtonVisual(
       visual = {
         id,
         backgroundColor: state === 'hovered' || state === 'pressed'
-          ? withAlpha(destructive, 0.1)
+          ? multiplyAlpha(destructive, 0.1)
           : TRANSPARENT,
         borderColor: TRANSPARENT,
         textColor: destructive,
@@ -456,7 +628,7 @@ export function resolveButtonVisual(
       visual = {
         id,
         backgroundColor: state === 'hovered' || state === 'pressed'
-          ? withAlpha(destructive, 0.9)
+          ? multiplyAlpha(destructive, 0.9)
           : destructive,
         borderColor: TRANSPARENT,
         textColor: destructiveForeground,
@@ -469,9 +641,9 @@ export function resolveButtonVisual(
       visual = {
         id,
         backgroundColor: state === 'hovered' || state === 'pressed'
-          ? withAlpha(destructive, 0.1)
+          ? multiplyAlpha(destructive, 0.1)
           : TRANSPARENT,
-        borderColor: withAlpha(destructive, 0.4),
+        borderColor: multiplyAlpha(destructive, 0.4),
         textColor: destructive,
         bevel: null,
         arcVisible,
@@ -481,7 +653,7 @@ export function resolveButtonVisual(
     case 'solid-invert':
       visual = {
         id,
-        backgroundColor: withAlpha(midground, 0.15),
+        backgroundColor: multiplyAlpha(midground, 0.15),
         borderColor: TRANSPARENT,
         textColor: midground,
         bevel: INVERT_BEVEL,
@@ -534,26 +706,26 @@ export function resolveControlColors(tokens: NativeThemeTokens) {
   const midground = tokens.colors.foreground;
   return {
     input: {
-      background: withAlpha(tokens.colors.background, CONTROL_METRICS.input.backgroundAlpha),
-      border: withAlpha(midground, CONTROL_METRICS.input.borderAlpha),
-      placeholder: withAlpha(midground, CONTROL_METRICS.input.placeholderAlpha),
-      focusRing: withAlpha(midground, CONTROL_METRICS.input.focusRingAlpha),
-      focusBorder: withAlpha(midground, CONTROL_METRICS.input.focusBorderAlpha),
+      background: multiplyAlpha(tokens.colors.background, CONTROL_METRICS.input.backgroundAlpha),
+      border: multiplyAlpha(midground, CONTROL_METRICS.input.borderAlpha),
+      placeholder: multiplyAlpha(midground, CONTROL_METRICS.input.placeholderAlpha),
+      focusRing: multiplyAlpha(midground, CONTROL_METRICS.input.focusRingAlpha),
+      focusBorder: multiplyAlpha(midground, CONTROL_METRICS.input.focusBorderAlpha),
     },
     listItem: {
-      activeBackground: withAlpha(midground, CONTROL_METRICS.listItem.activeBackgroundAlpha),
-      pressedBackground: withAlpha(midground, CONTROL_METRICS.listItem.pressedBackgroundAlpha),
+      activeBackground: multiplyAlpha(midground, CONTROL_METRICS.listItem.activeBackgroundAlpha),
+      pressedBackground: multiplyAlpha(midground, CONTROL_METRICS.listItem.pressedBackgroundAlpha),
       activeText: midground,
       inactiveText: tokens.colors.textSecondary,
       disabledText: tokens.colors.textDisabled,
-      focusRing: withAlpha(midground, CONTROL_METRICS.listItem.focusRingAlpha),
+      focusRing: multiplyAlpha(midground, CONTROL_METRICS.listItem.focusRingAlpha),
     },
     dialog: {
       overlay: 'rgba(0, 0, 0, 0.6)',
       background: opaque(tokens.colors.background),
       foregroundBase: opaque(tokens.colors.foregroundLayer),
-      border: withAlpha(midground, CONTROL_METRICS.confirmDialog.borderAlpha),
-      description: withAlpha(midground, 0.6),
+      border: multiplyAlpha(midground, CONTROL_METRICS.confirmDialog.borderAlpha),
+      description: multiplyAlpha(midground, 0.6),
     },
   };
 }
@@ -567,7 +739,7 @@ export function resolveArcGradient(
   const dy = -Math.cos(angleRadians);
   const foreground = parseColor(tokens.colors.foregroundLayer);
   const thresholdColor = foreground.alpha < CONTROL_METRICS.button.arcForegroundAlphaThreshold
-    ? formatColor({ ...foreground, alpha: 1 })
+    ? formatColor(foreground)
     : TRANSPARENT;
   const namedColors: Record<(typeof CONTROL_METRICS.button.arcBorderStops)[number][0], string> = {
     transparent: TRANSPARENT,
@@ -743,10 +915,11 @@ function formatColor(color: ParsedColor): string {
   return `rgba(${Math.round(color.red)}, ${Math.round(color.green)}, ${Math.round(color.blue)}, ${alpha})`;
 }
 
-function withAlpha(color: string, alpha: number): string {
-  return formatColor({ ...parseColor(color), alpha });
+function multiplyAlpha(color: string, alpha: number): string {
+  const parsed = parseColor(color);
+  return formatColor({ ...parsed, alpha: parsed.alpha * alpha });
 }
 
 function opaque(color: string): string {
-  return withAlpha(color, 1);
+  return formatColor({ ...parseColor(color), alpha: 1 });
 }

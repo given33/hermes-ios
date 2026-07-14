@@ -11,8 +11,11 @@ import {
   resolveButtonMetrics,
   resolveButtonVariantId,
   resolveButtonVisual,
+  resolveConfirmDialogMetrics,
   resolveControlColors,
   resolveCssGradientGeometry,
+  resolveInputMetrics,
+  resolveListItemMetrics,
   resolveNativeButtonVisualState,
   transitionConfirmDialogGate,
 } from '../src/design/control-contracts';
@@ -24,6 +27,7 @@ import {
 } from '../src/app/useAdaptiveLayout';
 
 const defaultTokens = deriveNativeThemeTokens(BUILTIN_THEMES.default);
+const defaultLargeTokens = deriveNativeThemeTokens(BUILTIN_THEMES['default-large']);
 
 test('control contracts cite the exact canonical source implementations', () => {
   assert.deepEqual(CONTROL_SOURCE_MAP, {
@@ -42,6 +46,11 @@ test('control contracts cite the exact canonical source implementations', () => 
 test('freezes exact visible control metrics and native translation notes', () => {
   assert.deepEqual(CONTROL_METRICS, {
     minimumHitTarget: 44,
+    tailwind: {
+      spacingRem: 0.25,
+      transitionDurationMs: 150,
+      transitionEasing: [0.4, 0, 0.2, 1],
+    },
     button: {
       bevelWidth: 1,
       arcBorderWidth: 1.25,
@@ -69,9 +78,9 @@ test('freezes exact visible control metrics and native translation notes', () =>
         ['foreground-threshold', 0.95],
         ['midground', 1],
       ],
-      prefixSuffixSpacerWidth: 20,
-      prefixSuffixOffset: 12,
-      prefixSuffixIconSize: 14,
+      prefixSuffixSpacerSpacingUnits: 5,
+      prefixSuffixOffsetSpacingUnits: 3,
+      prefixSuffixIconSpacingUnits: 3.5,
       sizes: {
         default: {
           fontSizeRem: 1,
@@ -80,28 +89,28 @@ test('freezes exact visible control metrics and native translation notes', () =>
           paddingInlineStartEm: 0.9,
           paddingInlineEndEm: 0.75,
         },
-        icon: { iconSize: 14, padding: 8, visibleSize: 30 },
+        icon: { iconSpacingUnits: 3.5, paddingSpacingUnits: 2 },
         sm: {
           fontSizeRem: 0.7,
-          iconSize: 12,
+          iconSpacingUnits: 3,
           letterSpacingEm: 0.15,
-          paddingHorizontal: 12,
-          paddingVertical: 6,
-          visibleHeight: 12,
+          paddingHorizontalSpacingUnits: 3,
+          paddingVerticalSpacingUnits: 1.5,
         },
-        xs: { iconSize: 12, padding: 4, visibleSize: 20 },
+        xs: { iconSpacingUnits: 3, paddingSpacingUnits: 1 },
       },
       translation:
         'CSS inset shadows become four absolute 1pt edge layers; no drop shadow.',
     },
     input: {
-      visibleHeight: 36,
+      heightSpacingUnits: 9,
       borderWidth: 1,
       borderAlpha: 0.15,
       backgroundAlpha: 0.4,
-      paddingHorizontal: 12,
-      paddingVertical: 4,
-      fontSize: 14,
+      paddingHorizontalSpacingUnits: 3,
+      paddingVerticalSpacingUnits: 1,
+      fontSizeRem: 0.875,
+      lineHeightRem: 1.25,
       placeholderAlpha: 0.5,
       focusRingWidth: 1,
       focusRingAlpha: 0.3,
@@ -109,10 +118,11 @@ test('freezes exact visible control metrics and native translation notes', () =>
       disabledOpacity: 0.5,
     },
     listItem: {
-      paddingHorizontal: 12,
-      paddingVertical: 8,
-      gap: 8,
-      fontSize: 14,
+      paddingHorizontalSpacingUnits: 3,
+      paddingVerticalSpacingUnits: 2,
+      gapSpacingUnits: 2,
+      fontSizeRem: 0.875,
+      lineHeightRem: 1.25,
       activeBackgroundAlpha: 0.1,
       pressedBackgroundAlpha: 0.05,
       focusRingWidth: 1,
@@ -120,20 +130,22 @@ test('freezes exact visible control metrics and native translation notes', () =>
     },
     confirmDialog: {
       overlayBlackAlpha: 0.6,
-      maxWidth: 448,
-      viewportHorizontalInset: 16,
+      backdropBlurRadius: 8,
+      maxWidthRem: 28,
+      viewportHorizontalInsetRem: 1,
       borderWidth: 1,
       borderAlpha: 0.15,
-      headerPadding: 16,
-      headerGap: 12,
-      contentGap: 4,
-      warningIconSize: 16,
-      titleFontSize: 14,
+      headerPaddingSpacingUnits: 4,
+      headerGapSpacingUnits: 3,
+      contentGapSpacingUnits: 1,
+      warningIconSpacingUnits: 4,
+      titleFontSizeRem: 0.875,
+      titleLineHeightRem: 1.25,
       titleLetterSpacingEm: 0.08,
-      descriptionFontSize: 12,
-      descriptionLineHeight: 19.5,
-      footerPadding: 12,
-      footerGap: 8,
+      descriptionFontSizeRem: 0.75,
+      descriptionLineHeightMultiplier: 1.625,
+      footerPaddingSpacingUnits: 3,
+      footerGapSpacingUnits: 2,
     },
     screenState: {
       paddingVertical: 48,
@@ -153,18 +165,66 @@ test('button sizes preserve visible CSS geometry while hit slop reaches 44pt', (
     paddingBottom: 18.75,
     paddingLeft: 13.5,
     paddingRight: 11.25,
-    iconSize: 14,
+    iconSize: 13.125,
+    prefixSuffixSpacerWidth: 18.75,
+    prefixSuffixOffset: 11.25,
+    prefixSuffixIconSize: 13.125,
     hitSlop: { top: 3.25, right: 0, bottom: 3.25, left: 0 },
   });
-  assert.equal(resolveButtonMetrics(defaultTokens, 'icon').visibleHeight, 30);
-  assert.equal(resolveButtonMetrics(defaultTokens, 'sm').visibleHeight, 12);
-  assert.equal(resolveButtonMetrics(defaultTokens, 'xs').visibleHeight, 20);
+  assert.equal(resolveButtonMetrics(defaultTokens, 'icon').visibleHeight, 28.125);
+  assert.equal(resolveButtonMetrics(defaultTokens, 'sm').visibleHeight, 11.25);
+  assert.equal(resolveButtonMetrics(defaultTokens, 'xs').visibleHeight, 18.75);
   assert.deepEqual(resolveButtonMetrics(defaultTokens, 'xs').hitSlop, {
-    top: 12,
-    right: 12,
-    bottom: 12,
-    left: 12,
+    top: 12.625,
+    right: 12.625,
+    bottom: 12.625,
+    left: 12.625,
   });
+  assert.equal(resolveButtonMetrics(defaultLargeTokens, 'default').visibleHeight, 45);
+  assert.equal(resolveButtonMetrics(defaultLargeTokens, 'icon').visibleHeight, 40.5);
+});
+
+test('rem and spacing controls consume root size and density exactly', () => {
+  assert.deepEqual(resolveInputMetrics(defaultTokens), {
+    visibleHeight: 33.75,
+    paddingHorizontal: 11.25,
+    paddingVertical: 3.75,
+    fontSize: 13.125,
+    lineHeight: 18.75,
+  });
+  assert.deepEqual(resolveListItemMetrics(defaultTokens), {
+    paddingHorizontal: 11.25,
+    paddingVertical: 7.5,
+    gap: 7.5,
+    fontSize: 13.125,
+    lineHeight: 18.75,
+  });
+  assert.deepEqual(resolveConfirmDialogMetrics(defaultTokens), {
+    maxWidth: 420,
+    viewportHorizontalInset: 15,
+    headerPadding: 15,
+    headerGap: 11.25,
+    contentGap: 3.75,
+    warningIconSize: 15,
+    titleFontSize: 13.125,
+    titleLineHeight: 18.75,
+    titleLetterSpacing: 1.05,
+    descriptionFontSize: 11.25,
+    descriptionLineHeight: 18.28125,
+    footerPadding: 11.25,
+    footerGap: 7.5,
+  });
+  const largeInput = resolveInputMetrics(defaultLargeTokens);
+  assert.ok(Math.abs(largeInput.visibleHeight - 48.6) < 1e-10);
+  assert.ok(Math.abs(largeInput.paddingVertical - 5.4) < 1e-10);
+  assert.equal(largeInput.paddingHorizontal, 16.2);
+  assert.equal(largeInput.fontSize, 15.75);
+  assert.equal(largeInput.lineHeight, 22.5);
+  assert.equal(resolveConfirmDialogMetrics(defaultLargeTokens).maxWidth, 504);
+  assert.ok(
+    Math.abs(resolveConfirmDialogMetrics(defaultLargeTokens).headerPadding - 21.6)
+      < 1e-10,
+  );
 });
 
 test('control colors derive exact source alpha variants from NativeThemeTokens', () => {
@@ -303,6 +363,7 @@ test('button variant resolver covers the complete canonical matrix', () => {
     'disabled',
   );
   assert.equal(disabled.backgroundColor, 'rgba(255, 230, 203, 0.15)');
+  assert.equal(disabled.borderColor, 'rgba(0, 0, 0, 0)');
   assert.equal(disabled.bevel, null);
   assert.equal(disabled.arcVisible, false);
   assert.equal(disabled.filter, null);
@@ -317,6 +378,16 @@ test('button variant resolver covers the complete canonical matrix', () => {
   assert.deepEqual(
     resolveButtonVisual(highAlphaTokens, { invert: true }, 'pressed').filter,
     [{ invert: 1 }, { brightness: 25.75 }],
+  );
+
+  const disabledOutlinedDestructive = resolveButtonVisual(
+    defaultTokens,
+    { destructive: true, outlined: true },
+    'disabled',
+  );
+  assert.equal(
+    disabledOutlinedDestructive.borderColor,
+    'rgba(251, 44, 54, 0.4)',
   );
 });
 
@@ -333,7 +404,7 @@ test('arc gradient preserves its exact moving vector and alpha threshold colors'
   assert.deepEqual(arc.stops.map((stop) => stop.offset), [
     0, 0.15, 0.2, 0.25, 0.35, 0.4, 0.55, 0.6, 0.65, 0.75, 0.8, 0.95, 1,
   ]);
-  assert.equal(arc.stops[1].color, 'rgba(255, 255, 255, 1)');
+  assert.equal(arc.stops[1].color, 'rgba(255, 255, 255, 0)');
   assert.equal(arc.stops[2].color, 'rgba(255, 230, 203, 1)');
   assert.equal(arc.stops[3].color, 'rgba(4, 28, 28, 1)');
 
@@ -347,6 +418,27 @@ test('arc gradient preserves its exact moving vector and alpha threshold colors'
   assert.equal(opaqueForeground.stops[1].color, 'rgba(0, 0, 0, 0)');
   assert.equal(opaqueForeground.stops[6].color, 'rgba(0, 0, 0, 0)');
   assert.equal(opaqueForeground.stops[11].color, 'rgba(0, 0, 0, 0)');
+});
+
+test('slash-alpha colors multiply translucent theme layers', () => {
+  const translucent = {
+    ...defaultTokens,
+    colors: {
+      ...defaultTokens.colors,
+      background: 'rgba(4, 28, 28, 0.5)',
+      foreground: 'rgba(255, 230, 203, 0.5)',
+    },
+  };
+  const colors = resolveControlColors(translucent);
+  assert.equal(colors.input.background, 'rgba(4, 28, 28, 0.2)');
+  assert.equal(colors.input.border, 'rgba(255, 230, 203, 0.075)');
+  assert.equal(colors.input.placeholder, 'rgba(255, 230, 203, 0.25)');
+  assert.equal(colors.listItem.activeBackground, 'rgba(255, 230, 203, 0.05)');
+  assert.equal(colors.dialog.description, 'rgba(255, 230, 203, 0.3)');
+  assert.equal(
+    resolveButtonVisual(translucent, {}, 'disabled').backgroundColor,
+    'rgba(255, 230, 203, 0.075)',
+  );
 });
 
 test('SVG arc geometry preserves the CSS angle for non-square buttons', () => {

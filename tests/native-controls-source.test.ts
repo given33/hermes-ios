@@ -34,6 +34,19 @@ test('arc border stays native, exact, and continuously animated', () => {
   assert.match(contract, /brightness: 100 - 99 \* foregroundAlpha/);
   assert.doesNotMatch(button, /reduceMotion|AccessibilityInfo|isReduceMotionEnabled/);
   assert.doesNotMatch(button, /filter:\s*\[/);
+  assert.match(button, /textTransform: 'uppercase'/);
+  assert.match(button, /Easing\.bezier\(\.\.\.CONTROL_METRICS\.tailwind\.transitionEasing\)/);
+});
+
+test('input and list item animate canonical transition-colors timing', () => {
+  for (const source of [
+    read('src/components/ui/NativeInput.tsx'),
+    read('src/components/ui/NativeListItem.tsx'),
+  ]) {
+    assert.match(source, /CONTROL_METRICS\.tailwind\.transitionDurationMs/);
+    assert.match(source, /CONTROL_METRICS\.tailwind\.transitionEasing/);
+    assert.match(source, /withTiming\(/);
+  }
 });
 
 test('confirm dialog keeps canonical blur, fonts, and native modal behavior', () => {
@@ -42,8 +55,14 @@ test('confirm dialog keeps canonical blur, fonts, and native modal behavior', ()
     dependencies: Record<string, string>;
   };
 
-  assert.equal(packageJson.dependencies['expo-blur'], '~15.0.8');
-  assert.match(dialog, /<BlurView/);
+  assert.equal(
+    packageJson.dependencies['@shopify/react-native-skia'],
+    '2.2.12',
+  );
+  assert.equal(packageJson.dependencies['expo-blur'], undefined);
+  assert.match(dialog, /<BackdropFilter/);
+  assert.match(dialog, /<Blur blur=\{CONTROL_METRICS\.confirmDialog\.backdropBlurRadius\}/);
+  assert.doesNotMatch(dialog, /tint=|intensity=/);
   assert.match(dialog, /RulesExpandedBold/);
   assert.match(dialog, /MondwestRegular/);
   assert.match(dialog, /presentationStyle="overFullScreen"/);

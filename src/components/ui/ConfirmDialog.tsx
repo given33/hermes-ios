@@ -8,13 +8,19 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { TriangleAlert } from 'lucide-react-native';
+import {
+  BackdropFilter,
+  Blur,
+  Canvas,
+  Fill,
+} from '@shopify/react-native-skia';
 
 import { WEBUI_FONT_FAMILIES } from '../../app/webui-fonts';
 import {
   CONTROL_METRICS,
   INITIAL_CONFIRM_DIALOG_GATE,
+  resolveConfirmDialogMetrics,
   resolveControlColors,
   transitionConfirmDialogGate,
   type ConfirmDialogGateEvent,
@@ -52,6 +58,7 @@ export function ConfirmDialog({
   const { width } = useWindowDimensions();
   const { tokens } = useTheme();
   const colors = resolveControlColors(tokens).dialog;
+  const metrics = resolveConfirmDialogMetrics(tokens);
   const [mounted, setMounted] = useState(open);
   const progress = useRef(new Animated.Value(0)).current;
   const gate = useRef<ConfirmDialogGateState>(INITIAL_CONFIRM_DIALOG_GATE);
@@ -98,10 +105,10 @@ export function ConfirmDialog({
   };
 
   const contentWidth = Math.min(
-    CONTROL_METRICS.confirmDialog.maxWidth,
+    metrics.maxWidth,
     Math.max(
       0,
-      width - CONTROL_METRICS.confirmDialog.viewportHorizontalInset * 2,
+      width - metrics.viewportHorizontalInset * 2,
     ),
   );
 
@@ -125,13 +132,13 @@ export function ConfirmDialog({
           pointerEvents="none"
           style={[styles.overlay, { opacity: progress }]}
         >
-          <BlurView intensity={16} style={StyleSheet.absoluteFill} tint="dark" />
-          <View
-            style={[
-              StyleSheet.absoluteFill,
-              { backgroundColor: colors.overlay },
-            ]}
-          />
+          <Canvas style={StyleSheet.absoluteFill}>
+            <BackdropFilter
+              filter={<Blur blur={CONTROL_METRICS.confirmDialog.backdropBlurRadius} />}
+            >
+              <Fill color={colors.overlay} />
+            </BackdropFilter>
+          </Canvas>
         </Animated.View>
 
         <Animated.View
@@ -155,36 +162,64 @@ export function ConfirmDialog({
             },
           ]}
         >
-          <View style={[styles.header, { borderBottomColor: colors.border }]}>
+          <View
+            style={[
+              styles.header,
+              {
+                borderBottomColor: colors.border,
+                gap: metrics.headerGap,
+                padding: metrics.headerPadding,
+              },
+            ]}
+          >
             {destructive ? (
               <View accessibilityElementsHidden style={styles.warningIcon}>
                 <TriangleAlert
                   color={tokens.colors.destructive}
-                  size={CONTROL_METRICS.confirmDialog.warningIconSize}
+                  size={metrics.warningIconSize}
                   strokeWidth={2}
                 />
               </View>
             ) : null}
 
-            <View style={styles.copy}>
+            <View style={[styles.copy, { gap: metrics.contentGap }]}>
               <Text
                 accessibilityRole="header"
                 style={[
                   styles.title,
-                  { color: colors.foregroundBase },
+                  {
+                    color: colors.foregroundBase,
+                    fontSize: metrics.titleFontSize,
+                    letterSpacing: metrics.titleLetterSpacing,
+                    lineHeight: metrics.titleLineHeight,
+                  },
                 ]}
               >
                 {title.toUpperCase()}
               </Text>
               {description ? (
-                <Text style={[styles.description, { color: colors.description }]}>
+                <Text
+                  style={[
+                    styles.description,
+                    {
+                      color: colors.description,
+                      fontSize: metrics.descriptionFontSize,
+                      lineHeight: metrics.descriptionLineHeight,
+                    },
+                  ]}
+                >
                   {description}
                 </Text>
               ) : null}
             </View>
           </View>
 
-          <View style={styles.footer}>
+          <View
+            style={[
+              styles.footer,
+              { gap: metrics.footerGap, padding: metrics.footerPadding },
+            ]}
+          >
             <NativeButton
               disabled={loading}
               onPress={() => trigger({ type: 'cancel' })}
@@ -223,8 +258,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     borderBottomWidth: CONTROL_METRICS.confirmDialog.borderWidth,
     flexDirection: 'row',
-    gap: CONTROL_METRICS.confirmDialog.headerGap,
-    padding: CONTROL_METRICS.confirmDialog.headerPadding,
   },
   warningIcon: {
     flexShrink: 0,
@@ -232,26 +265,17 @@ const styles = StyleSheet.create({
   },
   copy: {
     flex: 1,
-    gap: CONTROL_METRICS.confirmDialog.contentGap,
     minWidth: 0,
   },
   title: {
     fontFamily: WEBUI_FONT_FAMILIES.RulesExpandedBold,
-    fontSize: CONTROL_METRICS.confirmDialog.titleFontSize,
-    letterSpacing:
-      CONTROL_METRICS.confirmDialog.titleFontSize
-      * CONTROL_METRICS.confirmDialog.titleLetterSpacingEm,
   },
   description: {
     fontFamily: WEBUI_FONT_FAMILIES.MondwestRegular,
-    fontSize: CONTROL_METRICS.confirmDialog.descriptionFontSize,
-    lineHeight: CONTROL_METRICS.confirmDialog.descriptionLineHeight,
   },
   footer: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: CONTROL_METRICS.confirmDialog.footerGap,
     justifyContent: 'flex-end',
-    padding: CONTROL_METRICS.confirmDialog.footerPadding,
   },
 });

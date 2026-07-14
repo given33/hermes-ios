@@ -203,9 +203,17 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
           {visual.bevel ? <ButtonBevel bevel={visual.bevel} /> : null}
           {prefix ? (
             <>
-              <View style={styles.iconSpacer} />
-              <View style={[styles.affix, { left: CONTROL_METRICS.button.prefixSuffixOffset }]}>
-                {renderIcon(prefix, visual.textColor, CONTROL_METRICS.button.prefixSuffixIconSize)}
+              <View style={{ width: metrics.prefixSuffixSpacerWidth }} />
+              <View
+                style={[
+                  styles.affix,
+                  {
+                    left: metrics.prefixSuffixOffset,
+                    transform: [{ translateY: -metrics.prefixSuffixIconSize / 2 }],
+                  },
+                ]}
+              >
+                {renderIcon(prefix, visual.textColor, metrics.prefixSuffixIconSize)}
               </View>
             </>
           ) : null}
@@ -222,9 +230,17 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
 
           {suffix ? (
             <>
-              <View style={styles.iconSpacer} />
-              <View style={[styles.affix, { right: CONTROL_METRICS.button.prefixSuffixOffset }]}>
-                {renderIcon(suffix, visual.textColor, CONTROL_METRICS.button.prefixSuffixIconSize)}
+              <View style={{ width: metrics.prefixSuffixSpacerWidth }} />
+              <View
+                style={[
+                  styles.affix,
+                  {
+                    right: metrics.prefixSuffixOffset,
+                    transform: [{ translateY: -metrics.prefixSuffixIconSize / 2 }],
+                  },
+                ]}
+              >
+                {renderIcon(suffix, visual.textColor, metrics.prefixSuffixIconSize)}
               </View>
             </>
           ) : null}
@@ -276,6 +292,7 @@ function ArcBorder({
   useEffect(() => {
     opacity.value = withTiming(visible ? 1 : 0, {
       duration: CONTROL_METRICS.button.arcBorderOpacityDurationMs,
+      easing: Easing.bezier(...CONTROL_METRICS.tailwind.transitionEasing),
     });
   }, [opacity, visible]);
 
@@ -442,14 +459,11 @@ const styles = StyleSheet.create({
   text: {
     includeFontPadding: false,
     textAlign: 'center',
-  },
-  iconSpacer: {
-    width: CONTROL_METRICS.button.prefixSuffixSpacerWidth,
+    textTransform: 'uppercase',
   },
   affix: {
     position: 'absolute',
     top: '50%',
-    transform: [{ translateY: -CONTROL_METRICS.button.prefixSuffixIconSize / 2 }],
   },
   arc: {
     position: 'absolute',
