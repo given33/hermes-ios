@@ -9,19 +9,24 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
+import MaskedView from '@react-native-masked-view/masked-view';
+import type { LucideProps } from 'lucide-react-native';
 import {
   Pressable,
   StyleSheet,
   Text,
   View,
   type PressableProps,
+  type DimensionValue,
   type StyleProp,
   type TextStyle,
+  type ViewStyle,
 } from 'react-native';
 import Reanimated, {
   Easing,
   useAnimatedStyle,
   useSharedValue,
+  type SharedValue,
   withTiming,
 } from 'react-native-reanimated';
 
@@ -198,7 +203,7 @@ export const NativeListItem = forwardRef<View, NativeListItemProps>(
           (child) => renderListItemChild(
             child,
             animatedTextStyle,
-            resolvedTextColor,
+            animatedText,
             metrics.fontSize,
             metrics.lineHeight,
             textStyle,
@@ -212,7 +217,7 @@ export const NativeListItem = forwardRef<View, NativeListItemProps>(
 function renderListItemChild(
   child: ReactNode,
   animatedColor: StyleProp<TextStyle>,
-  resolvedColor: string,
+  animatedColorValue: SharedValue<string>,
   fontSize: number,
   lineHeight: number,
   textStyle: StyleProp<TextStyle>,
@@ -239,7 +244,7 @@ function renderListItemChild(
         {Children.map(fragment.props.children, (nested) => renderListItemChild(
           nested,
           animatedColor,
-          resolvedColor,
+          animatedColorValue,
           fontSize,
           lineHeight,
           textStyle,
@@ -271,16 +276,56 @@ function renderListItemChild(
       children: Children.map(view.props.children, (nested) => renderListItemChild(
         nested,
         animatedColor,
-        resolvedColor,
+        animatedColorValue,
         fontSize,
         lineHeight,
         textStyle,
       )),
     });
   }
-  return cloneElement(child as ReactElement<{ color?: string }>, {
-    color: resolvedColor,
-  });
+  return (
+    <AnimatedListItemIcon
+      animatedColor={animatedColorValue}
+      icon={child as ReactElement<TintableIconProps>}
+    />
+  );
+}
+
+type TintableIconProps = LucideProps;
+
+function AnimatedListItemIcon({
+  animatedColor,
+  icon,
+}: {
+  animatedColor: SharedValue<string>;
+  icon: ReactElement<TintableIconProps>;
+}) {
+  const size = icon.props.size ?? 24;
+  const iconStyle = StyleSheet.flatten(icon.props.style) as ViewStyle | undefined;
+  const width = (
+    icon.props.width ?? iconStyle?.width ?? size
+  ) as DimensionValue;
+  const height = (
+    icon.props.height ?? iconStyle?.height ?? size
+  ) as DimensionValue;
+  const animatedFillStyle = useAnimatedStyle(() => ({
+    backgroundColor: animatedColor.value,
+  }));
+
+  return (
+    <MaskedView
+      maskElement={cloneElement(icon, {
+        color: '#000000',
+        height: height as LucideProps['height'],
+        style: undefined,
+        width: width as LucideProps['width'],
+      })}
+      pointerEvents="none"
+      style={[icon.props.style, { height, width }]}
+    >
+      <Reanimated.View style={[StyleSheet.absoluteFill, animatedFillStyle]} />
+    </MaskedView>
+  );
 }
 
 const styles = StyleSheet.create({

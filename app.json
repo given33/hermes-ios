@@ -28,6 +28,14 @@
     "plugins": [
       "expo-dev-client",
       [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.0"
+          }
+        }
+      ],
+      [
         "expo-font",
         {
           "fonts": [
