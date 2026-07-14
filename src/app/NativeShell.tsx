@@ -150,7 +150,11 @@ export interface NativeShellProps {
   initialPath?: string;
   locale?: NativeRouteLocale;
   manifests?: readonly PluginManifest[];
-  renderRoute?(route: ComposedRoute, label: string): ReactNode;
+  renderRoute?(
+    route: ComposedRoute,
+    label: string,
+    context: NativeShellSlotContext,
+  ): ReactNode;
   slots?: NativeShellSlots;
 }
 
@@ -389,7 +393,7 @@ export function NativeShell({
           ]}
         >
           {activeRoute
-            ? renderRoute?.(activeRoute, activeLabel)
+            ? renderRoute?.(activeRoute, activeLabel, slotContext)
               ?? <RoutePreview label={activeLabel} />
             : null}
         </View>

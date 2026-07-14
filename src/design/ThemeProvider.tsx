@@ -168,6 +168,7 @@ export function ThemeProvider({
 export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
   const [themeName, setThemeName] = useState<BuiltinThemeName>('default');
   const [fontId, setFontId] = useState(THEME_DEFAULT_FONT_ID);
+  const [ready, setReady] = useState(false);
   const theme = BUILTIN_THEMES[themeName];
   const availableThemes = useMemo(
     () => BUILTIN_THEME_ORDER.map((name) => ({
@@ -180,7 +181,9 @@ export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
   );
   const setTheme = useCallback(async (name: string) => {
     if (Object.prototype.hasOwnProperty.call(BUILTIN_THEMES, name)) {
-      setThemeName(name as BuiltinThemeName);
+      const next = name as BuiltinThemeName;
+      setThemeName(next);
+      await AsyncStorage.setItem('hermes.preview.theme', next);
     }
   }, []);
   const setFont = useCallback(async (id: string) => {
@@ -189,10 +192,36 @@ export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
       || FONT_CHOICES.some((choice) => choice.id === id)
     ) {
       setFontId(id);
+      await AsyncStorage.setItem('hermes.preview.font', id);
     }
   }, []);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([
+      AsyncStorage.getItem('hermes.preview.theme'),
+      AsyncStorage.getItem('hermes.preview.font'),
+    ]).then(([storedTheme, storedFont]) => {
+      if (cancelled) return;
+      if (
+        storedTheme
+        && Object.prototype.hasOwnProperty.call(BUILTIN_THEMES, storedTheme)
+      ) {
+        setThemeName(storedTheme as BuiltinThemeName);
+      }
+      if (
+        storedFont === THEME_DEFAULT_FONT_ID
+        || FONT_CHOICES.some((choice) => choice.id === storedFont)
+      ) {
+        setFontId(storedFont ?? THEME_DEFAULT_FONT_ID);
+      }
+      setReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const value = useMemo<ThemeContextValue>(() => ({
-    ready: true,
+    ready,
     theme,
     themeName,
     tokens: applyFontPreference(deriveNativeThemeTokens(theme), fontId),
@@ -201,11 +230,11 @@ export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
     fontChoices: FONT_CHOICES,
     setTheme,
     setFont,
-  }), [availableThemes, fontId, setFont, setTheme, theme, themeName]);
+  }), [availableThemes, fontId, ready, setFont, setTheme, theme, themeName]);
 
   return (
     <ThemeContext.Provider value={value}>
-      {children}
+      {ready ? children : null}
     </ThemeContext.Provider>
   );
 }

@@ -3,12 +3,12 @@ import { StyleSheet, View } from 'react-native';
 
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { LoginScreen } from '../auth/LoginScreen';
+import { FrontendPreviewApp } from '../preview/FrontendPreviewApp';
 import {
   FrontendPreviewThemeProvider,
   ThemeProvider,
 } from '../design/ThemeProvider';
 import { NativeShell } from './NativeShell';
-import { BASELINE_PLUGIN_MANIFESTS } from './route-composition';
 import { useWebUiFonts } from './webui-fonts';
 
 const FRONTEND_PREVIEW =
@@ -27,7 +27,7 @@ export function HermesNativeApp() {
               accessibilityLabel="Hermes frontend preview"
               style={styles.nativeContent}
             >
-              <NativeShell manifests={BASELINE_PLUGIN_MANIFESTS} />
+              <FrontendPreviewApp />
             </View>
           </FrontendPreviewThemeProvider>
         ) : (

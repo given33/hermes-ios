@@ -1,14 +1,28 @@
-import { requireNativeViewManager } from 'expo-modules-core';
-import { createElement } from 'react';
-import type { ViewProps } from 'react-native';
+import {
+  requireNativeViewManager,
+  requireOptionalNativeModule,
+} from 'expo-modules-core';
+import { createElement, type ComponentType } from 'react';
+import { View, type ViewProps } from 'react-native';
 
 export interface HermesLiveBlurViewProps extends ViewProps {
   blurRadius: number;
 }
 
-const NativeHermesLiveBlurView =
-  requireNativeViewManager<HermesLiveBlurViewProps>('HermesLiveBlur');
+const hasExactNativeBlur =
+  requireOptionalNativeModule('HermesLiveBlur') !== null;
+const NativeHermesLiveBlurView = hasExactNativeBlur
+  ? requireNativeViewManager<HermesLiveBlurViewProps>('HermesLiveBlur')
+  : null;
 
 export function HermesLiveBlurView(props: HermesLiveBlurViewProps) {
-  return createElement(NativeHermesLiveBlurView, props);
+  if (NativeHermesLiveBlurView) {
+    return createElement(
+      NativeHermesLiveBlurView as ComponentType<HermesLiveBlurViewProps>,
+      props,
+    );
+  }
+
+  const { blurRadius: _blurRadius, ...viewProps } = props;
+  return createElement(View, viewProps);
 }
