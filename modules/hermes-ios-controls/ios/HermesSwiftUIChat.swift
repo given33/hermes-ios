@@ -84,7 +84,8 @@ struct HermesChatPage: View {
 
   var body: some View {
     ZStack {
-      HermesDitherBackground()
+      appearance.palette.background
+        .ignoresSafeArea()
       VStack(spacing: 0) {
         chatHeader
         messageStream
@@ -103,14 +104,7 @@ struct HermesChatPage: View {
 
   private var chatHeader: some View {
     HStack(spacing: 12) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(appearance.palette.primary)
-        Image(systemName: "sparkles")
-          .font(.system(size: 16, weight: .semibold))
-          .foregroundStyle(.white)
-      }
-      .frame(width: 36, height: 36)
+      HermesAgentAvatar(size: 36, cornerRadius: 10)
 
       VStack(alignment: .leading, spacing: 2) {
         Text("Hermes Agent")
@@ -335,7 +329,7 @@ struct HermesChatPage: View {
         Button(action: send) {
           Image(systemName: sending ? "ellipsis" : "arrow.up")
             .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(appearance.palette.background)
             .frame(width: 38, height: 38)
             .background(appearance.palette.accent)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
@@ -451,20 +445,16 @@ private struct HermesMessageBubble: View {
       if message.role == .assistant { avatar }
 
       VStack(alignment: message.role == .user ? .trailing : .leading, spacing: 5) {
-        HStack(spacing: 6) {
-          Text(message.author)
-            .font(HermesFonts.bodyBold(12))
-          if message.role == .assistant {
-            Text("HERMES AGENT")
-              .font(HermesFonts.condensed(9))
-              .foregroundStyle(appearance.palette.secondary)
-          }
-        }
+        Text(message.author)
+          .font(.system(size: 13, weight: .semibold))
+          .lineLimit(1)
 
         Text(message.content)
           .font(HermesFonts.body(15))
           .foregroundStyle(
-            message.role == .user ? Color.white : appearance.palette.foreground
+            message.role == .user
+              ? appearance.palette.background
+              : appearance.palette.foreground
           )
           .textSelection(.enabled)
           .padding(.horizontal, 12)
@@ -493,14 +483,7 @@ private struct HermesMessageBubble: View {
   }
 
   private var avatar: some View {
-    RoundedRectangle(cornerRadius: 8, style: .continuous)
-      .fill(appearance.palette.primary)
-      .frame(width: 28, height: 28)
-      .overlay {
-        Image(systemName: "sparkles")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundStyle(.white)
-      }
+    HermesAgentAvatar(size: 28, cornerRadius: 8)
   }
 
   private var userAvatar: some View {
@@ -510,7 +493,7 @@ private struct HermesMessageBubble: View {
       .overlay {
         Text(chinese ? "你" : "Y")
           .font(HermesFonts.bodyBold(10))
-          .foregroundStyle(appearance.palette.primary)
+          .foregroundStyle(appearance.palette.background)
       }
   }
 }
@@ -559,14 +542,7 @@ private struct HermesThinkingIndicator: View {
 
   var body: some View {
     HStack(spacing: 9) {
-      RoundedRectangle(cornerRadius: 8, style: .continuous)
-        .fill(appearance.palette.primary)
-        .frame(width: 28, height: 28)
-        .overlay {
-          Image(systemName: "sparkles")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white)
-        }
+      HermesAgentAvatar(size: 28, cornerRadius: 8)
       TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
         let phase = timeline.date.timeIntervalSinceReferenceDate * 4
         HStack(spacing: 5) {

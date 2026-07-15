@@ -22,11 +22,11 @@ struct HermesPalette {
     secondary: Color(uiColor: .secondaryLabel),
     tertiary: Color(uiColor: .tertiaryLabel),
     border: Color(uiColor: .separator),
-    accent: Color(uiColor: .systemBlue),
-    primary: Color(uiColor: .systemBlue),
-    success: Color(uiColor: .systemGreen),
-    warning: Color(uiColor: .systemOrange),
-    destructive: Color(uiColor: .systemRed)
+    accent: Color(uiColor: .label),
+    primary: Color(uiColor: .label),
+    success: Color(uiColor: .secondaryLabel),
+    warning: Color(uiColor: .secondaryLabel),
+    destructive: Color(uiColor: .label)
   )
 }
 
@@ -93,6 +93,19 @@ enum HermesFonts {
   }
 }
 
+struct HermesAgentAvatar: View {
+  let size: CGFloat
+  let cornerRadius: CGFloat
+
+  var body: some View {
+    Image("HermesAppIcon")
+      .resizable()
+      .scaledToFill()
+      .frame(width: size, height: size)
+      .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+  }
+}
+
 struct HermesPressStyle: ButtonStyle {
   var scale = 0.97
   var opacity = 0.86
@@ -114,7 +127,7 @@ struct HermesPrimaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(HermesFonts.bodyBold(15))
-      .foregroundStyle(.white)
+      .foregroundStyle(appearance.palette.background)
       .frame(minHeight: 44)
       .padding(.horizontal, 16)
       .background(appearance.palette.accent)

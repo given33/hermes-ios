@@ -98,11 +98,21 @@ test('chat composer, messages, gestures, sheets, and effects are native SwiftUI'
   const chat = read('modules/hermes-ios-controls/ios/HermesSwiftUIChat.swift');
   const design = read('modules/hermes-ios-controls/ios/HermesSwiftUIDesign.swift');
   const frontend = read('modules/hermes-ios-controls/ios/HermesSwiftUIFrontendModule.swift');
+  const controlsPodspec = read(
+    'modules/hermes-ios-controls/ios/HermesIOSControls.podspec',
+  );
+  const avatarAssets = read(
+    'modules/hermes-ios-controls/ios/Resources/HermesAppIcon.imageset/Contents.json',
+  );
 
   assert.match(chat, /@FocusState private var composerFocused/);
   assert.match(chat, /TapGesture\(\)\.onEnded/);
   assert.match(chat, /composerFocused = false/);
   assert.match(chat, /\.simultaneousGesture\(/);
+  assert.doesNotMatch(chat, /HermesDitherBackground\(\)/);
+  assert.match(chat, /HermesAgentAvatar\(size: 36, cornerRadius: 10\)/);
+  assert.match(chat, /HermesAgentAvatar\(size: 28, cornerRadius: 8\)/);
+  assert.doesNotMatch(chat, /Text\("HERMES AGENT"\)/);
   assert.match(chat, /private static let bottomAnchor/);
   assert.match(chat, /\.onChange\(of: composerFocused\)/);
   assert.match(chat, /proxy\.scrollTo\(Self\.bottomAnchor, anchor: \.bottom\)/);
@@ -131,6 +141,10 @@ test('chat composer, messages, gestures, sheets, and effects are native SwiftUI'
   assert.match(design, /UserDefaults\.standard\.set\(compactDensity/);
   assert.match(design, /Color\(uiColor: \.systemBackground\)/);
   assert.match(design, /Color\(uiColor: \.label\)/);
+  assert.match(design, /Image\("HermesAppIcon"\)/);
+  assert.doesNotMatch(design, /systemBlue|systemGreen|systemOrange|systemRed/);
+  assert.match(controlsPodspec, /s\.resources = 'Resources\/\*\*\/\*'/);
+  assert.match(avatarAssets, /HermesAppIcon\.png/);
   assert.match(design, /case system/);
   assert.match(design, /case light/);
   assert.match(design, /case dark/);
