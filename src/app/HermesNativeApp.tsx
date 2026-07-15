@@ -1,6 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { LoginScreen } from '../auth/LoginScreen';
 import { FrontendPreviewApp } from '../preview/FrontendPreviewApp';
@@ -16,6 +18,9 @@ const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1';
 
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();
+  useEffect(() => {
+    startNativeFrameRateController();
+  }, []);
 
   return (
     <View style={styles.root}>

@@ -1,5 +1,4 @@
 import * as DocumentPicker from 'expo-document-picker';
-import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { SymbolView } from 'expo-symbols';
@@ -54,10 +53,10 @@ import Reanimated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  HermesSwiftUIFrostedSurfaceView,
   HermesSwiftUIModelToolsView,
   hasNativeSwiftUIPartialFrontend,
 } from '../../modules/hermes-ios-controls';
+import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { NativeButton } from '../components/ui/NativeButton';
@@ -720,38 +719,30 @@ export function ChatPreviewPage({
 
 function ComposerSurface({ children }: { children: ReactNode }) {
   const { tokens } = useTheme();
-  const nativeTheme = resolveSwiftUIThemeProps(tokens);
-  const usesNativeFrostedSurface =
-    Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
   const surfaceStyle = [
     styles.inputShell,
     {
       backgroundColor: 'transparent',
-      borderColor: usesNativeFrostedSurface
-        ? 'transparent'
-        : tokens.colors.border,
-      borderWidth: usesNativeFrostedSurface ? 0 : 1,
+      borderColor: tokens.colors.border,
+      borderWidth: StyleSheet.hairlineWidth,
     },
   ];
 
   return (
     <View style={surfaceStyle}>
-      {usesNativeFrostedSurface ? (
-        <HermesSwiftUIFrostedSurfaceView
-          colorScheme={nativeTheme.themeColorScheme}
-          cornerRadius={15}
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, styles.composerFrostedBackground]}
-          tintColor={tokens.colors.background}
-        />
-      ) : (
-        <BlurView
-          intensity={48}
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, styles.composerFrostedBackground]}
-          tint={nativeTheme.themeColorScheme}
-        />
-      )}
+      <HermesLiveBlurView
+        blurRadius={18}
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, styles.composerFrostedBackground]}
+      />
+      <View
+        pointerEvents="none"
+        style={[
+          StyleSheet.absoluteFill,
+          styles.composerFrostedTint,
+          { backgroundColor: multiplyAlpha(tokens.colors.background, 0.68) },
+        ]}
+      />
       {children}
     </View>
   );
@@ -1472,6 +1463,7 @@ const styles = StyleSheet.create({
   attachmentRemoveFallback: { alignItems: 'center', backgroundColor: '#636366', borderRadius: 11, height: 22, justifyContent: 'center', width: 22 },
   inputShell: { alignItems: 'flex-end', alignSelf: 'center', borderRadius: 15, borderWidth: 1, flexDirection: 'row', gap: 4, maxWidth: 920, overflow: 'hidden', paddingBottom: 5, paddingLeft: 5, paddingRight: 5, paddingTop: 5, position: 'relative', width: '100%' },
   composerFrostedBackground: { zIndex: 0 },
+  composerFrostedTint: { zIndex: 0 },
   attachButton: { alignItems: 'center', height: 38, justifyContent: 'center', width: 34, zIndex: 1 },
   attachGlyph: { fontFamily: BODY_REGULAR, fontSize: 24, lineHeight: 30 },
   input: { flex: 1, fontFamily: BODY_REGULAR, fontSize: 16, letterSpacing: 0, lineHeight: 23, maxHeight: 120, minHeight: 38, paddingBottom: 5, paddingHorizontal: 0, paddingTop: 8, textAlignVertical: 'top', zIndex: 1 },

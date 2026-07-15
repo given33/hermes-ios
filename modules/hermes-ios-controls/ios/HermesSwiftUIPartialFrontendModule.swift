@@ -1,6 +1,5 @@
 import ExpoModulesCore
 import SwiftUI
-import UIKit
 
 public final class HermesSwiftUIPartialFrontendModule: Module {
   public func definition() -> ModuleDefinition {
@@ -119,63 +118,6 @@ private let hermesDrawerAnimation = Animation.interactiveSpring(
   blendDuration: 0.08
 )
 
-private struct HermesProMotionDriver: UIViewRepresentable {
-  let active: Bool
-
-  func makeCoordinator() -> Coordinator { Coordinator() }
-
-  func makeUIView(context: Context) -> UIView {
-    let view = UIView(frame: .zero)
-    view.isUserInteractionEnabled = false
-    context.coordinator.setActive(active)
-    return view
-  }
-
-  func updateUIView(_ uiView: UIView, context: Context) {
-    context.coordinator.setActive(active)
-  }
-
-  static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
-    coordinator.stop()
-  }
-
-  final class Coordinator: NSObject {
-    private var displayLink: CADisplayLink?
-
-    func setActive(_ active: Bool) {
-      if active {
-        start()
-      } else {
-        stop()
-      }
-    }
-
-    func stop() {
-      displayLink?.invalidate()
-      displayLink = nil
-    }
-
-    private func start() {
-      guard displayLink == nil else { return }
-      let link = CADisplayLink(target: self, selector: #selector(frameRequested))
-      let maximum = UIScreen.main.maximumFramesPerSecond
-      link.preferredFramesPerSecond = maximum
-      if #available(iOS 15.0, *) {
-        let maximumRate = Float(maximum)
-        link.preferredFrameRateRange = CAFrameRateRange(
-          minimum: maximum >= 120 ? 80 : maximumRate,
-          maximum: maximumRate,
-          preferred: maximumRate
-        )
-      }
-      link.add(to: .main, forMode: .common)
-      displayLink = link
-    }
-
-    @objc private func frameRequested() {}
-  }
-}
-
 protocol HermesThemeProviding {
   var themeAccentColor: String { get }
   var themeBackgroundColor: String { get }
@@ -286,11 +228,6 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       .gesture(isDrawer ? closeGesture(width: drawerWidth) : nil)
     }
     .background(Color.clear)
-    .background(
-      HermesProMotionDriver(active: !isDrawer || props.open)
-        .frame(width: 0, height: 0)
-        .allowsHitTesting(false)
-    )
     .clipped()
     .onAppear {
       presented = isDrawer ? false : true
@@ -479,11 +416,6 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     }
     .tint(appearance.palette.accent)
     .background(appearance.palette.background)
-    .background(
-      HermesProMotionDriver(active: true)
-        .frame(width: 0, height: 0)
-        .allowsHitTesting(false)
-    )
     .onAppear { props.applyTheme(to: appearance) }
     .onAppear { reportReady() }
     .onChange(of: props.path) { _ in reportReady() }
@@ -615,11 +547,6 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
         }
       }
     }
-    .background(
-      HermesProMotionDriver(active: props.open)
-        .frame(width: 0, height: 0)
-        .allowsHitTesting(false)
-    )
     .onChange(of: props.open) { next in
       withAnimation(hermesDrawerAnimation) { presented = next }
     }

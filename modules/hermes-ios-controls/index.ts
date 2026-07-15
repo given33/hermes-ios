@@ -16,6 +16,18 @@ import {
 
 type NativeViewProps = ViewProps & { children?: ReactNode };
 
+interface HermesFrameRateNativeModule {
+  start(): void;
+  stop(): void;
+}
+
+const nativeFrameRateModule =
+  requireOptionalNativeModule<HermesFrameRateNativeModule>('HermesFrameRate');
+
+export function startNativeFrameRateController() {
+  nativeFrameRateModule?.start();
+}
+
 export interface HermesSwiftUIThemeProps {
   themeAccentColor: string;
   themeBackgroundColor: string;

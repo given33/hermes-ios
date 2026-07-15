@@ -68,14 +68,31 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
+  const frameRate = read(
+    'modules/hermes-ios-controls/ios/HermesFrameRateModule.swift',
+  );
+  const bridge = read('modules/hermes-ios-controls/index.ts');
+  const app = read('src/app/HermesNativeApp.tsx');
+  const config = JSON.parse(
+    read('modules/hermes-ios-controls/expo-module.config.json'),
+  ) as { apple?: { modules?: string[] } };
   const shell = read('src/app/NativeShell.tsx');
 
   assert.match(native, /private let hermesDrawerAnimation = Animation\.interactiveSpring/);
-  assert.match(native, /struct HermesProMotionDriver: UIViewRepresentable/);
-  assert.match(native, /UIScreen\.main\.maximumFramesPerSecond/);
-  assert.match(native, /preferredFrameRateRange = CAFrameRateRange/);
-  assert.match(native, /minimum: maximum >= 120 \? 80 : maximumRate/);
-  assert.match(native, /link\.add\(to: \.main, forMode: \.common\)/);
+  assert.doesNotMatch(native, /HermesProMotionDriver|CADisplayLink/);
+  assert.ok(config.apple?.modules?.includes('HermesFrameRateModule'));
+  assert.match(frameRate, /Name\("HermesFrameRate"\)/);
+  assert.match(frameRate, /CADisplayLink/);
+  assert.match(frameRate, /UIScreen\.main\.maximumFramesPerSecond/);
+  assert.match(frameRate, /preferredFrameRateRange = CAFrameRateRange/);
+  assert.match(frameRate, /minimum: maximumRate/);
+  assert.match(frameRate, /preferred: maximumRate/);
+  assert.match(frameRate, /link\.add\(to: \.main, forMode: \.common\)/);
+  assert.match(frameRate, /OnAppBecomesActive/);
+  assert.match(frameRate, /OnAppEntersForeground/);
+  assert.match(frameRate, /OnAppEntersBackground/);
+  assert.match(bridge, /startNativeFrameRateController/);
+  assert.match(app, /startNativeFrameRateController\(\)/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = true \}/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = false \}/);
   assert.match(native, /NavigationStack \{/);
@@ -104,9 +121,12 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   );
 });
 
-test('the composer keeps RN controls above a SwiftUI material background', () => {
+test('the composer keeps RN controls above a relayout-safe native blur background', () => {
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
+  );
+  const liveBlur = read(
+    'modules/hermes-live-blur/ios/HermesLiveBlurView.swift',
   );
   const chat = read('src/preview/PreviewChatPage.tsx');
 
@@ -118,11 +138,18 @@ test('the composer keeps RN controls above a SwiftUI material background', () =>
   assert.match(native, /selectedReasoning = \$0\s*props\.onReasoningChange/);
   assert.match(native, /selectedModel = \$0\s*props\.onModelChange/);
   assert.match(chat, /<View style=\{surfaceStyle\}>/);
-  assert.match(chat, /<HermesSwiftUIFrostedSurfaceView/);
+  assert.match(chat, /<HermesLiveBlurView/);
+  assert.match(chat, /blurRadius=\{18\}/);
   assert.match(chat, /styles\.composerFrostedBackground/);
-  assert.match(chat, /borderWidth: usesNativeFrostedSurface \? 0 : 1/);
+  assert.match(chat, /borderWidth: StyleSheet\.hairlineWidth/);
+  assert.match(liveBlur, /UIVisualEffectView/);
+  assert.match(liveBlur, /override func layoutSubviews\(\)/);
+  assert.match(liveBlur, /installGaussianFilter\(\)/);
   assert.match(chat, /<HermesSwiftUIModelToolsView/);
-  assert.doesNotMatch(chat, /<GlassView|<HermesLiquidGlassView/);
+  assert.doesNotMatch(
+    chat,
+    /<GlassView|<HermesLiquidGlassView|<HermesSwiftUIFrostedSurfaceView/,
+  );
 });
 
 test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed palette', () => {
