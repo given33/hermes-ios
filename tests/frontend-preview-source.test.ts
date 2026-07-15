@@ -184,8 +184,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(contextMenuNative, /UIAction/);
   assert.match(chat, /<SymbolView/);
   assert.match(chat, /PlatformColor\('secondarySystemBackground'\)/);
-  assert.match(chat, /<GlassView/);
-  assert.match(chat, /isLiquidGlassAvailable\(\)/);
+  assert.match(chat, /<HermesSwiftUIFrostedSurfaceView/);
+  assert.match(chat, /<BlurView/);
+  assert.doesNotMatch(chat, /<GlassView|isLiquidGlassAvailable\(\)/);
   assert.match(chat, /resolveComposerFontSize\(content\)/);
   assert.match(chat, /Math\.max\(12, 16 - \(Math\.min\(glyphCount, 40\) - 28\) \/ 3\)/);
   assert.equal(packageJson.dependencies['expo-glass-effect'], '~0.1.10');
@@ -195,9 +196,8 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(quickLookNative, /QLPreviewController\(\)/);
   assert.match(quickLookNative, /\.runOnQueue\(\.main\)/);
   assert.match(chat, /function AttachmentItem/);
-  assert.match(chat, /<HermesLiquidGlassView/);
-  assert.match(chat, /blurRadius=\{24\}/);
-  assert.match(chat, /glassCornerRadius=\{15\}/);
+  assert.doesNotMatch(chat, /<HermesLiquidGlassView/);
+  assert.match(chat, /cornerRadius=\{15\}/);
   assert.match(chat, /require\('\.\.\/\.\.\/assets\/icon\.png'\)/);
   assert.doesNotMatch(chat, /TerminalStatusBar|terminalTranscript/);
   assert.doesNotMatch(chat, /<PreviewModal[^>]+title=\{isChinese \? '模型与工具'/);

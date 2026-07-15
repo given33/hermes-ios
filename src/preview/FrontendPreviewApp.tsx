@@ -10,7 +10,7 @@ import {
   UserRound,
 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, View } from 'react-native';
 import Reanimated, {
   Easing,
   FadeInRight,
@@ -18,6 +18,10 @@ import Reanimated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import {
+  HermesSwiftUIRouteView,
+  hasNativeSwiftUIPartialFrontend,
+} from '../../modules/hermes-ios-controls';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
@@ -81,6 +85,8 @@ type SystemAction = 'restart' | 'update' | null;
 export function FrontendPreviewApp() {
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
+  const useSwiftUIRoutes =
+    Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
   const [locale, setLocale] = useState<NativeRouteLocale>('zh');
   const [profile, setProfile] = useState('default');
   const [picker, setPicker] = useState<Picker>(null);
@@ -129,8 +135,9 @@ export function FrontendPreviewApp() {
       <NativeShell
         config={{ dashboard: { show_token_analytics: true } }}
         initialPath="/chat"
-        locale={locale}
+        locale={locale ?? 'zh'}
         manifests={BASELINE_PLUGIN_MANIFESTS}
+        nativeRouteChrome={useSwiftUIRoutes}
         renderRoute={(route, _label, context) => (
           <PreviewRoute
             locale={locale}
@@ -226,6 +233,23 @@ function PreviewRoute({
   route,
 }: PreviewPageProps & { openNavigation?(): void; route: ComposedRoute }) {
   const props = { locale, navigate, notify };
+  if (
+    Platform.OS === 'ios'
+    && hasNativeSwiftUIPartialFrontend
+    && route.routeId !== 'chat'
+  ) {
+    return (
+      <HermesSwiftUIRouteView
+        locale={locale ?? 'zh'}
+        onAction={(event) => notify(event.nativeEvent.payload || event.nativeEvent.action)}
+        onOpenNavigation={openNavigation}
+        path={route.path}
+        pluginName={route.pluginName ?? ''}
+        routeId={route.routeId ?? ''}
+        style={styles.nativeRoute}
+      />
+    );
+  }
   if (route.source === 'plugin') {
     if (route.pluginName === 'hermes-achievements') return <AchievementsPreviewPage {...props} />;
     if (route.pluginName === 'kanban') return <KanbanPreviewPage {...props} />;
@@ -555,6 +579,9 @@ function LanguagePicker({
 }
 
 const styles = StyleSheet.create({
+  nativeRoute: {
+    flex: 1,
+  },
   root: {
     flex: 1,
   },

@@ -49,6 +49,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -100,6 +101,10 @@ import {
   resolveVisibleSidebarWidth,
 } from './shell-contracts';
 import { useAdaptiveLayout } from './useAdaptiveLayout';
+import {
+  HermesSwiftUISidebarView,
+  hasNativeSwiftUIPartialFrontend,
+} from '../../modules/hermes-ios-controls';
 
 const NAV_ICONS: Record<NativeNavigationIconName, LucideIcon> = {
   Activity,
@@ -172,6 +177,7 @@ export interface NativeShellProps {
   initialPath?: string;
   locale?: NativeRouteLocale;
   manifests?: readonly PluginManifest[];
+  nativeRouteChrome?: boolean;
   renderRoute?(
     route: ComposedRoute,
     label: string,
@@ -185,11 +191,14 @@ export function NativeShell({
   initialPath = '/sessions',
   locale = 'zh',
   manifests = [],
+  nativeRouteChrome = false,
   renderRoute,
   slots,
 }: NativeShellProps) {
   const insets = useSafeAreaInsets();
   const layout = useAdaptiveLayout();
+  const useSwiftUISidebar =
+    Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
   const { tokens } = useTheme();
   const compactNavigationRef = useNavigationContainerRef<CompactStackParamList>();
   const composition = useMemo(
@@ -310,6 +319,10 @@ export function NativeShell({
         }
         const projectedTranslation = event.translationX + event.velocityX * 0.12;
         if (projectedTranslation > drawerExtent * 0.25) {
+          if (useSwiftUISidebar) {
+            runOnJS(openMobile)();
+            return;
+          }
           drawerTranslation.value = withSpring(0, {
             ...IOS_DRAWER_SPRING,
             velocity: event.velocityX,
@@ -323,7 +336,7 @@ export function NativeShell({
           });
         }
       }),
-    [drawerExtent, drawerTranslation, openMobile],
+    [drawerExtent, drawerTranslation, openMobile, useSwiftUISidebar],
   );
   const closeGesture = useMemo(
     () => Gesture.Pan()
@@ -382,21 +395,33 @@ export function NativeShell({
       <View style={styles.body}>
         {state.mode === 'split' ? (
           <Reanimated.View style={[styles.splitSidebar, drawerWidthStyle]}>
-            <Sidebar
-              borderSoft={borderSoft}
-              borderStrong={borderStrong}
-              closeMobile={closeMobile}
-              composition={composition}
-              insets={insets}
-              locale={locale}
-              navigate={navigate}
-              onToggleCollapsed={toggleCollapsed}
-              sidebarBackground={sidebarBackground}
-              slotContext={slotContext}
-              slots={slots}
-              state={state}
-              typography={typography}
-            />
+            {useSwiftUISidebar ? (
+              <HermesSwiftUISidebarView
+                activePath={state.activePath}
+                locale={locale}
+                onNavigate={(event) => navigate(event.nativeEvent.path)}
+                onRequestClose={closeMobile}
+                open
+                presentation="split"
+                style={styles.swiftUISidebar}
+              />
+            ) : (
+              <Sidebar
+                borderSoft={borderSoft}
+                borderStrong={borderStrong}
+                closeMobile={closeMobile}
+                composition={composition}
+                insets={insets}
+                locale={locale}
+                navigate={navigate}
+                onToggleCollapsed={toggleCollapsed}
+                sidebarBackground={sidebarBackground}
+                slotContext={slotContext}
+                slots={slots}
+                state={state}
+                typography={typography}
+              />
+            )}
           </Reanimated.View>
         ) : null}
 
@@ -484,7 +509,7 @@ export function NativeShell({
                                 <Menu color={tokens.colors.foreground} size={22} />
                               </IOSPressable>
                             ),
-                        headerShown: !chatRoute,
+                        headerShown: !chatRoute && !nativeRouteChrome,
                         title: label || 'Hermes Agent',
                       })}
                     >
@@ -514,20 +539,58 @@ export function NativeShell({
               </CompactStack.Navigator>
             </NavigationContainer>
           ) : activeRoute ? (
-            <Reanimated.View
-              entering={PAGE_ENTERING}
-              exiting={PAGE_EXITING}
-              key={activeRoute.path}
-              style={styles.routeStage}
-            >
-              {renderRoute?.(activeRoute, activeLabel, slotContext)
-                ?? <RoutePreview label={activeLabel} />}
-            </Reanimated.View>
+            nativeRouteChrome ? (
+              <View style={styles.routeStage}>
+                {renderRoute?.(activeRoute, activeLabel, slotContext)
+                  ?? <RoutePreview label={activeLabel} />}
+              </View>
+            ) : (
+              <Reanimated.View
+                entering={PAGE_ENTERING}
+                exiting={PAGE_EXITING}
+                key={activeRoute.path}
+                style={styles.routeStage}
+              >
+                {renderRoute?.(activeRoute, activeLabel, slotContext)
+                  ?? <RoutePreview label={activeLabel} />}
+              </Reanimated.View>
+            )
           ) : null}
         </View>
       </View>
 
       {state.mode === 'compact' ? (
+        useSwiftUISidebar ? (
+          <Fragment>
+            {!state.mobileOpen && !canGoBack ? (
+              <GestureDetector gesture={openGesture}>
+                <View
+                  style={[
+                    styles.openEdge,
+                    { top: unifiedChatActive ? insets.top : insets.top + SHELL_METRICS.headerHeight },
+                  ]}
+                />
+              </GestureDetector>
+            ) : null}
+            <View
+              accessibilityElementsHidden={!state.mobileOpen}
+              accessibilityViewIsModal={state.mobileOpen}
+              importantForAccessibility={state.mobileOpen ? 'yes' : 'no-hide-descendants'}
+              pointerEvents={state.mobileOpen ? 'auto' : 'none'}
+              style={styles.swiftUIDrawerHost}
+            >
+              <HermesSwiftUISidebarView
+                activePath={state.activePath}
+                locale={locale}
+                onNavigate={(event) => navigate(event.nativeEvent.path)}
+                onRequestClose={closeMobile}
+                open={state.mobileOpen}
+                presentation="drawer"
+                style={styles.swiftUISidebar}
+              />
+            </View>
+          </Fragment>
+        ) : (
         <Fragment>
           <Reanimated.View
             accessibilityElementsHidden={!state.mobileOpen}
@@ -596,6 +659,7 @@ export function NativeShell({
             </Reanimated.View>
           </GestureDetector>
         </Fragment>
+        )
       ) : null}
     </View>
   );
@@ -993,6 +1057,13 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     height: '100%',
     overflow: 'hidden',
+  },
+  swiftUIDrawerHost: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 60,
+  },
+  swiftUISidebar: {
+    flex: 1,
   },
   mobileSidebar: {
     bottom: 0,

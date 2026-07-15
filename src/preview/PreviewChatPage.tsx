@@ -1,5 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
-import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
+import { BlurView } from 'expo-blur';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { SymbolView } from 'expo-symbols';
@@ -53,7 +53,11 @@ import Reanimated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { HermesLiquidGlassView } from '../../modules/hermes-live-blur';
+import {
+  HermesSwiftUIFrostedSurfaceView,
+  HermesSwiftUIModelToolsView,
+  hasNativeSwiftUIPartialFrontend,
+} from '../../modules/hermes-ios-controls';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { NativeButton } from '../components/ui/NativeButton';
@@ -75,8 +79,6 @@ const BODY_SEMIBOLD = 'HermesGoogle-IBMPlexSans-600-Normal';
 const BODY_BOLD = 'HermesGoogle-IBMPlexSans-700-Normal';
 const DISPLAY_BOLD = 'SpaceGrotesk_700Bold';
 const MONO_REGULAR = 'HermesTerminal-JetBrainsMono-400-Normal';
-const LIQUID_GLASS_AVAILABLE = Platform.OS === 'ios'
-  && isLiquidGlassAvailable();
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
 
@@ -660,30 +662,26 @@ function ComposerSurface({ children }: { children: ReactNode }) {
     },
   ];
 
-  if (LIQUID_GLASS_AVAILABLE) {
+  if (Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend) {
     return (
-      <GlassView
-        colorScheme="auto"
-        glassEffectStyle="regular"
-        isInteractive
+      <HermesSwiftUIFrostedSurfaceView
+        cornerRadius={15}
         style={surfaceStyle}
-        tintColor={multiplyAlpha(tokens.colors.background, 0.14)}
+        tintColor={tokens.colors.background}
       >
         {children}
-      </GlassView>
+      </HermesSwiftUIFrostedSurfaceView>
     );
   }
 
   return (
-    <HermesLiquidGlassView
-      blurRadius={24}
-      glassCornerRadius={15}
-      interactive
+    <BlurView
+      intensity={48}
       style={surfaceStyle}
-      tintColor={multiplyAlpha(tokens.colors.background, 0.22)}
+      tint="dark"
     >
       {children}
-    </HermesLiquidGlassView>
+    </BlurView>
   );
 }
 
@@ -1116,6 +1114,7 @@ function ModelToolsDrawer({
   const [modelOpen, setModelOpen] = useState(false);
   const [model, setModel] = useState('claude-sonnet-4');
   const [reasoning, setReasoning] = useState<'low' | 'medium' | 'high'>('medium');
+  const [toolsEnabled, setToolsEnabled] = useState(true);
   const translateX = useSharedValue(256);
   const openModelPicker = () => {
     const models = ['claude-sonnet-4', 'gpt-5.6-sol'] as const;
@@ -1168,6 +1167,38 @@ function ModelToolsDrawer({
       Extrapolation.CLAMP,
     ),
   }));
+
+  if (Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend) {
+    return (
+      <Modal
+        animationType="none"
+        onRequestClose={onClose}
+        presentationStyle="overFullScreen"
+        statusBarTranslucent
+        transparent
+        visible={open}
+      >
+        <HermesSwiftUIModelToolsView
+          locale={isChinese ? 'zh' : 'en'}
+          model={model}
+          onModelChange={(event) => setModel(event.nativeEvent.model)}
+          onNewConversation={onNewConversation}
+          onReasoningChange={(event) => {
+            const next = event.nativeEvent.reasoning;
+            if (next === 'low' || next === 'medium' || next === 'high') {
+              setReasoning(next);
+            }
+          }}
+          onRequestClose={onClose}
+          onToolsChange={(event) => setToolsEnabled(event.nativeEvent.enabled)}
+          open={open}
+          reasoning={reasoning}
+          style={styles.drawerRoot}
+          toolsEnabled={toolsEnabled}
+        />
+      </Modal>
+    );
+  }
 
   return (
     <Modal

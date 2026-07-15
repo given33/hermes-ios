@@ -16,9 +16,12 @@ import {
 
 type NativeViewProps = ViewProps & { children?: ReactNode };
 
-function optionalView<P extends NativeViewProps>(name: string) {
+function optionalView<P extends NativeViewProps>(
+  name: string,
+  viewName?: string,
+) {
   const available = requireOptionalNativeModule(name) !== null;
-  const NativeView = available ? requireNativeView<P>(name) : null;
+  const NativeView = available ? requireNativeView<P>(name, viewName) : null;
   const Component = forwardRef<View, P>(function OptionalNativeView(
     { children, ...props },
     ref,
@@ -93,12 +96,64 @@ export interface HermesPressFeedbackProps extends NativeViewProps {
   scaleTo: number;
 }
 
+export interface HermesSwiftUISidebarProps extends NativeViewProps {
+  activePath: string;
+  locale: 'en' | 'zh';
+  onNavigate?(event: NativeSyntheticEvent<{ path: string }>): void;
+  onRequestClose?(event: NativeSyntheticEvent<Record<string, never>>): void;
+  open: boolean;
+  presentation: 'drawer' | 'split';
+}
+
+export interface HermesSwiftUIRouteProps extends NativeViewProps {
+  locale: 'en' | 'zh';
+  onAction?(event: NativeSyntheticEvent<{ action: string; payload: string }>): void;
+  onOpenNavigation?(event: NativeSyntheticEvent<Record<string, never>>): void;
+  path: string;
+  pluginName: string;
+  routeId: string;
+}
+
+export interface HermesSwiftUIModelToolsProps extends NativeViewProps {
+  locale: 'en' | 'zh';
+  model: string;
+  onModelChange?(event: NativeSyntheticEvent<{ model: string }>): void;
+  onNewConversation?(event: NativeSyntheticEvent<Record<string, never>>): void;
+  onReasoningChange?(event: NativeSyntheticEvent<{ reasoning: string }>): void;
+  onRequestClose?(event: NativeSyntheticEvent<Record<string, never>>): void;
+  onToolsChange?(event: NativeSyntheticEvent<{ enabled: boolean }>): void;
+  open: boolean;
+  reasoning: 'high' | 'low' | 'medium';
+  toolsEnabled: boolean;
+}
+
+export interface HermesSwiftUIFrostedSurfaceProps extends NativeViewProps {
+  cornerRadius: number;
+  tintColor: string;
+}
+
 const segmented = optionalView<HermesSegmentedControlProps>('HermesSegmentedControl');
 const nativeSwitch = optionalView<HermesSwitchProps>('HermesSwitch');
 const search = optionalView<HermesSearchBarProps>('HermesSearchBar');
 const progress = optionalView<HermesProgressProps>('HermesProgress');
 const selection = optionalView<HermesSelectionProps>('HermesSelection');
 const pressFeedback = optionalView<HermesPressFeedbackProps>('HermesPressFeedback');
+const swiftUIPartialSidebar = optionalView<HermesSwiftUISidebarProps>(
+  'HermesSwiftUIPartialFrontend',
+  'HermesSwiftUISidebarView',
+);
+const swiftUIPartialRoute = optionalView<HermesSwiftUIRouteProps>(
+  'HermesSwiftUIPartialFrontend',
+  'HermesSwiftUIRouteView',
+);
+const swiftUIPartialModelTools = optionalView<HermesSwiftUIModelToolsProps>(
+  'HermesSwiftUIPartialFrontend',
+  'HermesSwiftUIModelToolsView',
+);
+const swiftUIPartialFrostedSurface = optionalView<HermesSwiftUIFrostedSurfaceProps>(
+  'HermesSwiftUIPartialFrontend',
+  'HermesSwiftUIFrostedSurfaceView',
+);
 
 export const hasNativeSegmentedControl = segmented.available;
 export const HermesSegmentedControlView = segmented.Component;
@@ -112,3 +167,8 @@ export const hasNativeSelection = selection.available;
 export const HermesSelectionView = selection.Component;
 export const hasNativePressFeedback = pressFeedback.available;
 export const HermesPressFeedbackView = pressFeedback.Component;
+export const hasNativeSwiftUIPartialFrontend = swiftUIPartialSidebar.available;
+export const HermesSwiftUISidebarView = swiftUIPartialSidebar.Component;
+export const HermesSwiftUIRouteView = swiftUIPartialRoute.Component;
+export const HermesSwiftUIModelToolsView = swiftUIPartialModelTools.Component;
+export const HermesSwiftUIFrostedSurfaceView = swiftUIPartialFrostedSurface.Component;

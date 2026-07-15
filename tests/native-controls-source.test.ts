@@ -86,7 +86,7 @@ test('input and list item use the shared iOS control motion', () => {
   assert.match(listItem, /onNativePress=/);
   assert.match(listItem, /onPressState=/);
   assert.match(controlsBridge, /optionalView<HermesPressFeedbackProps>\('HermesPressFeedback'\)/);
-  assert.match(controlsBridge, /requireNativeView<P>\(name\)/);
+  assert.match(controlsBridge, /requireNativeView<P>\(name, viewName\)/);
   assert.ok(controlsConfig.apple?.modules?.includes('HermesPressFeedbackModule'));
   assert.match(nativePressFeedback, /UILongPressGestureRecognizer/);
   assert.match(nativePressFeedback, /UIViewPropertyAnimator\(/);

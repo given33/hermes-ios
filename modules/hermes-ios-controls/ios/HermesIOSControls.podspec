@@ -2,10 +2,11 @@ Pod::Spec.new do |s|
   s.name           = 'HermesIOSControls'
   s.version        = '1.0.0'
   s.summary        = 'Native UIKit controls for Hermes iOS'
-  s.description    = 'UISegmentedControl, UISwitch, UISearchBar, UIProgressView, and native selection animations.'
+  s.description    = 'UIKit controls plus the partial SwiftUI sidebar, route pages, model tools, and frosted composer surface.'
   s.author         = 'Hermes iOS'
   s.homepage       = 'https://github.com/NousResearch/hermes-agent'
   s.platforms      = { :ios => '16.0' }
+  s.swift_version  = '5.9'
   s.source         = { :git => '' }
   s.static_framework = true
 
