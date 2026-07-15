@@ -108,6 +108,29 @@ test('compact navigation opens, closes, and closes on route selection', () => {
   assert.equal(resolveMobileDrawerTranslation(navigated), -256);
 });
 
+test('sidebar route selection keeps the drawer covering the previous route until ready', () => {
+  const open = reduceNativeShellState(
+    createNativeShellState('compact', '/analytics'),
+    { type: 'open-mobile' },
+  );
+  const selected = reduceNativeShellState(open, {
+    type: 'select-route',
+    path: '/files',
+  });
+
+  assert.deepEqual(selected, {
+    mode: 'compact',
+    activePath: '/files',
+    collapsed: false,
+    mobileOpen: true,
+  });
+  assert.equal(resolveMobileDrawerTranslation(selected), 0);
+  assert.equal(
+    reduceNativeShellState(selected, { type: 'close-mobile' }).mobileOpen,
+    false,
+  );
+});
+
 test('split navigation alone owns the persistent collapsed state', () => {
   const split = createNativeShellState('split', '/chat');
   const compactToggle = reduceNativeShellState(

@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import SwiftUI
+import UIKit
 
 public final class HermesSwiftUIPartialFrontendModule: Module {
   public func definition() -> ModuleDefinition {
@@ -118,6 +119,63 @@ private let hermesDrawerAnimation = Animation.interactiveSpring(
   blendDuration: 0.08
 )
 
+private struct HermesProMotionDriver: UIViewRepresentable {
+  let active: Bool
+
+  func makeCoordinator() -> Coordinator { Coordinator() }
+
+  func makeUIView(context: Context) -> UIView {
+    let view = UIView(frame: .zero)
+    view.isUserInteractionEnabled = false
+    context.coordinator.setActive(active)
+    return view
+  }
+
+  func updateUIView(_ uiView: UIView, context: Context) {
+    context.coordinator.setActive(active)
+  }
+
+  static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+    coordinator.stop()
+  }
+
+  final class Coordinator: NSObject {
+    private var displayLink: CADisplayLink?
+
+    func setActive(_ active: Bool) {
+      if active {
+        start()
+      } else {
+        stop()
+      }
+    }
+
+    func stop() {
+      displayLink?.invalidate()
+      displayLink = nil
+    }
+
+    private func start() {
+      guard displayLink == nil else { return }
+      let link = CADisplayLink(target: self, selector: #selector(frameRequested))
+      let maximum = UIScreen.main.maximumFramesPerSecond
+      link.preferredFramesPerSecond = maximum
+      if #available(iOS 15.0, *) {
+        let maximumRate = Float(maximum)
+        link.preferredFrameRateRange = CAFrameRateRange(
+          minimum: maximum >= 120 ? 80 : maximumRate,
+          maximum: maximumRate,
+          preferred: maximumRate
+        )
+      }
+      link.add(to: .main, forMode: .common)
+      displayLink = link
+    }
+
+    @objc private func frameRequested() {}
+  }
+}
+
 protocol HermesThemeProviding {
   var themeAccentColor: String { get }
   var themeBackgroundColor: String { get }
@@ -228,6 +286,11 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       .gesture(isDrawer ? closeGesture(width: drawerWidth) : nil)
     }
     .background(Color.clear)
+    .background(
+      HermesProMotionDriver(active: !isDrawer || props.open)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+    )
     .clipped()
     .onAppear {
       presented = isDrawer ? false : true
@@ -288,6 +351,14 @@ private struct HermesSidebarContent: View {
 
   var body: some View {
     List {
+      Text("Hermes Agent")
+        .font(.largeTitle.bold())
+        .foregroundStyle(appearance.palette.foreground)
+        .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+        .accessibilityAddTraits(.isHeader)
+
       ForEach(0..<4, id: \.self) { group in
         Section(sectionTitle(group)) {
           ForEach(HermesRoute.allCases.filter { $0.group == group }) { route in
@@ -370,6 +441,7 @@ final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps, HermesThemeProviding
   @Field var themeWarningColor = "#ffbd38"
   var onAction = EventDispatcher()
   var onOpenNavigation = EventDispatcher()
+  var onReady = EventDispatcher()
 }
 
 struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
@@ -407,10 +479,24 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     }
     .tint(appearance.palette.accent)
     .background(appearance.palette.background)
+    .background(
+      HermesProMotionDriver(active: true)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+    )
     .onAppear { props.applyTheme(to: appearance) }
+    .onAppear { reportReady() }
+    .onChange(of: props.path) { _ in reportReady() }
     .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
     .preferredColorScheme(appearance.colorScheme)
     .environmentObject(appearance)
+  }
+
+  private func reportReady() {
+    let path = props.path
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) {
+      props.onReady(["path": path])
+    }
   }
 }
 
@@ -529,6 +615,11 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
         }
       }
     }
+    .background(
+      HermesProMotionDriver(active: props.open)
+        .frame(width: 0, height: 0)
+        .allowsHitTesting(false)
+    )
     .onChange(of: props.open) { next in
       withAnimation(hermesDrawerAnimation) { presented = next }
     }

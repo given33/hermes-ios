@@ -168,9 +168,11 @@ export function ChatPreviewPage({
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const streamRef = useRef<ScrollView>(null);
   const composerInputRef = useRef<TextInput>(null);
+  const contentRef = useRef('');
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingAttachmentCleanup = useRef<(() => void) | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
+  const pendingSendFrame = useRef<number | null>(null);
   const pendingScrollFrame = useRef<number | null>(null);
   const keyboard = useAnimatedKeyboard();
   const keyboardAvoidanceEnabled = useSharedValue(1);
@@ -183,6 +185,7 @@ export function ChatPreviewPage({
   const safeAreaRight = shellSplit ? 0 : insets.right;
   const safeAreaTop = shellSplit ? 0 : insets.top;
   const attachmentCount = attachments.length;
+  const canSend = !sending && Boolean(content.trim() || attachmentCount > 0);
   const inputFontSize = resolveComposerFontSize(content);
   const keepLatestVisible = useCallback((animated = false) => {
     if (pendingScrollFrame.current !== null) return;
@@ -220,19 +223,24 @@ export function ChatPreviewPage({
     if (pendingScrollFrame.current !== null) {
       cancelAnimationFrame(pendingScrollFrame.current);
     }
+    if (pendingSendFrame.current !== null) {
+      cancelAnimationFrame(pendingSendFrame.current);
+    }
     pendingAttachmentCleanup.current?.();
     pendingNavigationCleanup.current?.();
   }, []);
 
   const createConversation = () => {
     setMessages([]);
+    contentRef.current = '';
     setContent('');
     setAttachments([]);
     notify(isChinese ? '已新建会话' : 'New conversation created');
   };
 
   const send = () => {
-    const trimmed = content.trim();
+    const currentContent = contentRef.current;
+    const trimmed = currentContent.trim();
     if ((!trimmed && attachmentCount === 0) || sending) return;
     const userMessage: ChatMessage = {
       content: trimmed || (isChinese ? `已添加 ${attachmentCount} 个附件` : `${attachmentCount} attachments`),
@@ -241,6 +249,7 @@ export function ChatPreviewPage({
       role: 'user',
     };
     setMessages((current) => [...current, userMessage]);
+    contentRef.current = '';
     setContent('');
     setAttachments([]);
     setSending(true);
@@ -262,6 +271,15 @@ export function ChatPreviewPage({
       setSending(false);
       replyTimer.current = null;
     }, 650);
+  };
+  const requestSend = () => {
+    if (pendingSendFrame.current !== null) {
+      cancelAnimationFrame(pendingSendFrame.current);
+    }
+    pendingSendFrame.current = requestAnimationFrame(() => {
+      pendingSendFrame.current = null;
+      send();
+    });
   };
 
   const pickPhoto = async (camera: boolean) => {
@@ -614,12 +632,15 @@ export function ChatPreviewPage({
               <TextInput
                 blurOnSubmit={false}
                 multiline
-                onChangeText={setContent}
+                onChangeText={(next) => {
+                  contentRef.current = next;
+                  setContent(next);
+                }}
                 onFocus={() => {
                   keyboardAvoidanceEnabled.value = 1;
                   keepLatestVisible(false);
                 }}
-                onSubmitEditing={send}
+                onSubmitEditing={requestSend}
                 placeholder={isChinese ? '输入消息' : 'Type a message'}
                 placeholderTextColor={tokens.colors.textDisabled}
                 returnKeyType="send"
@@ -637,18 +658,18 @@ export function ChatPreviewPage({
               />
               <IOSPressable
                 accessibilityLabel={isChinese ? '发送消息' : 'Send message'}
-                disabled={sending || (!content.trim() && attachmentCount === 0)}
-                haptic="light"
-                onPress={send}
+                disabled={sending}
+                haptic={canSend ? 'light' : 'none'}
+                hitSlop={8}
+                onPress={requestSend}
                 opacityTo={0.78}
+                pressRetentionOffset={12}
                 scaleTo={0.91}
                 style={[
                   styles.send,
                   {
                     backgroundColor: tokens.colors.primary,
-                    opacity: sending || (!content.trim() && attachmentCount === 0)
-                      ? 0.38
-                      : 1,
+                    opacity: canSend ? 1 : 0.38,
                   },
                 ]}
               >
@@ -700,29 +721,34 @@ export function ChatPreviewPage({
 function ComposerSurface({ children }: { children: ReactNode }) {
   const { tokens } = useTheme();
   const nativeTheme = resolveSwiftUIThemeProps(tokens);
+  const usesNativeFrostedSurface =
+    Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
   const surfaceStyle = [
     styles.inputShell,
     {
       backgroundColor: 'transparent',
-      borderColor: tokens.colors.border,
+      borderColor: usesNativeFrostedSurface
+        ? 'transparent'
+        : tokens.colors.border,
+      borderWidth: usesNativeFrostedSurface ? 0 : 1,
     },
   ];
 
   return (
     <View style={surfaceStyle}>
-      {Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend ? (
+      {usesNativeFrostedSurface ? (
         <HermesSwiftUIFrostedSurfaceView
           colorScheme={nativeTheme.themeColorScheme}
           cornerRadius={15}
           pointerEvents="none"
-          style={StyleSheet.absoluteFill}
+          style={[StyleSheet.absoluteFill, styles.composerFrostedBackground]}
           tintColor={tokens.colors.background}
         />
       ) : (
         <BlurView
           intensity={48}
           pointerEvents="none"
-          style={StyleSheet.absoluteFill}
+          style={[StyleSheet.absoluteFill, styles.composerFrostedBackground]}
           tint={nativeTheme.themeColorScheme}
         />
       )}
@@ -1445,10 +1471,11 @@ const styles = StyleSheet.create({
   attachmentRemove: { alignItems: 'center', height: 30, justifyContent: 'center', position: 'absolute', right: -8, top: -8, width: 30, zIndex: 3 },
   attachmentRemoveFallback: { alignItems: 'center', backgroundColor: '#636366', borderRadius: 11, height: 22, justifyContent: 'center', width: 22 },
   inputShell: { alignItems: 'flex-end', alignSelf: 'center', borderRadius: 15, borderWidth: 1, flexDirection: 'row', gap: 4, maxWidth: 920, overflow: 'hidden', paddingBottom: 5, paddingLeft: 5, paddingRight: 5, paddingTop: 5, position: 'relative', width: '100%' },
-  attachButton: { alignItems: 'center', height: 38, justifyContent: 'center', width: 34 },
+  composerFrostedBackground: { zIndex: 0 },
+  attachButton: { alignItems: 'center', height: 38, justifyContent: 'center', width: 34, zIndex: 1 },
   attachGlyph: { fontFamily: BODY_REGULAR, fontSize: 24, lineHeight: 30 },
-  input: { flex: 1, fontFamily: BODY_REGULAR, fontSize: 16, letterSpacing: 0, lineHeight: 23, maxHeight: 120, minHeight: 38, paddingBottom: 5, paddingHorizontal: 0, paddingTop: 8, textAlignVertical: 'top' },
-  send: { alignItems: 'center', borderRadius: 11, height: 38, justifyContent: 'center', width: 38 },
+  input: { flex: 1, fontFamily: BODY_REGULAR, fontSize: 16, letterSpacing: 0, lineHeight: 23, maxHeight: 120, minHeight: 38, paddingBottom: 5, paddingHorizontal: 0, paddingTop: 8, textAlignVertical: 'top', zIndex: 1 },
+  send: { alignItems: 'center', borderRadius: 11, height: 38, justifyContent: 'center', width: 38, zIndex: 1 },
   sendGlyph: { fontFamily: BODY_SEMIBOLD, fontSize: 19, lineHeight: 23 },
   history: { borderRightWidth: 1, gap: 9, minWidth: 220, paddingHorizontal: 12, paddingVertical: 14, width: 260 },
   historyBrand: { alignItems: 'center', flexDirection: 'row', gap: 11, paddingBottom: 4, paddingHorizontal: 4, paddingTop: 3 },

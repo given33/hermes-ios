@@ -125,6 +125,7 @@ export interface HermesSwiftUIRouteProps extends NativeViewProps, HermesSwiftUIT
   locale: 'en' | 'zh';
   onAction?(event: NativeSyntheticEvent<{ action: string; payload: string }>): void;
   onOpenNavigation?(event: NativeSyntheticEvent<Record<string, never>>): void;
+  onReady?(event: NativeSyntheticEvent<{ path: string }>): void;
   path: string;
   pluginName: string;
   routeId: string;

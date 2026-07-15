@@ -102,6 +102,7 @@ export type NativeShellEvent =
   | { type: 'close-mobile' }
   | { type: 'toggle-collapsed' }
   | { type: 'navigate'; path: string }
+  | { type: 'select-route'; path: string }
   | { type: 'layout-changed'; mode: AdaptiveLayoutMode };
 
 export function resolveShellTypography(
@@ -181,6 +182,10 @@ export function reduceNativeShellState(
       return state.activePath === event.path && !state.mobileOpen
         ? state
         : { ...state, activePath: event.path, mobileOpen: false };
+    case 'select-route':
+      return state.activePath === event.path
+        ? state
+        : { ...state, activePath: event.path };
     case 'layout-changed':
       return state.mode === event.mode && !state.mobileOpen
         ? state

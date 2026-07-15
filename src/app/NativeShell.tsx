@@ -47,6 +47,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -234,7 +235,10 @@ const PAGE_ENTERING = FadeInRight
 const PAGE_EXITING = FadeOutLeft
   .duration(IOS_MOTION.duration.navigationExit)
   .easing(IOS_NAVIGATION_EASING);
-type CompactStackParamList = Record<string, undefined>;
+type CompactStackParamList = Record<
+  string,
+  { sidebarSelection?: boolean } | undefined
+>;
 const CompactStack = createNativeStackNavigator<CompactStackParamList>();
 
 export interface NativeShellSlotContext {
@@ -243,6 +247,7 @@ export interface NativeShellSlotContext {
   activePath: string;
   navigate(path: string): void;
   openNavigation(): void;
+  reportRouteReady(path: string): void;
 }
 
 export interface NativeShellSlots {
@@ -309,6 +314,9 @@ export function NativeShell({
   const sidebarWidth = useSharedValue(visibleSidebarWidth);
   const drawerTranslation = useSharedValue(initialDrawerTranslation);
   const [canGoBack, setCanGoBack] = useState(false);
+  const pendingSidebarPath = useRef<string | null>(null);
+  const pendingSidebarFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSidebarCloseFrame = useRef<number | null>(null);
   const typography = resolveShellTypography(tokens);
   const swiftUIThemeProps = resolveSwiftUIThemeProps(tokens);
   const rootBackground = opaque(tokens.colors.background);
@@ -347,8 +355,39 @@ export function NativeShell({
     drawerTranslation.value = withSpring(target, IOS_DRAWER_SPRING);
   }, [drawerExtent, drawerTranslation, state.mobileOpen, state.mode]);
 
-  const openMobile = useCallback(() => dispatch({ type: 'open-mobile' }), []);
-  const closeMobile = useCallback(() => dispatch({ type: 'close-mobile' }), []);
+  const clearPendingSidebarSelection = useCallback(() => {
+    pendingSidebarPath.current = null;
+    if (pendingSidebarFallback.current) {
+      clearTimeout(pendingSidebarFallback.current);
+      pendingSidebarFallback.current = null;
+    }
+    if (pendingSidebarCloseFrame.current !== null) {
+      cancelAnimationFrame(pendingSidebarCloseFrame.current);
+      pendingSidebarCloseFrame.current = null;
+    }
+  }, []);
+  const openMobile = useCallback(() => {
+    clearPendingSidebarSelection();
+    dispatch({ type: 'open-mobile' });
+  }, [clearPendingSidebarSelection]);
+  const closeMobile = useCallback(() => {
+    clearPendingSidebarSelection();
+    dispatch({ type: 'close-mobile' });
+  }, [clearPendingSidebarSelection]);
+  const reportRouteReady = useCallback((path: string) => {
+    const resolved = resolveNativeShellPath(composition.routes, path);
+    if (pendingSidebarPath.current !== resolved) return;
+    if (pendingSidebarFallback.current) {
+      clearTimeout(pendingSidebarFallback.current);
+      pendingSidebarFallback.current = null;
+    }
+    pendingSidebarPath.current = null;
+    pendingSidebarCloseFrame.current = requestAnimationFrame(() => {
+      pendingSidebarCloseFrame.current = null;
+      dispatch({ type: 'close-mobile' });
+    });
+  }, [composition.routes]);
+  useEffect(() => clearPendingSidebarSelection, [clearPendingSidebarSelection]);
   const navigate = useCallback(
     (path: string) => {
       const resolved = resolveNativeShellPath(composition.routes, path);
@@ -369,16 +408,36 @@ export function NativeShell({
       if (
         state.mode === 'compact'
         && compactNavigationRef.isReady()
-        && compactNavigationRef.getCurrentRoute()?.name !== resolved
       ) {
+        if (compactNavigationRef.getCurrentRoute()?.name === resolved) {
+          closeMobile();
+          return;
+        }
+        clearPendingSidebarSelection();
+        pendingSidebarPath.current = resolved;
         compactNavigationRef.resetRoot({
           index: 0,
-          routes: [{ name: resolved }],
+          routes: [{
+            name: resolved,
+            params: { sidebarSelection: true },
+          }],
         });
+        dispatch({ type: 'select-route', path: resolved });
+        pendingSidebarFallback.current = setTimeout(() => {
+          reportRouteReady(resolved);
+        }, 1200);
+        return;
       }
       dispatch({ type: 'navigate', path: resolved });
     },
-    [compactNavigationRef, composition.routes, state.mode],
+    [
+      clearPendingSidebarSelection,
+      closeMobile,
+      compactNavigationRef,
+      composition.routes,
+      reportRouteReady,
+      state.mode,
+    ],
   );
   const syncCompactNavigation = useCallback(() => {
     const current = compactNavigationRef.getCurrentRoute()?.name;
@@ -386,7 +445,12 @@ export function NativeShell({
     if (!current) return;
     const resolved = resolveNativeShellPath(composition.routes, current);
     if (resolved !== state.activePath) {
-      dispatch({ type: 'navigate', path: resolved });
+      dispatch({
+        type: pendingSidebarPath.current === resolved
+          ? 'select-route'
+          : 'navigate',
+        path: resolved,
+      });
     }
   }, [compactNavigationRef, composition.routes, state.activePath]);
   const toggleCollapsed = useCallback(
@@ -491,6 +555,7 @@ export function NativeShell({
     activePath: state.activePath,
     navigate,
     openNavigation: openMobile,
+    reportRouteReady,
   };
   const unifiedChatActive = activeRoute?.routeId === 'chat';
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
@@ -598,7 +663,10 @@ export function NativeShell({
                     <CompactStack.Screen
                       key={route.path}
                       name={route.path}
-                      options={({ navigation }) => ({
+                      options={({ navigation, route: navigationRoute }) => ({
+                        animation: navigationRoute.params?.sidebarSelection
+                          ? 'none'
+                          : 'default',
                         headerBackVisible: navigation.canGoBack(),
                         headerLeft: navigation.canGoBack()
                           ? undefined

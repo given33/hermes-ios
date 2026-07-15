@@ -71,16 +71,26 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   const shell = read('src/app/NativeShell.tsx');
 
   assert.match(native, /private let hermesDrawerAnimation = Animation\.interactiveSpring/);
+  assert.match(native, /struct HermesProMotionDriver: UIViewRepresentable/);
+  assert.match(native, /UIScreen\.main\.maximumFramesPerSecond/);
+  assert.match(native, /preferredFrameRateRange = CAFrameRateRange/);
+  assert.match(native, /minimum: maximum >= 120 \? 80 : maximumRate/);
+  assert.match(native, /link\.add\(to: \.main, forMode: \.common\)/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = true \}/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = false \}/);
   assert.match(native, /NavigationStack \{/);
   assert.doesNotMatch(native, /navigationTitle\("Hermes Agent"\)/);
+  assert.match(native, /Text\("Hermes Agent"\)\s*\.font\(\.largeTitle\.bold\(\)\)/);
+  assert.match(native, /\.listRowSeparator\(\.hidden\)/);
   assert.match(
     native,
     /private func select\(_ route: HermesRoute\) \{\s*feedbackTrigger \+= 1\s*props\.onNavigate\(\["path": route\.path\]\)\s*\}/,
   );
   assert.doesNotMatch(native, /props\.onNavigate\(\["path": route\.path\]\)\s*if isDrawer/);
   assert.match(native, /DragGesture\(minimumDistance: 8/);
+  assert.match(native, /var onReady = EventDispatcher\(\)/);
+  assert.match(native, /DispatchQueue\.main\.asyncAfter\(deadline: \.now\(\) \+ 0\.025\)/);
+  assert.match(native, /props\.onReady\(\["path": path\]\)/);
   assert.match(shell, /useSwiftUISidebar \? \(/);
   assert.match(shell, /<HermesSwiftUISidebarView/);
   const compactBranchStart = shell.indexOf("{state.mode === 'compact' ? (");
@@ -109,7 +119,8 @@ test('the composer keeps RN controls above a SwiftUI material background', () =>
   assert.match(native, /selectedModel = \$0\s*props\.onModelChange/);
   assert.match(chat, /<View style=\{surfaceStyle\}>/);
   assert.match(chat, /<HermesSwiftUIFrostedSurfaceView/);
-  assert.match(chat, /style=\{StyleSheet\.absoluteFill\}/);
+  assert.match(chat, /styles\.composerFrostedBackground/);
+  assert.match(chat, /borderWidth: usesNativeFrostedSurface \? 0 : 1/);
   assert.match(chat, /<HermesSwiftUIModelToolsView/);
   assert.doesNotMatch(chat, /<GlassView|<HermesLiquidGlassView/);
 });

@@ -146,6 +146,7 @@ export function FrontendPreviewApp() {
             navigate={context.navigate}
             notify={notify}
             openNavigation={context.openNavigation}
+            reportRouteReady={context.reportRouteReady}
             route={route}
           />
         )}
@@ -232,15 +233,25 @@ function PreviewRoute({
   navigate,
   notify,
   openNavigation,
+  reportRouteReady,
   route,
-}: PreviewPageProps & { openNavigation?(): void; route: ComposedRoute }) {
+}: PreviewPageProps & {
+  openNavigation?(): void;
+  reportRouteReady(path: string): void;
+  route: ComposedRoute;
+}) {
   const { tokens } = useTheme();
   const props = { locale, navigate, notify };
-  if (
+  const usesNativeSwiftUIRoute =
     Platform.OS === 'ios'
     && hasNativeSwiftUIPartialFrontend
-    && route.routeId !== 'chat'
-  ) {
+    && route.routeId !== 'chat';
+  useEffect(() => {
+    if (usesNativeSwiftUIRoute) return undefined;
+    const frame = requestAnimationFrame(() => reportRouteReady(route.path));
+    return () => cancelAnimationFrame(frame);
+  }, [reportRouteReady, route.path, usesNativeSwiftUIRoute]);
+  if (usesNativeSwiftUIRoute) {
     return (
       <HermesSwiftUIRouteView
         key={route.path}
@@ -248,6 +259,7 @@ function PreviewRoute({
         locale={locale ?? 'zh'}
         onAction={(event) => notify(event.nativeEvent.payload || event.nativeEvent.action)}
         onOpenNavigation={openNavigation}
+        onReady={(event) => reportRouteReady(event.nativeEvent.path)}
         path={route.path}
         pluginName={route.pluginName ?? ''}
         routeId={route.routeId ?? ''}

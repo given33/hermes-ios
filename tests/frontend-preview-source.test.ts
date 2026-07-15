@@ -344,7 +344,10 @@ test('preview share, import, export, and model selection open iOS system surface
   const plugins = read('src/preview/PreviewPluginPages.tsx');
   const settings = read('src/preview/PreviewSettingsPages.tsx');
 
-  assert.match(chat, /haptic="light"[\s\S]*onPress=\{send\}/);
+  assert.match(chat, /haptic=\{canSend \? 'light' : 'none'\}/);
+  assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{requestSend\}/);
+  assert.match(chat, /const currentContent = contentRef\.current/);
+  assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*pendingSendFrame\.current = null;\s*send\(\);/);
   assert.match(core, /ActionSheetIOS\.showActionSheetWithOptions/);
   assert.match(plugins, /Share\.share\(/);
   assert.match(settings, /new File\(Paths\.cache, 'hermes-config-preview\.json'\)/);
