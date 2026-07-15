@@ -12,7 +12,6 @@ import {
   Globe,
   Heart,
   KeyRound,
-  Menu,
   MessageSquare,
   Package,
   PanelLeftClose,
@@ -49,6 +48,7 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -60,8 +60,6 @@ import {
 } from 'react-native-gesture-handler';
 import Reanimated, {
   Easing,
-  FadeInRight,
-  FadeOutLeft,
   interpolate,
   runOnJS,
   useAnimatedStyle,
@@ -69,6 +67,7 @@ import Reanimated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import { SplitViewHost, SplitViewScreen } from 'react-native-screens';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { AnimatedTintedIcon } from '../components/ui/AnimatedTintedIcon';
@@ -81,6 +80,10 @@ import {
 import { resolveNativeFontStack } from '../design/native-font-faces';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
+import {
+  hasNativeDrawerSurface,
+  HermesDrawerSurfaceView,
+} from '../../modules/hermes-ios-controls';
 import {
   composeRouteRegistry,
   type ComposedNavigationItem,
@@ -142,12 +145,6 @@ const IOS_DRAWER_SPRING = {
   overshootClamping: true,
   stiffness: IOS_MOTION.spring.stiffness,
 } as const;
-const PAGE_ENTERING = FadeInRight
-  .duration(IOS_MOTION.duration.navigationEnter)
-  .easing(IOS_NAVIGATION_EASING);
-const PAGE_EXITING = FadeOutLeft
-  .duration(IOS_MOTION.duration.navigationExit)
-  .easing(IOS_NAVIGATION_EASING);
 type CompactStackParamList = Record<string, undefined>;
 const CompactStack = createNativeStackNavigator<CompactStackParamList>();
 
@@ -256,15 +253,14 @@ export function NativeShell({
     (path: string) => {
       const resolved = resolveNativeShellPath(composition.routes, path);
       if (
-        state.mode === 'compact'
-        && compactNavigationRef.isReady()
+        compactNavigationRef.isReady()
         && compactNavigationRef.getCurrentRoute()?.name !== resolved
       ) {
         compactNavigationRef.navigate(resolved);
       }
       dispatch({ type: 'navigate', path: resolved });
     },
-    [compactNavigationRef, composition.routes, state.mode],
+    [compactNavigationRef, composition.routes],
   );
   const syncCompactNavigation = useCallback(() => {
     const current = compactNavigationRef.getCurrentRoute()?.name;
@@ -364,9 +360,6 @@ export function NativeShell({
     ...composition.coreItems,
     ...composition.pluginItems,
   ];
-  const activeLabel = allNavigationItems.find(
-    (item) => item.path === activeRoute?.path,
-  )?.label ?? activeRoute?.path ?? '';
   const slotContext: NativeShellSlotContext = {
     collapsed: state.mode === 'split' && state.collapsed,
     compact: state.mode === 'compact',
@@ -376,184 +369,191 @@ export function NativeShell({
   };
   const unifiedChatActive = activeRoute?.routeId === 'chat';
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
+  const sidebarContent = (
+    <Sidebar
+      borderSoft={borderSoft}
+      borderStrong={borderStrong}
+      closeMobile={closeMobile}
+      composition={composition}
+      insets={insets}
+      locale={locale}
+      navigate={navigate}
+      onToggleCollapsed={toggleCollapsed}
+      sidebarBackground={sidebarBackground}
+      slotContext={slotContext}
+      slots={slots}
+      state={state}
+      typography={typography}
+    />
+  );
+  const routeNavigator = (
+    <NavigationContainer
+      onReady={syncCompactNavigation}
+      onStateChange={syncCompactNavigation}
+      ref={compactNavigationRef}
+      theme={{
+        ...DefaultTheme,
+        colors: {
+          ...DefaultTheme.colors,
+          background: rootBackground,
+          border: borderStrong,
+          card: rootBackground,
+          notification: tokens.colors.destructive,
+          primary: tokens.colors.primary,
+          text: tokens.colors.foreground,
+        },
+      }}
+    >
+      <CompactStack.Navigator
+        initialRouteName={state.activePath}
+        screenOptions={{
+          animation: 'default',
+          animationMatchesGesture: true,
+          contentStyle: { backgroundColor: rootBackground },
+          gestureDirection: 'horizontal',
+          gestureEnabled: true,
+          headerBackButtonDisplayMode: 'minimal',
+          headerBackButtonMenuEnabled: true,
+          headerShadowVisible: true,
+          headerStyle: { backgroundColor: rootBackground },
+          headerTintColor: tokens.colors.foreground,
+          headerTitleAlign: 'left',
+          headerTitleStyle: {
+            fontFamily: displayFont,
+            // react-native-screens stores native-stack title sizes as NSInteger.
+            fontSize: Math.round(typography.mobileBrand.fontSize),
+          },
+        }}
+      >
+        {composition.routes.map((route) => {
+          const label = allNavigationItems.find(
+            (item) => item.path === route.path,
+          )?.label ?? route.path;
+          const chatRoute = route.routeId === 'chat';
+          return (
+            <CompactStack.Screen
+              key={route.path}
+              name={route.path}
+              options={({ navigation }) => ({
+                headerBackVisible: navigation.canGoBack(),
+                unstable_headerLeftItems:
+                  state.mode === 'compact' && !navigation.canGoBack()
+                    ? () => [{
+                        accessibilityLabel: locale === 'zh'
+                          ? '\u6253\u5f00\u5bfc\u822a'
+                          : 'Open navigation',
+                        icon: {
+                          name: 'line.3.horizontal',
+                          type: 'sfSymbol',
+                        },
+                        label: locale === 'zh' ? '\u5bfc\u822a' : 'Navigation',
+                        onPress: openMobile,
+                        tintColor: tokens.colors.foreground,
+                        type: 'button',
+                      }]
+                    : undefined,
+                headerShown: state.mode === 'compact' && !chatRoute,
+                title: label || 'Hermes Agent',
+              })}
+            >
+              {() => {
+                const routeContext: NativeShellSlotContext = {
+                  ...slotContext,
+                  activePath: route.path,
+                };
+                return (
+                  <View
+                    style={[
+                      styles.routeStage,
+                      state.mode === 'compact' && !chatRoute ? {
+                        paddingLeft: insets.left,
+                        paddingRight: insets.right,
+                      } : null,
+                    ]}
+                  >
+                    {renderRoute?.(route, label, routeContext)
+                      ?? <RoutePreview label={label} />}
+                  </View>
+                );
+              }}
+            </CompactStack.Screen>
+          );
+        })}
+      </CompactStack.Navigator>
+    </NavigationContainer>
+  );
 
   return (
     <View style={[styles.root, { backgroundColor: rootBackground }]}>
       <View style={styles.body}>
-        {state.mode === 'split' ? (
-          <Reanimated.View style={[styles.splitSidebar, drawerWidthStyle]}>
-            <Sidebar
-              borderSoft={borderSoft}
-              borderStrong={borderStrong}
-              closeMobile={closeMobile}
-              composition={composition}
-              insets={insets}
-              locale={locale}
-              navigate={navigate}
-              onToggleCollapsed={toggleCollapsed}
-              sidebarBackground={sidebarBackground}
-              slotContext={slotContext}
-              slots={slots}
-              state={state}
-              typography={typography}
-            />
-          </Reanimated.View>
-        ) : null}
-
-        <View
-          accessibilityElementsHidden={
-            state.mode === 'compact' && state.mobileOpen
-          }
-          importantForAccessibility={
-            state.mode === 'compact' && state.mobileOpen
-              ? 'no-hide-descendants'
-              : 'auto'
-          }
-          style={[
-            styles.content,
-            state.mode === 'split'
-              ? {
+        {Platform.OS === 'ios'
+        && hasNativeDrawerSurface
+        && state.mode === 'split' ? (
+          <SplitViewHost
+            columnMetrics={{
+              maximumPrimaryColumnWidth: drawerExtent,
+              minimumPrimaryColumnWidth: Math.min(
+                SHELL_METRICS.collapsedSidebarWidth + insets.left,
+                visibleSidebarWidth,
+              ),
+              preferredPrimaryColumnWidthOrFraction: visibleSidebarWidth,
+            }}
+            displayModeButtonVisibility="automatic"
+            preferredDisplayMode="oneBesideSecondary"
+            preferredSplitBehavior="tile"
+            presentsWithGesture
+            primaryEdge="leading"
+            showSecondaryToggleButton
+          >
+            <SplitViewScreen.Column>
+              <View style={styles.splitSidebar}>{sidebarContent}</View>
+            </SplitViewScreen.Column>
+            <SplitViewScreen.Column>
+              <View
+                style={[
+                  styles.content,
+                  {
+                    paddingRight: insets.right,
+                    paddingTop: insets.top,
+                  },
+                ]}
+              >
+                {routeNavigator}
+              </View>
+            </SplitViewScreen.Column>
+          </SplitViewHost>
+        ) : (
+          <>
+            {state.mode === 'split' ? (
+              <Reanimated.View style={[styles.splitSidebar, drawerWidthStyle]}>
+                {sidebarContent}
+              </Reanimated.View>
+            ) : null}
+            <View
+              accessibilityElementsHidden={
+                state.mode === 'compact' && state.mobileOpen
+              }
+              importantForAccessibility={
+                state.mode === 'compact' && state.mobileOpen
+                  ? 'no-hide-descendants'
+                  : 'auto'
+              }
+              style={[
+                styles.content,
+                state.mode === 'split' ? {
                   paddingRight: insets.right,
                   paddingTop: insets.top,
-                }
-              : null,
-          ]}
-        >
-          {state.mode === 'compact' ? (
-            <NavigationContainer
-              onReady={syncCompactNavigation}
-              onStateChange={syncCompactNavigation}
-              ref={compactNavigationRef}
-              theme={{
-                ...DefaultTheme,
-                colors: {
-                  ...DefaultTheme.colors,
-                  background: rootBackground,
-                  border: borderStrong,
-                  card: rootBackground,
-                  notification: tokens.colors.destructive,
-                  primary: tokens.colors.primary,
-                  text: tokens.colors.foreground,
-                },
-              }}
+                } : null,
+              ]}
             >
-              <CompactStack.Navigator
-                initialRouteName={state.activePath}
-                screenOptions={{
-                  animation: 'default',
-                  animationMatchesGesture: true,
-                  contentStyle: { backgroundColor: rootBackground },
-                  gestureDirection: 'horizontal',
-                  gestureEnabled: true,
-                  headerBackButtonDisplayMode: 'minimal',
-                  headerBackButtonMenuEnabled: true,
-                  headerShadowVisible: true,
-                  headerStyle: { backgroundColor: rootBackground },
-                  headerTintColor: tokens.colors.foreground,
-                  headerTitleAlign: 'left',
-                  headerTitleStyle: {
-                    fontFamily: displayFont,
-                    // react-native-screens stores native-stack title sizes as NSInteger.
-                    fontSize: Math.round(typography.mobileBrand.fontSize),
-                  },
-                }}
-              >
-                {composition.routes.map((route) => {
-                  const label = allNavigationItems.find(
-                    (item) => item.path === route.path,
-                  )?.label ?? route.path;
-                  const chatRoute = route.routeId === 'chat';
-                  return (
-                    <CompactStack.Screen
-                      key={route.path}
-                      name={route.path}
-                      options={({ navigation }) => ({
-                        headerBackVisible: navigation.canGoBack(),
-                        headerLeft: navigation.canGoBack()
-                          ? undefined
-                          : () => (
-                              <IOSPressable
-                                accessibilityLabel={locale === 'zh' ? '\u6253\u5f00\u5bfc\u822a' : 'Open navigation'}
-                                haptic="none"
-                                hitSlop={10}
-                                onPress={openMobile}
-                                opacityTo={0.7}
-                                scaleTo={0.9}
-                                style={styles.nativeHeaderButton}
-                              >
-                                <Menu color={tokens.colors.foreground} size={22} />
-                              </IOSPressable>
-                            ),
-                        headerShown: !chatRoute,
-                        title: label || 'Hermes Agent',
-                      })}
-                    >
-                      {() => {
-                        const compactContext: NativeShellSlotContext = {
-                          ...slotContext,
-                          activePath: route.path,
-                        };
-                        return (
-                          <View
-                            style={[
-                              styles.routeStage,
-                              chatRoute ? null : {
-                                paddingLeft: insets.left,
-                                paddingRight: insets.right,
-                              },
-                            ]}
-                          >
-                            {renderRoute?.(route, label, compactContext)
-                              ?? <RoutePreview label={label} />}
-                          </View>
-                        );
-                      }}
-                    </CompactStack.Screen>
-                  );
-                })}
-              </CompactStack.Navigator>
-            </NavigationContainer>
-          ) : activeRoute ? (
-            <Reanimated.View
-              entering={PAGE_ENTERING}
-              exiting={PAGE_EXITING}
-              key={activeRoute.path}
-              style={styles.routeStage}
-            >
-              {renderRoute?.(activeRoute, activeLabel, slotContext)
-                ?? <RoutePreview label={activeLabel} />}
-            </Reanimated.View>
-          ) : null}
-        </View>
+              {routeNavigator}
+            </View>
+          </>
+        )}
       </View>
 
       {state.mode === 'compact' ? (
         <Fragment>
-          <Reanimated.View
-            accessibilityElementsHidden={!state.mobileOpen}
-            importantForAccessibility={
-              state.mobileOpen ? 'yes' : 'no-hide-descendants'
-            }
-            pointerEvents={state.mobileOpen ? 'auto' : 'none'}
-            style={[
-              styles.overlay,
-              {
-                backgroundColor: SHELL_METRICS.overlayColor,
-                left: drawerExtent,
-              },
-              overlayStyle,
-            ]}
-          >
-            <IOSPressable
-              accessibilityLabel={locale === 'zh' ? '\u5173\u95ed\u5bfc\u822a' : 'Close navigation'}
-              haptic="none"
-              onPress={closeMobile}
-              opacityTo={1}
-              scaleTo={1}
-              style={StyleSheet.absoluteFill}
-            />
-          </Reanimated.View>
-
           {!state.mobileOpen && !canGoBack ? (
             <GestureDetector gesture={openGesture}>
               <View
@@ -565,36 +565,66 @@ export function NativeShell({
             </GestureDetector>
           ) : null}
 
-          <GestureDetector gesture={closeGesture}>
-            <Reanimated.View
+          {Platform.OS === 'ios' && hasNativeDrawerSurface ? (
+            <HermesDrawerSurfaceView
               accessibilityElementsHidden={!state.mobileOpen}
               accessibilityViewIsModal={state.mobileOpen}
               importantForAccessibility={
                 state.mobileOpen ? 'yes' : 'no-hide-descendants'
               }
-              style={[
-                styles.mobileSidebar,
-                drawerWidthStyle,
-                drawerTranslationStyle,
-              ]}
+              onRequestClose={closeMobile}
+              open={state.mobileOpen}
+              overlayColor={SHELL_METRICS.overlayColor}
+              pointerEvents={state.mobileOpen ? 'auto' : 'none'}
+              style={styles.nativeDrawerSurface}
+              width={drawerExtent}
             >
-              <Sidebar
-                borderSoft={borderSoft}
-                borderStrong={borderStrong}
-                closeMobile={closeMobile}
-                composition={composition}
-                insets={insets}
-                locale={locale}
-                navigate={navigate}
-                onToggleCollapsed={toggleCollapsed}
-                sidebarBackground={sidebarBackground}
-                slotContext={slotContext}
-                slots={slots}
-                state={state}
-                typography={typography}
-              />
-            </Reanimated.View>
-          </GestureDetector>
+              {sidebarContent}
+            </HermesDrawerSurfaceView>
+          ) : (
+            <>
+              <Reanimated.View
+                accessibilityElementsHidden={!state.mobileOpen}
+                importantForAccessibility={
+                  state.mobileOpen ? 'yes' : 'no-hide-descendants'
+                }
+                pointerEvents={state.mobileOpen ? 'auto' : 'none'}
+                style={[
+                  styles.overlay,
+                  {
+                    backgroundColor: SHELL_METRICS.overlayColor,
+                    left: drawerExtent,
+                  },
+                  overlayStyle,
+                ]}
+              >
+                <IOSPressable
+                  accessibilityLabel={locale === 'zh' ? '\u5173\u95ed\u5bfc\u822a' : 'Close navigation'}
+                  haptic="none"
+                  onPress={closeMobile}
+                  opacityTo={1}
+                  scaleTo={1}
+                  style={StyleSheet.absoluteFill}
+                />
+              </Reanimated.View>
+              <GestureDetector gesture={closeGesture}>
+                <Reanimated.View
+                  accessibilityElementsHidden={!state.mobileOpen}
+                  accessibilityViewIsModal={state.mobileOpen}
+                  importantForAccessibility={
+                    state.mobileOpen ? 'yes' : 'no-hide-descendants'
+                  }
+                  style={[
+                    styles.mobileSidebar,
+                    drawerWidthStyle,
+                    drawerTranslationStyle,
+                  ]}
+                >
+                  {sidebarContent}
+                </Reanimated.View>
+              </GestureDetector>
+            </>
+          )}
         </Fragment>
       ) : null}
     </View>
@@ -983,12 +1013,6 @@ const styles = StyleSheet.create({
     minHeight: 0,
     minWidth: 0,
   },
-  nativeHeaderButton: {
-    alignItems: 'center',
-    height: 36,
-    justifyContent: 'center',
-    width: 36,
-  },
   splitSidebar: {
     flexShrink: 0,
     height: '100%',
@@ -1000,6 +1024,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'absolute',
     top: 0,
+    zIndex: 50,
+  },
+  nativeDrawerSurface: {
+    ...StyleSheet.absoluteFillObject,
     zIndex: 50,
   },
   sidebar: {

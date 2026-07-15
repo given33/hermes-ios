@@ -39,7 +39,7 @@ test('phone drawer and iPad rail use iOS spring and timing motion', () => {
   assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
 });
 
-test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () => {
+test('ProMotion uses system navigation and 8ms scroll cadence', () => {
   const source = read('src/app/NativeShell.tsx');
   const appConfig = JSON.parse(read('app.json')) as {
     expo: { ios: { infoPlist: Record<string, unknown> } };
@@ -57,16 +57,34 @@ test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () =>
     appConfig.expo.ios.infoPlist.CADisableMinimumFrameDurationOnPhone,
     true,
   );
-  assert.match(source, /FadeInRight[\s\S]*duration\(IOS_MOTION\.duration\.navigationEnter\)/);
-  assert.match(source, /FadeOutLeft[\s\S]*duration\(IOS_MOTION\.duration\.navigationExit\)/);
+  assert.match(source, /createNativeStackNavigator<CompactStackParamList>\(\)/);
+  assert.match(source, /<SplitViewHost/);
+  assert.match(
+    source,
+    /Platform\.OS === 'ios'[\s\S]*hasNativeDrawerSurface[\s\S]*state\.mode === 'split'/,
+  );
+  assert.match(source, /<SplitViewScreen\.Column>/);
+  assert.match(source, /unstable_headerLeftItems/);
+  assert.match(source, /name: 'line\.3\.horizontal'/);
   assert.match(source, /IOS_NAVIGATION_EASING = Easing\.bezier\(\.\.\.IOS_MOTION\.curve\.navigation\)/);
-  assert.match(source, /entering=\{PAGE_ENTERING\}/);
-  assert.match(source, /exiting=\{PAGE_EXITING\}/);
+  assert.doesNotMatch(source, /FadeInRight|FadeOutLeft|PAGE_ENTERING|PAGE_EXITING/);
   assert.match(source, /animation: 'default'/);
   for (const scrollSource of scrollSources) {
     const scrollViews = scrollSource.match(/<ScrollView\s/g)?.length ?? 0;
     const promotionCadence = scrollSource.match(/scrollEventThrottle=\{8\}/g)?.length ?? 0;
     assert.equal(promotionCadence, scrollViews);
+  }
+});
+
+test('signed iPad builds enable the react-native-screens split view implementation', () => {
+  const workflow = read('.github/workflows/ios-unsigned.yml');
+  const eas = JSON.parse(read('eas.json')) as {
+    build: Record<string, { env?: Record<string, string> }>;
+  };
+
+  assert.match(workflow, /RNS_GAMMA_ENABLED: '1'/);
+  for (const profile of ['development', 'preview', 'production']) {
+    assert.equal(eas.build[profile]?.env?.RNS_GAMMA_ENABLED, '1');
   }
 });
 

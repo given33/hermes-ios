@@ -84,7 +84,20 @@ final class HermesPressFeedbackView: ExpoView, UIGestureRecognizerDelegate {
         ? CGAffineTransform(scaleX: self.scaleTo, y: self.scaleTo)
         : .identity
     }
-    let animator = UIViewPropertyAnimator(duration: 0.3, dampingRatio: 0.8, animations: changes)
+    let animator: UIViewPropertyAnimator
+    if pressed {
+      animator = UIViewPropertyAnimator(
+        duration: 0.12,
+        curve: .easeOut,
+        animations: changes
+      )
+    } else {
+      animator = UIViewPropertyAnimator(
+        duration: 0.32,
+        dampingRatio: 0.82,
+        animations: changes
+      )
+    }
     self.animator = animator
     animator.startAnimation()
   }

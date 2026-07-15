@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
   s.license        = package['license']
   s.author         = 'Hermes iOS'
   s.homepage       = 'https://github.com/given33/hermes-ios'
-  s.platforms      = { :ios => '16.0' }
+  s.platforms      = { :ios => '18.0' }
   s.swift_version  = '5.9'
   s.source         = { :git => 'https://github.com/given33/hermes-ios.git' }
   s.static_framework = true

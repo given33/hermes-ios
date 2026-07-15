@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react-native';
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -41,18 +42,19 @@ import Reanimated, {
   cancelAnimation,
   interpolate,
   runOnJS,
+  useAnimatedReaction,
   useAnimatedStyle,
   useAnimatedKeyboard,
   useSharedValue,
   withRepeat,
   withSequence,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HermesLiquidGlassView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
+import { configurePresentedSheet } from '../../modules/hermes-sheet-controller';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { NativeButton } from '../components/ui/NativeButton';
 import { IOSContextMenu } from '../components/ios/IOSContextMenu';
@@ -164,6 +166,7 @@ export function ChatPreviewPage({
   const streamRef = useRef<ScrollView>(null);
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
+  const pendingScrollFrame = useRef<number | null>(null);
   const keyboard = useAnimatedKeyboard();
   const isChinese = locale === 'zh';
   const compact = width <= 560;
@@ -175,6 +178,13 @@ export function ChatPreviewPage({
   const safeAreaTop = shellSplit ? 0 : insets.top;
   const attachmentCount = attachments.length;
   const inputFontSize = resolveComposerFontSize(content);
+  const keepLatestVisible = useCallback((animated = false) => {
+    if (pendingScrollFrame.current !== null) return;
+    pendingScrollFrame.current = requestAnimationFrame(() => {
+      pendingScrollFrame.current = null;
+      streamRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
   const keyboardRootStyle = useAnimatedStyle(() => ({
     paddingBottom: keyboard.height.value,
   }));
@@ -186,9 +196,24 @@ export function ChatPreviewPage({
       Extrapolation.CLAMP,
     ),
   }));
+  useAnimatedReaction(
+    () => keyboard.height.value,
+    (height, previousHeight) => {
+      if (
+        previousHeight === null
+        || Math.abs(height - previousHeight) >= 0.5
+      ) {
+        runOnJS(keepLatestVisible)(false);
+      }
+    },
+    [keepLatestVisible],
+  );
 
   useEffect(() => () => {
     if (replyTimer.current) clearTimeout(replyTimer.current);
+    if (pendingScrollFrame.current !== null) {
+      cancelAnimationFrame(pendingScrollFrame.current);
+    }
     pendingNavigationCleanup.current?.();
   }, []);
 
@@ -454,7 +479,8 @@ export function ChatPreviewPage({
             decelerationRate="normal"
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
-            onContentSizeChange={() => streamRef.current?.scrollToEnd({ animated: true })}
+            onContentSizeChange={() => keepLatestVisible(true)}
+            onLayout={() => keepLatestVisible(false)}
             ref={streamRef}
             scrollEventThrottle={8}
             showsVerticalScrollIndicator={false}
@@ -486,6 +512,7 @@ export function ChatPreviewPage({
           </ScrollView>
 
           <Reanimated.View
+            onLayout={() => keepLatestVisible(false)}
             style={[
               styles.composer,
               {
@@ -544,6 +571,7 @@ export function ChatPreviewPage({
                 blurOnSubmit={false}
                 multiline
                 onChangeText={setContent}
+                onFocus={() => keepLatestVisible(false)}
                 onSubmitEditing={send}
                 placeholder={isChinese ? '输入消息' : 'Type a message'}
                 placeholderTextColor={tokens.colors.textDisabled}
@@ -1084,11 +1112,9 @@ function ModelToolsDrawer({
 }) {
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
-  const [mounted, setMounted] = useState(open);
   const [modelOpen, setModelOpen] = useState(false);
   const [model, setModel] = useState('claude-sonnet-4');
   const [reasoning, setReasoning] = useState<'low' | 'medium' | 'high'>('medium');
-  const translateX = useSharedValue(256);
   const openModelPicker = () => {
     const models = ['claude-sonnet-4', 'gpt-5.6-sol'] as const;
     if (Platform.OS !== 'ios') {
@@ -1109,63 +1135,36 @@ function ModelToolsDrawer({
   };
 
   useEffect(() => {
-    if (open) {
-      setMounted(true);
-      requestAnimationFrame(() => {
-        translateX.value = withSpring(0, {
-          damping: IOS_MOTION.spring.damping,
-          mass: IOS_MOTION.spring.mass,
-          overshootClamping: true,
-          stiffness: IOS_MOTION.spring.stiffness,
-        });
-      });
-    } else if (mounted) {
-      translateX.value = withSpring(256, {
-        damping: IOS_MOTION.spring.damping,
-        mass: IOS_MOTION.spring.mass,
-        overshootClamping: true,
-        stiffness: IOS_MOTION.spring.stiffness,
-      }, (finished) => {
-        if (finished) runOnJS(setMounted)(false);
-      });
-    }
-  }, [mounted, open, translateX]);
-
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ translateX: translateX.value }] }));
-  const backdropStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      translateX.value,
-      [0, 256],
-      [1, 0],
-      Extrapolation.CLAMP,
-    ),
-  }));
+    if (!open || Platform.OS !== 'ios') return;
+    const timer = setTimeout(() => {
+      void configurePresentedSheet();
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [open]);
 
   return (
     <Modal
-      animationType="none"
+      allowSwipeDismissal={Platform.OS === 'ios'}
+      animationType={Platform.OS === 'ios' ? 'slide' : 'fade'}
       onRequestClose={onClose}
-      presentationStyle="overFullScreen"
-      statusBarTranslucent
-      transparent
-      visible={mounted}
+      presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'overFullScreen'}
+      statusBarTranslucent={Platform.OS !== 'ios'}
+      transparent={Platform.OS !== 'ios'}
+      visible={open}
     >
-      <View style={styles.drawerRoot}>
-        <Reanimated.View
-          style={[StyleSheet.absoluteFill, styles.drawerBackdrop, backdropStyle]}
-        >
-          <IOSPressable haptic="none" onPress={onClose} opacityTo={1} scaleTo={1} style={StyleSheet.absoluteFill} />
-        </Reanimated.View>
-        <Reanimated.View
+      <View
+        style={[
+          styles.drawerRoot,
+          { backgroundColor: tokens.colors.background },
+        ]}
+      >
+        <View
           style={[
             styles.drawer,
             {
-              backgroundColor: 'transparent',
-              borderLeftColor: tokens.colors.border,
               paddingBottom: insets.bottom,
-              paddingTop: insets.top,
+              paddingTop: Platform.OS === 'ios' ? 0 : insets.top,
             },
-            animatedStyle,
           ]}
         >
           <View style={[styles.drawerHeader, { borderBottomColor: tokens.colors.border }]}>
@@ -1246,7 +1245,7 @@ function ModelToolsDrawer({
               </View>
             </View>
           </ScrollView>
-        </Reanimated.View>
+        </View>
       </View>
     </Modal>
   );
@@ -1350,8 +1349,7 @@ const styles = StyleSheet.create({
   historyItemTitle: { fontFamily: BODY_SEMIBOLD, fontSize: 11 },
   historyItemMeta: { fontFamily: BODY_REGULAR, fontSize: 9, marginTop: 3 },
   drawerRoot: { flex: 1 },
-  drawerBackdrop: { backgroundColor: 'rgba(0,0,0,0.60)', right: 256 },
-  drawer: { borderLeftWidth: 1, bottom: 0, overflow: 'hidden', position: 'absolute', right: 0, top: 0, width: 256 },
+  drawer: { flex: 1, overflow: 'hidden' },
   drawerHeader: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', justifyContent: 'space-between', minHeight: 56, paddingHorizontal: 20 },
   drawerTitle: { fontFamily: WEBUI_FONT_FAMILIES.MondwestRegular, fontSize: 18, letterSpacing: 0.84, lineHeight: 17 },
   drawerClose: { alignItems: 'center', height: 36, justifyContent: 'center', width: 36 },

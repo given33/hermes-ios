@@ -93,12 +93,37 @@ export interface HermesPressFeedbackProps extends NativeViewProps {
   scaleTo: number;
 }
 
+export interface HermesInputFocusProps extends NativeViewProps {
+  backgroundColorValue: string;
+  borderColor: string;
+  borderWidth: number;
+  focusBorderColor: string;
+  focused: boolean;
+  focusRingColor: string;
+  focusRingWidth: number;
+}
+
+export interface HermesAlertPresenterProps extends NativeViewProps {
+  open: boolean;
+  overlayColor: string;
+}
+
+export interface HermesDrawerSurfaceProps extends NativeViewProps {
+  onRequestClose?(event: NativeSyntheticEvent<Record<string, never>>): void;
+  open: boolean;
+  overlayColor: string;
+  width: number;
+}
+
 const segmented = optionalView<HermesSegmentedControlProps>('HermesSegmentedControl');
 const nativeSwitch = optionalView<HermesSwitchProps>('HermesSwitch');
 const search = optionalView<HermesSearchBarProps>('HermesSearchBar');
 const progress = optionalView<HermesProgressProps>('HermesProgress');
 const selection = optionalView<HermesSelectionProps>('HermesSelection');
 const pressFeedback = optionalView<HermesPressFeedbackProps>('HermesPressFeedback');
+const inputFocus = optionalView<HermesInputFocusProps>('HermesInputFocus');
+const alertPresenter = optionalView<HermesAlertPresenterProps>('HermesAlertPresenter');
+const drawerSurface = optionalView<HermesDrawerSurfaceProps>('HermesDrawerSurface');
 
 export const hasNativeSegmentedControl = segmented.available;
 export const HermesSegmentedControlView = segmented.Component;
@@ -112,3 +137,9 @@ export const hasNativeSelection = selection.available;
 export const HermesSelectionView = selection.Component;
 export const hasNativePressFeedback = pressFeedback.available;
 export const HermesPressFeedbackView = pressFeedback.Component;
+export const hasNativeInputFocus = inputFocus.available;
+export const HermesInputFocusView = inputFocus.Component;
+export const hasNativeAlertPresenter = alertPresenter.available;
+export const HermesAlertPresenterView = alertPresenter.Component;
+export const hasNativeDrawerSurface = drawerSurface.available;
+export const HermesDrawerSurfaceView = drawerSurface.Component;

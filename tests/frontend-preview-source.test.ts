@@ -114,6 +114,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   const quickLookBridge = read('modules/hermes-quick-look/index.ts');
   const quickLookNative = read('modules/hermes-quick-look/ios/HermesQuickLookModule.swift');
+  const nativeDrawer = read(
+    'modules/hermes-ios-controls/ios/HermesDrawerSurfaceModule.swift',
+  );
   const packageJson = JSON.parse(read('package.json')) as {
     dependencies: Record<string, string>;
   };
@@ -121,10 +124,12 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(app, /from '\.\/PreviewChatPage'/);
   assert.doesNotMatch(chat, /KeyboardAvoidingView/);
   assert.match(chat, /useAnimatedKeyboard\(\)/);
+  assert.match(chat, /useAnimatedReaction\(/);
+  assert.match(chat, /runOnJS\(keepLatestVisible\)\(false\)/);
   assert.match(chat, /paddingBottom: keyboard\.height\.value/);
   assert.match(
     chat,
-    /<Reanimated\.View\s*style=\{\[\s*styles\.composer,[\s\S]*composerKeyboardStyle/,
+    /<Reanimated\.View[\s\S]{0,240}styles\.composer,[\s\S]*composerKeyboardStyle/,
   );
   assert.doesNotMatch(
     chat,
@@ -133,18 +138,23 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /keyboardDidHide/);
   assert.match(chat, /Keyboard\.dismiss\(\)/);
   assert.match(chat, /keyboardDismissMode="interactive"/);
+  assert.match(chat, /onContentSizeChange=\{\(\) => keepLatestVisible\(true\)\}/);
+  assert.match(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
+  assert.match(chat, /onFocus=\{\(\) => keepLatestVisible\(false\)\}/);
   assert.match(chat, /Hermes Agent/);
   assert.match(chat, /当前窗口持续使用同一个会话/);
   assert.match(chat, /直接告诉 Hermes 你想做什么/);
   assert.match(chat, /function UnifiedMessage/);
   assert.match(chat, /function RoleActivityGroup/);
   assert.match(chat, /function ModelToolsDrawer/);
-  assert.match(chat, /animationType="none"/);
-  assert.match(chat, /translateX/);
-  assert.match(chat, /withSpring\(0,[\s\S]*IOS_MOTION\.spring\.stiffness/);
+  assert.match(chat, /allowSwipeDismissal=\{Platform\.OS === 'ios'\}/);
+  assert.match(chat, /animationType=\{Platform\.OS === 'ios' \? 'slide' : 'fade'\}/);
+  assert.match(chat, /presentationStyle=\{Platform\.OS === 'ios' \? 'pageSheet' : 'overFullScreen'\}/);
+  assert.match(chat, /configurePresentedSheet\(\)/);
   assert.doesNotMatch(chat, /ReduceMotion|useReducedMotion|reduceMotion/);
-  assert.match(chat, /runOnJS\(setMounted\)\(false\)/);
-  assert.match(chat, /styles\.drawerBackdrop, backdropStyle/);
+  assert.doesNotMatch(chat, /styles\.drawerBackdrop, backdropStyle/);
+  assert.match(nativeDrawer, /struct HermesDrawerSurfaceView: ExpoSwiftUI\.View/);
+  assert.match(nativeDrawer, /DragGesture\(minimumDistance: 8\)/);
   assert.match(chat, /safeAreaBottom/);
   assert.match(chat, /\[7 \+ safeAreaBottom, 3\]/);
   assert.match(chat, /ActionSheetIOS\.showActionSheetWithOptions/);
@@ -226,20 +236,25 @@ test('application surfaces use the shared iOS press, swipe, and haptic controls'
 test('mobile shell remains full bleed and keeps the WebUI sidebar readable without blur', () => {
   const shell = read('src/app/NativeShell.tsx');
   const chat = read('src/preview/PreviewChatPage.tsx');
+  const nativeDrawer = read(
+    'modules/hermes-ios-controls/ios/HermesDrawerSurfaceModule.swift',
+  );
 
   assert.match(shell, /const sidebarBackground = multiplyAlpha\([\s\S]*state\.mode === 'compact' \? 0\.96 : 1/);
   assert.match(shell, /backgroundColor: sidebarBackground/);
   assert.doesNotMatch(shell, /backgroundColor: 'transparent'/);
   assert.doesNotMatch(shell, /HermesLiveBlurView/);
   assert.match(shell, /left: drawerExtent/);
-  assert.match(chat, /backgroundColor: 'transparent'/);
-  assert.match(chat, /drawerBackdrop: \{ backgroundColor: 'rgba\(0,0,0,0\.60\)', right: 256 \}/);
-  const contentStart = shell.indexOf('styles.content,');
-  const contentBlock = shell.slice(
-    contentStart,
-    shell.indexOf('{activeRoute', contentStart),
+  assert.match(shell, /<HermesDrawerSurfaceView/);
+  assert.match(shell, /hasNativeDrawerSurface/);
+  assert.match(nativeDrawer, /Children\(\)/);
+  assert.doesNotMatch(nativeDrawer, /Material|blur|UIVisualEffectView/);
+  assert.match(chat, /backgroundColor: tokens\.colors\.background/);
+  assert.doesNotMatch(chat, /drawerBackdrop:/);
+  assert.doesNotMatch(
+    shell,
+    /styles\.content,\s*\{[^}]*paddingBottom: insets\.bottom/s,
   );
-  assert.doesNotMatch(contentBlock, /paddingBottom: insets\.bottom/);
 });
 
 test('secondary interfaces use the native iOS sheet transition', () => {

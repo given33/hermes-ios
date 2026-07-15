@@ -55,6 +55,8 @@ test('native button gives small and CJK labels enough painted line space', () =>
 
 test('input and list item use the shared iOS control motion', () => {
   const input = read('src/components/ui/NativeInput.tsx');
+  const button = read('src/components/ui/NativeButton.tsx');
+  const iosPressable = read('src/components/ios/IOSPressable.tsx');
   const listItem = read('src/components/ui/NativeListItem.tsx');
   const animatedIcon = read('src/components/ui/AnimatedTintedIcon.tsx');
   const controlsBridge = read('modules/hermes-ios-controls/index.ts');
@@ -63,6 +65,9 @@ test('input and list item use the shared iOS control motion', () => {
   ) as { apple?: { modules?: string[] } };
   const nativePressFeedback = read(
     'modules/hermes-ios-controls/ios/HermesPressFeedbackModule.swift',
+  );
+  const nativeInputFocus = read(
+    'modules/hermes-ios-controls/ios/HermesInputFocusModule.swift',
   );
   const packageJson = JSON.parse(read('package.json')) as {
     dependencies: Record<string, string>;
@@ -88,8 +93,28 @@ test('input and list item use the shared iOS control motion', () => {
   assert.match(controlsBridge, /optionalView<HermesPressFeedbackProps>\('HermesPressFeedback'\)/);
   assert.match(controlsBridge, /requireNativeView<P>\(name\)/);
   assert.ok(controlsConfig.apple?.modules?.includes('HermesPressFeedbackModule'));
+  assert.ok(controlsConfig.apple?.modules?.includes('HermesInputFocusModule'));
+  for (const source of [iosPressable, button]) {
+    assert.match(source, /Platform\.OS === 'ios' && hasNativePressFeedback/);
+    assert.match(source, /<HermesPressFeedbackView/);
+    assert.match(source, /onNativePress=/);
+    assert.match(source, /onPressState=/);
+  }
+  assert.match(input, /Platform\.OS === 'ios' && hasNativeInputFocus/);
+  assert.match(input, /<HermesInputFocusView/);
+  const nativeInputBranch = input.slice(
+    input.indexOf("if (Platform.OS === 'ios' && hasNativeInputFocus)"),
+    input.indexOf('return (\n      <AnimatedTextInput'),
+  );
+  assert.doesNotMatch(nativeInputBranch, /inputTypography,\s*style,/);
+  assert.match(nativeInputFocus, /UIViewPropertyAnimator\(/);
+  assert.match(nativeInputFocus, /CAShapeLayer\(\)/);
+  assert.match(nativeInputFocus, /focusRingLayer\.frame = bounds/);
+  assert.doesNotMatch(nativeInputFocus, /bounds\.insetBy/);
   assert.match(nativePressFeedback, /UILongPressGestureRecognizer/);
   assert.match(nativePressFeedback, /UIViewPropertyAnimator\(/);
+  assert.match(nativePressFeedback, /duration: 0\.12,[\s\S]*curve: \.easeOut/);
+  assert.match(nativePressFeedback, /duration: 0\.32,[\s\S]*dampingRatio: 0\.82/);
   assert.match(nativePressFeedback, /CGAffineTransform\(scaleX:/);
   assert.match(nativePressFeedback, /UISelectionFeedbackGenerator/);
   assert.match(nativePressFeedback, /UIImpactFeedbackGenerator/);
@@ -133,6 +158,12 @@ test('confirm dialog keeps canonical blur, fonts, and native modal behavior', ()
   const moduleConfig = JSON.parse(
     read('modules/hermes-live-blur/expo-module.config.json'),
   ) as { apple?: { modules?: string[] }; platforms?: string[] };
+  const controlsConfig = JSON.parse(
+    read('modules/hermes-ios-controls/expo-module.config.json'),
+  ) as { apple?: { modules?: string[] } };
+  const nativeAlert = read(
+    'modules/hermes-ios-controls/ios/HermesAlertPresenterModule.swift',
+  );
   const packageJson = JSON.parse(read('package.json')) as {
     dependencies: Record<string, string>;
   };
@@ -161,6 +192,21 @@ test('confirm dialog keeps canonical blur, fonts, and native modal behavior', ()
   assert.match(dialog, /DIALOG_DURATION_MS = IOS_MOTION\.duration\.modal/);
   assert.doesNotMatch(dialog, /ReduceMotion|useReducedMotion|reduceMotion/);
   assert.match(dialog, /transitionConfirmDialogGate/);
+  assert.match(dialog, /Platform\.OS === 'ios' && hasNativeAlertPresenter/);
+  assert.match(dialog, /<HermesAlertPresenterView/);
+  assert.ok(controlsConfig.apple?.modules?.includes('HermesAlertPresenterModule'));
+  assert.match(nativeAlert, /struct HermesAlertPresenterView: ExpoSwiftUI\.View/);
+  assert.match(nativeAlert, /fullScreenCover\(isPresented:/);
+  assert.match(nativeAlert, /withAnimation\(\.spring/);
+  assert.match(nativeAlert, /dismissalTask\?\.cancel\(\)/);
+  assert.match(nativeAlert, /guard !Task\.isCancelled, !props\.open/);
+  assert.match(nativeAlert, /appeared = true/);
+  const nativeDrawer = read(
+    'modules/hermes-ios-controls/ios/HermesDrawerSurfaceModule.swift',
+  );
+  assert.match(nativeDrawer, /\.simultaneousGesture\(/);
+  assert.match(nativeDrawer, /abs\(value\.translation\.width\) > abs\(value\.translation\.height\)/);
+  assert.match(nativeDrawer, /isOpen = false[\s\S]*props\.onRequestClose\(\)/);
   assert.match(liquidGlassModule, /Name\("HermesLiquidGlass"\)/);
   assert.match(liquidGlass, /UIVisualEffectView\(\)/);
   assert.match(liquidGlass, /UIBlurEffect\(style: \.systemUltraThinMaterial\)/);
@@ -173,23 +219,36 @@ test('confirm dialog keeps canonical blur, fonts, and native modal behavior', ()
   assert.match(liquidGlass, /layer\.cornerCurve = \.continuous/);
 });
 
-test('live blur and the app share an explicit iOS 16 deployment target', () => {
+test('all local native modules and the app require iOS 18', () => {
   const appConfig = JSON.parse(read('app.json')) as {
-    expo: { plugins: Array<string | [string, Record<string, unknown>]> };
+    expo: {
+      newArchEnabled?: boolean;
+      plugins: Array<string | [string, Record<string, unknown>]>;
+    };
   };
   const packageJson = JSON.parse(read('package.json')) as {
     dependencies: Record<string, string>;
   };
-  const podspec = read('modules/hermes-live-blur/ios/HermesLiveBlur.podspec');
+  const podspecs = [
+    'modules/hermes-context-menu/ios/HermesContextMenu.podspec',
+    'modules/hermes-ios-controls/ios/HermesIOSControls.podspec',
+    'modules/hermes-live-blur/ios/HermesLiveBlur.podspec',
+    'modules/hermes-quick-look/ios/HermesQuickLook.podspec',
+    'modules/hermes-sheet-controller/ios/HermesSheetController.podspec',
+    'modules/hermes-swipe-actions/ios/HermesSwipeActions.podspec',
+  ].map(read);
   const buildProperties = appConfig.expo.plugins.find(
     (plugin): plugin is [string, { ios: { deploymentTarget: string } }] =>
       Array.isArray(plugin) && plugin[0] === 'expo-build-properties',
   );
 
   assert.equal(packageJson.dependencies['expo-build-properties'], '~1.0.10');
+  assert.equal(appConfig.expo.newArchEnabled, true);
   assert.ok(buildProperties);
-  assert.equal(buildProperties[1].ios.deploymentTarget, '16.0');
-  assert.match(podspec, /s\.platforms\s*=\s*\{ :ios => '16\.0' \}/);
+  assert.equal(buildProperties[1].ios.deploymentTarget, '18.0');
+  for (const podspec of podspecs) {
+    assert.match(podspec, /s\.platforms\s*=\s*\{ :ios => '18\.0' \}/);
+  }
 });
 
 test('local native effects always launch through a development client', () => {
