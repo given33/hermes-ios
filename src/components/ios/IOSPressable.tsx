@@ -3,7 +3,6 @@ import { type ReactNode, useState } from 'react';
 import {
   Platform,
   Pressable,
-  type GestureResponderEvent,
   type PressableProps,
   type StyleProp,
   type ViewStyle,
@@ -15,10 +14,6 @@ import Reanimated, {
 } from 'react-native-reanimated';
 
 import { IOS_MOTION } from '../../design/ios-motion';
-import {
-  hasNativePressFeedback,
-  HermesPressFeedbackView,
-} from '../../../modules/hermes-ios-controls';
 
 const AnimatedPressable = Reanimated.createAnimatedComponent(Pressable);
 
@@ -58,38 +53,6 @@ export function IOSPressable({
     mass: 0.72,
     stiffness: IOS_MOTION.spring.stiffness + 80,
   } as const;
-
-  if (Platform.OS === 'ios' && hasNativePressFeedback) {
-    return (
-      <HermesPressFeedbackView
-        {...props}
-        accessibilityRole={props.accessibilityRole ?? 'button'}
-        accessibilityState={{
-          ...props.accessibilityState,
-          disabled: disabled === true,
-        }}
-        disabled={disabled === true}
-        haptic={haptic}
-        onNativePress={(event) => {
-          onPress?.(event as unknown as GestureResponderEvent);
-        }}
-        onPressState={(event) => {
-          const nextPressed = event.nativeEvent.pressed;
-          setPressed(nextPressed);
-          if (nextPressed) {
-            onPressIn?.(event as unknown as GestureResponderEvent);
-          } else {
-            onPressOut?.(event as unknown as GestureResponderEvent);
-          }
-        }}
-        opacityTo={opacityTo}
-        scaleTo={scaleTo}
-        style={[style, pressed && pressedStyle]}
-      >
-        {children}
-      </HermesPressFeedbackView>
-    );
-  }
 
   return (
     <AnimatedPressable

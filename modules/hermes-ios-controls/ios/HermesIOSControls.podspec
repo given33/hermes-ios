@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.description    = 'UISegmentedControl, UISwitch, UISearchBar, UIProgressView, and native selection animations.'
   s.author         = 'Hermes iOS'
   s.homepage       = 'https://github.com/NousResearch/hermes-agent'
-  s.platforms      = { :ios => '18.0' }
+  s.platforms      = { :ios => '16.0' }
   s.source         = { :git => '' }
   s.static_framework = true
 

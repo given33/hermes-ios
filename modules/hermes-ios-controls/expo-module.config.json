@@ -7,10 +7,7 @@
       "HermesSearchBarModule",
       "HermesProgressModule",
       "HermesSelectionModule",
-      "HermesPressFeedbackModule",
-      "HermesInputFocusModule",
-      "HermesAlertPresenterModule",
-      "HermesDrawerSurfaceModule"
+      "HermesPressFeedbackModule"
     ]
   }
 }

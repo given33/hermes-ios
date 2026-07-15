@@ -22,7 +22,6 @@ test('authenticated native content is reachable through the native ThemeProvider
   assert.match(appSource, /Hermes authenticated content/);
   assert.match(appSource, /<NativeShell \/>/);
   assert.match(appSource, /EXPO_PUBLIC_FRONTEND_PREVIEW/);
-  assert.doesNotMatch(appSource, /__DEV__\s*&&\s*process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW/);
   assert.match(appSource, /<FrontendPreviewThemeProvider>/);
 
   assert.match(providerSource, /@react-native-async-storage\/async-storage/);

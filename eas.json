@@ -7,27 +7,18 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "env": {
-        "RNS_GAMMA_ENABLED": "1"
-      },
       "ios": {
         "simulator": false
       }
     },
     "preview": {
       "distribution": "internal",
-      "env": {
-        "RNS_GAMMA_ENABLED": "1"
-      },
       "ios": {
         "simulator": false
       }
     },
     "production": {
-      "autoIncrement": true,
-      "env": {
-        "RNS_GAMMA_ENABLED": "1"
-      }
+      "autoIncrement": true
     }
   }
 }

@@ -2,12 +2,6 @@ name: Build unsigned iOS IPA
 
 on:
   workflow_dispatch:
-    inputs:
-      frontend_preview:
-        description: Build the standalone frontend preview without login
-        required: true
-        default: true
-        type: boolean
   push:
     tags:
       - 'v*.*.*'
@@ -19,9 +13,6 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 60
-    env:
-      EXPO_PUBLIC_FRONTEND_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.frontend_preview && '1' || '0' }}
-      RNS_GAMMA_ENABLED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

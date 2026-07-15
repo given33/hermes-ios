@@ -1,11 +1,8 @@
 import { forwardRef, useEffect, useState } from 'react';
 import {
-  Platform,
   StyleSheet,
   TextInput,
-  type StyleProp,
   type TextInputProps,
-  type ViewStyle,
 } from 'react-native';
 import Reanimated, {
   Easing,
@@ -23,11 +20,6 @@ import {
 import { useTheme } from '../../design/ThemeProvider';
 import { IOS_MOTION } from '../../design/ios-motion';
 import { useNativeLocalization } from '../../i18n/NativeLocalization';
-import { resolveNativeFontStack } from '../../design/native-font-faces';
-import {
-  hasNativeInputFocus,
-  HermesInputFocusView,
-} from '../../../modules/hermes-ios-controls';
 
 const AnimatedTextInput = Reanimated.createAnimatedComponent(TextInput);
 const TRANSITION_EASING = Easing.bezier(
@@ -99,72 +91,6 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
       });
       onBlur?.(event);
     };
-    const translatedPlaceholder = typeof props.placeholder === 'string'
-      ? t(props.placeholder)
-      : props.placeholder;
-    const inputTypography = {
-      color: tokens.colors.foreground,
-      fontFamily: resolveNativeFontStack(tokens.typography.fontMono, 400),
-      fontSize: metrics.fontSize,
-      lineHeight: metrics.lineHeight,
-      paddingHorizontal: metrics.paddingHorizontal,
-      paddingVertical: metrics.paddingVertical,
-      textAlignVertical: multiline ? 'top' as const : 'center' as const,
-    };
-
-    if (Platform.OS === 'ios' && hasNativeInputFocus) {
-      return (
-        <HermesInputFocusView
-          accessibilityLabel={props.accessibilityLabel
-            ? t(props.accessibilityLabel)
-            : undefined}
-          accessibilityState={{
-            ...props.accessibilityState,
-            disabled: !enabled,
-          }}
-          backgroundColorValue={colors.background}
-          borderColor={colors.border}
-          borderWidth={CONTROL_METRICS.input.borderWidth}
-          focusBorderColor={colors.focusBorder}
-          focused={focused}
-          focusRingColor={colors.focusRing}
-          focusRingWidth={CONTROL_METRICS.input.focusRingWidth}
-          style={[
-            styles.input,
-            {
-              height: multiline ? undefined : metrics.visibleHeight,
-              minHeight: metrics.visibleHeight,
-              opacity: enabled ? 1 : CONTROL_METRICS.input.disabledOpacity,
-            },
-            style as StyleProp<ViewStyle>,
-          ]}
-        >
-          <TextInput
-            {...props}
-            accessibilityLabel={props.accessibilityLabel
-              ? t(props.accessibilityLabel)
-              : undefined}
-            accessibilityState={{
-              ...props.accessibilityState,
-              disabled: !enabled,
-            }}
-            cursorColor={tokens.colors.foreground}
-            editable={enabled}
-            multiline={multiline}
-            onBlur={handleBlur}
-            onFocus={handleFocus}
-            placeholder={translatedPlaceholder}
-            placeholderTextColor={placeholderTextColor ?? colors.placeholder}
-            ref={ref}
-            selectionColor={tokens.colors.foreground}
-            style={[
-              styles.nativeInput,
-              inputTypography,
-            ]}
-          />
-        </HermesInputFocusView>
-      );
-    }
 
     return (
       <AnimatedTextInput
@@ -181,7 +107,9 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
         multiline={multiline}
         onBlur={handleBlur}
         onFocus={handleFocus}
-        placeholder={translatedPlaceholder}
+        placeholder={typeof props.placeholder === 'string'
+          ? t(props.placeholder)
+          : props.placeholder}
         placeholderTextColor={placeholderTextColor ?? colors.placeholder}
         ref={ref}
         selectionColor={tokens.colors.foreground}
@@ -190,11 +118,17 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
           {
             backgroundColor: colors.background,
             borderWidth: CONTROL_METRICS.input.borderWidth,
-            ...inputTypography,
+            color: tokens.colors.foreground,
+            fontFamily: 'Courier New',
+            fontSize: metrics.fontSize,
             height: multiline ? undefined : metrics.visibleHeight,
+            lineHeight: metrics.lineHeight,
             minHeight: metrics.visibleHeight,
             opacity: enabled ? 1 : CONTROL_METRICS.input.disabledOpacity,
             outlineWidth: focused ? CONTROL_METRICS.input.focusRingWidth : 0,
+            paddingHorizontal: metrics.paddingHorizontal,
+            paddingVertical: metrics.paddingVertical,
+            textAlignVertical: multiline ? 'top' : 'center',
           },
           focusStyle,
           style,
@@ -207,12 +141,5 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
 const styles = StyleSheet.create({
   input: {
     borderRadius: 0,
-  },
-  nativeInput: {
-    backgroundColor: 'transparent',
-    borderWidth: 0,
-    flex: 1,
-    minHeight: 0,
-    width: '100%',
   },
 });

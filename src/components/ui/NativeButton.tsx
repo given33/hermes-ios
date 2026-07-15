@@ -13,13 +13,11 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
   type ColorValue,
-  type GestureResponderEvent,
   type PressableProps,
   type StyleProp,
   type TextStyle,
@@ -54,10 +52,6 @@ import { resolveNativeFontStack } from '../../design/native-font-faces';
 import { useTheme } from '../../design/ThemeProvider';
 import { IOS_MOTION } from '../../design/ios-motion';
 import { useNativeLocalization } from '../../i18n/NativeLocalization';
-import {
-  hasNativePressFeedback,
-  HermesPressFeedbackView,
-} from '../../../modules/hermes-ios-controls';
 import { playHaptic, type IOSHaptic } from '../ios/IOSPressable';
 
 const AnimatedRect = Reanimated.createAnimatedComponent(Rect);
@@ -146,17 +140,77 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
       if (blocked) dispatch('reset');
     }, [blocked]);
 
-    const handleLayout: NonNullable<PressableProps['onLayout']> = (event) => {
-      const { height, width } = event.nativeEvent.layout;
-      setLayout((current) => (
-        current.height === height && current.width === width
-          ? current
-          : { height, width }
-      ));
-      onLayout?.(event);
-    };
-    const buttonContent = (
-      <>
+    return (
+      <Pressable
+        {...props}
+        accessibilityLabel={accessibilityLabel ? t(accessibilityLabel) : undefined}
+        accessibilityRole={props.accessibilityRole ?? 'button'}
+        accessibilityState={{
+          ...accessibilityState,
+          busy: loading || accessibilityState?.busy,
+          disabled: blocked,
+        }}
+        disabled={blocked}
+        focusable={!blocked}
+        hitSlop={props.hitSlop ?? metrics.hitSlop}
+        onBlur={(event) => {
+          dispatch('blur');
+          onBlur?.(event);
+        }}
+        onFocus={(event) => {
+          dispatch('focus');
+          onFocus?.(event);
+        }}
+        onHoverIn={(event) => {
+          dispatch('hover-in');
+          onHoverIn?.(event);
+        }}
+        onHoverOut={(event) => {
+          dispatch('hover-out');
+          onHoverOut?.(event);
+        }}
+        onLayout={(event) => {
+          const { height, width } = event.nativeEvent.layout;
+          setLayout((current) => (
+            current.height === height && current.width === width
+              ? current
+              : { height, width }
+          ));
+          onLayout?.(event);
+        }}
+        onPressIn={(event) => {
+          dispatch('press-in');
+          pressProgress.value = withSpring(1, {
+            damping: IOS_MOTION.spring.damping,
+            mass: 0.72,
+            stiffness: IOS_MOTION.spring.stiffness + 80,
+          });
+          onPressIn?.(event);
+        }}
+        onPress={(event) => {
+          void playHaptic(haptic ?? (destructive ? 'medium' : 'none'));
+          onPress?.(event);
+        }}
+        onPressOut={(event) => {
+          dispatch('press-out');
+          pressProgress.value = withSpring(0, {
+            damping: IOS_MOTION.spring.damping,
+            mass: 0.72,
+            stiffness: IOS_MOTION.spring.stiffness + 80,
+          });
+          onPressOut?.(event);
+        }}
+        ref={ref}
+        style={(state) => [
+          styles.pressable,
+          {
+            borderRadius,
+            height: paintedHeight,
+            width: square ? paintedHeight : undefined,
+          },
+          typeof style === 'function' ? style(state) : style,
+        ]}
+      >
         <ArcBorder
           borderRadius={borderRadius}
           filter={visual.filter}
@@ -231,118 +285,6 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
             </>
           ) : null}
         </Reanimated.View>
-      </>
-    );
-    const baseRootStyle = [
-      styles.pressable,
-      {
-        borderRadius,
-        height: paintedHeight,
-        width: square ? paintedHeight : undefined,
-      },
-    ];
-
-    if (Platform.OS === 'ios' && hasNativePressFeedback) {
-      return (
-        <HermesPressFeedbackView
-          {...props}
-          accessibilityLabel={accessibilityLabel ? t(accessibilityLabel) : undefined}
-          accessibilityRole={props.accessibilityRole ?? 'button'}
-          accessibilityState={{
-            ...accessibilityState,
-            busy: loading || accessibilityState?.busy,
-            disabled: blocked,
-          }}
-          disabled={blocked}
-          haptic={haptic ?? (destructive ? 'medium' : 'none')}
-          hitSlop={props.hitSlop ?? metrics.hitSlop}
-          onLayout={handleLayout}
-          onNativePress={(event) => {
-            onPress?.(event as unknown as GestureResponderEvent);
-          }}
-          onPressState={(event) => {
-            const pressed = event.nativeEvent.pressed;
-            dispatch(pressed ? 'press-in' : 'press-out');
-            if (pressed) {
-              onPressIn?.(event as unknown as GestureResponderEvent);
-            } else {
-              onPressOut?.(event as unknown as GestureResponderEvent);
-            }
-          }}
-          opacityTo={0.92}
-          ref={ref}
-          scaleTo={0.975}
-          style={[
-            baseRootStyle,
-            typeof style === 'function'
-              ? style({ pressed: interaction.pressed })
-              : style,
-          ]}
-        >
-          {buttonContent}
-        </HermesPressFeedbackView>
-      );
-    }
-
-    return (
-      <Pressable
-        {...props}
-        accessibilityLabel={accessibilityLabel ? t(accessibilityLabel) : undefined}
-        accessibilityRole={props.accessibilityRole ?? 'button'}
-        accessibilityState={{
-          ...accessibilityState,
-          busy: loading || accessibilityState?.busy,
-          disabled: blocked,
-        }}
-        disabled={blocked}
-        focusable={!blocked}
-        hitSlop={props.hitSlop ?? metrics.hitSlop}
-        onBlur={(event) => {
-          dispatch('blur');
-          onBlur?.(event);
-        }}
-        onFocus={(event) => {
-          dispatch('focus');
-          onFocus?.(event);
-        }}
-        onHoverIn={(event) => {
-          dispatch('hover-in');
-          onHoverIn?.(event);
-        }}
-        onHoverOut={(event) => {
-          dispatch('hover-out');
-          onHoverOut?.(event);
-        }}
-        onLayout={handleLayout}
-        onPressIn={(event) => {
-          dispatch('press-in');
-          pressProgress.value = withSpring(1, {
-            damping: IOS_MOTION.spring.damping,
-            mass: 0.72,
-            stiffness: IOS_MOTION.spring.stiffness + 80,
-          });
-          onPressIn?.(event);
-        }}
-        onPress={(event) => {
-          void playHaptic(haptic ?? (destructive ? 'medium' : 'none'));
-          onPress?.(event);
-        }}
-        onPressOut={(event) => {
-          dispatch('press-out');
-          pressProgress.value = withSpring(0, {
-            damping: IOS_MOTION.spring.damping,
-            mass: 0.72,
-            stiffness: IOS_MOTION.spring.stiffness + 80,
-          });
-          onPressOut?.(event);
-        }}
-        ref={ref}
-        style={(state) => [
-          baseRootStyle,
-          typeof style === 'function' ? style(state) : style,
-        ]}
-      >
-        {buttonContent}
       </Pressable>
     );
   },
