@@ -147,7 +147,8 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View {
         onNavigate: select
       )
       .environmentObject(appearance)
-      .frame(width: drawerWidth, maxHeight: .infinity, alignment: .leading)
+      .frame(width: drawerWidth)
+      .frame(maxHeight: .infinity, alignment: .leading)
       .background(appearance.palette.background)
       .offset(x: isDrawer ? drawerOffset(width: drawerWidth) : 0)
       .shadow(

@@ -449,7 +449,7 @@ private struct HermesProfileEditor: View {
     .navigationTitle(profile.name)
     .navigationBarTitleDisplayMode(.inline)
     .tint(appearance.palette.accent)
-    .onChange(of: profile) { _, updated in
+    .onChange(of: profile) { updated in
       onChange(updated)
     }
   }
@@ -863,4 +863,3 @@ private struct HermesDocDisclosure: View {
     .animation(.spring(response: 0.34, dampingFraction: 0.88), value: expanded)
   }
 }
-
