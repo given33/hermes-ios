@@ -221,8 +221,12 @@ test('heavy analytics content is staged before the sidebar close signal', () => 
   assert.match(native, /DispatchQueue\.main\.async \{/);
   assert.match(native, /preparedAnalyticsPath = path/);
   assert.match(native, /enabled: routeContentReady/);
+  assert.match(native, /private var activationGeneration = 0/);
+  assert.match(native, /activationGeneration == readyGeneration/);
+  assert.match(native, /lastReportedGeneration != activationGeneration/);
   assert.match(routes, /let renderDeferredContent: Bool/);
   assert.match(routes, /HermesAnalyticsPage\([\s\S]*renderChart: renderDeferredContent/);
   assert.match(routes, /if renderChart \{[\s\S]*Chart\(points\)/);
   assert.doesNotMatch(preview, /<HermesSwiftUIRouteView\s+key=\{route\.path\}/);
+  assert.doesNotMatch(preview, /<PreviewRoute\s+key=\{route\.path\}/);
 });

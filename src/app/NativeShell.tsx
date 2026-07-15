@@ -237,8 +237,10 @@ const PAGE_EXITING = FadeOutLeft
   .easing(IOS_NAVIGATION_EASING);
 type CompactStackParamList = Record<
   string,
-  { sidebarSelection?: boolean } | undefined
+  { path?: string; sidebarSelection?: boolean } | undefined
 >;
+const STABLE_SWIFTUI_ROUTE_NAME = '__hermes-swiftui-sidebar-root';
+const STABLE_SWIFTUI_ROUTE_KEY = 'hermes-swiftui-sidebar-root';
 const CompactStack = createNativeStackNavigator<CompactStackParamList>();
 
 export interface NativeShellSlotContext {
@@ -391,10 +393,14 @@ export function NativeShell({
   const navigate = useCallback(
     (path: string) => {
       const resolved = resolveNativeShellPath(composition.routes, path);
+      const currentRoute = compactNavigationRef.getCurrentRoute();
+      const currentPath = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
+        ? currentRoute.params?.path
+        : currentRoute?.name;
       if (
         state.mode === 'compact'
         && compactNavigationRef.isReady()
-        && compactNavigationRef.getCurrentRoute()?.name !== resolved
+        && currentPath !== resolved
       ) {
         compactNavigationRef.navigate(resolved);
       }
@@ -409,17 +415,30 @@ export function NativeShell({
         state.mode === 'compact'
         && compactNavigationRef.isReady()
       ) {
-        if (compactNavigationRef.getCurrentRoute()?.name === resolved) {
+        const currentRoute = compactNavigationRef.getCurrentRoute();
+        const currentPath = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
+          ? currentRoute.params?.path
+          : currentRoute?.name;
+        if (currentPath === resolved) {
           closeMobile();
           return;
         }
+        const resolvedRoute = composition.routes.find(
+          (route) => route.path === resolved,
+        );
+        const reuseSwiftUIHost =
+          nativeRouteChrome && resolvedRoute?.routeId !== 'chat';
         clearPendingSidebarSelection();
         pendingSidebarPath.current = resolved;
         compactNavigationRef.resetRoot({
           index: 0,
           routes: [{
-            name: resolved,
-            params: { sidebarSelection: true },
+            key: reuseSwiftUIHost ? STABLE_SWIFTUI_ROUTE_KEY : undefined,
+            name: reuseSwiftUIHost ? STABLE_SWIFTUI_ROUTE_NAME : resolved,
+            params: {
+              path: reuseSwiftUIHost ? resolved : undefined,
+              sidebarSelection: true,
+            },
           }],
         });
         dispatch({ type: 'select-route', path: resolved });
@@ -435,12 +454,16 @@ export function NativeShell({
       closeMobile,
       compactNavigationRef,
       composition.routes,
+      nativeRouteChrome,
       reportRouteReady,
       state.mode,
     ],
   );
   const syncCompactNavigation = useCallback(() => {
-    const current = compactNavigationRef.getCurrentRoute()?.name;
+    const currentRoute = compactNavigationRef.getCurrentRoute();
+    const current = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
+      ? currentRoute.params?.path
+      : currentRoute?.name;
     setCanGoBack(compactNavigationRef.canGoBack());
     if (!current) return;
     const resolved = resolveNativeShellPath(composition.routes, current);
@@ -710,6 +733,49 @@ export function NativeShell({
                     </CompactStack.Screen>
                   );
                 })}
+                {nativeRouteChrome ? (
+                  <CompactStack.Screen
+                    name={STABLE_SWIFTUI_ROUTE_NAME}
+                    options={({ route: navigationRoute }) => ({
+                      animation: navigationRoute.params?.sidebarSelection
+                        ? 'none'
+                        : 'default',
+                      headerShown: false,
+                    })}
+                  >
+                    {({ route: navigationRoute }) => {
+                      const resolved = resolveNativeShellPath(
+                        composition.routes,
+                        navigationRoute.params?.path ?? state.activePath,
+                      );
+                      const route = composition.routes.find(
+                        (candidate) => candidate.path === resolved,
+                      );
+                      if (!route) return null;
+                      const label = allNavigationItems.find(
+                        (item) => item.path === route.path,
+                      )?.label ?? route.path;
+                      const compactContext: NativeShellSlotContext = {
+                        ...slotContext,
+                        activePath: route.path,
+                      };
+                      return (
+                        <View
+                          style={[
+                            styles.routeStage,
+                            {
+                              paddingLeft: insets.left,
+                              paddingRight: insets.right,
+                            },
+                          ]}
+                        >
+                          {renderRoute?.(route, label, compactContext)
+                            ?? <RoutePreview label={label} />}
+                        </View>
+                      );
+                    }}
+                  </CompactStack.Screen>
+                ) : null}
               </CompactStack.Navigator>
             </NavigationContainer>
           ) : activeRoute ? (

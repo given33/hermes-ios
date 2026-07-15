@@ -141,7 +141,6 @@ export function FrontendPreviewApp() {
         nativeRouteChrome={useSwiftUIRoutes}
         renderRoute={(route, _label, context) => (
           <PreviewRoute
-            key={route.path}
             locale={locale}
             navigate={context.navigate}
             notify={notify}

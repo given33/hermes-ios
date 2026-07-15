@@ -479,17 +479,23 @@ private struct HermesRouteReadinessProbe: UIViewRepresentable {
 }
 
 private final class HermesRouteReadinessView: UIView {
+  private var activationGeneration = 0
   private var enabled = false
-  private var lastReportedPath: String?
+  private var lastReportedGeneration: Int?
   private var onReady: ((String) -> Void)?
   private var path = ""
-  private var pendingPath: String?
+  private var pendingGeneration: Int?
 
   func configure(
     enabled: Bool,
     path: String,
     onReady: @escaping (String) -> Void
   ) {
+    let startsNewActivation = self.path != path || (!self.enabled && enabled)
+    if startsNewActivation {
+      activationGeneration += 1
+      pendingGeneration = nil
+    }
     self.enabled = enabled
     self.path = path
     self.onReady = onReady
@@ -503,24 +509,26 @@ private final class HermesRouteReadinessView: UIView {
       window != nil,
       bounds.width > 0,
       bounds.height > 0,
-      lastReportedPath != path,
-      pendingPath != path
+      lastReportedGeneration != activationGeneration,
+      pendingGeneration != activationGeneration
     else { return }
 
+    let readyGeneration = activationGeneration
     let readyPath = path
-    pendingPath = readyPath
+    pendingGeneration = readyGeneration
     DispatchQueue.main.async { [weak self] in
       guard let self else { return }
       guard
         enabled,
         window != nil,
+        activationGeneration == readyGeneration,
         path == readyPath
       else {
-        if pendingPath == readyPath { pendingPath = nil }
+        if pendingGeneration == readyGeneration { pendingGeneration = nil }
         return
       }
-      pendingPath = nil
-      lastReportedPath = readyPath
+      pendingGeneration = nil
+      lastReportedGeneration = readyGeneration
       onReady?(readyPath)
     }
   }

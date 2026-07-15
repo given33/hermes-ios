@@ -140,8 +140,13 @@ test('sidebar selections reset the top-level stack instead of accumulating pages
   const source = read('src/app/NativeShell.tsx');
 
   assert.match(source, /const selectSidebarRoute = useCallback/);
-  assert.match(source, /compactNavigationRef\.resetRoot\(\{[\s\S]*index: 0,[\s\S]*params: \{ sidebarSelection: true \}/);
+  assert.match(source, /compactNavigationRef\.resetRoot\(\{[\s\S]*index: 0,[\s\S]*sidebarSelection: true/);
   assert.match(source, /animation: navigationRoute\.params\?\.sidebarSelection\s*\? 'none'\s*: 'default'/);
+  assert.match(source, /const STABLE_SWIFTUI_ROUTE_KEY = 'hermes-swiftui-sidebar-root'/);
+  assert.match(source, /key: reuseSwiftUIHost \? STABLE_SWIFTUI_ROUTE_KEY : undefined/);
+  assert.match(source, /name: reuseSwiftUIHost \? STABLE_SWIFTUI_ROUTE_NAME : resolved/);
+  assert.match(source, /<CompactStack\.Screen\s*name=\{STABLE_SWIFTUI_ROUTE_NAME\}/);
+  assert.match(source, /navigationRoute\.params\?\.path \?\? state\.activePath/);
   assert.match(source, /pendingSidebarPath\.current = resolved/);
   assert.match(source, /dispatch\(\{ type: 'select-route', path: resolved \}\)/);
   assert.match(source, /const reportRouteReady = useCallback/);
