@@ -10,7 +10,9 @@ const read = (path: string) => readFileSync(resolve(projectRoot, path), 'utf8');
 test('signed iOS builds use the partial SwiftUI frontend without replacing chat', () => {
   const config = JSON.parse(
     read('modules/hermes-ios-controls/expo-module.config.json'),
-  ) as { apple?: { modules?: string[] } };
+  ) as {
+    apple?: { modules?: string[]; appDelegateSubscribers?: string[] };
+  };
   const bridge = read('modules/hermes-ios-controls/index.ts');
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
@@ -71,27 +73,47 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   const frameRate = read(
     'modules/hermes-ios-controls/ios/HermesFrameRateModule.swift',
   );
+  const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
   const bridge = read('modules/hermes-ios-controls/index.ts');
   const app = read('src/app/HermesNativeApp.tsx');
   const config = JSON.parse(
     read('modules/hermes-ios-controls/expo-module.config.json'),
-  ) as { apple?: { modules?: string[] } };
+  ) as {
+    apple?: { modules?: string[]; appDelegateSubscribers?: string[] };
+  };
   const shell = read('src/app/NativeShell.tsx');
 
   assert.match(native, /private let hermesDrawerAnimation = Animation\.interactiveSpring/);
   assert.doesNotMatch(native, /HermesProMotionDriver|CADisplayLink/);
   assert.ok(config.apple?.modules?.includes('HermesFrameRateModule'));
+  assert.ok(
+    config.apple?.appDelegateSubscribers?.includes(
+      'HermesFrameRateAppDelegateSubscriber',
+    ),
+  );
   assert.match(frameRate, /Name\("HermesFrameRate"\)/);
+  assert.match(frameRate, /Thread\.isMainThread/);
+  assert.match(frameRate, /DispatchQueue\.main\.async/);
+  assert.match(frameRate, /method_exchangeImplementations/);
+  assert.match(frameRate, /HermesFrameRateAppDelegateSubscriber/);
+  assert.match(frameRate, /subscriberDidRegister/);
+  assert.match(frameRate, /getDiagnostics/);
+  assert.match(frameRate, /runOnQueue\(\.main\)/);
+  assert.match(frameRate, /measuredCallbacksPerSecond/);
+  assert.match(routes, /HermesFrameRateLogRow/);
+  assert.match(routes, /TimelineView\(\.periodic/);
+  assert.match(routes, /requested=\\\(snapshot\.requestedFramesPerSecond\)/);
   assert.match(frameRate, /CADisplayLink/);
   assert.match(frameRate, /UIScreen\.main\.maximumFramesPerSecond/);
   assert.match(frameRate, /preferredFrameRateRange = CAFrameRateRange/);
-  assert.match(frameRate, /minimum: maximumRate/);
-  assert.match(frameRate, /preferred: maximumRate/);
-  assert.match(frameRate, /link\.add\(to: \.main, forMode: \.common\)/);
+  assert.match(frameRate, /minimum: targetRate/);
+  assert.match(frameRate, /preferred: targetRate/);
+  assert.match(frameRate, /link\.add\(to: RunLoop\.main, forMode: \.common\)/);
   assert.match(frameRate, /OnAppBecomesActive/);
   assert.match(frameRate, /OnAppEntersForeground/);
   assert.match(frameRate, /OnAppEntersBackground/);
   assert.match(bridge, /startNativeFrameRateController/);
+  assert.match(bridge, /getNativeFrameRateDiagnostics/);
   assert.match(app, /startNativeFrameRateController\(\)/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = true \}/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = false \}/);

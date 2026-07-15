@@ -10,6 +10,9 @@
       "HermesPressFeedbackModule",
       "HermesFrameRateModule",
       "HermesSwiftUIPartialFrontendModule"
+    ],
+    "appDelegateSubscribers": [
+      "HermesFrameRateAppDelegateSubscriber"
     ]
   }
 }

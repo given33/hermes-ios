@@ -1,4 +1,5 @@
 import Charts
+import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -548,6 +549,12 @@ private struct HermesLogsPage: View {
       .padding(12)
 
       List {
+        TimelineView(.periodic(from: .now, by: 1)) { _ in
+          HermesFrameRateLogRow(
+            chinese: chinese,
+            snapshot: HermesFrameRateController.shared.snapshot()
+          )
+        }
         ForEach(filteredLogs) { log in
           HStack(alignment: .top, spacing: 10) {
             Text(log.time)
@@ -568,5 +575,37 @@ private struct HermesLogsPage: View {
     }
     .background(appearance.palette.background)
     .searchable(text: $search, prompt: chinese ? "搜索日志" : "Search logs")
+  }
+}
+
+private struct HermesFrameRateLogRow: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let chinese: Bool
+  let snapshot: HermesFrameRateSnapshot
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Text("LIVE")
+        .font(HermesFonts.mono(10))
+        .foregroundStyle(appearance.palette.tertiary)
+      Text("FPS")
+        .font(HermesFonts.mono(10))
+        .foregroundStyle(
+          snapshot.measuredCallbacksPerSecond >= 110
+            ? appearance.palette.success
+            : appearance.palette.warning
+        )
+        .frame(width: 38, alignment: .leading)
+      Text(message)
+        .font(HermesFonts.mono(12))
+        .textSelection(.enabled)
+    }
+    .padding(.vertical, 3)
+  }
+
+  private var message: String {
+    let measured = String(format: "%.1f", snapshot.measuredCallbacksPerSecond)
+    let power = snapshot.lowPowerMode ? (chinese ? "低电量开启" : "Low Power On") : (chinese ? "低电量关闭" : "Low Power Off")
+    return "max=\(snapshot.screenMaximumFramesPerSecond) requested=\(snapshot.requestedFramesPerSecond) measured=\(measured) \(power) thermal=\(snapshot.thermalState)"
   }
 }

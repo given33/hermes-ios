@@ -19,6 +19,7 @@ type NativeViewProps = ViewProps & { children?: ReactNode };
 interface HermesFrameRateNativeModule {
   start(): void;
   stop(): void;
+  getDiagnostics(): Promise<Record<string, unknown>>;
 }
 
 const nativeFrameRateModule =
@@ -26,6 +27,10 @@ const nativeFrameRateModule =
 
 export function startNativeFrameRateController() {
   nativeFrameRateModule?.start();
+}
+
+export async function getNativeFrameRateDiagnostics() {
+  return (await nativeFrameRateModule?.getDiagnostics()) ?? null;
 }
 
 export interface HermesSwiftUIThemeProps {
