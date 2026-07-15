@@ -62,6 +62,12 @@ enum HermesThemeChoice: String, CaseIterable, Identifiable {
 final class HermesAppearanceModel: ObservableObject {
   private static let themeKey = "hermes.native.theme"
   private static let compactDensityKey = "hermes.native.compact-density"
+  private let appearanceSignatureProvider: (() -> String)?
+  private let paletteProvider: (() -> HermesPalette)?
+  private let colorSchemeProvider: (() -> ColorScheme)?
+  private var cachedProviderSignature: String?
+  private var cachedProviderPalette: HermesPalette?
+  private var cachedProviderColorScheme: ColorScheme?
 
   @Published var theme: HermesThemeChoice {
     didSet { UserDefaults.standard.set(theme.rawValue, forKey: Self.themeKey) }
@@ -71,21 +77,44 @@ final class HermesAppearanceModel: ObservableObject {
   }
   @Published private var resolvedAppearance: HermesResolvedAppearance?
 
-  init() {
+  init(
+    appearanceSignatureProvider: (() -> String)? = nil,
+    paletteProvider: (() -> HermesPalette)? = nil,
+    colorSchemeProvider: (() -> ColorScheme)? = nil
+  ) {
+    self.appearanceSignatureProvider = appearanceSignatureProvider
+    self.paletteProvider = paletteProvider
+    self.colorSchemeProvider = colorSchemeProvider
     let storedTheme = UserDefaults.standard.string(forKey: Self.themeKey)
     self.theme = storedTheme.flatMap(HermesThemeChoice.init(rawValue:)) ?? .nous
     self.compactDensity = UserDefaults.standard.bool(forKey: Self.compactDensityKey)
     self.resolvedAppearance = nil
   }
 
-  var palette: HermesPalette { resolvedAppearance?.palette ?? theme.palette }
-  var colorScheme: ColorScheme { resolvedAppearance?.colorScheme ?? theme.colorScheme }
+  var palette: HermesPalette {
+    refreshProviderCache()
+    return cachedProviderPalette ?? resolvedAppearance?.palette ?? theme.palette
+  }
+
+  var colorScheme: ColorScheme {
+    refreshProviderCache()
+    return cachedProviderColorScheme ?? resolvedAppearance?.colorScheme ?? theme.colorScheme
+  }
 
   func apply(palette: HermesPalette, colorScheme: ColorScheme) {
     resolvedAppearance = HermesResolvedAppearance(
       colorScheme: colorScheme,
       palette: palette
     )
+  }
+
+  private func refreshProviderCache() {
+    guard let paletteProvider, let colorSchemeProvider else { return }
+    let signature = appearanceSignatureProvider?() ?? ""
+    guard signature != cachedProviderSignature else { return }
+    cachedProviderSignature = signature
+    cachedProviderPalette = paletteProvider()
+    cachedProviderColorScheme = colorSchemeProvider()
   }
 }
 

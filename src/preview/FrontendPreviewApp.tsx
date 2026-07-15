@@ -254,7 +254,6 @@ function PreviewRoute({
   if (usesNativeSwiftUIRoute) {
     return (
       <HermesSwiftUIRouteView
-        key={route.path}
         {...resolveSwiftUIThemeProps(tokens)}
         locale={locale ?? 'zh'}
         onAction={(event) => notify(event.nativeEvent.payload || event.nativeEvent.action)}

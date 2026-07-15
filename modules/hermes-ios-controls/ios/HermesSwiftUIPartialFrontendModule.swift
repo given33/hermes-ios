@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import SwiftUI
+import UIKit
 
 public final class HermesSwiftUIPartialFrontendModule: Module {
   public func definition() -> ModuleDefinition {
@@ -118,7 +119,7 @@ private let hermesDrawerAnimation = Animation.interactiveSpring(
   blendDuration: 0.08
 )
 
-protocol HermesThemeProviding {
+protocol HermesThemeProviding: AnyObject {
   var themeAccentColor: String { get }
   var themeBackgroundColor: String { get }
   var themeBorderColor: String { get }
@@ -153,24 +154,29 @@ extension HermesThemeProviding {
     ].joined(separator: "|")
   }
 
-  func applyTheme(to appearance: HermesAppearanceModel) {
-    appearance.apply(
-      palette: HermesPalette(
-        background: .hermes(themeBackgroundColor),
-        surface: .hermes(themeSurfaceColor),
-        elevated: .hermes(themeElevatedColor),
-        foreground: .hermes(themeForegroundColor),
-        secondary: .hermes(themeSecondaryColor),
-        tertiary: .hermes(themeTertiaryColor),
-        border: .hermes(themeBorderColor),
-        accent: .hermes(themeAccentColor),
-        primary: .hermes(themePrimaryColor),
-        success: .hermes(themeSuccessColor),
-        warning: .hermes(themeWarningColor),
-        destructive: .hermes(themeDestructiveColor)
-      ),
-      colorScheme: themeColorScheme == "light" ? .light : .dark
+  var resolvedPalette: HermesPalette {
+    HermesPalette(
+      background: .hermes(themeBackgroundColor),
+      surface: .hermes(themeSurfaceColor),
+      elevated: .hermes(themeElevatedColor),
+      foreground: .hermes(themeForegroundColor),
+      secondary: .hermes(themeSecondaryColor),
+      tertiary: .hermes(themeTertiaryColor),
+      border: .hermes(themeBorderColor),
+      accent: .hermes(themeAccentColor),
+      primary: .hermes(themePrimaryColor),
+      success: .hermes(themeSuccessColor),
+      warning: .hermes(themeWarningColor),
+      destructive: .hermes(themeDestructiveColor)
     )
+  }
+
+  var resolvedColorScheme: ColorScheme {
+    themeColorScheme == "light" ? .light : .dark
+  }
+
+  func applyTheme(to appearance: HermesAppearanceModel) {
+    appearance.apply(palette: resolvedPalette, colorScheme: resolvedColorScheme)
   }
 }
 
@@ -383,11 +389,25 @@ final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps, HermesThemeProviding
 
 struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUIRouteProps
-  @StateObject private var appearance = HermesAppearanceModel()
+  @StateObject private var appearance: HermesAppearanceModel
+  @State private var preparedAnalyticsPath: String? = nil
+
+  init(props: HermesSwiftUIRouteProps) {
+    _props = ObservedObject(wrappedValue: props)
+    _appearance = StateObject(wrappedValue: HermesAppearanceModel(
+      appearanceSignatureProvider: { [weak props] in props?.themeSignature ?? "" },
+      paletteProvider: { [weak props] in props?.resolvedPalette ?? .nous },
+      colorSchemeProvider: { [weak props] in props?.resolvedColorScheme ?? .dark }
+    ))
+  }
 
   private var chinese: Bool { props.locale == "zh" }
   private var route: HermesRoute {
     HermesRoute.resolve(routeId: props.routeId, path: props.path, pluginName: props.pluginName)
+  }
+
+  private var routeContentReady: Bool {
+    route != .analytics || preparedAnalyticsPath == props.path
   }
 
   var body: some View {
@@ -397,6 +417,7 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
         attachmentNames: [],
         route: route,
         chinese: chinese,
+        renderDeferredContent: routeContentReady,
         onAction: { action, payload in
           props.onAction(["action": action, "payload": payload ?? ""])
         }
@@ -416,18 +437,91 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     }
     .tint(appearance.palette.accent)
     .background(appearance.palette.background)
-    .onAppear { props.applyTheme(to: appearance) }
-    .onAppear { reportReady() }
-    .onChange(of: props.path) { _ in reportReady() }
-    .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
+    .background {
+      HermesRouteReadinessProbe(
+        enabled: routeContentReady,
+        path: props.path,
+        onReady: { path in props.onReady(["path": path]) }
+      )
+    }
+    .onAppear { prepareDeferredContent() }
+    .onChange(of: props.path) { _ in prepareDeferredContent() }
     .preferredColorScheme(appearance.colorScheme)
     .environmentObject(appearance)
   }
 
-  private func reportReady() {
+  private func prepareDeferredContent() {
+    guard route == .analytics else {
+      preparedAnalyticsPath = nil
+      return
+    }
     let path = props.path
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) {
-      props.onReady(["path": path])
+    preparedAnalyticsPath = nil
+    DispatchQueue.main.async {
+      guard props.path == path, route == .analytics else { return }
+      preparedAnalyticsPath = path
+    }
+  }
+}
+
+private struct HermesRouteReadinessProbe: UIViewRepresentable {
+  let enabled: Bool
+  let path: String
+  let onReady: (String) -> Void
+
+  func makeUIView(context: Context) -> HermesRouteReadinessView {
+    HermesRouteReadinessView()
+  }
+
+  func updateUIView(_ view: HermesRouteReadinessView, context: Context) {
+    view.configure(enabled: enabled, path: path, onReady: onReady)
+  }
+}
+
+private final class HermesRouteReadinessView: UIView {
+  private var enabled = false
+  private var lastReportedPath: String?
+  private var onReady: ((String) -> Void)?
+  private var path = ""
+  private var pendingPath: String?
+
+  func configure(
+    enabled: Bool,
+    path: String,
+    onReady: @escaping (String) -> Void
+  ) {
+    self.enabled = enabled
+    self.path = path
+    self.onReady = onReady
+    setNeedsLayout()
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    guard
+      enabled,
+      window != nil,
+      bounds.width > 0,
+      bounds.height > 0,
+      lastReportedPath != path,
+      pendingPath != path
+    else { return }
+
+    let readyPath = path
+    pendingPath = readyPath
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      guard
+        enabled,
+        window != nil,
+        path == readyPath
+      else {
+        if pendingPath == readyPath { pendingPath = nil }
+        return
+      }
+      pendingPath = nil
+      lastReportedPath = readyPath
+      onReady?(readyPath)
     }
   }
 }

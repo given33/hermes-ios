@@ -128,7 +128,11 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.doesNotMatch(native, /props\.onNavigate\(\["path": route\.path\]\)\s*if isDrawer/);
   assert.match(native, /DragGesture\(minimumDistance: 8/);
   assert.match(native, /var onReady = EventDispatcher\(\)/);
-  assert.match(native, /DispatchQueue\.main\.asyncAfter\(deadline: \.now\(\) \+ 0\.025\)/);
+  assert.match(native, /HermesRouteReadinessProbe/);
+  assert.match(native, /override func layoutSubviews\(\)/);
+  assert.match(native, /window != nil/);
+  assert.match(native, /DispatchQueue\.main\.async \{ \[weak self\] in/);
+  assert.doesNotMatch(native, /asyncAfter\(deadline: \.now\(\) \+ 0\.025\)/);
   assert.match(native, /props\.onReady\(\["path": path\]\)/);
   assert.match(shell, /useSwiftUISidebar \? \(/);
   assert.match(shell, /<HermesSwiftUISidebarView/);
@@ -185,6 +189,16 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
   assert.match(bridge, /interface HermesSwiftUIThemeProps/);
   assert.match(native, /protocol HermesThemeProviding/);
   assert.match(native, /props\.applyTheme\(to: appearance\)/);
+  assert.match(native, /paletteProvider: \{ \[weak props\] in props\?\.resolvedPalette/);
+  assert.match(native, /appearanceSignatureProvider: \{ \[weak props\] in props\?\.themeSignature/);
+  const design = read('modules/hermes-ios-controls/ios/HermesSwiftUIDesign.swift');
+  assert.match(design, /guard signature != cachedProviderSignature else \{ return \}/);
+  const routeView = native.slice(
+    native.indexOf('struct HermesSwiftUIRouteView'),
+    native.indexOf('final class HermesSwiftUIModelToolsProps'),
+  );
+  assert.doesNotMatch(routeView, /\.onAppear \{ props\.applyTheme/);
+  assert.doesNotMatch(routeView, /\.onChange\(of: props\.themeSignature\)/);
   assert.match(native, /\.listStyle\(\.insetGrouped\)/);
   assert.match(native, /\.font\(HermesFonts\.body\(15\)\)/);
   assert.match(native, /\.padding\(14\)/);
@@ -194,4 +208,21 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
   assert.match(shell, /<SymbolView[\s\S]*name=\{route\.symbol\}[\s\S]*size=\{18\}/);
   assert.match(shell, /referenceSidebarRow:[\s\S]*minHeight: 44/);
   assert.match(preview, /\.\.\.resolveSwiftUIThemeProps\(tokens\)/);
+});
+
+test('heavy analytics content is staged before the sidebar close signal', () => {
+  const native = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
+  );
+  const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const preview = read('src/preview/FrontendPreviewApp.tsx');
+
+  assert.match(native, /route != \.analytics \|\| preparedAnalyticsPath == props\.path/);
+  assert.match(native, /DispatchQueue\.main\.async \{/);
+  assert.match(native, /preparedAnalyticsPath = path/);
+  assert.match(native, /enabled: routeContentReady/);
+  assert.match(routes, /let renderDeferredContent: Bool/);
+  assert.match(routes, /HermesAnalyticsPage\([\s\S]*renderChart: renderDeferredContent/);
+  assert.match(routes, /if renderChart \{[\s\S]*Chart\(points\)/);
+  assert.doesNotMatch(preview, /<HermesSwiftUIRouteView\s+key=\{route\.path\}/);
 });

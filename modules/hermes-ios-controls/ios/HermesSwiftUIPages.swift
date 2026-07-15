@@ -8,6 +8,7 @@ struct HermesRouteContent: View {
   let attachmentNames: [String]
   let route: HermesRoute
   let chinese: Bool
+  let renderDeferredContent: Bool
   let onAction: (String, String?) -> Void
 
   var body: some View {
@@ -21,7 +22,10 @@ struct HermesRouteContent: View {
     case .files:
       HermesFilesPage(chinese: chinese)
     case .analytics:
-      HermesAnalyticsPage(chinese: chinese)
+      HermesAnalyticsPage(
+        chinese: chinese,
+        renderChart: renderDeferredContent
+      )
     case .models:
       HermesModelsPage(chinese: chinese)
     case .logs:
@@ -395,6 +399,7 @@ private struct HermesAnalyticsPoint: Identifiable {
 private struct HermesAnalyticsPage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let chinese: Bool
+  let renderChart: Bool
   private let points = [
     HermesAnalyticsPoint(day: "Mon", input: 18, output: 9),
     HermesAnalyticsPoint(day: "Tue", input: 26, output: 14),
@@ -422,19 +427,25 @@ private struct HermesAnalyticsPage: View {
         VStack(alignment: .leading, spacing: 14) {
           Text(chinese ? "最近 7 天" : "Last 7 Days")
             .font(HermesFonts.display(15))
-          Chart(points) { point in
-            LineMark(x: .value("Day", point.day), y: .value("Input", point.input))
-              .foregroundStyle(appearance.palette.accent)
-              .interpolationMethod(.catmullRom)
-            AreaMark(x: .value("Day", point.day), y: .value("Input", point.input))
-              .foregroundStyle(appearance.palette.accent.opacity(0.12))
-              .interpolationMethod(.catmullRom)
-            LineMark(x: .value("Day", point.day), y: .value("Output", point.output))
-              .foregroundStyle(appearance.palette.primary)
-              .interpolationMethod(.catmullRom)
+          if renderChart {
+            Chart(points) { point in
+              LineMark(x: .value("Day", point.day), y: .value("Input", point.input))
+                .foregroundStyle(appearance.palette.accent)
+                .interpolationMethod(.catmullRom)
+              AreaMark(x: .value("Day", point.day), y: .value("Input", point.input))
+                .foregroundStyle(appearance.palette.accent.opacity(0.12))
+                .interpolationMethod(.catmullRom)
+              LineMark(x: .value("Day", point.day), y: .value("Output", point.output))
+                .foregroundStyle(appearance.palette.primary)
+                .interpolationMethod(.catmullRom)
+            }
+            .chartLegend(.hidden)
+            .frame(height: 240)
+          } else {
+            Color.clear
+              .frame(height: 240)
+              .accessibilityHidden(true)
           }
-          .chartLegend(.hidden)
-          .frame(height: 240)
         }
       }
     }
