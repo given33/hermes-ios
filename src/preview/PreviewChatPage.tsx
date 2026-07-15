@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react-native';
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -41,6 +42,7 @@ import Reanimated, {
   cancelAnimation,
   interpolate,
   runOnJS,
+  useAnimatedReaction,
   useAnimatedStyle,
   useAnimatedKeyboard,
   useSharedValue,
@@ -164,6 +166,7 @@ export function ChatPreviewPage({
   const streamRef = useRef<ScrollView>(null);
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
+  const pendingScrollFrame = useRef<number | null>(null);
   const keyboard = useAnimatedKeyboard();
   const isChinese = locale === 'zh';
   const compact = width <= 560;
@@ -175,6 +178,13 @@ export function ChatPreviewPage({
   const safeAreaTop = shellSplit ? 0 : insets.top;
   const attachmentCount = attachments.length;
   const inputFontSize = resolveComposerFontSize(content);
+  const keepLatestVisible = useCallback((animated = false) => {
+    if (pendingScrollFrame.current !== null) return;
+    pendingScrollFrame.current = requestAnimationFrame(() => {
+      pendingScrollFrame.current = null;
+      streamRef.current?.scrollToEnd({ animated });
+    });
+  }, []);
   const keyboardRootStyle = useAnimatedStyle(() => ({
     paddingBottom: keyboard.height.value,
   }));
@@ -186,9 +196,24 @@ export function ChatPreviewPage({
       Extrapolation.CLAMP,
     ),
   }));
+  useAnimatedReaction(
+    () => keyboard.height.value,
+    (height, previousHeight) => {
+      if (
+        previousHeight === null
+        || Math.abs(height - previousHeight) >= 0.5
+      ) {
+        runOnJS(keepLatestVisible)(false);
+      }
+    },
+    [keepLatestVisible],
+  );
 
   useEffect(() => () => {
     if (replyTimer.current) clearTimeout(replyTimer.current);
+    if (pendingScrollFrame.current !== null) {
+      cancelAnimationFrame(pendingScrollFrame.current);
+    }
     pendingNavigationCleanup.current?.();
   }, []);
 
@@ -454,7 +479,8 @@ export function ChatPreviewPage({
             decelerationRate="normal"
             keyboardDismissMode="interactive"
             keyboardShouldPersistTaps="handled"
-            onContentSizeChange={() => streamRef.current?.scrollToEnd({ animated: true })}
+            onContentSizeChange={() => keepLatestVisible(true)}
+            onLayout={() => keepLatestVisible(false)}
             ref={streamRef}
             scrollEventThrottle={8}
             showsVerticalScrollIndicator={false}
@@ -486,6 +512,7 @@ export function ChatPreviewPage({
           </ScrollView>
 
           <Reanimated.View
+            onLayout={() => keepLatestVisible(false)}
             style={[
               styles.composer,
               {
@@ -544,6 +571,7 @@ export function ChatPreviewPage({
                 blurOnSubmit={false}
                 multiline
                 onChangeText={setContent}
+                onFocus={() => keepLatestVisible(false)}
                 onSubmitEditing={send}
                 placeholder={isChinese ? '输入消息' : 'Type a message'}
                 placeholderTextColor={tokens.colors.textDisabled}

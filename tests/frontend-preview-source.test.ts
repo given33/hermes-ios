@@ -55,6 +55,18 @@ test('frontend preview renders every customized WebUI route without API ownershi
   assert.doesNotMatch(previewSources, /WebView|WKWebView|react-native-webview/);
 });
 
+test('manual IPA builds launch the standalone frontend without login', () => {
+  const workflow = read('.github/workflows/ios-unsigned.yml');
+  const app = read('src/app/HermesNativeApp.tsx');
+
+  assert.match(workflow, /frontend_preview:/);
+  assert.match(workflow, /default: true/);
+  assert.match(workflow, /EXPO_PUBLIC_FRONTEND_PREVIEW:/);
+  assert.match(workflow, /inputs\.frontend_preview/);
+  assert.match(app, /process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
+  assert.doesNotMatch(app, /__DEV__[\s\S]{0,80}EXPO_PUBLIC_FRONTEND_PREVIEW/);
+});
+
 test('Expo Go fallback never replaces the exact blur in signed native builds', () => {
   const bridge = read('modules/hermes-live-blur/index.ts');
   const nativeBlur = read('modules/hermes-live-blur/ios/HermesLiveBlurView.swift');
@@ -121,10 +133,12 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(app, /from '\.\/PreviewChatPage'/);
   assert.doesNotMatch(chat, /KeyboardAvoidingView/);
   assert.match(chat, /useAnimatedKeyboard\(\)/);
+  assert.match(chat, /useAnimatedReaction\(/);
+  assert.match(chat, /runOnJS\(keepLatestVisible\)\(false\)/);
   assert.match(chat, /paddingBottom: keyboard\.height\.value/);
   assert.match(
     chat,
-    /<Reanimated\.View\s*style=\{\[\s*styles\.composer,[\s\S]*composerKeyboardStyle/,
+    /<Reanimated\.View[\s\S]{0,240}styles\.composer,[\s\S]*composerKeyboardStyle/,
   );
   assert.doesNotMatch(
     chat,
@@ -133,6 +147,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /keyboardDidHide/);
   assert.match(chat, /Keyboard\.dismiss\(\)/);
   assert.match(chat, /keyboardDismissMode="interactive"/);
+  assert.match(chat, /onContentSizeChange=\{\(\) => keepLatestVisible\(true\)\}/);
+  assert.match(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
+  assert.match(chat, /onFocus=\{\(\) => keepLatestVisible\(false\)\}/);
   assert.match(chat, /Hermes Agent/);
   assert.match(chat, /当前窗口持续使用同一个会话/);
   assert.match(chat, /直接告诉 Hermes 你想做什么/);
