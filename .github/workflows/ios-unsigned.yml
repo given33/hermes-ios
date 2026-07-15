@@ -13,8 +13,6 @@ jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 60
-    env:
-      EXPO_PUBLIC_FRONTEND_PREVIEW: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

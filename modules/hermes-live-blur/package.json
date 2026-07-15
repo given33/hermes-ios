@@ -1,8 +1,0 @@
-{
-  "name": "hermes-live-blur",
-  "version": "1.0.0",
-  "description": "Hermes native live CSS-equivalent backdrop blur",
-  "main": "index.ts",
-  "license": "MIT",
-  "private": true
-}

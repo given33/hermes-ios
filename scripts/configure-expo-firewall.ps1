@@ -8,7 +8,7 @@ if ($existing) {
 
 New-NetFirewallRule `
   -DisplayName $ruleName `
-  -Description 'Allow Hermes development clients on the local network to reach Metro.' `
+  -Description 'Allow Expo Go devices on the local network to reach Hermes Metro.' `
   -Direction Inbound `
   -Action Allow `
   -Protocol TCP `
