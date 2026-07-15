@@ -29,6 +29,21 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
   assert.match(native, /View\(HermesSwiftUIRouteView\.self\)/);
   assert.match(native, /View\(HermesSwiftUIModelToolsView\.self\)/);
   assert.match(native, /View\(HermesSwiftUIFrostedSurfaceView\.self\)/);
+  const hostedViews = [
+    'HermesSwiftUISidebarView',
+    'HermesSwiftUIRouteView',
+    'HermesSwiftUIModelToolsView',
+    'HermesSwiftUIFrostedSurfaceView',
+  ];
+  for (const view of hostedViews) {
+    assert.match(
+      native,
+      new RegExp(
+        `struct ${view}: ExpoSwiftUI\\.View, ExpoSwiftUI\\.WithHostingView`,
+      ),
+      `${view} must mount through a concrete HostingView`,
+    );
+  }
   assert.match(routes, /case \.chat:[\s\S]*EmptyView\(\)/);
   assert.doesNotMatch(routes, /case \.chat:[\s\S]*HermesChatPage\(/);
   assert.match(preview, /route\.routeId !== 'chat'/);

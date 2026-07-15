@@ -127,7 +127,7 @@ final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps {
   var onRequestClose = EventDispatcher()
 }
 
-struct HermesSwiftUISidebarView: ExpoSwiftUI.View {
+struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUISidebarProps
   @StateObject private var appearance = HermesAppearanceModel()
   @State private var presented = false
@@ -340,7 +340,7 @@ final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps {
   var onOpenNavigation = EventDispatcher()
 }
 
-struct HermesSwiftUIRouteView: ExpoSwiftUI.View {
+struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUIRouteProps
   @StateObject private var appearance = HermesAppearanceModel()
 
@@ -393,7 +393,7 @@ final class HermesSwiftUIModelToolsProps: ExpoSwiftUI.ViewProps {
   var onToolsChange = EventDispatcher()
 }
 
-struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View {
+struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUIModelToolsProps
   @StateObject private var appearance = HermesAppearanceModel()
   @State private var presented = false
@@ -517,7 +517,7 @@ final class HermesSwiftUIFrostedSurfaceProps: ExpoSwiftUI.ViewProps {
   @Field var tintColor = "#ffffff"
 }
 
-struct HermesSwiftUIFrostedSurfaceView: ExpoSwiftUI.View {
+struct HermesSwiftUIFrostedSurfaceView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUIFrostedSurfaceProps
 
   var body: some View {
