@@ -28,6 +28,7 @@ import { NativeButton } from '../components/ui/NativeButton';
 import { multiplyAlpha } from '../design/control-contracts';
 import { THEME_DEFAULT_FONT_ID } from '../design/font-catalog';
 import { resolveNativeFontStack } from '../design/native-font-faces';
+import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
 import { NativeLocalizationProvider } from '../i18n/NativeLocalization';
@@ -232,6 +233,7 @@ function PreviewRoute({
   openNavigation,
   route,
 }: PreviewPageProps & { openNavigation?(): void; route: ComposedRoute }) {
+  const { tokens } = useTheme();
   const props = { locale, navigate, notify };
   if (
     Platform.OS === 'ios'
@@ -240,6 +242,7 @@ function PreviewRoute({
   ) {
     return (
       <HermesSwiftUIRouteView
+        {...resolveSwiftUIThemeProps(tokens)}
         locale={locale ?? 'zh'}
         onAction={(event) => notify(event.nativeEvent.payload || event.nativeEvent.action)}
         onOpenNavigation={openNavigation}

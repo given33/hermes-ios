@@ -45,6 +45,11 @@ struct HermesPalette {
   )
 }
 
+private struct HermesResolvedAppearance {
+  let colorScheme: ColorScheme
+  let palette: HermesPalette
+}
+
 enum HermesThemeChoice: String, CaseIterable, Identifiable {
   case nous
   case light
@@ -64,14 +69,24 @@ final class HermesAppearanceModel: ObservableObject {
   @Published var compactDensity: Bool {
     didSet { UserDefaults.standard.set(compactDensity, forKey: Self.compactDensityKey) }
   }
+  @Published private var resolvedAppearance: HermesResolvedAppearance?
 
   init() {
     let storedTheme = UserDefaults.standard.string(forKey: Self.themeKey)
     self.theme = storedTheme.flatMap(HermesThemeChoice.init(rawValue:)) ?? .nous
     self.compactDensity = UserDefaults.standard.bool(forKey: Self.compactDensityKey)
+    self.resolvedAppearance = nil
   }
 
-  var palette: HermesPalette { theme.palette }
+  var palette: HermesPalette { resolvedAppearance?.palette ?? theme.palette }
+  var colorScheme: ColorScheme { resolvedAppearance?.colorScheme ?? theme.colorScheme }
+
+  func apply(palette: HermesPalette, colorScheme: ColorScheme) {
+    resolvedAppearance = HermesResolvedAppearance(
+      colorScheme: colorScheme,
+      palette: palette
+    )
+  }
 }
 
 enum HermesFonts {
@@ -308,4 +323,3 @@ extension View {
     modifier(HermesImpactFeedbackModifier(trigger: trigger))
   }
 }
-

@@ -118,11 +118,80 @@ private let hermesDrawerAnimation = Animation.interactiveSpring(
   blendDuration: 0.08
 )
 
-final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps {
+protocol HermesThemeProviding {
+  var themeAccentColor: String { get }
+  var themeBackgroundColor: String { get }
+  var themeBorderColor: String { get }
+  var themeColorScheme: String { get }
+  var themeDestructiveColor: String { get }
+  var themeElevatedColor: String { get }
+  var themeForegroundColor: String { get }
+  var themePrimaryColor: String { get }
+  var themeSecondaryColor: String { get }
+  var themeSuccessColor: String { get }
+  var themeSurfaceColor: String { get }
+  var themeTertiaryColor: String { get }
+  var themeWarningColor: String { get }
+}
+
+extension HermesThemeProviding {
+  var themeSignature: String {
+    [
+      themeAccentColor,
+      themeBackgroundColor,
+      themeBorderColor,
+      themeColorScheme,
+      themeDestructiveColor,
+      themeElevatedColor,
+      themeForegroundColor,
+      themePrimaryColor,
+      themeSecondaryColor,
+      themeSuccessColor,
+      themeSurfaceColor,
+      themeTertiaryColor,
+      themeWarningColor,
+    ].joined(separator: "|")
+  }
+
+  func applyTheme(to appearance: HermesAppearanceModel) {
+    appearance.apply(
+      palette: HermesPalette(
+        background: .hermes(themeBackgroundColor),
+        surface: .hermes(themeSurfaceColor),
+        elevated: .hermes(themeElevatedColor),
+        foreground: .hermes(themeForegroundColor),
+        secondary: .hermes(themeSecondaryColor),
+        tertiary: .hermes(themeTertiaryColor),
+        border: .hermes(themeBorderColor),
+        accent: .hermes(themeAccentColor),
+        primary: .hermes(themePrimaryColor),
+        success: .hermes(themeSuccessColor),
+        warning: .hermes(themeWarningColor),
+        destructive: .hermes(themeDestructiveColor)
+      ),
+      colorScheme: themeColorScheme == "light" ? .light : .dark
+    )
+  }
+}
+
+final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
   @Field var activePath = "/chat"
   @Field var locale = "zh"
   @Field var open = false
   @Field var presentation = "drawer"
+  @Field var themeAccentColor = "#ffe6cb"
+  @Field var themeBackgroundColor = "#041c1c"
+  @Field var themeBorderColor = "#ffe6cb26"
+  @Field var themeColorScheme = "dark"
+  @Field var themeDestructiveColor = "#fb2c36"
+  @Field var themeElevatedColor = "#0e2524"
+  @Field var themeForegroundColor = "#ffe6cb"
+  @Field var themePrimaryColor = "#ffe6cb"
+  @Field var themeSecondaryColor = "#ffe6cbcc"
+  @Field var themeSuccessColor = "#4ade80"
+  @Field var themeSurfaceColor = "#0e2524"
+  @Field var themeTertiaryColor = "#ffe6cba6"
+  @Field var themeWarningColor = "#ffbd38"
   var onNavigate = EventDispatcher()
   var onRequestClose = EventDispatcher()
 }
@@ -140,12 +209,15 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   var body: some View {
     GeometryReader { proxy in
       let drawerWidth = isDrawer ? proxy.size.width : min(360, proxy.size.width)
-      HermesSidebarContent(
-        activePath: props.activePath,
-        chinese: chinese,
-        onClose: isDrawer ? closeDrawer : nil,
-        onNavigate: select
-      )
+      NavigationStack {
+        HermesSidebarContent(
+          activePath: props.activePath,
+          chinese: chinese,
+          onNavigate: select
+        )
+        .navigationTitle("Hermes Agent")
+        .navigationBarTitleDisplayMode(.large)
+      }
       .environmentObject(appearance)
       .frame(width: drawerWidth)
       .frame(maxHeight: .infinity, alignment: .leading)
@@ -173,7 +245,9 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       guard isDrawer else { return }
       withAnimation(hermesDrawerAnimation) { presented = next }
     }
-    .preferredColorScheme(appearance.theme.colorScheme)
+    .onAppear { props.applyTheme(to: appearance) }
+    .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
+    .preferredColorScheme(appearance.colorScheme)
     .hermesImpact(trigger: feedbackTrigger)
   }
 
@@ -215,112 +289,62 @@ private struct HermesSidebarContent: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let activePath: String
   let chinese: Bool
-  let onClose: (() -> Void)?
   let onNavigate: (HermesRoute) -> Void
 
   var body: some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 28) {
-        HStack(alignment: .center) {
-          Text("Hermes Agent")
-            .font(HermesFonts.display(31))
-            .foregroundStyle(appearance.palette.foreground)
-            .lineLimit(1)
-            .minimumScaleFactor(0.72)
-          Spacer(minLength: 12)
-          if let onClose {
-            Button(action: onClose) {
-              Image(systemName: "xmark")
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 38, height: 38)
-                .background(.thinMaterial, in: Circle())
-            }
-            .buttonStyle(HermesPressStyle(scale: 0.92, opacity: 0.8))
-            .accessibilityLabel(chinese ? "关闭侧边栏" : "Close sidebar")
-          }
-        }
-
-        ForEach(0..<4, id: \.self) { group in
-          VStack(alignment: .leading, spacing: 10) {
-            Text(sectionTitle(group))
-              .font(HermesFonts.body(14))
-              .foregroundStyle(appearance.palette.secondary)
-              .padding(.horizontal, 18)
-
-            VStack(spacing: 0) {
-              let routes = HermesRoute.allCases.filter { $0.group == group }
-              ForEach(Array(routes.enumerated()), id: \.element.id) { index, route in
-                Button {
-                  onNavigate(route)
-                } label: {
-                  HStack(spacing: 16) {
-                    Image(systemName: route.symbol)
-                      .font(.system(size: 20, weight: .medium))
-                      .foregroundStyle(appearance.palette.accent)
-                      .frame(width: 28)
-                    Text(route.title(chinese))
-                      .font(HermesFonts.body(17))
-                      .foregroundStyle(appearance.palette.foreground)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                      .font(.system(size: 14, weight: .semibold))
-                      .foregroundStyle(appearance.palette.tertiary)
-                  }
-                  .padding(.horizontal, 18)
-                  .frame(minHeight: 58)
-                  .contentShape(Rectangle())
-                  .background(
-                    activePath == route.path
-                      ? appearance.palette.accent.opacity(0.10)
-                      : Color.clear
-                  )
+    List {
+      ForEach(0..<4, id: \.self) { group in
+        Section(sectionTitle(group)) {
+          ForEach(HermesRoute.allCases.filter { $0.group == group }) { route in
+            Button {
+              onNavigate(route)
+            } label: {
+              HStack(spacing: 10) {
+                Label {
+                  Text(route.title(chinese))
+                    .foregroundStyle(appearance.palette.foreground)
+                } icon: {
+                  Image(systemName: route.symbol)
+                    .foregroundStyle(appearance.palette.accent)
                 }
-                .buttonStyle(HermesPressStyle(scale: 0.985, opacity: 0.82))
-
-                if index < routes.count - 1 {
-                  Divider()
-                    .overlay(appearance.palette.border)
-                    .padding(.leading, 62)
-                }
+                .font(HermesFonts.body(15))
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                  .font(.system(size: 13, weight: .semibold))
+                  .foregroundStyle(appearance.palette.tertiary)
               }
+              .contentShape(Rectangle())
             }
-            .background(appearance.palette.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay {
-              RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(appearance.palette.border, lineWidth: 0.6)
-            }
+            .buttonStyle(.plain)
+            .listRowBackground(
+              activePath == route.path
+                ? appearance.palette.accent.opacity(0.10)
+                : nil
+            )
           }
         }
       }
-      .padding(.horizontal, 18)
-      .padding(.top, 30)
-      .padding(.bottom, 112)
     }
-    .scrollDismissesKeyboard(.interactively)
-    .safeAreaInset(edge: .bottom, spacing: 0) {
-      HStack(spacing: 11) {
+    .scrollContentBackground(.hidden)
+    .listStyle(.insetGrouped)
+    .background(appearance.palette.background)
+    .safeAreaInset(edge: .bottom) {
+      HStack(spacing: 10) {
         Circle()
           .fill(appearance.palette.success)
-          .frame(width: 9, height: 9)
+          .frame(width: 8, height: 8)
           .shadow(color: appearance.palette.success, radius: 5)
         VStack(alignment: .leading, spacing: 2) {
           Text(chinese ? "网关在线" : "Gateway online")
-            .font(HermesFonts.bodyBold(14))
+            .font(HermesFonts.bodyBold(13))
           Text(chinese ? "v0.9.3 · 2 个会话" : "v0.9.3 · 2 sessions")
             .font(HermesFonts.mono(10))
             .foregroundStyle(appearance.palette.secondary)
         }
         Spacer()
       }
-      .padding(.horizontal, 24)
-      .padding(.vertical, 15)
-      .background(.ultraThinMaterial)
-      .overlay(alignment: .top) {
-        Divider().overlay(appearance.palette.border)
-      }
+      .padding(14)
     }
-    .background(appearance.palette.background)
   }
 
   private func sectionTitle(_ group: Int) -> String {
@@ -331,11 +355,24 @@ private struct HermesSidebarContent: View {
   }
 }
 
-final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps {
+final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
   @Field var locale = "zh"
   @Field var path = "/sessions"
   @Field var pluginName = ""
   @Field var routeId = "sessions"
+  @Field var themeAccentColor = "#ffe6cb"
+  @Field var themeBackgroundColor = "#041c1c"
+  @Field var themeBorderColor = "#ffe6cb26"
+  @Field var themeColorScheme = "dark"
+  @Field var themeDestructiveColor = "#fb2c36"
+  @Field var themeElevatedColor = "#0e2524"
+  @Field var themeForegroundColor = "#ffe6cb"
+  @Field var themePrimaryColor = "#ffe6cb"
+  @Field var themeSecondaryColor = "#ffe6cbcc"
+  @Field var themeSuccessColor = "#4ade80"
+  @Field var themeSurfaceColor = "#0e2524"
+  @Field var themeTertiaryColor = "#ffe6cba6"
+  @Field var themeWarningColor = "#ffbd38"
   var onAction = EventDispatcher()
   var onOpenNavigation = EventDispatcher()
 }
@@ -375,17 +412,32 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     }
     .tint(appearance.palette.accent)
     .background(appearance.palette.background)
-    .preferredColorScheme(appearance.theme.colorScheme)
+    .onAppear { props.applyTheme(to: appearance) }
+    .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
+    .preferredColorScheme(appearance.colorScheme)
     .environmentObject(appearance)
   }
 }
 
-final class HermesSwiftUIModelToolsProps: ExpoSwiftUI.ViewProps {
+final class HermesSwiftUIModelToolsProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
   @Field var locale = "zh"
   @Field var model = "claude-sonnet-4"
   @Field var open = false
   @Field var reasoning = "medium"
   @Field var toolsEnabled = true
+  @Field var themeAccentColor = "#ffe6cb"
+  @Field var themeBackgroundColor = "#041c1c"
+  @Field var themeBorderColor = "#ffe6cb26"
+  @Field var themeColorScheme = "dark"
+  @Field var themeDestructiveColor = "#fb2c36"
+  @Field var themeElevatedColor = "#0e2524"
+  @Field var themeForegroundColor = "#ffe6cb"
+  @Field var themePrimaryColor = "#ffe6cb"
+  @Field var themeSecondaryColor = "#ffe6cbcc"
+  @Field var themeSuccessColor = "#4ade80"
+  @Field var themeSurfaceColor = "#0e2524"
+  @Field var themeTertiaryColor = "#ffe6cba6"
+  @Field var themeWarningColor = "#ffbd38"
   var onModelChange = EventDispatcher()
   var onNewConversation = EventDispatcher()
   var onReasoningChange = EventDispatcher()
@@ -479,7 +531,9 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
     .onChange(of: props.open) { next in
       withAnimation(hermesDrawerAnimation) { presented = next }
     }
-    .preferredColorScheme(appearance.theme.colorScheme)
+    .onAppear { props.applyTheme(to: appearance) }
+    .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
+    .preferredColorScheme(appearance.colorScheme)
     .environmentObject(appearance)
   }
 
@@ -513,6 +567,7 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
 }
 
 final class HermesSwiftUIFrostedSurfaceProps: ExpoSwiftUI.ViewProps {
+  @Field var colorScheme = "dark"
   @Field var cornerRadius = 22.0
   @Field var tintColor = "#ffffff"
 }
@@ -529,13 +584,13 @@ struct HermesSwiftUIFrostedSurfaceView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostin
       shape
         .fill(.regularMaterial)
       shape
-        .fill(Color.hermes(props.tintColor).opacity(0.035))
-      Children()
+        .fill(Color.hermes(props.tintColor).opacity(0.14))
     }
     .clipShape(shape)
     .overlay {
       shape.stroke(.white.opacity(0.18), lineWidth: 0.65)
     }
     .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
+    .preferredColorScheme(props.colorScheme == "light" ? .light : .dark)
   }
 }

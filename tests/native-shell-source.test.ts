@@ -135,3 +135,12 @@ test('compact navigation is owned by UIKit native-stack instead of a simulated b
   assert.match(source, /onStateChange=\{syncCompactNavigation\}/);
   assert.doesNotMatch(source, /routeHistory|backTranslation|backGesture/);
 });
+
+test('sidebar selections reset the top-level stack instead of accumulating pages', () => {
+  const source = read('src/app/NativeShell.tsx');
+
+  assert.match(source, /const selectSidebarRoute = useCallback/);
+  assert.match(source, /CommonActions\.reset\(\{[\s\S]*index: 0,[\s\S]*routes: \[\{ name: resolved \}\]/);
+  assert.match(source, /onNavigate=\{\(event\) => selectSidebarRoute\(event\.nativeEvent\.path\)\}/);
+  assert.match(source, /navigate=\{selectSidebarRoute\}/);
+});

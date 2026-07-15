@@ -88,17 +88,41 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   );
 });
 
-test('the composer is SwiftUI frosted material and model tools stay native', () => {
+test('the composer keeps RN controls above a SwiftUI material background', () => {
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
   const chat = read('src/preview/PreviewChatPage.tsx');
 
   assert.match(native, /\.fill\(\.regularMaterial\)/);
-  assert.match(native, /Children\(\)/);
+  assert.doesNotMatch(native, /Children\(\)/);
   assert.match(native, /struct HermesSwiftUIModelToolsView/);
   assert.match(native, /Picker\(chinese \? "推理强度"/);
+  assert.match(chat, /<View style=\{surfaceStyle\}>/);
   assert.match(chat, /<HermesSwiftUIFrostedSurfaceView/);
+  assert.match(chat, /style=\{StyleSheet\.absoluteFill\}/);
   assert.match(chat, /<HermesSwiftUIModelToolsView/);
   assert.doesNotMatch(chat, /<GlassView|<HermesLiquidGlassView/);
+});
+
+test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed palette', () => {
+  const bridge = read('modules/hermes-ios-controls/index.ts');
+  const native = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
+  );
+  const shell = read('src/app/NativeShell.tsx');
+  const preview = read('src/preview/FrontendPreviewApp.tsx');
+
+  assert.match(bridge, /interface HermesSwiftUIThemeProps/);
+  assert.match(native, /protocol HermesThemeProviding/);
+  assert.match(native, /props\.applyTheme\(to: appearance\)/);
+  assert.match(native, /\.listStyle\(\.insetGrouped\)/);
+  assert.match(native, /\.font\(HermesFonts\.body\(15\)\)/);
+  assert.match(native, /\.padding\(14\)/);
+  assert.doesNotMatch(native, /\.background\(\.ultraThinMaterial\)/);
+  assert.doesNotMatch(native, /\.frame\(minHeight: 58\)/);
+  assert.match(shell, /\.\.\.swiftUIThemeProps/);
+  assert.match(shell, /<SymbolView[\s\S]*name=\{route\.symbol\}[\s\S]*size=\{18\}/);
+  assert.match(shell, /referenceSidebarRow:[\s\S]*minHeight: 44/);
+  assert.match(preview, /\.\.\.resolveSwiftUIThemeProps\(tokens\)/);
 });

@@ -64,6 +64,7 @@ import { NativeButton } from '../components/ui/NativeButton';
 import { IOSContextMenu } from '../components/ios/IOSContextMenu';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { multiplyAlpha } from '../design/control-contracts';
+import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
 import {
@@ -654,6 +655,7 @@ export function ChatPreviewPage({
 
 function ComposerSurface({ children }: { children: ReactNode }) {
   const { tokens } = useTheme();
+  const nativeTheme = resolveSwiftUIThemeProps(tokens);
   const surfaceStyle = [
     styles.inputShell,
     {
@@ -662,26 +664,26 @@ function ComposerSurface({ children }: { children: ReactNode }) {
     },
   ];
 
-  if (Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend) {
-    return (
-      <HermesSwiftUIFrostedSurfaceView
-        cornerRadius={15}
-        style={surfaceStyle}
-        tintColor={tokens.colors.background}
-      >
-        {children}
-      </HermesSwiftUIFrostedSurfaceView>
-    );
-  }
-
   return (
-    <BlurView
-      intensity={48}
-      style={surfaceStyle}
-      tint="dark"
-    >
+    <View style={surfaceStyle}>
+      {Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend ? (
+        <HermesSwiftUIFrostedSurfaceView
+          colorScheme={nativeTheme.themeColorScheme}
+          cornerRadius={15}
+          pointerEvents="none"
+          style={StyleSheet.absoluteFill}
+          tintColor={tokens.colors.background}
+        />
+      ) : (
+        <BlurView
+          intensity={48}
+          pointerEvents="none"
+          style={StyleSheet.absoluteFill}
+          tint={nativeTheme.themeColorScheme}
+        />
+      )}
       {children}
-    </BlurView>
+    </View>
   );
 }
 
@@ -1179,6 +1181,7 @@ function ModelToolsDrawer({
         visible={open}
       >
         <HermesSwiftUIModelToolsView
+          {...resolveSwiftUIThemeProps(tokens)}
           locale={isChinese ? 'zh' : 'en'}
           model={model}
           onModelChange={(event) => setModel(event.nativeEvent.model)}

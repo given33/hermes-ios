@@ -16,6 +16,22 @@ import {
 
 type NativeViewProps = ViewProps & { children?: ReactNode };
 
+export interface HermesSwiftUIThemeProps {
+  themeAccentColor: string;
+  themeBackgroundColor: string;
+  themeBorderColor: string;
+  themeColorScheme: 'dark' | 'light';
+  themeDestructiveColor: string;
+  themeElevatedColor: string;
+  themeForegroundColor: string;
+  themePrimaryColor: string;
+  themeSecondaryColor: string;
+  themeSuccessColor: string;
+  themeSurfaceColor: string;
+  themeTertiaryColor: string;
+  themeWarningColor: string;
+}
+
 function optionalView<P extends NativeViewProps>(
   name: string,
   viewName?: string,
@@ -96,7 +112,7 @@ export interface HermesPressFeedbackProps extends NativeViewProps {
   scaleTo: number;
 }
 
-export interface HermesSwiftUISidebarProps extends NativeViewProps {
+export interface HermesSwiftUISidebarProps extends NativeViewProps, HermesSwiftUIThemeProps {
   activePath: string;
   locale: 'en' | 'zh';
   onNavigate?(event: NativeSyntheticEvent<{ path: string }>): void;
@@ -105,7 +121,7 @@ export interface HermesSwiftUISidebarProps extends NativeViewProps {
   presentation: 'drawer' | 'split';
 }
 
-export interface HermesSwiftUIRouteProps extends NativeViewProps {
+export interface HermesSwiftUIRouteProps extends NativeViewProps, HermesSwiftUIThemeProps {
   locale: 'en' | 'zh';
   onAction?(event: NativeSyntheticEvent<{ action: string; payload: string }>): void;
   onOpenNavigation?(event: NativeSyntheticEvent<Record<string, never>>): void;
@@ -114,7 +130,7 @@ export interface HermesSwiftUIRouteProps extends NativeViewProps {
   routeId: string;
 }
 
-export interface HermesSwiftUIModelToolsProps extends NativeViewProps {
+export interface HermesSwiftUIModelToolsProps extends NativeViewProps, HermesSwiftUIThemeProps {
   locale: 'en' | 'zh';
   model: string;
   onModelChange?(event: NativeSyntheticEvent<{ model: string }>): void;
@@ -128,6 +144,7 @@ export interface HermesSwiftUIModelToolsProps extends NativeViewProps {
 }
 
 export interface HermesSwiftUIFrostedSurfaceProps extends NativeViewProps {
+  colorScheme: 'dark' | 'light';
   cornerRadius: number;
   tintColor: string;
 }
