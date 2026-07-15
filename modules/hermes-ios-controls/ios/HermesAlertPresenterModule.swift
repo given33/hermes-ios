@@ -13,7 +13,7 @@ final class HermesAlertPresenterProps: ExpoSwiftUI.ViewProps {
   @Field var overlayColor = "#00000099"
 }
 
-struct HermesAlertPresenterView: ExpoSwiftUI.View {
+struct HermesAlertPresenterView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesAlertPresenterProps
   @State private var isPresented: Bool
   @State private var appeared = false

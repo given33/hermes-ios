@@ -15,7 +15,7 @@ final class HermesDrawerSurfaceProps: ExpoSwiftUI.ViewProps {
   var onRequestClose = EventDispatcher()
 }
 
-struct HermesDrawerSurfaceView: ExpoSwiftUI.View {
+struct HermesDrawerSurfaceView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesDrawerSurfaceProps
   @State private var isOpen: Bool
   @GestureState private var dragTranslation: CGFloat = 0

@@ -5,7 +5,7 @@ final class HermesLiveBlurProps: ExpoSwiftUI.ViewProps {
   @Field var blurRadius = 8.0
 }
 
-struct HermesLiveBlurView: ExpoSwiftUI.View {
+struct HermesLiveBlurView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesLiveBlurProps
 
   var body: some View {

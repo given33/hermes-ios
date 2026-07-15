@@ -1,7 +1,7 @@
 import ExpoModulesCore
 import SwiftUI
 
-struct HermesLiquidGlassView: ExpoSwiftUI.View {
+struct HermesLiquidGlassView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesLiquidGlassProps
   @GestureState private var pressed = false
 

@@ -7,6 +7,33 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (path: string) => readFileSync(resolve(projectRoot, path), 'utf8');
 
+const reactMountedSwiftUIViews = [
+  'modules/hermes-ios-controls/ios/HermesAlertPresenterModule.swift',
+  'modules/hermes-ios-controls/ios/HermesConfirmationDialogModule.swift',
+  'modules/hermes-ios-controls/ios/HermesDrawerSurfaceModule.swift',
+  'modules/hermes-ios-controls/ios/HermesPressFeedbackModule.swift',
+  'modules/hermes-ios-controls/ios/HermesSearchBarModule.swift',
+  'modules/hermes-ios-controls/ios/HermesSelectionModule.swift',
+  'modules/hermes-ios-controls/ios/HermesSwiftUIFrontendModule.swift',
+  'modules/hermes-ios-controls/ios/HermesSwiftUILoginModule.swift',
+  'modules/hermes-ios-controls/ios/HermesTextInputModule.swift',
+  'modules/hermes-live-blur/ios/HermesLiquidGlassView.swift',
+  'modules/hermes-live-blur/ios/HermesLiveBlurView.swift',
+  'modules/hermes-quick-look/ios/HermesQuickLookModule.swift',
+  'modules/hermes-swipe-actions/ios/HermesSwipeActionsView.swift',
+] as const;
+
+test('every React-mounted SwiftUI view is self-hosting', () => {
+  for (const path of reactMountedSwiftUIViews) {
+    const source = read(path);
+    assert.match(
+      source,
+      /ExpoSwiftUI\.View, ExpoSwiftUI\.WithHostingView/,
+      `${path} must render through a concrete HostingView`,
+    );
+  }
+});
+
 test('native controls render through React Native without a browser surface', () => {
   const sources = [
     'src/components/ui/NativeButton.tsx',

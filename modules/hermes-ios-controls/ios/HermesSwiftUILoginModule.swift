@@ -21,7 +21,7 @@ final class HermesSwiftUILoginProps: ExpoSwiftUI.ViewProps {
   var onUnlock = EventDispatcher()
 }
 
-struct HermesSwiftUILoginView: ExpoSwiftUI.View {
+struct HermesSwiftUILoginView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUILoginProps
 
   var body: some View {

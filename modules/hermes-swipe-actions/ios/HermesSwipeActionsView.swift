@@ -15,7 +15,7 @@ final class HermesSwipeActionsProps: ExpoSwiftUI.ViewProps {
   var onAction = EventDispatcher()
 }
 
-struct HermesSwipeActionsView: ExpoSwiftUI.View {
+struct HermesSwipeActionsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwipeActionsProps
 
   var body: some View {

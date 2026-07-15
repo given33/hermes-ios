@@ -14,7 +14,7 @@ final class HermesQuickLookProps: ExpoSwiftUI.ViewProps {
   @Field var requestId = 0
 }
 
-struct HermesQuickLookView: ExpoSwiftUI.View {
+struct HermesQuickLookView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesQuickLookProps
   @State private var previewURL: URL?
 

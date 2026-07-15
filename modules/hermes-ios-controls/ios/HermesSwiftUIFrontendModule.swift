@@ -16,7 +16,7 @@ final class HermesSwiftUIFrontendProps: ExpoSwiftUI.ViewProps {
   var onAction = EventDispatcher()
 }
 
-struct HermesSwiftUIFrontendView: ExpoSwiftUI.View {
+struct HermesSwiftUIFrontendView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUIFrontendProps
 
   var body: some View {

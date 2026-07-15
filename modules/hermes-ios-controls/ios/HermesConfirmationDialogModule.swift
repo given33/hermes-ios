@@ -24,7 +24,7 @@ final class HermesConfirmationDialogProps: ExpoSwiftUI.ViewProps {
   var onOpenChange = EventDispatcher()
 }
 
-struct HermesConfirmationDialogView: ExpoSwiftUI.View {
+struct HermesConfirmationDialogView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesConfirmationDialogProps
   @State private var isPresented: Bool
 

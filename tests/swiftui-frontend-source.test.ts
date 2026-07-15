@@ -39,6 +39,22 @@ test('iOS entry mounts only the SwiftUI login and frontend surfaces', () => {
   assert.match(unsignedWorkflow, /EXPO_PUBLIC_FRONTEND_PREVIEW: '1'/);
 });
 
+test('React-mounted SwiftUI roots own a concrete hosting view', () => {
+  const frontend = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIFrontendModule.swift',
+  );
+  const login = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUILoginModule.swift',
+  );
+
+  for (const root of [frontend, login]) {
+    assert.match(
+      root,
+      /ExpoSwiftUI\.View, ExpoSwiftUI\.WithHostingView/,
+    );
+  }
+});
+
 test('signed frontend source has no RN, Reanimated, UIKit, or WebView surface', () => {
   const nativeFrontend = swiftUIFiles.map(read).join('\n');
 

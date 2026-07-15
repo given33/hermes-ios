@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.given33.hermesagent.nativebeta",
-      "buildNumber": "9",
+      "buildNumber": "10",
       "supportsTablet": true,
       "requireFullScreen": false,
       "infoPlist": {

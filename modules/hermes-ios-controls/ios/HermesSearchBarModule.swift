@@ -22,7 +22,7 @@ final class HermesSearchBarProps: ExpoSwiftUI.ViewProps {
   var onSubmit = EventDispatcher()
 }
 
-struct HermesSearchBarView: ExpoSwiftUI.View {
+struct HermesSearchBarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSearchBarProps
   @State private var text = ""
 

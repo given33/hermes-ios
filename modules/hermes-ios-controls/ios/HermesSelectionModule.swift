@@ -20,7 +20,7 @@ final class HermesSelectionProps: ExpoSwiftUI.ViewProps {
   @Field var cornerRadius = 0.0
 }
 
-struct HermesSelectionView: ExpoSwiftUI.View {
+struct HermesSelectionView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSelectionProps
 
   var body: some View {

@@ -18,7 +18,7 @@ final class HermesPressFeedbackProps: ExpoSwiftUI.ViewProps {
   var onPressState = EventDispatcher()
 }
 
-struct HermesPressFeedbackView: ExpoSwiftUI.View {
+struct HermesPressFeedbackView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesPressFeedbackProps
   @State private var hapticTrigger = 0
 

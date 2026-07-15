@@ -39,7 +39,7 @@ final class HermesTextInputProps: ExpoSwiftUI.ViewProps {
   var onNativeSubmit = EventDispatcher()
 }
 
-struct HermesTextInputView: ExpoSwiftUI.View {
+struct HermesTextInputView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesTextInputProps
   @State private var text = ""
   @FocusState private var focused: Bool
