@@ -141,6 +141,7 @@ export function FrontendPreviewApp() {
         nativeRouteChrome={useSwiftUIRoutes}
         renderRoute={(route, _label, context) => (
           <PreviewRoute
+            key={route.path}
             locale={locale}
             navigate={context.navigate}
             notify={notify}
@@ -242,6 +243,7 @@ function PreviewRoute({
   ) {
     return (
       <HermesSwiftUIRouteView
+        key={route.path}
         {...resolveSwiftUIThemeProps(tokens)}
         locale={locale ?? 'zh'}
         onAction={(event) => notify(event.nativeEvent.payload || event.nativeEvent.action)}

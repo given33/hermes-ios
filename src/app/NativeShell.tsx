@@ -36,7 +36,6 @@ import {
 } from 'lucide-react-native';
 import { SymbolView, type SFSymbol } from 'expo-symbols';
 import {
-  CommonActions,
   DefaultTheme,
   NavigationContainer,
   useNavigationContainerRef,
@@ -372,12 +371,10 @@ export function NativeShell({
         && compactNavigationRef.isReady()
         && compactNavigationRef.getCurrentRoute()?.name !== resolved
       ) {
-        compactNavigationRef.dispatch(
-          CommonActions.reset({
-            index: 0,
-            routes: [{ name: resolved }],
-          }),
-        );
+        compactNavigationRef.resetRoot({
+          index: 0,
+          routes: [{ name: resolved }],
+        });
       }
       dispatch({ type: 'navigate', path: resolved });
     },

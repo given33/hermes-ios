@@ -74,6 +74,12 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = true \}/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = false \}/);
   assert.match(native, /NavigationStack \{/);
+  assert.doesNotMatch(native, /navigationTitle\("Hermes Agent"\)/);
+  assert.match(
+    native,
+    /private func select\(_ route: HermesRoute\) \{\s*feedbackTrigger \+= 1\s*props\.onNavigate\(\["path": route\.path\]\)\s*\}/,
+  );
+  assert.doesNotMatch(native, /props\.onNavigate\(\["path": route\.path\]\)\s*if isDrawer/);
   assert.match(native, /DragGesture\(minimumDistance: 8/);
   assert.match(shell, /useSwiftUISidebar \? \(/);
   assert.match(shell, /<HermesSwiftUISidebarView/);
@@ -98,6 +104,9 @@ test('the composer keeps RN controls above a SwiftUI material background', () =>
   assert.doesNotMatch(native, /Children\(\)/);
   assert.match(native, /struct HermesSwiftUIModelToolsView/);
   assert.match(native, /Picker\(chinese \? "推理强度"/);
+  assert.match(native, /@State private var selectedReasoning = "medium"/);
+  assert.match(native, /selectedReasoning = \$0\s*props\.onReasoningChange/);
+  assert.match(native, /selectedModel = \$0\s*props\.onModelChange/);
   assert.match(chat, /<View style=\{surfaceStyle\}>/);
   assert.match(chat, /<HermesSwiftUIFrostedSurfaceView/);
   assert.match(chat, /style=\{StyleSheet\.absoluteFill\}/);

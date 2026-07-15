@@ -135,7 +135,10 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /useAnimatedKeyboard\(\)/);
   assert.match(chat, /useAnimatedReaction\(/);
   assert.match(chat, /runOnJS\(keepLatestVisible\)\(false\)/);
-  assert.match(chat, /paddingBottom: keyboard\.height\.value/);
+  assert.match(chat, /paddingBottom: keyboard\.height\.value \* keyboardAvoidanceEnabled\.value/);
+  assert.match(chat, /composerInputRef\.current\?\.blur\(\)/);
+  assert.match(chat, /keyboardAvoidanceEnabled\.value = 0/);
+  assert.match(chat, /requestAnimationFrame\(showIOSAttachmentPicker\)/);
   assert.match(
     chat,
     /<Reanimated\.View[\s\S]{0,240}styles\.composer,[\s\S]*composerKeyboardStyle/,
@@ -149,7 +152,10 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /keyboardDismissMode="interactive"/);
   assert.match(chat, /onContentSizeChange=\{\(\) => keepLatestVisible\(true\)\}/);
   assert.match(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
-  assert.match(chat, /onFocus=\{\(\) => keepLatestVisible\(false\)\}/);
+  assert.match(
+    chat,
+    /onFocus=\{\(\) => \{[\s\S]{0,140}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,80}keepLatestVisible\(false\);/,
+  );
   assert.match(chat, /Hermes Agent/);
   assert.match(chat, /当前窗口持续使用同一个会话/);
   assert.match(chat, /直接告诉 Hermes 你想做什么/);

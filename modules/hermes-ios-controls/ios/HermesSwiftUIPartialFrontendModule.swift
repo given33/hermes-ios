@@ -209,15 +209,11 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   var body: some View {
     GeometryReader { proxy in
       let drawerWidth = isDrawer ? proxy.size.width : min(360, proxy.size.width)
-      NavigationStack {
-        HermesSidebarContent(
-          activePath: props.activePath,
-          chinese: chinese,
-          onNavigate: select
-        )
-        .navigationTitle("Hermes Agent")
-        .navigationBarTitleDisplayMode(.large)
-      }
+      HermesSidebarContent(
+        activePath: props.activePath,
+        chinese: chinese,
+        onNavigate: select
+      )
       .environmentObject(appearance)
       .frame(width: drawerWidth)
       .frame(maxHeight: .infinity, alignment: .leading)
@@ -274,7 +270,6 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   private func select(_ route: HermesRoute) {
     feedbackTrigger += 1
     props.onNavigate(["path": route.path])
-    if isDrawer { closeDrawer() }
   }
 
   private func closeDrawer() {
@@ -449,6 +444,9 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
   @ObservedObject var props: HermesSwiftUIModelToolsProps
   @StateObject private var appearance = HermesAppearanceModel()
   @State private var presented = false
+  @State private var selectedModel = "claude-sonnet-4"
+  @State private var selectedReasoning = "medium"
+  @State private var selectedToolsEnabled = true
 
   private var chinese: Bool { props.locale == "zh" }
 
@@ -465,8 +463,8 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
           Form {
             Section {
               Button {
-                props.onNewConversation([:])
                 close()
+                DispatchQueue.main.async { props.onNewConversation([:]) }
               } label: {
                 Label(chinese ? "新建会话" : "New conversation", systemImage: "square.and.pencil")
               }
@@ -521,6 +519,9 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
       }
     }
     .onAppear {
+      selectedModel = props.model
+      selectedReasoning = props.reasoning
+      selectedToolsEnabled = props.toolsEnabled
       presented = false
       if props.open {
         DispatchQueue.main.async {
@@ -531,6 +532,9 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
     .onChange(of: props.open) { next in
       withAnimation(hermesDrawerAnimation) { presented = next }
     }
+    .onChange(of: props.model) { selectedModel = $0 }
+    .onChange(of: props.reasoning) { selectedReasoning = $0 }
+    .onChange(of: props.toolsEnabled) { selectedToolsEnabled = $0 }
     .onAppear { props.applyTheme(to: appearance) }
     .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
     .preferredColorScheme(appearance.colorScheme)
@@ -539,22 +543,31 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
 
   private var modelBinding: Binding<String> {
     Binding(
-      get: { props.model },
-      set: { props.onModelChange(["model": $0]) }
+      get: { selectedModel },
+      set: {
+        selectedModel = $0
+        props.onModelChange(["model": $0])
+      }
     )
   }
 
   private var toolsBinding: Binding<Bool> {
     Binding(
-      get: { props.toolsEnabled },
-      set: { props.onToolsChange(["enabled": $0]) }
+      get: { selectedToolsEnabled },
+      set: {
+        selectedToolsEnabled = $0
+        props.onToolsChange(["enabled": $0])
+      }
     )
   }
 
   private var reasoningBinding: Binding<String> {
     Binding(
-      get: { props.reasoning },
-      set: { props.onReasoningChange(["reasoning": $0]) }
+      get: { selectedReasoning },
+      set: {
+        selectedReasoning = $0
+        props.onReasoningChange(["reasoning": $0])
+      }
     )
   }
 

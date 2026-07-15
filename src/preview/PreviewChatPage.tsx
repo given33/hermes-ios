@@ -167,10 +167,13 @@ export function ChatPreviewPage({
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const streamRef = useRef<ScrollView>(null);
+  const composerInputRef = useRef<TextInput>(null);
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAttachmentCleanup = useRef<(() => void) | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
   const pendingScrollFrame = useRef<number | null>(null);
   const keyboard = useAnimatedKeyboard();
+  const keyboardAvoidanceEnabled = useSharedValue(1);
   const isChinese = locale === 'zh';
   const compact = width <= 560;
   const shellSplit = width >= 768;
@@ -189,18 +192,18 @@ export function ChatPreviewPage({
     });
   }, []);
   const keyboardRootStyle = useAnimatedStyle(() => ({
-    paddingBottom: keyboard.height.value,
+    paddingBottom: keyboard.height.value * keyboardAvoidanceEnabled.value,
   }));
   const composerKeyboardStyle = useAnimatedStyle(() => ({
     paddingBottom: interpolate(
-      keyboard.height.value,
+      keyboard.height.value * keyboardAvoidanceEnabled.value,
       [0, Math.max(1, safeAreaBottom)],
       [7 + safeAreaBottom, 3],
       Extrapolation.CLAMP,
     ),
   }));
   useAnimatedReaction(
-    () => keyboard.height.value,
+    () => keyboard.height.value * keyboardAvoidanceEnabled.value,
     (height, previousHeight) => {
       if (
         previousHeight === null
@@ -217,6 +220,7 @@ export function ChatPreviewPage({
     if (pendingScrollFrame.current !== null) {
       cancelAnimationFrame(pendingScrollFrame.current);
     }
+    pendingAttachmentCleanup.current?.();
     pendingNavigationCleanup.current?.();
   }, []);
 
@@ -284,6 +288,7 @@ export function ChatPreviewPage({
       ]);
       setAttachmentsOpen(false);
     }
+    keepLatestVisible(false);
   };
 
   const pickFile = async () => {
@@ -303,13 +308,10 @@ export function ChatPreviewPage({
       ]);
       setAttachmentsOpen(false);
     }
+    keepLatestVisible(false);
   };
 
-  const openAttachmentPicker = () => {
-    if (Platform.OS !== 'ios') {
-      setAttachmentsOpen(true);
-      return;
-    }
+  const showIOSAttachmentPicker = () => {
     ActionSheetIOS.showActionSheetWithOptions(
       {
         cancelButtonIndex: 3,
@@ -324,6 +326,38 @@ export function ChatPreviewPage({
         if (index === 2) void pickFile();
       },
     );
+  };
+
+  const openAttachmentPicker = () => {
+    if (Platform.OS !== 'ios') {
+      setAttachmentsOpen(true);
+      return;
+    }
+
+    pendingAttachmentCleanup.current?.();
+    keyboardAvoidanceEnabled.value = 0;
+    const keyboardWasVisible = Keyboard.isVisible();
+    composerInputRef.current?.blur();
+    if (!keyboardWasVisible) {
+      requestAnimationFrame(showIOSAttachmentPicker);
+      return;
+    }
+
+    let completed = false;
+    const present = () => {
+      if (completed) return;
+      completed = true;
+      pendingAttachmentCleanup.current?.();
+      showIOSAttachmentPicker();
+    };
+    const subscription = Keyboard.addListener('keyboardDidHide', present);
+    const fallback = setTimeout(present, 450);
+    pendingAttachmentCleanup.current = () => {
+      subscription.remove();
+      clearTimeout(fallback);
+      pendingAttachmentCleanup.current = null;
+    };
+    Keyboard.dismiss();
   };
 
   const shareAttachment = async (attachment: ChatAttachment) => {
@@ -379,6 +413,8 @@ export function ChatPreviewPage({
       clearTimeout(fallback);
       pendingNavigationCleanup.current = null;
     };
+    keyboardAvoidanceEnabled.value = 0;
+    composerInputRef.current?.blur();
     Keyboard.dismiss();
   };
 
@@ -452,7 +488,12 @@ export function ChatPreviewPage({
             <View style={styles.headerControls}>
               <IOSPressable
                 accessibilityLabel={isChinese ? '模型与工具' : 'Model and tools'}
-                onPress={() => setToolsOpen(true)}
+                onPress={() => {
+                  keyboardAvoidanceEnabled.value = 0;
+                  composerInputRef.current?.blur();
+                  Keyboard.dismiss();
+                  setToolsOpen(true);
+                }}
                 pressedStyle={{ backgroundColor: tokens.colors.accent }}
                 style={[
                   styles.modelTools,
@@ -574,11 +615,15 @@ export function ChatPreviewPage({
                 blurOnSubmit={false}
                 multiline
                 onChangeText={setContent}
-                onFocus={() => keepLatestVisible(false)}
+                onFocus={() => {
+                  keyboardAvoidanceEnabled.value = 1;
+                  keepLatestVisible(false);
+                }}
                 onSubmitEditing={send}
                 placeholder={isChinese ? '输入消息' : 'Type a message'}
                 placeholderTextColor={tokens.colors.textDisabled}
                 returnKeyType="send"
+                ref={composerInputRef}
                 selectionColor={tokens.colors.foreground}
                 style={[
                   styles.input,
@@ -629,7 +674,6 @@ export function ChatPreviewPage({
         onClose={() => setToolsOpen(false)}
         onNewConversation={() => {
           createConversation();
-          setToolsOpen(false);
         }}
         open={toolsOpen}
       />
@@ -1244,7 +1288,14 @@ function ModelToolsDrawer({
             scrollEventThrottle={8}
             showsVerticalScrollIndicator={false}
           >
-            <NativeButton onPress={onNewConversation} outlined style={styles.drawerNewChat}>
+            <NativeButton
+              onPress={() => {
+                onNewConversation();
+                onClose();
+              }}
+              outlined
+              style={styles.drawerNewChat}
+            >
               {isChinese ? '新建对话' : 'New chat'}
             </NativeButton>
             <View style={[styles.drawerCard, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }]}>
