@@ -103,6 +103,7 @@ test('safe areas and modal accessibility cover phone and tablet shells', () => {
   const source = read('src/app/NativeShell.tsx');
   assert.match(source, /headerStyle: \{ backgroundColor: rootBackground \}/);
   assert.match(source, /headerTitleStyle:/);
+  assert.match(source, /fontSize: Math\.round\(typography\.mobileBrand\.fontSize\)/);
   assert.match(source, /paddingLeft: insets\.left/);
   assert.match(source, /paddingRight: insets\.right/);
   assert.match(source, /paddingBottom: insets\.bottom/);

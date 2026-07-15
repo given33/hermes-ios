@@ -453,7 +453,8 @@ export function NativeShell({
                   headerTitleAlign: 'left',
                   headerTitleStyle: {
                     fontFamily: displayFont,
-                    fontSize: typography.mobileBrand.fontSize,
+                    // react-native-screens stores native-stack title sizes as NSInteger.
+                    fontSize: Math.round(typography.mobileBrand.fontSize),
                   },
                 }}
               >
