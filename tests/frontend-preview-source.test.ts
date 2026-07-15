@@ -257,6 +257,18 @@ test('mobile shell remains full bleed and keeps the WebUI sidebar readable witho
   );
 });
 
+test('manual IPA builds default to the standalone frontend preview', () => {
+  const workflow = read('.github/workflows/ios-unsigned.yml');
+  const app = read('src/app/HermesNativeApp.tsx');
+
+  assert.match(workflow, /frontend_preview:/);
+  assert.match(workflow, /default: true/);
+  assert.match(workflow, /EXPO_PUBLIC_FRONTEND_PREVIEW:/);
+  assert.match(workflow, /inputs\.frontend_preview/);
+  assert.match(app, /process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
+  assert.doesNotMatch(app, /__DEV__[\s\S]{0,80}EXPO_PUBLIC_FRONTEND_PREVIEW/);
+});
+
 test('secondary interfaces use the native iOS sheet transition', () => {
   const primitives = read('src/preview/PreviewPrimitives.tsx');
   const sheetBridge = read('modules/hermes-sheet-controller/index.ts');

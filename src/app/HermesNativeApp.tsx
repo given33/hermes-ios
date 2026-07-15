@@ -12,8 +12,7 @@ import {
 import { NativeShell } from './NativeShell';
 import { useWebUiFonts } from './webui-fonts';
 
-const FRONTEND_PREVIEW =
-  __DEV__ && process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1';
+const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1';
 
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();
