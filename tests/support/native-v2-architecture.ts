@@ -42,7 +42,7 @@ export function assertNoWebRuntime(sources: readonly NativeRuntimeSource[]): voi
   }
 }
 
-export function assertPureSwiftUIEntry(source: string): void {
+export function assertReactNativeEntry(source: string): void {
   const sourceFile = ts.createSourceFile(
     'index.ts',
     source,
@@ -64,12 +64,12 @@ export function assertPureSwiftUIEntry(source: string): void {
       && statement.expression.arguments[0]?.getText() === 'App',
   );
 
-  if (importsGestureHandler || !registersApp) {
-    throw new Error('Pure SwiftUI entry violation: register App without the RN gesture runtime');
+  if (!importsGestureHandler || !registersApp) {
+    throw new Error('React Native entry violation: initialize gestures and register App');
   }
 }
 
-export function assertNativeRootComposition(source: string): void {
+export function assertHybridRootComposition(source: string): void {
   const sourceFile = ts.createSourceFile(
     'App.tsx',
     source,
@@ -101,8 +101,10 @@ export function assertNativeRootComposition(source: string): void {
   }
 
   const root = unwrapParentheses(returnStatement.expression);
-  if (!ts.isJsxSelfClosingElement(root) || root.tagName.getText() !== 'HermesNativeApp') {
-    rootCompositionError('App must directly return only HermesNativeApp');
+  const safeAreaProvider = onlyJsxElementChild(root, 'GestureHandlerRootView');
+  const app = onlyJsxChild(safeAreaProvider, 'SafeAreaProvider');
+  if (!ts.isJsxSelfClosingElement(app) || app.tagName.getText() !== 'HermesNativeApp') {
+    rootCompositionError('SafeAreaProvider must contain only HermesNativeApp');
   }
 }
 
@@ -155,5 +157,5 @@ function onlyMeaningfulChild(element: ts.JsxElement): ts.JsxChild {
 }
 
 function rootCompositionError(detail: string): never {
-  throw new Error(`Native root composition violation: ${detail}`);
+  throw new Error(`Hybrid root composition violation: ${detail}`);
 }

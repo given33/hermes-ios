@@ -299,9 +299,11 @@ test('native auth root is integrated without an AppState foreground re-prompt li
   assert.match(providerSource, /bootstrapSavedConnection/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(appSource, /<AuthProvider>/);
-  assert.match(appSource, /<HermesSwiftUILoginView/);
-  assert.match(appSource, /<HermesSwiftUIFrontendView/);
-  assert.doesNotMatch(appSource, /<LoginScreen|<NativeShell|<ThemeProvider/);
+  assert.match(appSource, /<LoginScreen/);
+  assert.match(appSource, /<NativeShell/);
+  assert.match(appSource, /<ThemeProvider/);
+  assert.match(appSource, /<FrontendPreviewApp/);
+  assert.doesNotMatch(appSource, /<HermesSwiftUI(?:Login|Frontend)View/);
   assert.match(loginSource, /TextInput/);
   assert.match(loginSource, /secureTextEntry/);
   assert.match(loginSource, /autoComplete="off"/);

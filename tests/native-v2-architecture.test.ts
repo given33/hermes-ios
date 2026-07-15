@@ -5,9 +5,9 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  assertPureSwiftUIEntry,
-  assertNativeRootComposition,
+  assertHybridRootComposition,
   assertNoWebRuntime,
+  assertReactNativeEntry,
   readNativeRuntimeSources,
 } from './support/native-v2-architecture';
 
@@ -68,42 +68,41 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
   );
 });
 
-test('native v2 entry registers the SwiftUI host without the RN gesture runtime', () => {
-  assertPureSwiftUIEntry(indexSource);
+test('native v2 entry initializes the React Native gesture runtime', () => {
+  assertReactNativeEntry(indexSource);
 });
 
-test('pure SwiftUI entry guard rejects the RN gesture runtime', () => {
+test('React Native entry guard rejects a missing gesture runtime', () => {
   assert.throws(
-    () => assertPureSwiftUIEntry(`
+    () => assertReactNativeEntry(`
       import { registerRootComponent } from 'expo';
-      import 'react-native-gesture-handler';
       import App from './App';
       registerRootComponent(App);
     `),
-    /pure SwiftUI entry/i,
+    /React Native entry/i,
   );
 });
 
-test('native v2 directly mounts the SwiftUI host without RN view wrappers', () => {
-  assertNativeRootComposition(appSource);
+test('native v2 mounts the RN app inside gesture and safe-area providers', () => {
+  assertHybridRootComposition(appSource);
 });
 
-test('native root guard rejects provider and view wrappers', () => {
+test('hybrid root guard rejects incomplete provider composition', () => {
   assert.throws(
-    () => assertNativeRootComposition(`
+    () => assertHybridRootComposition(`
       export default function App() {
         return <SafeAreaProvider><HermesNativeApp /></SafeAreaProvider>;
       }
     `),
-    /native root composition/i,
+    /hybrid root composition/i,
   );
   assert.throws(
-    () => assertNativeRootComposition(`
+    () => assertHybridRootComposition(`
       export default function App() {
-        return <View><HermesNativeApp /></View>;
+        return <GestureHandlerRootView><HermesNativeApp /></GestureHandlerRootView>;
       }
     `),
-    /native root composition/i,
+    /hybrid root composition/i,
   );
 });
 
@@ -118,7 +117,7 @@ test('native v2 uses the isolated beta identity and required Expo plugins', () =
 
   assert.equal(appConfig.expo.ios.bundleIdentifier, 'com.given33.hermesagent.nativebeta');
   assert.equal(appConfig.expo.version, '2.0.0-beta.1');
-  assert.equal(appConfig.expo.ios.buildNumber, '12');
+  assert.equal(appConfig.expo.ios.buildNumber, '13');
   assert.equal(appConfig.expo.userInterfaceStyle, 'automatic');
   assert.match(JSON.stringify(appConfig.expo.plugins), /"dark":\{"backgroundColor":"#000000"\}/);
   assert.equal(packageConfig.version, '2.0.0-beta.1');

@@ -14,8 +14,6 @@ const reactMountedSwiftUIViews = [
   'modules/hermes-ios-controls/ios/HermesPressFeedbackModule.swift',
   'modules/hermes-ios-controls/ios/HermesSearchBarModule.swift',
   'modules/hermes-ios-controls/ios/HermesSelectionModule.swift',
-  'modules/hermes-ios-controls/ios/HermesSwiftUIFrontendModule.swift',
-  'modules/hermes-ios-controls/ios/HermesSwiftUILoginModule.swift',
   'modules/hermes-ios-controls/ios/HermesTextInputModule.swift',
   'modules/hermes-live-blur/ios/HermesLiquidGlassView.swift',
   'modules/hermes-live-blur/ios/HermesLiveBlurView.swift',

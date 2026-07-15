@@ -121,26 +121,6 @@ export interface HermesConfirmationDialogProps extends NativeViewProps {
   title: string;
 }
 
-export interface HermesSwiftUIFrontendProps extends NativeViewProps {
-  attachmentIds: string[];
-  attachmentNames: string[];
-  errorMessage: string;
-  locale: 'en' | 'zh';
-  onAction?(event: NativeSyntheticEvent<{ action: string; payload?: string }>): void;
-}
-
-export interface HermesSwiftUILoginProps extends NativeViewProps {
-  baseUrl: string;
-  busy: boolean;
-  errorMessage: string;
-  loading: boolean;
-  locked: boolean;
-  locale: 'en' | 'zh';
-  onLogout?(event: NativeSyntheticEvent<Record<string, never>>): void;
-  onProvision?(event: NativeSyntheticEvent<{ apiKey: string; baseUrl: string }>): void;
-  onUnlock?(event: NativeSyntheticEvent<Record<string, never>>): void;
-}
-
 const search = optionalView<HermesSearchBarProps>('HermesSearchBar');
 const selection = optionalView<HermesSelectionProps>('HermesSelection');
 const pressFeedback = optionalView<HermesPressFeedbackProps>('HermesPressFeedback');
@@ -150,10 +130,6 @@ const drawerSurface = optionalView<HermesDrawerSurfaceProps>('HermesDrawerSurfac
 const confirmationDialog = optionalView<HermesConfirmationDialogProps>(
   'HermesConfirmationDialog',
 );
-const swiftUIFrontend = optionalView<HermesSwiftUIFrontendProps>(
-  'HermesSwiftUIFrontend',
-);
-const swiftUILogin = optionalView<HermesSwiftUILoginProps>('HermesSwiftUILogin');
 
 export const hasNativeSearchBar = search.available;
 export const HermesSearchBarView = search.Component;
@@ -169,7 +145,3 @@ export const hasNativeDrawerSurface = drawerSurface.available;
 export const HermesDrawerSurfaceView = drawerSurface.Component;
 export const hasNativeConfirmationDialog = confirmationDialog.available;
 export const HermesConfirmationDialogView = confirmationDialog.Component;
-export const hasNativeSwiftUIFrontend = swiftUIFrontend.available;
-export const HermesSwiftUIFrontendView = swiftUIFrontend.Component;
-export const hasNativeSwiftUILogin = swiftUILogin.available;
-export const HermesSwiftUILoginView = swiftUILogin.Component;

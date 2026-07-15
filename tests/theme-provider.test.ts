@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-test('pure SwiftUI iOS content bypasses the legacy React ThemeProvider', () => {
+test('React Native pages use preview and authenticated theme providers', () => {
   const appSource = readFileSync(
     resolve(projectRoot, 'src', 'app', 'HermesNativeApp.tsx'),
     'utf8',
@@ -16,11 +16,14 @@ test('pure SwiftUI iOS content bypasses the legacy React ThemeProvider', () => {
     'utf8',
   );
 
-  assert.match(appSource, /const \{ state, client,[^}]+\} = useAuth\(\)/);
-  assert.match(appSource, /<HermesSwiftUILoginView/);
-  assert.match(appSource, /<HermesSwiftUIFrontendView/);
+  assert.match(appSource, /const \{ state, client \} = useAuth\(\)/);
+  assert.match(appSource, /<LoginScreen/);
+  assert.match(appSource, /<FrontendPreviewApp/);
+  assert.match(appSource, /<NativeShell/);
+  assert.match(appSource, /<ThemeProvider/);
+  assert.match(appSource, /<FrontendPreviewThemeProvider/);
   assert.match(appSource, /EXPO_PUBLIC_FRONTEND_PREVIEW/);
-  assert.doesNotMatch(appSource, /ThemeProvider|FrontendPreviewApp|NativeShell|LoginScreen/);
+  assert.doesNotMatch(appSource, /HermesSwiftUI(?:Frontend|Login)View/);
 
   assert.match(providerSource, /@react-native-async-storage\/async-storage/);
   assert.match(providerSource, /ThemePreferenceStore/);

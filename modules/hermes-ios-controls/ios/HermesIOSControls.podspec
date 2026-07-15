@@ -12,5 +12,4 @@ Pod::Spec.new do |s|
 
   s.dependency 'ExpoModulesCore'
   s.source_files = '**/*.{h,m,mm,swift}'
-  s.resources = 'Resources/**/*'
 end

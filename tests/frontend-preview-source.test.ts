@@ -381,10 +381,9 @@ test('narrow admin rows use mobile-safe action layouts instead of scattered icon
   assert.doesNotMatch(settings, /accessibilityLabel=\{`Clear \$\{key\}`\} destructive ghost/);
 });
 
-test('legacy preview keeps its WebUI contract while the iOS root stays SwiftUI-only', () => {
+test('React Native preview owns the signed iOS frontend', () => {
   const app = read('src/preview/FrontendPreviewApp.tsx');
   const root = read('src/app/HermesNativeApp.tsx');
-  const swiftRoot = read('modules/hermes-ios-controls/ios/HermesSwiftUIFrontendModule.swift');
 
   assert.match(app, /function SystemActionRow/);
   assert.match(app, /paddingHorizontal: 20/);
@@ -393,8 +392,10 @@ test('legacy preview keeps its WebUI contract while the iOS root stays SwiftUI-o
   assert.match(app, /活跃会话：2/);
   assert.match(app, /function SidebarControl/);
   assert.match(app, /styles\.footerVersion/);
-  assert.match(swiftRoot, /\.preferredColorScheme\(appearance\.theme\.colorScheme\)/);
-  assert.doesNotMatch(root, /ThemedStatusBar|FrontendPreviewApp|NativeShell|ThemeProvider/);
+  assert.match(root, /<FrontendPreviewApp/);
+  assert.match(root, /<NativeShell/);
+  assert.match(root, /<ThemeProvider/);
+  assert.doesNotMatch(root, /HermesSwiftUI(?:Frontend|Login)View/);
 });
 
 test('skills preview uses the current WebUI filter and compact row structure', () => {

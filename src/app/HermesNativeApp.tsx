@@ -1,121 +1,65 @@
-import { useState } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import { PlatformColor, StyleSheet, View } from 'react-native';
 
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
-import { HERMES_ORIGIN } from '../config';
+import { LoginScreen } from '../auth/LoginScreen';
 import {
-  hasNativeSwiftUIFrontend,
-  hasNativeSwiftUILogin,
-  HermesSwiftUIFrontendView,
-  HermesSwiftUILoginView,
-} from '../../modules/hermes-ios-controls';
-import {
-  pickNativeFrontendAttachments,
-  type NativeFrontendAttachment,
-} from './native-frontend-attachments';
+  FrontendPreviewThemeProvider,
+  ThemeProvider,
+} from '../design/ThemeProvider';
+import { FrontendPreviewApp } from '../preview/FrontendPreviewApp';
+import { NativeShell } from './NativeShell';
+import { useWebUiFonts } from './webui-fonts';
 
 const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1';
 
 export function HermesNativeApp() {
-  if (Platform.OS !== 'ios') return null;
-  if (FRONTEND_PREVIEW && hasNativeSwiftUIFrontend) {
-    return <NativeSwiftUIFrontend />;
-  }
+  const fontsLoaded = useWebUiFonts();
+
   return (
-    <AuthProvider>
-      <NativeAuthRoot />
-    </AuthProvider>
+    <View style={styles.root}>
+      <StatusBar style="auto" />
+      {fontsLoaded ? (
+        FRONTEND_PREVIEW ? (
+          <FrontendPreviewThemeProvider>
+            <View
+              accessibilityLabel="Hermes frontend preview"
+              style={styles.nativeContent}
+            >
+              <FrontendPreviewApp />
+            </View>
+          </FrontendPreviewThemeProvider>
+        ) : (
+          <AuthProvider>
+            <NativeAuthRoot />
+          </AuthProvider>
+        )
+      ) : null}
+    </View>
   );
 }
 
 function NativeAuthRoot() {
-  const { state, client, logout, provision, unlock } = useAuth();
-  if (
-    state.status !== 'authenticated'
-    && Platform.OS === 'ios'
-    && hasNativeSwiftUILogin
-  ) {
-    const locked = state.status === 'locked';
-    return (
-      <HermesSwiftUILoginView
-        baseUrl={locked ? state.baseUrl : HERMES_ORIGIN}
-        busy={state.status === 'loading' ? false : state.busy}
-        errorMessage={state.status === 'loading' ? '' : state.error ?? ''}
-        loading={state.status === 'loading'}
-        locked={locked}
-        locale="zh"
-        onLogout={() => void logout()}
-        onProvision={(event) => {
-          void provision(event.nativeEvent.baseUrl, event.nativeEvent.apiKey);
-        }}
-        onUnlock={() => void unlock()}
-        style={styles.nativeContent}
-      />
-    );
-  }
-  if (state.status !== 'authenticated') return null;
+  const { state, client } = useAuth();
+  if (state.status !== 'authenticated') return <LoginScreen />;
   if (!client) return null;
-  if (Platform.OS === 'ios' && hasNativeSwiftUIFrontend) {
-    return <NativeSwiftUIFrontend />;
-  }
-  return null;
-}
-
-function NativeSwiftUIFrontend() {
-  const [attachments, setAttachments] = useState<NativeFrontendAttachment[]>([]);
-  const [actionError, setActionError] = useState('');
-
-  const handleAction = async (action: string, payload?: string) => {
-    if (action === 'clear-attachments') {
-      setAttachments([]);
-      return;
-    }
-    if (action === 'dismiss-error') {
-      setActionError('');
-      return;
-    }
-    if (action === 'remove-attachment') {
-      setAttachments((current) => {
-        return current.filter((attachment) => attachment.id !== payload);
-      });
-      return;
-    }
-    if (action === 'photo-library' || action === 'camera') {
-      const selected = await pickNativeFrontendAttachments(
-        action,
-        attachments.length,
-      );
-      if (selected) setAttachments((current) => [...current, ...selected]);
-      return;
-    }
-    if (action === 'file-picker') {
-      const selected = await pickNativeFrontendAttachments(
-        action,
-        attachments.length,
-      );
-      if (selected) setAttachments((current) => [...current, ...selected]);
-    }
-  };
-
   return (
-    <HermesSwiftUIFrontendView
-      accessibilityLabel="Hermes SwiftUI frontend"
-      attachmentIds={attachments.map((attachment) => attachment.id)}
-      attachmentNames={attachments.map((attachment) => attachment.name)}
-      errorMessage={actionError}
-      locale="zh"
-      onAction={(event) => {
-        void handleAction(event.nativeEvent.action, event.nativeEvent.payload)
-          .catch(() => {
-            setActionError('无法打开系统选择器，请检查照片、相机或文件访问权限。');
-          });
-      }}
-      style={styles.nativeContent}
-    />
+    <ThemeProvider client={client}>
+      <View
+        accessibilityLabel="Hermes authenticated content"
+        style={styles.nativeContent}
+      >
+        <NativeShell />
+      </View>
+    </ThemeProvider>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: PlatformColor('systemBackground'),
+  },
   nativeContent: {
     flex: 1,
   },

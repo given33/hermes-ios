@@ -1,6 +1,6 @@
 # Hermes Agent iOS
 
-这是当前定制 Hermes WebUI 的 SwiftUI 原生 iOS 前端，不包含 WebView 或 WKWebView。WebUI 源代码是 UI、字体、颜色、尺寸、渲染、特效、动画和功能行为的唯一规格；Expo 仅保留进程、认证和系统能力桥接，可见业务界面由 SwiftUI 绘制。
+这是当前定制 Hermes WebUI 的 React Native 原生 iOS 前端，不包含 WebView 或 WKWebView。WebUI 源代码是 UI、字体、颜色、尺寸、渲染、特效、动画和功能行为的唯一规格；React Native 负责页面、导航和业务界面，SwiftUI 只提供输入框、搜索、选择、按压反馈、抽屉和弹窗等原生控件。
 
 ## 已实现
 
@@ -28,7 +28,7 @@
 
 GitHub 的 `Build unsigned iOS IPA` 工作流不需要 Apple 证书。手动运行工作流，或推送 `v1.0.0` 形式的 tag，即可得到 `Hermes-Agent-unsigned.ipa`。该文件必须先由自签软件写入有效证书和 provisioning profile，不能直接安装。
 
-当前 unsigned IPA 工作流设置 `EXPO_PUBLIC_FRONTEND_PREVIEW=1`，Release 包会直接进入 SwiftUI 前端预览，不连接 Hermes 后端。未设置该变量的正式构建仍使用登录和认证流程。
+当前 unsigned IPA 工作流设置 `EXPO_PUBLIC_FRONTEND_PREVIEW=1`，Release 包会直接进入 React Native 前端预览，不连接 Hermes 后端。未设置该变量的正式构建仍使用登录和认证流程。
 
 ## 后台任务
 

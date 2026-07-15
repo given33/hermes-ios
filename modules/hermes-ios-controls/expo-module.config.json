@@ -8,9 +8,7 @@
       "HermesAlertPresenterModule",
       "HermesTextInputModule",
       "HermesDrawerSurfaceModule",
-      "HermesConfirmationDialogModule",
-      "HermesSwiftUIFrontendModule",
-      "HermesSwiftUILoginModule"
+      "HermesConfirmationDialogModule"
     ]
   }
 }
