@@ -1,0 +1,13 @@
+{
+  "platforms": ["apple"],
+  "apple": {
+    "modules": [
+      "HermesSegmentedControlModule",
+      "HermesSwitchModule",
+      "HermesSearchBarModule",
+      "HermesProgressModule",
+      "HermesSelectionModule",
+      "HermesPressFeedbackModule"
+    ]
+  }
+}

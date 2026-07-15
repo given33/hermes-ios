@@ -1,0 +1,8 @@
+{
+  "name": "hermes-context-menu",
+  "version": "1.0.0",
+  "description": "Hermes native iOS context menu interaction",
+  "main": "index.ts",
+  "license": "MIT",
+  "private": true
+}

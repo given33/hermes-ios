@@ -26,7 +26,7 @@ if ($hotspotAddress) {
 }
 
 if ($Tunnel) {
-  pnpm exec expo start --go --tunnel --clear
+  pnpm exec expo start --dev-client --tunnel --clear
 } else {
-  pnpm exec expo start --go --lan --clear
+  pnpm exec expo start --dev-client --lan --clear
 }

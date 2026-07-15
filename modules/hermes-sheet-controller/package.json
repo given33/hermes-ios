@@ -1,0 +1,8 @@
+{
+  "name": "hermes-sheet-controller",
+  "version": "1.0.0",
+  "description": "Hermes native iOS sheet detent controller",
+  "main": "index.ts",
+  "license": "MIT",
+  "private": true
+}
