@@ -39,7 +39,7 @@ final class HermesInputFocusView: ExpoView {
   var focusRingWidthValue: CGFloat = 0 { didSet { setNeedsLayout() } }
 
   private let focusRingLayer = CAShapeLayer()
-  private var focused = false
+  private var isFocused = false
   private var animator: UIViewPropertyAnimator?
 
   required init(appContext: AppContext? = nil) {
@@ -58,11 +58,11 @@ final class HermesInputFocusView: ExpoView {
   }
 
   func setFocused(_ value: Bool, animated: Bool) {
-    guard focused != value else {
+    guard isFocused != value else {
       updateAppearance()
       return
     }
-    focused = value
+    isFocused = value
     animator?.stopAnimation(true)
     let changes = { self.updateAppearance() }
     guard animated else {
@@ -81,8 +81,8 @@ final class HermesInputFocusView: ExpoView {
   private func updateAppearance() {
     backgroundColor = backgroundColorValue
     layer.borderWidth = borderWidthValue
-    layer.borderColor = (focused ? focusBorderColorValue : borderColorValue).cgColor
+    layer.borderColor = (isFocused ? focusBorderColorValue : borderColorValue).cgColor
     focusRingLayer.strokeColor = focusRingColorValue.cgColor
-    focusRingLayer.opacity = focused ? 1 : 0
+    focusRingLayer.opacity = isFocused ? 1 : 0
   }
 }

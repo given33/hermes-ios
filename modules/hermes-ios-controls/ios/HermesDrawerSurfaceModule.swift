@@ -35,7 +35,8 @@ struct HermesDrawerSurfaceView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
         .onTapGesture { requestClose() }
 
       Children()
-        .frame(width: CGFloat(props.width), maxHeight: .infinity)
+        .frame(width: CGFloat(props.width))
+        .frame(maxHeight: .infinity)
         .offset(x: baseOffset + min(0, dragTranslation))
         .simultaneousGesture(
           DragGesture(minimumDistance: 8)
