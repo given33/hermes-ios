@@ -75,7 +75,7 @@ private struct HermesSwiftUILoginScreen: View {
       .scrollDismissesKeyboard(.interactively)
     }
     .environmentObject(appearance)
-    .preferredColorScheme(.dark)
+    .preferredColorScheme(appearance.theme.colorScheme)
     .hermesImpact(trigger: hapticTrigger)
     .onAppear {
       withAnimation(.easeOut(duration: 0.6)) {

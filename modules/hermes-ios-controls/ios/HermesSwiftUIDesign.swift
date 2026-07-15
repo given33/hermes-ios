@@ -14,48 +14,41 @@ struct HermesPalette {
   let warning: Color
   let destructive: Color
 
-  static let nous = HermesPalette(
-    background: Color.hermes("#170d02"),
-    surface: Color.hermes("#1d1207"),
-    elevated: Color.hermes("#28190b"),
-    foreground: .white,
-    secondary: .white.opacity(0.68),
-    tertiary: .white.opacity(0.43),
-    border: Color.hermes("#ffac02").opacity(0.23),
-    accent: Color.hermes("#ffac02"),
-    primary: Color.hermes("#0d7164"),
-    success: Color.hermes("#20a879"),
-    warning: Color.hermes("#f4b740"),
-    destructive: Color.hermes("#ff6b6b")
-  )
-
-  static let light = HermesPalette(
-    background: Color.hermes("#f7f7f4"),
-    surface: .white,
-    elevated: Color.hermes("#efefeb"),
-    foreground: Color.hermes("#151515"),
-    secondary: Color.hermes("#4c4c4c"),
-    tertiary: Color.hermes("#777777"),
-    border: Color.black.opacity(0.14),
-    accent: Color.hermes("#c26b00"),
-    primary: Color.hermes("#0d7164"),
-    success: Color.hermes("#14855f"),
-    warning: Color.hermes("#ad6900"),
-    destructive: Color.hermes("#c93636")
+  static let system = HermesPalette(
+    background: Color(uiColor: .systemBackground),
+    surface: Color(uiColor: .systemBackground),
+    elevated: Color(uiColor: .systemBackground),
+    foreground: Color(uiColor: .label),
+    secondary: Color(uiColor: .secondaryLabel),
+    tertiary: Color(uiColor: .tertiaryLabel),
+    border: Color(uiColor: .separator),
+    accent: Color(uiColor: .systemBlue),
+    primary: Color(uiColor: .systemBlue),
+    success: Color(uiColor: .systemGreen),
+    warning: Color(uiColor: .systemOrange),
+    destructive: Color(uiColor: .systemRed)
   )
 }
 
 enum HermesThemeChoice: String, CaseIterable, Identifiable {
-  case nous
+  case system
   case light
+  case dark
 
   var id: String { rawValue }
-  var palette: HermesPalette { self == .nous ? .nous : .light }
-  var colorScheme: ColorScheme { self == .nous ? .dark : .light }
+  var palette: HermesPalette { .system }
+
+  var colorScheme: ColorScheme? {
+    switch self {
+    case .system: return nil
+    case .light: return .light
+    case .dark: return .dark
+    }
+  }
 }
 
 final class HermesAppearanceModel: ObservableObject {
-  private static let themeKey = "hermes.native.theme"
+  private static let themeKey = "hermes.native.system-theme"
   private static let compactDensityKey = "hermes.native.compact-density"
 
   @Published var theme: HermesThemeChoice {
@@ -67,7 +60,7 @@ final class HermesAppearanceModel: ObservableObject {
 
   init() {
     let storedTheme = UserDefaults.standard.string(forKey: Self.themeKey)
-    self.theme = storedTheme.flatMap(HermesThemeChoice.init(rawValue:)) ?? .nous
+    self.theme = storedTheme.flatMap(HermesThemeChoice.init(rawValue:)) ?? .system
     self.compactDensity = UserDefaults.standard.bool(forKey: Self.compactDensityKey)
   }
 
@@ -121,7 +114,7 @@ struct HermesPrimaryButtonStyle: ButtonStyle {
   func makeBody(configuration: Configuration) -> some View {
     configuration.label
       .font(HermesFonts.bodyBold(15))
-      .foregroundStyle(appearance.palette.background)
+      .foregroundStyle(.white)
       .frame(minHeight: 44)
       .padding(.horizontal, 16)
       .background(appearance.palette.accent)

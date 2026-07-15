@@ -258,8 +258,9 @@ private struct HermesAppearanceSheet: View {
       Form {
         Section(chinese ? "主题" : "Theme") {
           Picker(chinese ? "主题" : "Theme", selection: $appearance.theme) {
-            Text("NOUS").tag(HermesThemeChoice.nous)
+            Text(chinese ? "跟随系统" : "System").tag(HermesThemeChoice.system)
             Text(chinese ? "系统浅色" : "System Light").tag(HermesThemeChoice.light)
+            Text(chinese ? "系统深色" : "System Dark").tag(HermesThemeChoice.dark)
           }
           .pickerStyle(.segmented)
         }

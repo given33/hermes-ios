@@ -100,6 +100,9 @@ test('chat composer, messages, gestures, sheets, and effects are native SwiftUI'
   const frontend = read('modules/hermes-ios-controls/ios/HermesSwiftUIFrontendModule.swift');
 
   assert.match(chat, /@FocusState private var composerFocused/);
+  assert.match(chat, /TapGesture\(\)\.onEnded/);
+  assert.match(chat, /composerFocused = false/);
+  assert.match(chat, /\.simultaneousGesture\(/);
   assert.match(chat, /private static let bottomAnchor/);
   assert.match(chat, /\.onChange\(of: composerFocused\)/);
   assert.match(chat, /proxy\.scrollTo\(Self\.bottomAnchor, anchor: \.bottom\)/);
@@ -126,6 +129,13 @@ test('chat composer, messages, gestures, sheets, and effects are native SwiftUI'
   assert.match(design, /\.sensoryFeedback\(\.impact\(weight: \.light\)/);
   assert.match(design, /UserDefaults\.standard\.set\(theme\.rawValue/);
   assert.match(design, /UserDefaults\.standard\.set\(compactDensity/);
+  assert.match(design, /Color\(uiColor: \.systemBackground\)/);
+  assert.match(design, /Color\(uiColor: \.label\)/);
+  assert.match(design, /case system/);
+  assert.match(design, /case light/);
+  assert.match(design, /case dark/);
+  assert.doesNotMatch(design, /#170d02|#1d1207|#28190b|#f7f7f4/);
+  assert.doesNotMatch(chat, /\.background\(\.ultraThinMaterial\)/);
 });
 
 test('every SwiftUI route is interactive frontend state without empty actions', () => {

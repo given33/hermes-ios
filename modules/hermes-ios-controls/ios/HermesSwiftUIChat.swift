@@ -87,7 +87,6 @@ struct HermesChatPage: View {
       HermesDitherBackground()
       VStack(spacing: 0) {
         chatHeader
-        Divider().overlay(appearance.palette.border)
         messageStream
       }
     }
@@ -143,7 +142,7 @@ struct HermesChatPage: View {
     }
     .padding(.horizontal, 16)
     .padding(.vertical, 10)
-    .background(.ultraThinMaterial)
+    .background(appearance.palette.background)
   }
 
   private var messageStream: some View {
@@ -201,6 +200,12 @@ struct HermesChatPage: View {
       .onPreferenceChange(HermesChatViewportHeightKey.self) { nextHeight in
         viewportHeight = nextHeight
       }
+      .contentShape(Rectangle())
+      .simultaneousGesture(
+        TapGesture().onEnded {
+          composerFocused = false
+        }
+      )
       .scrollDismissesKeyboard(.interactively)
       .onAppear {
         Task { @MainActor in
@@ -242,7 +247,6 @@ struct HermesChatPage: View {
 
   private var composer: some View {
     VStack(spacing: 0) {
-      Divider().overlay(appearance.palette.border)
       if !attachments.isEmpty {
         ScrollView(.horizontal, showsIndicators: false) {
           HStack(spacing: 8) {
@@ -331,7 +335,7 @@ struct HermesChatPage: View {
         Button(action: send) {
           Image(systemName: sending ? "ellipsis" : "arrow.up")
             .font(.system(size: 16, weight: .bold))
-            .foregroundStyle(appearance.palette.background)
+            .foregroundStyle(.white)
             .frame(width: 38, height: 38)
             .background(appearance.palette.accent)
             .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
@@ -346,7 +350,7 @@ struct HermesChatPage: View {
       .padding(.top, 9)
       .padding(.bottom, 8)
       .frame(maxWidth: .infinity)
-      .background(.ultraThinMaterial)
+      .background(appearance.palette.background)
     }
     .animation(.spring(response: 0.34, dampingFraction: 0.88), value: attachments)
   }
@@ -459,7 +463,9 @@ private struct HermesMessageBubble: View {
 
         Text(message.content)
           .font(HermesFonts.body(15))
-          .foregroundStyle(appearance.palette.foreground)
+          .foregroundStyle(
+            message.role == .user ? Color.white : appearance.palette.foreground
+          )
           .textSelection(.enabled)
           .padding(.horizontal, 12)
           .padding(.vertical, 10)

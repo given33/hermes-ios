@@ -6,11 +6,11 @@
     "version": "2.0.0-beta.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "com.given33.hermesagent.nativebeta",
-      "buildNumber": "10",
+      "buildNumber": "11",
       "supportsTablet": true,
       "requireFullScreen": false,
       "infoPlist": {
@@ -118,10 +118,13 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#170d02",
+          "backgroundColor": "#ffffff",
           "image": "./assets/splash-icon.png",
           "imageWidth": 180,
-          "resizeMode": "contain"
+          "resizeMode": "contain",
+          "dark": {
+            "backgroundColor": "#000000"
+          }
         }
       ]
     ],
