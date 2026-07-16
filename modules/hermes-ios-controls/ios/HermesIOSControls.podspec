@@ -5,7 +5,7 @@ Pod::Spec.new do |s|
   s.description    = 'UIKit controls plus the partial SwiftUI sidebar, route pages, model tools, and frosted composer surface.'
   s.author         = 'Hermes iOS'
   s.homepage       = 'https://github.com/NousResearch/hermes-agent'
-  s.platforms      = { :ios => '16.0' }
+  s.platforms      = { :ios => '18.0' }
   s.swift_version  = '5.9'
   s.source         = { :git => '' }
   s.static_framework = true

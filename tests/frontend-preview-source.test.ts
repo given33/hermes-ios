@@ -6,7 +6,7 @@ function read(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-test('frontend preview renders every customized WebUI route without API ownership', () => {
+test('frontend preview renders every customized route and authenticated builds may attach cloud ownership', () => {
   const app = read('src/preview/FrontendPreviewApp.tsx');
   const previewSources = [
     app,
@@ -50,8 +50,10 @@ test('frontend preview renders every customized WebUI route without API ownershi
     assert.match(app, new RegExp(`route\\.pluginName === '${plugin}'`));
   }
 
-  assert.doesNotMatch(previewSources, /HermesApiClient|useAuth|\bapi\.[a-z]/);
-  assert.doesNotMatch(previewSources, /from ['"][^'"]*\/api\//);
+  assert.match(app, /FrontendPreviewAppProps/);
+  assert.match(previewSources, /HermesCloudApi/);
+  assert.match(previewSources, /useHermesSwiftUIRouteData/);
+  assert.doesNotMatch(previewSources, /useAuth/);
   assert.doesNotMatch(previewSources, /WebView|WKWebView|react-native-webview/);
 });
 
@@ -60,7 +62,7 @@ test('manual IPA builds launch the standalone frontend without login', () => {
   const app = read('src/app/HermesNativeApp.tsx');
 
   assert.match(workflow, /frontend_preview:/);
-  assert.match(workflow, /default: true/);
+  assert.match(workflow, /default: false/);
   assert.match(workflow, /EXPO_PUBLIC_FRONTEND_PREVIEW:/);
   assert.match(workflow, /inputs\.frontend_preview/);
   assert.match(app, /process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
@@ -350,7 +352,7 @@ test('preview share, import, export, and model selection open iOS system surface
   assert.match(chat, /haptic=\{canSend \? 'light' : 'none'\}/);
   assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{requestSend\}/);
   assert.match(chat, /const currentContent = contentRef\.current/);
-  assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*pendingSendFrame\.current = null;\s*send\(\);/);
+  assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*pendingSendFrame\.current = null;\s*void send\(\);/);
   assert.match(core, /ActionSheetIOS\.showActionSheetWithOptions/);
   assert.match(plugins, /Share\.share\(/);
   assert.match(settings, /new File\(Paths\.cache, 'hermes-config-preview\.json'\)/);
@@ -403,7 +405,10 @@ test('sidebar system actions and status bar follow the WebUI mobile contract', (
   assert.match(app, /paddingHorizontal: 20/);
   assert.match(app, /paddingVertical: 8/);
   assert.match(app, /网关状态：/);
-  assert.match(app, /活跃会话：2/);
+  assert.match(app, /summary\.activeSessions/);
+  assert.match(app, /api\.getStatus\(\)/);
+  assert.match(app, /api\.restartGateway\(\)/);
+  assert.match(app, /api\.updateHermes\(\)/);
   assert.match(app, /function SidebarControl/);
   assert.match(app, /styles\.footerVersion/);
   assert.match(root, /function ThemedStatusBar/);

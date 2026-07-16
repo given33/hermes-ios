@@ -365,6 +365,7 @@ private struct HermesSidebarContent: View {
 }
 
 final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
+  @Field var dataJson = "{}"
   @Field var locale = "zh"
   @Field var path = "/sessions"
   @Field var pluginName = ""
@@ -390,6 +391,7 @@ final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps, HermesThemeProviding
 struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   @ObservedObject var props: HermesSwiftUIRouteProps
   @StateObject private var appearance: HermesAppearanceModel
+  @StateObject private var routeData: HermesRouteDataStore
   @State private var preparedAnalyticsPath: String? = nil
 
   init(props: HermesSwiftUIRouteProps) {
@@ -399,6 +401,7 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       paletteProvider: { [weak props] in props?.resolvedPalette ?? .nous },
       colorSchemeProvider: { [weak props] in props?.resolvedColorScheme ?? .dark }
     ))
+    _routeData = StateObject(wrappedValue: HermesRouteDataStore(dataJson: props.dataJson))
   }
 
   private var chinese: Bool { props.locale == "zh" }
@@ -415,11 +418,15 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       HermesRouteContent(
         attachmentIds: [],
         attachmentNames: [],
+        data: routeData.snapshot,
         route: route,
         chinese: chinese,
         renderDeferredContent: routeContentReady,
         onAction: { action, payload in
-          props.onAction(["action": action, "payload": payload ?? ""])
+          props.onAction([
+            "action": action.rawValue,
+            "payload": HermesRouteActionEncoder.encode(payload),
+          ])
         }
       )
       .navigationTitle(route.title(chinese))
@@ -445,6 +452,7 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       )
     }
     .onAppear { prepareDeferredContent() }
+    .onChange(of: props.dataJson) { next in routeData.update(dataJson: next) }
     .onChange(of: props.path) { _ in prepareDeferredContent() }
     .preferredColorScheme(appearance.colorScheme)
     .environmentObject(appearance)

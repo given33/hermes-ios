@@ -1,5 +1,5 @@
 export const HERMES_ORIGIN = (
-  process.env.EXPO_PUBLIC_HERMES_URL ?? 'https://8.138.40.16'
+  process.env.EXPO_PUBLIC_HERMES_URL ?? 'https://daxueshenmai.top'
 ).replace(/\/$/, '');
 
 export const GITHUB_REPOSITORY =

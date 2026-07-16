@@ -13,6 +13,9 @@
       "buildNumber": "21",
       "supportsTablet": true,
       "requireFullScreen": false,
+      "entitlements": {
+        "aps-environment": "production"
+      },
       "infoPlist": {
         "CFBundleDisplayName": "Hermes Agent",
         "CFBundleAllowMixedLocalizations": true,
@@ -32,7 +35,7 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "16.0"
+            "deploymentTarget": "18.0"
           }
         }
       ],
@@ -126,7 +129,7 @@
       ]
     ],
     "extra": {
-      "hermesUrl": "https://8.138.40.16",
+      "hermesUrl": "https://daxueshenmai.top",
       "githubRepository": "given33/hermes-ios"
     }
   }

@@ -20,7 +20,8 @@ test('authenticated native content is reachable through the native ThemeProvider
   assert.match(appSource, /const \{ state, client \} = useAuth\(\)/);
   assert.match(appSource, /<ThemeProvider client=\{client\}>/);
   assert.match(appSource, /Hermes authenticated content/);
-  assert.match(appSource, /<NativeShell \/>/);
+  assert.match(appSource, /<FrontendPreviewApp\s+client=\{client\}\s+notificationTarget=\{notificationTarget\}/);
+  assert.doesNotMatch(appSource, /<NativeShell \/>/);
   assert.match(appSource, /EXPO_PUBLIC_FRONTEND_PREVIEW/);
   assert.doesNotMatch(appSource, /__DEV__\s*&&\s*process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW/);
   assert.match(appSource, /<FrontendPreviewThemeProvider>/);

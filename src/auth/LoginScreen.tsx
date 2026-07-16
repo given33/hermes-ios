@@ -54,25 +54,41 @@ const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
 );
 
 export function LoginScreen() {
-  const { state, provision, unlock, logout } = useAuth();
+  const { state, authenticate, unlock, logout } = useAuth();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
-  const apiKeyInput = useRef<TextInputHandle>(null);
+  const usernameInput = useRef<TextInputHandle>(null);
+  const passwordInput = useRef<TextInputHandle>(null);
+  const setupTokenInput = useRef<TextInputHandle>(null);
   const entranceOpacity = useRef(new Animated.Value(0)).current;
   const entranceOffset = useRef(new Animated.Value(LOGIN_ENTRANCE.translateY)).current;
   const [baseUrl, setBaseUrl] = useState(
     state.status === 'locked' ? state.baseUrl : HERMES_ORIGIN,
   );
-  const [apiKey, setApiKey] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
-  const [focusedField, setFocusedField] = useState<'baseUrl' | 'apiKey' | null>(null);
+  const [focusedField, setFocusedField] = useState<
+    'baseUrl' | 'username' | 'password' | 'setupToken' | null
+  >(null);
 
   const loading = state.status === 'loading';
   const locked = state.status === 'locked';
   const busy = state.status !== 'loading' && state.status !== 'authenticated' && state.busy;
   const error =
     state.status === 'locked' || state.status === 'provisioning' ? state.error : undefined;
-  const canSubmit = baseUrl.trim().length > 0 && apiKey.trim().length > 0 && !busy;
+  const mode = state.status === 'provisioning' ? state.mode : 'login';
+  const setupTokenRequired =
+    state.status === 'provisioning'
+    && state.mode === 'register'
+    && state.setupTokenRequired;
+  const canSubmit =
+    baseUrl.trim().length > 0
+    && username.trim().length > 0
+    && password.length > 0
+    && (!setupTokenRequired || setupToken.trim().length > 0)
+    && !busy;
   const verticalPadding = Math.min(96, Math.max(24, height * 0.06));
 
   useEffect(() => {
@@ -96,7 +112,7 @@ export function LoginScreen() {
 
   const submit = () => {
     if (state.status === 'provisioning' && canSubmit) {
-      void provision(baseUrl, apiKey);
+      void authenticate(baseUrl, username, password, setupToken);
     }
   };
 
@@ -143,13 +159,15 @@ export function LoginScreen() {
                 style={styles.card}
               >
                 <View pointerEvents="none" style={styles.cardHighlight} />
-                <Text style={styles.heading}>登录</Text>
+                <Text style={styles.heading}>{mode === 'register' ? '注册' : '登录'}</Text>
                 <Text style={styles.subtitle}>
                   {loading
                     ? '正在读取 Hermes 安全连接。'
                     : locked
                       ? state.baseUrl
-                      : '登录后继续使用 Hermes Agent 管理面板。'}
+                      : mode === 'register'
+                        ? '创建此 Hermes 服务器的所有者账号。'
+                        : '登录后继续使用 Hermes Agent 管理面板。'}
                 </Text>
 
                 {loading ? (
@@ -183,7 +201,9 @@ export function LoginScreen() {
                   </View>
                 ) : (
                   <View style={styles.form}>
-                    <Text style={styles.formTitle}>使用 API 密钥登录</Text>
+                    <Text style={styles.formTitle}>
+                      {mode === 'register' ? '创建所有者账号' : '使用账号密码登录'}
+                    </Text>
                     <View style={styles.field}>
                       <Text style={styles.fieldLabel}>BASE URL</Text>
                       <View style={styles.inputContainer}>
@@ -196,8 +216,8 @@ export function LoginScreen() {
                           onBlur={() => setFocusedField(null)}
                           onChangeText={setBaseUrl}
                           onFocus={() => setFocusedField('baseUrl')}
-                          onSubmitEditing={() => apiKeyInput.current?.focus()}
-                          placeholder="https://8.138.40.16"
+                          onSubmitEditing={() => usernameInput.current?.focus()}
+                          placeholder="https://daxueshenmai.top"
                           placeholderTextColor="rgba(255, 255, 255, 0.32)"
                           returnKeyType="next"
                           selectTextOnFocus={false}
@@ -214,33 +234,92 @@ export function LoginScreen() {
                       </View>
                     </View>
                     <View style={styles.field}>
-                      <Text style={styles.fieldLabel}>API 密钥</Text>
+                      <Text style={styles.fieldLabel}>用户名</Text>
                       <View style={styles.inputContainer}>
                         <TextInput
-                          ref={apiKeyInput}
-                          accessibilityLabel="API 密钥"
-                          autoComplete="off"
+                          ref={usernameInput}
+                          accessibilityLabel="用户名"
+                          autoComplete="username"
                           autoCapitalize="none"
                           autoCorrect={false}
                           editable={!busy}
                           onBlur={() => setFocusedField(null)}
-                          onChangeText={setApiKey}
-                          onFocus={() => setFocusedField('apiKey')}
-                          onSubmitEditing={submit}
-                          returnKeyType="done"
-                          secureTextEntry
+                          onChangeText={setUsername}
+                          onFocus={() => setFocusedField('username')}
+                          onSubmitEditing={() => passwordInput.current?.focus()}
+                          returnKeyType="next"
                           style={[
                             styles.input,
-                            focusedField === 'apiKey' && styles.inputFocused,
+                            focusedField === 'username' && styles.inputFocused,
                           ]}
-                          textContentType="none"
-                          value={apiKey}
+                          textContentType="username"
+                          value={username}
                         />
-                        {focusedField === 'apiKey' ? (
+                        {focusedField === 'username' ? (
                           <View pointerEvents="none" style={styles.inputFocusRing} />
                         ) : null}
                       </View>
                     </View>
+                    <View style={styles.field}>
+                      <Text style={styles.fieldLabel}>密码</Text>
+                      <View style={styles.inputContainer}>
+                        <TextInput
+                          ref={passwordInput}
+                          accessibilityLabel="密码"
+                          autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                          autoCapitalize="none"
+                          autoCorrect={false}
+                          editable={!busy}
+                          onBlur={() => setFocusedField(null)}
+                          onChangeText={setPassword}
+                          onFocus={() => setFocusedField('password')}
+                          onSubmitEditing={() => {
+                            if (setupTokenRequired) setupTokenInput.current?.focus();
+                            else submit();
+                          }}
+                          returnKeyType={setupTokenRequired ? 'next' : 'done'}
+                          secureTextEntry
+                          style={[
+                            styles.input,
+                            focusedField === 'password' && styles.inputFocused,
+                          ]}
+                          textContentType={mode === 'register' ? 'newPassword' : 'password'}
+                          value={password}
+                        />
+                        {focusedField === 'password' ? (
+                          <View pointerEvents="none" style={styles.inputFocusRing} />
+                        ) : null}
+                      </View>
+                    </View>
+                    {setupTokenRequired ? (
+                      <View style={styles.field}>
+                        <Text style={styles.fieldLabel}>服务器初始化码</Text>
+                        <View style={styles.inputContainer}>
+                          <TextInput
+                            ref={setupTokenInput}
+                            accessibilityLabel="服务器初始化码"
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            editable={!busy}
+                            onBlur={() => setFocusedField(null)}
+                            onChangeText={setSetupToken}
+                            onFocus={() => setFocusedField('setupToken')}
+                            onSubmitEditing={submit}
+                            returnKeyType="done"
+                            secureTextEntry
+                            style={[
+                              styles.input,
+                              focusedField === 'setupToken' && styles.inputFocused,
+                            ]}
+                            textContentType="oneTimeCode"
+                            value={setupToken}
+                          />
+                          {focusedField === 'setupToken' ? (
+                            <View pointerEvents="none" style={styles.inputFocusRing} />
+                          ) : null}
+                        </View>
+                      </View>
+                    ) : null}
                     {error ? (
                       <Text accessibilityRole="alert" style={styles.errorText}>
                         {error}
@@ -249,7 +328,9 @@ export function LoginScreen() {
                     <ProviderButton
                       busy={busy}
                       disabled={!canSubmit}
-                      label={busy ? '正在连接' : '登录'}
+                      label={busy
+                        ? mode === 'register' ? '正在注册' : '正在登录'
+                        : mode === 'register' ? '注册并登录' : '登录'}
                       onPress={submit}
                     />
                   </View>

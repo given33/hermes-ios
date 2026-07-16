@@ -5,13 +5,16 @@ import { StyleSheet, View } from 'react-native';
 import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { LoginScreen } from '../auth/LoginScreen';
+import {
+  NotificationProvider,
+  useTaskNotificationTarget,
+} from '../notifications/NotificationProvider';
 import { FrontendPreviewApp } from '../preview/FrontendPreviewApp';
 import {
   FrontendPreviewThemeProvider,
   ThemeProvider,
   useTheme,
 } from '../design/ThemeProvider';
-import { NativeShell } from './NativeShell';
 import { useWebUiFonts } from './webui-fonts';
 
 const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1';
@@ -37,7 +40,9 @@ export function HermesNativeApp() {
           </FrontendPreviewThemeProvider>
         ) : (
           <AuthProvider>
-            <NativeAuthRoot />
+            <NotificationProvider>
+              <NativeAuthRoot />
+            </NotificationProvider>
           </AuthProvider>
         )
       ) : null}
@@ -47,6 +52,7 @@ export function HermesNativeApp() {
 
 function NativeAuthRoot() {
   const { state, client } = useAuth();
+  const notificationTarget = useTaskNotificationTarget();
   if (state.status !== 'authenticated') return <LoginScreen />;
   if (!client) return null;
   return (
@@ -56,7 +62,10 @@ function NativeAuthRoot() {
         accessibilityLabel="Hermes authenticated content"
         style={styles.nativeContent}
       >
-        <NativeShell />
+        <FrontendPreviewApp
+          client={client}
+          notificationTarget={notificationTarget}
+        />
       </View>
     </ThemeProvider>
   );

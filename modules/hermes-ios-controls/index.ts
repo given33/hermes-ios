@@ -139,6 +139,7 @@ export interface HermesSwiftUISidebarProps extends NativeViewProps, HermesSwiftU
 }
 
 export interface HermesSwiftUIRouteProps extends NativeViewProps, HermesSwiftUIThemeProps {
+  dataJson?: string;
   locale: 'en' | 'zh';
   onAction?(event: NativeSyntheticEvent<{ action: string; payload: string }>): void;
   onOpenNavigation?(event: NativeSyntheticEvent<Record<string, never>>): void;

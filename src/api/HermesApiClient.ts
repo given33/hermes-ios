@@ -19,6 +19,16 @@ export interface HermesRequestOptions extends RequestInit {
   query?: HermesQuery;
 }
 
+export interface HermesAccessTokenRequest {
+  forceRefresh?: boolean;
+  rejectedToken?: string;
+}
+
+export interface HermesAccessTokenProvider {
+  getAccessToken(request?: HermesAccessTokenRequest): Promise<string>;
+  getCurrentAccessToken(): string | null;
+}
+
 export class HermesApiError extends Error {
   readonly name = 'HermesApiError';
 
@@ -64,13 +74,28 @@ export function normalizeBaseUrl(input: string): string {
 
 export class HermesApiClient {
   readonly baseUrl: string;
-  private readonly apiKey: string;
+  private readonly credential: string | HermesAccessTokenProvider;
   private readonly fetchImpl: typeof fetch;
 
-  constructor(baseUrl: string, apiKey: string, fetchImpl: typeof fetch = fetch) {
+  constructor(
+    baseUrl: string,
+    credential: string | HermesAccessTokenProvider,
+    fetchImpl: typeof fetch = fetch,
+  ) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
-    this.apiKey = apiKey.trim();
-    if (!this.apiKey) throw new Error('Hermes API key is required');
+    if (typeof credential === 'string') {
+      const accessToken = credential.trim();
+      if (!accessToken) throw new Error('Hermes access token is required');
+      this.credential = accessToken;
+    } else {
+      if (
+        typeof credential?.getAccessToken !== 'function'
+        || typeof credential.getCurrentAccessToken !== 'function'
+      ) {
+        throw new Error('Hermes access-token provider is required');
+      }
+      this.credential = credential;
+    }
     this.fetchImpl = fetchImpl;
   }
 
@@ -86,24 +111,19 @@ export class HermesApiClient {
     const url = this.createSameOriginUrl(path);
     mergeQuery(url, query);
     if (profile !== undefined) url.searchParams.set('profile', profile);
-    this.assertUrlHasNoApiKey(url);
+    this.assertUrlHasNoCredentials(url, this.currentCredentialSecrets());
 
-    const headers = new Headers(callerHeaders);
-    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
-    headers.set('Authorization', `Bearer ${this.apiKey}`);
-
-    // React Native's whatwg-fetch ignores RequestInit.redirect. Its iOS native
-    // transport follows redirects while rebuilding the redirected request
-    // without the Authorization header, so validate the final URL before the
-    // response body is consumed instead of claiming manual redirect handling.
-    const response = await this.fetchImpl(url.toString(), { ...requestInit, headers });
-    this.assertResponseSameOrigin(response);
+    const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
+      url,
+      callerHeaders,
+      requestInit,
+    );
     const body = await response.text();
 
     if (!response.ok) {
       throw new HermesApiError(
         response.status,
-        safeResponseDetail(body, response, this.apiKey),
+        safeResponseDetail(body, response, attemptedTokens),
       );
     }
     if (!body) return undefined as T;
@@ -119,10 +139,37 @@ export class HermesApiClient {
     return body as T;
   }
 
+  async download(path: string, options: HermesRequestOptions = {}): Promise<Blob> {
+    const {
+      headers: callerHeaders,
+      profile,
+      query,
+      redirect: unsupportedRedirect,
+      ...requestInit
+    } = options;
+    void unsupportedRedirect;
+    const url = this.createSameOriginUrl(path);
+    mergeQuery(url, query);
+    if (profile !== undefined) url.searchParams.set('profile', profile);
+    const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
+      url,
+      callerHeaders,
+      requestInit,
+    );
+    if (!response.ok) {
+      const body = await response.text();
+      throw new HermesApiError(
+        response.status,
+        safeResponseDetail(body, response, attemptedTokens),
+      );
+    }
+    return response.blob();
+  }
+
   createAttachmentUrl(path: string, query?: HermesQuery): string {
     const url = this.createSameOriginUrl(path);
     mergeQuery(url, query);
-    this.assertUrlHasNoApiKey(url);
+    this.assertUrlHasNoCredentials(url, this.currentCredentialSecrets());
     return url.toString();
   }
 
@@ -168,23 +215,84 @@ export class HermesApiClient {
     if (url.origin !== new URL(this.baseUrl).origin) {
       throw new Error('Hermes requests must remain same-origin');
     }
-    this.assertUrlHasNoApiKey(url);
+    this.assertUrlHasNoCredentials(url, this.currentCredentialSecrets());
     return url;
   }
 
-  private assertUrlHasNoApiKey(url: URL): void {
+  private assertUrlHasNoCredentials(url: URL, secrets: string[]): void {
     const serialized = url.toString();
-    const serializedLeak =
-      this.apiKey.length >= 8 &&
-      secretEncodings(this.apiKey).some((encoded) => serialized.includes(encoded));
-    const decodedLeak = urlComponents(url).some((component) =>
-      this.apiKey.length < 8
-        ? component === this.apiKey
-        : component.includes(this.apiKey),
-    );
-    if (serializedLeak || decodedLeak) {
-      throw new Error('Hermes credentials must not appear in request URLs');
+    for (const secret of secrets.filter(Boolean)) {
+      const serializedLeak =
+        secret.length >= 8
+        && secretEncodings(secret).some((encoded) => serialized.includes(encoded));
+      const decodedLeak = urlComponents(url).some((component) =>
+        secret.length < 8 ? component === secret : component.includes(secret),
+      );
+      if (serializedLeak || decodedLeak) {
+        throw new Error('Hermes credentials must not appear in request URLs');
+      }
     }
+  }
+
+  private currentCredentialSecrets(): string[] {
+    if (typeof this.credential === 'string') return [this.credential];
+    const accessToken = this.credential.getCurrentAccessToken();
+    return accessToken ? [accessToken] : [];
+  }
+
+  private async resolveAccessToken(): Promise<string> {
+    return typeof this.credential === 'string'
+      ? this.credential
+      : normalizeAccessToken(await this.credential.getAccessToken());
+  }
+
+  private async fetchAuthorizedResponse(
+    url: URL,
+    callerHeaders: HeadersInit | undefined,
+    requestInit: Omit<HermesRequestOptions, 'headers' | 'profile' | 'query' | 'redirect'>,
+  ): Promise<{ attemptedTokens: string[]; response: Response }> {
+    const accessToken = await this.resolveAccessToken();
+    this.assertUrlHasNoCredentials(url, [accessToken]);
+    // React Native's transport may follow redirects without preserving the
+    // Authorization header. Always validate the final response origin.
+    let response = await this.fetchWithAccessToken(
+      url,
+      accessToken,
+      callerHeaders,
+      requestInit,
+    );
+    this.assertResponseSameOrigin(response);
+    const attemptedTokens = [accessToken];
+    if (response.status === 401 && typeof this.credential !== 'string') {
+      const refreshedToken = normalizeAccessToken(
+        await this.credential.getAccessToken({
+          forceRefresh: true,
+          rejectedToken: accessToken,
+        }),
+      );
+      attemptedTokens.push(refreshedToken);
+      this.assertUrlHasNoCredentials(url, [refreshedToken]);
+      response = await this.fetchWithAccessToken(
+        url,
+        refreshedToken,
+        callerHeaders,
+        requestInit,
+      );
+      this.assertResponseSameOrigin(response);
+    }
+    return { attemptedTokens, response };
+  }
+
+  private fetchWithAccessToken(
+    url: URL,
+    accessToken: string,
+    callerHeaders: HeadersInit | undefined,
+    requestInit: Omit<HermesRequestOptions, 'headers' | 'profile' | 'query' | 'redirect'>,
+  ): Promise<Response> {
+    const headers = new Headers(callerHeaders);
+    if (!headers.has('Accept')) headers.set('Accept', 'application/json');
+    headers.set('Authorization', `Bearer ${accessToken}`);
+    return this.fetchImpl(url.toString(), { ...requestInit, headers });
   }
 
   private assertResponseSameOrigin(response: Response): void {
@@ -230,7 +338,11 @@ function urlComponents(url: URL): string[] {
   ];
 }
 
-function safeResponseDetail(body: string, response: Response, apiKey: string): string | undefined {
+function safeResponseDetail(
+  body: string,
+  response: Response,
+  secrets: string[],
+): string | undefined {
   let detail: string | undefined;
   if (body) {
     try {
@@ -244,7 +356,7 @@ function safeResponseDetail(body: string, response: Response, apiKey: string): s
   }
   detail = detail ?? (response.statusText || undefined);
   if (!detail) return undefined;
-  return redactSecret(detail, apiKey).slice(0, 240);
+  return redactSecrets(detail, secrets).slice(0, 240);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -255,14 +367,22 @@ function firstString(...values: unknown[]): string | undefined {
   return values.find((value): value is string => typeof value === 'string');
 }
 
-function redactSecret(value: string, apiKey: string): string {
+function redactSecrets(value: string, secrets: string[]): string {
   let redacted = value;
-  for (const encoded of secretEncodings(apiKey).sort(
-    (left, right) => right.length - left.length,
-  )) {
-    redacted = redacted.split(encoded).join('[redacted]');
+  for (const secret of secrets.filter(Boolean)) {
+    for (const encoded of secretEncodings(secret).sort(
+      (left, right) => right.length - left.length,
+    )) {
+      redacted = redacted.split(encoded).join('[redacted]');
+    }
   }
   return redacted.replace(/\bauthorization\s*[:=][^\r\n]*/gi, '[redacted header]');
+}
+
+function normalizeAccessToken(value: string): string {
+  const accessToken = value.trim();
+  if (!accessToken) throw new Error('Hermes access-token provider returned an empty token');
+  return accessToken;
 }
 
 function secretEncodings(secret: string): string[] {

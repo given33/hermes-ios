@@ -28,7 +28,10 @@ function withResponseUrl(response: Response, url: string): Response {
 }
 
 test('normalizes the fixed server URL and rejects unsafe base URLs', () => {
-  assert.equal(normalizeBaseUrl(' https://8.138.40.16/ '), 'https://8.138.40.16');
+  assert.equal(
+    normalizeBaseUrl(' https://daxueshenmai.top/ '),
+    'https://daxueshenmai.top',
+  );
   assert.equal(normalizeBaseUrl('http://hermes.test:8080'), 'http://hermes.test:8080');
 
   for (const unsafe of [
@@ -62,7 +65,7 @@ test('rejects cross-origin request paths before bearer credentials reach fetch',
   assert.equal(calls.length, 0);
 });
 
-test('adds bearer auth and merges profile, query, and caller headers without key leakage', async () => {
+test('adds bearer auth and merges profile, query, and caller headers without token leakage', async () => {
   const calls: FetchCall[] = [];
   const client = new HermesApiClient(
     'https://hermes.test/',
@@ -101,7 +104,7 @@ test('adds bearer auth and merges profile, query, and caller headers without key
   assert.doesNotMatch(calls[0].url, /mobile-secret/);
 });
 
-test('a short valid key is not confused with ordinary request URL characters', async () => {
+test('a short valid token is not confused with ordinary request URL characters', async () => {
   const calls: FetchCall[] = [];
   const client = new HermesApiClient(
     'https://hermes.test',
@@ -118,7 +121,7 @@ test('a short valid key is not confused with ordinary request URL characters', a
   assert.doesNotMatch(calls[0].url, /[?&](?:api_?key|token)=/i);
 });
 
-test('rejects raw, URI-encoded, and form-encoded API keys in request URLs', () => {
+test('rejects raw, URI-encoded, and form-encoded access tokens in request URLs', () => {
   const rawClient = new HermesApiClient('https://hermes.test', 'mobile-secret');
   assert.throws(
     () => rawClient.createAttachmentUrl('/api/files/mobile-secret'),
@@ -230,6 +233,43 @@ test('parses JSON, text, and empty successful responses', async () => {
   assert.equal(await client.request('/api/empty'), undefined);
 });
 
+test('authenticated binary downloads refresh one rejected token and preserve bytes', async () => {
+  const calls: FetchCall[] = [];
+  const provider = {
+    getCurrentAccessToken: () => 'old-mobile-token',
+    getAccessToken: async (request?: { forceRefresh?: boolean }) =>
+      request?.forceRefresh ? 'new-mobile-token' : 'old-mobile-token',
+  };
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    provider,
+    async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init: init ?? {} });
+      if (calls.length === 1) {
+        return jsonResponse(url, { detail: 'expired' }, { status: 401 });
+      }
+      return withResponseUrl(
+        new Response(new Uint8Array([0, 1, 2, 255]), {
+          headers: { 'Content-Type': 'application/octet-stream' },
+        }),
+        url,
+      );
+    },
+  );
+
+  const blob = await client.download('/api/files/download', {
+    query: { path: 'outputs/最终报告.pdf' },
+  });
+
+  assert.deepEqual([...new Uint8Array(await blob.arrayBuffer())], [0, 1, 2, 255]);
+  assert.equal(calls.length, 2);
+  assert.equal(new URL(calls[0].url).searchParams.get('path'), 'outputs/最终报告.pdf');
+  assert.equal(new Headers(calls[0].init.headers).get('Authorization'), 'Bearer old-mobile-token');
+  assert.equal(new Headers(calls[1].init.headers).get('Authorization'), 'Bearer new-mobile-token');
+  assert.doesNotMatch(calls.map(({ url }) => url).join('\n'), /mobile-token/);
+});
+
 test('accepts only the actual mobile v1 handshake contract', () => {
   const handshake = {
     api_version: 1,
@@ -276,13 +316,13 @@ test('non-2xx errors expose status but redact keys, headers, and echoed secrets'
 });
 
 test('error redaction covers URLSearchParams space and tilde encoding', async () => {
-  for (const { apiKey, echoed } of [
-    { apiKey: 'mobile secret', echoed: 'mobile+secret' },
-    { apiKey: 'mobile~secret', echoed: 'mobile%7Esecret' },
+  for (const { accessToken, echoed } of [
+    { accessToken: 'mobile secret', echoed: 'mobile+secret' },
+    { accessToken: 'mobile~secret', echoed: 'mobile%7Esecret' },
   ]) {
     const client = new HermesApiClient(
       'https://hermes.test',
-      apiKey,
+      accessToken,
       async () =>
         jsonResponse(
           'https://hermes.test/api/config',
@@ -296,7 +336,7 @@ test('error redaction covers URLSearchParams space and tilde encoding', async ()
       const serialized = `${String(error)}\n${JSON.stringify(error)}\n${error.stack ?? ''}`;
       const normalized = serialized.toLowerCase();
       assert.equal(normalized.includes(echoed.toLowerCase()), false);
-      assert.equal(normalized.includes(apiKey.toLowerCase()), false);
+      assert.equal(normalized.includes(accessToken.toLowerCase()), false);
       return true;
     });
   }

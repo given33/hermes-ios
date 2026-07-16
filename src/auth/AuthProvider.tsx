@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+import * as Device from 'expo-device';
 import * as SecureStore from 'expo-secure-store';
 import {
   createContext,
@@ -12,6 +14,9 @@ import {
 
 import { HermesApiClient } from '../api/HermesApiClient';
 import { assertMobileHandshake } from '../api/hermes-types';
+import { HERMES_ORIGIN } from '../config';
+import { HermesMobileNotificationApi } from '../notifications/mobile-notifications';
+import { AccessTokenController } from './access-token-controller';
 import {
   authReducer,
   bootstrapSavedConnection,
@@ -22,11 +27,24 @@ import {
   CredentialStore,
   provisionConnection as persistVerifiedConnection,
 } from './credential-store';
+import { getMobileDeviceIdentity } from './device-identity';
+import {
+  MobileAuthApiClient,
+  MobileAuthApiError,
+  resolveMobileAuthMode,
+  type MobileAuthMode,
+} from './mobile-auth';
 
 interface AuthContextValue {
   state: AuthState;
   client: HermesApiClient | null;
-  provision(baseUrl: string, apiKey: string): Promise<void>;
+  authenticate(
+    baseUrl: string,
+    username: string,
+    password: string,
+    setupToken?: string,
+  ): Promise<void>;
+  rememberDeviceId(deviceId: string): Promise<void>;
   unlock(): Promise<void>;
   logout(): Promise<void>;
 }
@@ -37,6 +55,7 @@ const credentialStore = new CredentialStore(SecureStore);
 const UNLOCK_ERROR = 'Face ID 已取消或凭据不可用，请重试。';
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
+const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
@@ -49,10 +68,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
     let active = true;
 
     void bootstrapSavedConnection(credentialStore)
-      .then((result) => {
+      .then(async (result) => {
         if (!active) return;
         if (result.status === 'provisioning') {
-          dispatch({ type: 'BOOTSTRAP_EMPTY' });
+          let mode: MobileAuthMode = 'login';
+          let setupTokenRequired = false;
+          let error: string | undefined;
+          try {
+            const status = await new MobileAuthApiClient(HERMES_ORIGIN).getStatus();
+            mode = resolveMobileAuthMode(status);
+            setupTokenRequired = status.setupTokenRequired;
+          } catch {
+            error = CONNECTION_ERROR;
+          }
+          if (active) {
+            dispatch({
+              type: 'BOOTSTRAP_EMPTY',
+              mode,
+              setupTokenRequired,
+              error,
+            });
+          }
         } else if (result.status === 'locked') {
           dispatch({
             type: 'BOOTSTRAP_LOCKED',
@@ -64,7 +100,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
       })
       .catch(() => {
-        if (active) dispatch({ type: 'BOOTSTRAP_EMPTY' });
+        if (active) {
+          dispatch({
+            type: 'BOOTSTRAP_EMPTY',
+            mode: 'login',
+            error: CONNECTION_ERROR,
+          });
+        }
       });
 
     return () => {
@@ -72,26 +114,63 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
-  const provision = useCallback(
-    async (baseUrl: string, apiKey: string) => {
+  const authenticate = useCallback(
+    async (
+      baseUrl: string,
+      username: string,
+      password: string,
+      setupToken = '',
+    ) => {
       if (state.status !== 'provisioning' || state.busy || operationInFlight.current) return;
       operationInFlight.current = true;
       dispatch({ type: 'PROVISION_STARTED' });
       try {
+        const mobileAuth = new MobileAuthApiClient(baseUrl);
+        const status = await mobileAuth.getStatus();
+        const mode = resolveMobileAuthMode(status);
+        dispatch({
+          type: 'AUTH_MODE_RESOLVED',
+          mode,
+          setupTokenRequired: status.setupTokenRequired,
+        });
+        const device = await getMobileDeviceIdentity(SecureStore, {
+          appVersion: Constants.expoConfig?.version,
+          deviceName: Device.deviceName,
+          modelId: Device.modelId,
+          modelName: Device.modelName,
+          osName: Device.osName,
+          osVersion: Device.osVersion,
+        });
+        const session = mode === 'register'
+          ? await mobileAuth.register(username, password, device, setupToken)
+          : await mobileAuth.login(username, password, device);
         const connection = await persistVerifiedConnection(
-          { baseUrl, apiKey },
+          {
+            baseUrl: mobileAuth.baseUrl,
+            username: session.account.username,
+            accessToken: session.accessToken,
+            refreshToken: session.refreshToken,
+            expiresAt: session.expiresAt,
+            deviceId: session.deviceId,
+          },
           {
             store: credentialStore,
             async verify(candidate) {
-              const client = new HermesApiClient(candidate.baseUrl, candidate.apiKey);
+              const client = new HermesApiClient(
+                candidate.baseUrl,
+                candidate.accessToken,
+              );
               const response = await client.request<unknown>('/api/mobile/v1/handshake');
               assertMobileHandshake(response);
             },
           },
         );
         dispatch({ type: 'AUTHENTICATED', connection });
-      } catch {
-        dispatch({ type: 'PROVISION_FAILED', error: CONNECTION_ERROR });
+      } catch (error) {
+        dispatch({
+          type: 'PROVISION_FAILED',
+          error: authenticationErrorMessage(error),
+        });
       } finally {
         operationInFlight.current = false;
       }
@@ -104,12 +183,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
     operationInFlight.current = true;
     dispatch({ type: 'UNLOCK_STARTED' });
     try {
-      const apiKey = await credentialStore.readApiKey();
-      if (!apiKey) throw new Error('Protected credential unavailable');
-      dispatch({
-        type: 'AUTHENTICATED',
-        connection: { baseUrl: state.baseUrl, apiKey },
-      });
+      const result = await bootstrapSavedConnection(credentialStore);
+      if (result.status !== 'authenticated') {
+        throw new Error('Protected credential unavailable');
+      }
+      dispatch({ type: 'AUTHENTICATED', connection: result.connection });
     } catch {
       dispatch({ type: 'UNLOCK_FAILED', error: UNLOCK_ERROR });
     } finally {
@@ -117,10 +195,63 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [state]);
 
+  const client = useMemo(() => {
+    if (state.status !== 'authenticated') return null;
+    const { connection } = state;
+    const mobileAuth = new MobileAuthApiClient(connection.baseUrl);
+    const accessTokens = new AccessTokenController(connection, {
+      store: credentialStore,
+      async refresh(refreshToken) {
+        try {
+          return await mobileAuth.refresh(refreshToken);
+        } catch (error) {
+          if (error instanceof MobileAuthApiError && error.status === 401) {
+            await credentialStore.clear().catch(() => undefined);
+            dispatch({ type: 'SESSION_EXPIRED', error: SESSION_EXPIRED_ERROR });
+          }
+          throw error;
+        }
+      },
+      onSessionRefreshed(session) {
+        dispatch({
+          type: 'SESSION_REFRESHED',
+          accessToken: session.accessToken,
+          refreshToken: session.refreshToken,
+          expiresAt: session.expiresAt,
+          deviceId: session.deviceId,
+        });
+      },
+    });
+    return new HermesApiClient(connection.baseUrl, accessTokens);
+  }, [state]);
+
+  const rememberDeviceId = useCallback(async (deviceId: string) => {
+    const normalized = deviceId.trim();
+    if (!normalized || state.status !== 'authenticated') return;
+    await credentialStore.saveDeviceId(normalized);
+    dispatch({ type: 'DEVICE_IDENTIFIED', deviceId: normalized });
+  }, [state.status]);
+
   const logout = useCallback(async () => {
     if (operationInFlight.current) return;
     operationInFlight.current = true;
     try {
+      if (state.status === 'authenticated') {
+        const mobileAuth = new MobileAuthApiClient(state.connection.baseUrl);
+        if (client) {
+          const notifications = new HermesMobileNotificationApi(client);
+          const deviceId = await notifications.resolveCurrentDeviceId(
+            state.connection.deviceId,
+          ).catch(() => '');
+          if (deviceId) {
+            await notifications.unregisterApns(deviceId).catch(() => undefined);
+          }
+        }
+        await mobileAuth.logout(
+          state.connection.refreshToken,
+          state.connection.accessToken,
+        ).catch(() => undefined);
+      }
       await credentialStore.clear();
       dispatch({ type: 'LOGGED_OUT' });
     } catch {
@@ -128,18 +259,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
     } finally {
       operationInFlight.current = false;
     }
-  }, []);
+  }, [client, state]);
 
-  const client = useMemo(
-    () =>
-      state.status === 'authenticated'
-        ? new HermesApiClient(state.connection.baseUrl, state.connection.apiKey)
-        : null,
-    [state],
-  );
   const value = useMemo(
-    () => ({ state, client, provision, unlock, logout }),
-    [client, logout, provision, state, unlock],
+    () => ({ state, client, authenticate, rememberDeviceId, unlock, logout }),
+    [authenticate, client, logout, rememberDeviceId, state, unlock],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -149,4 +273,15 @@ export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth must be used inside AuthProvider');
   return context;
+}
+
+function authenticationErrorMessage(error: unknown): string {
+  if (error instanceof MobileAuthApiError) {
+    if (error.status === 401) return '用户名或密码不正确。';
+    if (error.status === 403) return '服务器初始化码不正确。';
+    if (error.status === 409) return '服务器已有所有者账号，请登录。';
+    if (error.status === 422) return '用户名或密码格式不符合要求。';
+    if (error.status === 429) return '尝试次数过多，请稍后重试。';
+  }
+  return CONNECTION_ERROR;
 }

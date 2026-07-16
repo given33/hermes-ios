@@ -13,12 +13,14 @@ import {
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from 'react';
 import {
   ActionSheetIOS,
+  AppState,
   Image,
   Keyboard,
   Modal,
@@ -59,6 +61,22 @@ import {
 import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
+import type { HermesApiClient } from '../api/HermesApiClient';
+import { HermesChatStream, structuredText } from '../api/HermesChatStream';
+import { createNativeHermesChatStreamRuntime } from '../api/native-chat-stream-runtime';
+import {
+  HermesCloudApi,
+  type CollaborationMessage,
+  type SingleConversation,
+} from '../api/HermesCloudApi';
+import {
+  attachmentContext,
+  conversationHasRunningWork,
+  conversationMessagesToView,
+  streamEventToActivity,
+  type HermesChatActivity as ChatActivity,
+  type HermesChatViewMessage as ChatMessage,
+} from '../api/chat-view-model';
 import { NativeButton } from '../components/ui/NativeButton';
 import { IOSContextMenu } from '../components/ios/IOSContextMenu';
 import { IOSPressable } from '../components/ios/IOSPressable';
@@ -66,6 +84,7 @@ import { multiplyAlpha } from '../design/control-contracts';
 import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
+import type { HermesNotificationTarget } from '../notifications/notification-target';
 import {
   PreviewBadge,
   PreviewModal,
@@ -81,30 +100,6 @@ const DISPLAY_BOLD = 'SpaceGrotesk_700Bold';
 const MONO_REGULAR = 'HermesTerminal-JetBrainsMono-400-Normal';
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
-
-type ActivityStatus = 'completed' | 'running' | 'failed';
-
-interface ChatActivity {
-  id: string;
-  category: 'command' | 'reasoning' | 'file';
-  duration: string;
-  input?: string;
-  name: string;
-  output?: string;
-  preview: string;
-  status: ActivityStatus;
-}
-
-interface ChatMessage {
-  activities?: ChatActivity[];
-  content: string;
-  id: string;
-  model?: string;
-  name: string;
-  role: 'assistant' | 'user';
-  roleLabel?: string;
-  roleStage?: 'chat' | 'worker';
-}
 
 interface ChatAttachment {
   id: string;
@@ -146,21 +141,29 @@ const INITIAL_MESSAGES: ChatMessage[] = [
 ];
 
 interface ChatPreviewPageProps {
+  client?: HermesApiClient;
   locale?: 'en' | 'zh';
   notify(message: string): void;
+  notificationTarget?: HermesNotificationTarget | null;
   openNavigation?(): void;
 }
 
 export function ChatPreviewPage({
+  client,
   locale = 'zh',
   notify,
+  notificationTarget,
   openNavigation,
 }: ChatPreviewPageProps) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const { tokens } = useTheme();
+  const cloudApi = useMemo(() => client ? new HermesCloudApi(client) : null, [client]);
   const [content, setContent] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => client ? [] : INITIAL_MESSAGES);
+  const [conversations, setConversations] = useState<SingleConversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState('');
+  const [hostedRunning, setHostedRunning] = useState(false);
   const [sending, setSending] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
@@ -169,6 +172,9 @@ export function ChatPreviewPage({
   const composerInputRef = useRef<TextInput>(null);
   const contentRef = useRef('');
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeStream = useRef<HermesChatStream | null>(null);
+  const activeConversationIdRef = useRef('');
+  const runtimeSessionsRef = useRef<Record<string, string>>({});
   const pendingAttachmentCleanup = useRef<(() => void) | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
   const pendingSendFrame = useRef<number | null>(null);
@@ -217,6 +223,89 @@ export function ChatPreviewPage({
     [keepLatestVisible],
   );
 
+  const applyConversation = useCallback((conversation: SingleConversation) => {
+    activeConversationIdRef.current = conversation.id;
+    setActiveConversationId(conversation.id);
+    runtimeSessionsRef.current = { ...(conversation.runtime_sessions ?? {}) };
+    setMessages(conversationMessagesToView(conversation, isChinese));
+    const running = conversationHasRunningWork(conversation);
+    setHostedRunning(running);
+    setSending(running);
+  }, [isChinese]);
+
+  const loadConversation = useCallback(async (conversationId: string) => {
+    if (!cloudApi || !conversationId) return null;
+    const result = await cloudApi.getConversation(conversationId);
+    if (activeConversationIdRef.current && activeConversationIdRef.current !== conversationId) {
+      return result.conversation;
+    }
+    applyConversation(result.conversation);
+    return result.conversation;
+  }, [applyConversation, cloudApi]);
+
+  const loadConversationIndex = useCallback(async (preferredId = '') => {
+    if (!cloudApi) return;
+    const result = await cloudApi.getConversations();
+    setConversations(result.conversations);
+    const activeId = preferredId
+      || activeConversationIdRef.current
+      || result.conversations[0]?.id
+      || '';
+    if (!activeId) {
+      activeConversationIdRef.current = '';
+      setActiveConversationId('');
+      setMessages([]);
+      setHostedRunning(false);
+      setSending(false);
+      return;
+    }
+    activeConversationIdRef.current = activeId;
+    await loadConversation(activeId);
+  }, [cloudApi, loadConversation]);
+
+  useEffect(() => {
+    if (!cloudApi) return undefined;
+    let disposed = false;
+    void loadConversationIndex(notificationTarget?.conversationId).catch((error) => {
+      if (!disposed) notify(serverFailure(error, isChinese));
+    });
+    const appState = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      void loadConversationIndex(activeConversationIdRef.current).catch((error) => {
+        if (!disposed) notify(serverFailure(error, isChinese));
+      });
+    });
+    const indexTimer = setInterval(() => {
+      if (AppState.currentState !== 'active' || activeStream.current) return;
+      void cloudApi.getConversations()
+        .then((result) => {
+          if (!disposed) setConversations(result.conversations);
+        })
+        .catch(() => {});
+    }, 15_000);
+    return () => {
+      disposed = true;
+      appState.remove();
+      clearInterval(indexTimer);
+    };
+  }, [
+    cloudApi,
+    isChinese,
+    loadConversationIndex,
+    notificationTarget?.conversationId,
+    notificationTarget?.notificationId,
+    notify,
+  ]);
+
+  useEffect(() => {
+    if (!cloudApi || !activeConversationId || activeStream.current) return undefined;
+    const interval = setInterval(() => {
+      if (AppState.currentState !== 'active' || activeStream.current) return;
+      void loadConversation(activeConversationId).catch(() => {});
+    }, hostedRunning ? 1_000 : 4_000);
+    return () => clearInterval(interval);
+  }, [activeConversationId, cloudApi, hostedRunning, loadConversation]);
+
   useEffect(() => () => {
     if (replyTimer.current) clearTimeout(replyTimer.current);
     if (pendingScrollFrame.current !== null) {
@@ -227,9 +316,26 @@ export function ChatPreviewPage({
     }
     pendingAttachmentCleanup.current?.();
     pendingNavigationCleanup.current?.();
+    activeStream.current?.detach();
+    activeStream.current = null;
   }, []);
 
-  const createConversation = () => {
+  const createConversation = async () => {
+    activeStream.current?.detach();
+    activeStream.current = null;
+    if (cloudApi) {
+      try {
+        const result = await cloudApi.createConversation('default', isChinese ? '新对话' : 'New conversation');
+        setConversations((current) => [
+          result.conversation,
+          ...current.filter((item) => item.id !== result.conversation.id),
+        ]);
+        applyConversation(result.conversation);
+      } catch (error) {
+        notify(serverFailure(error, isChinese));
+      }
+      return;
+    }
     setMessages([]);
     contentRef.current = '';
     setContent('');
@@ -237,13 +343,15 @@ export function ChatPreviewPage({
     notify(isChinese ? '已新建会话' : 'New conversation created');
   };
 
-  const send = () => {
+  const send = async () => {
     const currentContent = contentRef.current;
     const trimmed = currentContent.trim();
     if ((!trimmed && attachmentCount === 0) || sending) return;
+    const pendingAttachments = [...attachments];
+    const userMessageId = `user-${Date.now()}`;
     const userMessage: ChatMessage = {
       content: trimmed || (isChinese ? `已添加 ${attachmentCount} 个附件` : `${attachmentCount} attachments`),
-      id: `user-${Date.now()}`,
+      id: userMessageId,
       name: isChinese ? '你' : 'You',
       role: 'user',
     };
@@ -252,24 +360,229 @@ export function ChatPreviewPage({
     setContent('');
     setAttachments([]);
     setSending(true);
-    replyTimer.current = setTimeout(() => {
+    if (!cloudApi || !client) {
+      replyTimer.current = setTimeout(() => {
+        setMessages((current) => [
+          ...current,
+          {
+            content: isChinese
+              ? '这是前端预览回复；正式登录构建会连接 Hermes 服务器。'
+              : 'This is a frontend preview response; authenticated builds connect to Hermes.',
+            id: `assistant-${Date.now()}`,
+            model: 'preview',
+            name: 'Hermes Agent',
+            role: 'assistant',
+            roleLabel: 'Hermes Agent',
+            roleStage: 'chat',
+          },
+        ]);
+        setSending(false);
+        replyTimer.current = null;
+      }, 650);
+      return;
+    }
+
+    let keepServerRunning = false;
+    try {
+      let conversationId = activeConversationIdRef.current;
+      if (!conversationId) {
+        const created = await cloudApi.createConversation(
+          'default',
+          trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
+        );
+        conversationId = created.conversation.id;
+        activeConversationIdRef.current = conversationId;
+        setActiveConversationId(conversationId);
+        setConversations((current) => [created.conversation, ...current]);
+      }
+
+      const uploaded: Record<string, unknown>[] = [];
+      for (const attachment of pendingAttachments) {
+        const result = await cloudApi.uploadConversationAttachment(conversationId, {
+          mimeType: attachment.mimeType,
+          name: attachment.name,
+          uri: attachment.uri,
+        });
+        if (isRecord(result.attachment)) uploaded.push(result.attachment);
+      }
+      const filesContext = attachmentContext(uploaded);
+      const serverUserMessage: CollaborationMessage = {
+        content: userMessage.content,
+        id: userMessageId,
+        kind: 'message',
+        meta: { attachments: uploaded },
+        name: isChinese ? '你' : 'You',
+        role: 'user',
+        status: 'completed',
+      };
+      await cloudApi.recordConversationMessage(conversationId, serverUserMessage);
+
+      const route = await cloudApi.routeMessage(userMessage.content);
+      const routeMessage: CollaborationMessage = {
+        content: route.reason,
+        id: `route-${Date.now()}`,
+        kind: 'route',
+        meta: {
+          artifact_required: route.artifact_required,
+          confidence: route.confidence,
+          mode: route.mode,
+          profiles: route.profiles,
+          source: route.source,
+        },
+        name: route.label,
+        role: 'system',
+        status: 'completed',
+      };
+      await cloudApi.recordConversationMessage(conversationId, routeMessage);
+
+      if (route.mode === 'work') {
+        const turnId = uniqueTurnId('hosted');
+        await cloudApi.createHostedTurn(conversationId, {
+          artifactRequired: route.artifact_required,
+          attachmentContext: filesContext,
+          content: userMessage.content,
+          deliveryContext: route.artifact_required
+            ? '仅生成用户明确要求的交付文件，并把最终文件放入会话输出目录。'
+            : '本任务未要求交付文件，不要创建交付文件。',
+          profiles: route.profiles,
+          title: route.title,
+          turnId,
+        });
+        keepServerRunning = true;
+        setHostedRunning(true);
+        await loadConversation(conversationId);
+        return;
+      }
+
+      const streamId = uniqueTurnId('stream');
+      let accumulatedText = '';
+      let activities: ChatActivity[] = [];
+      let actualModel = '';
+      let actualProvider = '';
+      const patchStreamMessage = () => {
+        setMessages((current) => current.map((message) => (
+          message.id === streamId
+            ? {
+                ...message,
+                activities: [...activities],
+                content: accumulatedText,
+                model: [actualProvider, actualModel].filter(Boolean).join(' · ') || undefined,
+              }
+            : message
+        )));
+      };
       setMessages((current) => [
         ...current,
         {
-          content: isChinese
-            ? '已收到。在后端迁移完成后，这里会持续显示 Hermes 的完整执行过程和结果。'
-            : 'Received. The complete Hermes execution process and result will stream here after backend migration.',
-          id: `assistant-${Date.now()}`,
-          model: 'anthropic · claude-sonnet-4',
+          activities: [],
+          content: '',
+          id: streamId,
           name: 'Hermes Agent',
           role: 'assistant',
           roleLabel: 'Hermes Agent',
           roleStage: 'chat',
         },
       ]);
-      setSending(false);
-      replyTimer.current = null;
-    }, 650);
+      const stream = new HermesChatStream(client, async (event) => {
+        const payload = event.payload;
+        if (event.type === 'session.ready') {
+          const storedSessionId = stringValue(payload.stored_session_id)
+            || stringValue(payload.session_id);
+          if (storedSessionId) {
+            runtimeSessionsRef.current = {
+              ...runtimeSessionsRef.current,
+              default: storedSessionId,
+            };
+            await cloudApi.saveRuntimeSession(
+              conversationId,
+              'default',
+              storedSessionId,
+              streamId,
+              'running',
+            );
+          }
+          return;
+        }
+        if (event.type === 'message.delta') {
+          accumulatedText += structuredText(payload.text);
+          patchStreamMessage();
+          return;
+        }
+        if (event.type === 'session.info') {
+          actualModel = stringValue(payload.model) || actualModel;
+          actualProvider = stringValue(payload.provider) || actualProvider;
+          patchStreamMessage();
+          return;
+        }
+        const activity = streamEventToActivity(event.type, payload);
+        if (activity) {
+          activities = mergeStreamActivity(activities, activity);
+          patchStreamMessage();
+        }
+      }, createNativeHermesChatStreamRuntime());
+      activeStream.current = stream;
+      const result = await stream.run({
+        conversationId,
+        existingSessionId: runtimeSessionsRef.current.default,
+        profile: 'default',
+        prompt: [
+          trimmed || userMessage.content,
+          filesContext,
+          route.artifact_required
+            ? '用户明确要求文件交付，仅生成所需文件。'
+            : '本任务未要求文件交付，不要创建交付文件。',
+        ].filter(Boolean).join('\n\n'),
+        sessionTitle: route.title,
+        turnId: streamId,
+      });
+      if (result.text) accumulatedText = result.text;
+      patchStreamMessage();
+      const assistantMessage: CollaborationMessage = {
+        content: accumulatedText || result.text,
+        id: streamId,
+        kind: 'message',
+        meta: {
+          activities,
+          actual_model: actualModel,
+          actual_provider: actualProvider,
+          runtime_session_id: result.storedSessionId,
+          runtime_turn_id: streamId,
+        },
+        name: 'default',
+        role: 'assistant',
+        status: result.status === 'error' ? 'failed' : 'completed',
+      };
+      await cloudApi.recordConversationMessage(conversationId, assistantMessage);
+      await cloudApi.saveRuntimeSession(
+        conversationId,
+        'default',
+        result.storedSessionId,
+        streamId,
+        'completed',
+      );
+      await loadConversationIndex(conversationId);
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'HermesStreamDetachedError')) {
+        notify(serverFailure(error, isChinese));
+        setMessages((current) => [
+          ...current,
+          {
+            content: serverFailure(error, isChinese),
+            id: uniqueTurnId('error'),
+            name: 'Hermes Agent',
+            role: 'assistant',
+            roleLabel: isChinese ? '执行失败' : 'Failed',
+            roleStage: 'chat',
+          },
+        ]);
+      }
+    } finally {
+      activeStream.current = null;
+      if (!keepServerRunning) {
+        setHostedRunning(false);
+        setSending(false);
+      }
+    }
   };
   const requestSend = () => {
     if (pendingSendFrame.current !== null) {
@@ -277,8 +590,26 @@ export function ChatPreviewPage({
     }
     pendingSendFrame.current = requestAnimationFrame(() => {
       pendingSendFrame.current = null;
-      send();
+      void send();
     });
+  };
+
+  const selectConversation = async (conversationId: string) => {
+    if (!conversationId || conversationId === activeConversationIdRef.current) return;
+    activeStream.current?.detach();
+    activeStream.current = null;
+    setSending(false);
+    setHostedRunning(false);
+    setContent('');
+    contentRef.current = '';
+    setAttachments([]);
+    activeConversationIdRef.current = conversationId;
+    setActiveConversationId(conversationId);
+    try {
+      await loadConversation(conversationId);
+    } catch (error) {
+      notify(serverFailure(error, isChinese));
+    }
   };
 
   const pickPhoto = async (camera: boolean) => {
@@ -447,7 +778,10 @@ export function ChatPreviewPage({
         {showHistory ? (
           <ConversationHistory
             onNew={createConversation}
-            onSelect={() => notify(isChinese ? '已切换会话' : 'Conversation selected')}
+            onSelect={(id) => { void selectConversation(id); }}
+            conversations={conversations}
+            activeId={activeConversationId}
+            isChinese={isChinese}
           />
         ) : null}
 
@@ -895,25 +1229,86 @@ function resolveComposerFontSize(value: string): number {
   return Math.max(12, 16 - (Math.min(glyphCount, 40) - 28) / 3);
 }
 
-function ConversationHistory({ onNew, onSelect }: { onNew(): void; onSelect(): void }) {
+function uniqueTurnId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function mergeStreamActivity(
+  current: ChatActivity[],
+  next: ChatActivity,
+): ChatActivity[] {
+  const index = current.findIndex((activity) => activity.id === next.id);
+  if (index < 0) return [...current, next];
+  const merged = [...current];
+  merged[index] = {
+    ...merged[index],
+    ...next,
+    input: next.input || merged[index].input,
+    output: next.output || merged[index].output,
+    preview: next.preview || merged[index].preview,
+  };
+  return merged;
+}
+
+function serverFailure(error: unknown, chinese: boolean): string {
+  if (error instanceof Error && error.message) {
+    return chinese ? `服务器操作失败：${error.message}` : `Server operation failed: ${error.message}`;
+  }
+  return chinese ? '服务器操作失败，请稍后重试。' : 'Server operation failed. Try again.';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function ConversationHistory({
+  activeId,
+  conversations,
+  isChinese,
+  onNew,
+  onSelect,
+}: {
+  activeId: string;
+  conversations: SingleConversation[];
+  isChinese: boolean;
+  onNew(): void;
+  onSelect(id: string): void;
+}) {
   const { tokens } = useTheme();
   return (
     <View style={[styles.history, { backgroundColor: tokens.colors.card, borderRightColor: tokens.colors.border }]}>
       <View style={styles.historyBrand}>
         <View style={styles.roomIcon}><Text style={styles.roomIconText}>H</Text></View>
         <View>
-          <Text style={[styles.historyTitle, { color: tokens.colors.foreground }]}>{'智能会话'}</Text>
-          <Text style={[styles.historyKicker, { color: tokens.colors.textTertiary }]}>DBB3 CONTROL PLANE</Text>
+          <Text style={[styles.historyTitle, { color: tokens.colors.foreground }]}>{isChinese ? '智能会话' : 'Conversations'}</Text>
+          <Text style={[styles.historyKicker, { color: tokens.colors.textTertiary }]}>HERMES CLOUD</Text>
         </View>
       </View>
       <IOSPressable onPress={onNew} style={[styles.newChat, { backgroundColor: '#192320' }]}>
-        <Text style={styles.newChatText}>{'＋ 新建会话'}</Text>
+        <Text style={styles.newChatText}>{isChinese ? '＋ 新建会话' : '+ New conversation'}</Text>
       </IOSPressable>
-      <Text style={[styles.historyLabel, { color: tokens.colors.textTertiary }]}>{'最近会话'}</Text>
-      <IOSPressable onPress={onSelect} style={[styles.historyItem, { backgroundColor: tokens.colors.accent }]}> 
-        <Text numberOfLines={1} style={[styles.historyItemTitle, { color: tokens.colors.foreground }]}>{'检查当前项目状态'}</Text>
-        <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>2 {'条记录'}</Text>
-      </IOSPressable>
+      <Text style={[styles.historyLabel, { color: tokens.colors.textTertiary }]}>{isChinese ? '最近会话' : 'Recent conversations'}</Text>
+      {conversations.map((conversation) => (
+        <IOSPressable
+          key={conversation.id}
+          onPress={() => onSelect(conversation.id)}
+          style={[
+            styles.historyItem,
+            activeId === conversation.id && { backgroundColor: tokens.colors.accent },
+          ]}
+        >
+          <Text numberOfLines={1} style={[styles.historyItemTitle, { color: tokens.colors.foreground }]}>
+            {conversation.title || (isChinese ? '新对话' : 'New conversation')}
+          </Text>
+          <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>
+            {conversation.message_count ?? conversation.messages?.length ?? 0} {isChinese ? '条记录' : 'messages'}
+          </Text>
+        </IOSPressable>
+      ))}
     </View>
   );
 }

@@ -10,10 +10,16 @@ import {
   initialAuthState,
 } from '../src/auth/auth-state';
 import {
-  API_KEY_STORAGE_KEY,
+  ACCESS_EXPIRES_AT_STORAGE_KEY,
+  ACCESS_TOKEN_STORAGE_KEY,
   BASE_URL_STORAGE_KEY,
   CREDENTIAL_STORAGE_KEYS,
+  DEVICE_ID_STORAGE_KEY,
   FACE_ID_PROMPT,
+  REFRESH_TOKEN_KEY_PREFIX,
+  REFRESH_TOKEN_POINTER_STORAGE_KEY,
+  REFRESH_TOKEN_STORAGE_KEY,
+  USERNAME_STORAGE_KEY,
   type SavedConnection,
 } from '../src/auth/credential-contract';
 import {
@@ -23,139 +29,205 @@ import {
 } from '../src/auth/credential-store';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const session: SavedConnection = {
+  baseUrl: 'https://hermes.test',
+  username: 'owner',
+  accessToken: 'access-token',
+  refreshToken: 'refresh-token',
+  expiresAt: 2_000_000_000,
+};
 
-test('auth reducer covers cold start, Face ID lock, retry, success, and logout', () => {
-  const loading = initialAuthState;
-  const locked = authReducer(loading, {
+test('auth reducer covers owner registration, login selection, success, and expiry', () => {
+  const registration = authReducer(initialAuthState, {
+    type: 'BOOTSTRAP_EMPTY',
+    mode: 'register',
+    setupTokenRequired: true,
+  });
+  assert.deepEqual(registration, {
+    status: 'provisioning',
+    mode: 'register',
+    setupTokenRequired: true,
+    busy: false,
+  });
+
+  const loggingIn = authReducer(
+    authReducer(registration, { type: 'PROVISION_STARTED' }),
+    {
+      type: 'AUTH_MODE_RESOLVED',
+      mode: 'login',
+      setupTokenRequired: false,
+    },
+  );
+  assert.deepEqual(loggingIn, {
+    status: 'provisioning',
+    mode: 'login',
+    setupTokenRequired: false,
+    busy: true,
+  });
+
+  const failed = authReducer(loggingIn, {
+    type: 'PROVISION_FAILED',
+    error: '用户名或密码不正确。',
+  });
+  assert.deepEqual(failed, {
+    status: 'provisioning',
+    mode: 'login',
+    setupTokenRequired: false,
+    busy: false,
+    error: '用户名或密码不正确。',
+  });
+
+  const authenticated = authReducer(failed, {
+    type: 'AUTHENTICATED',
+    connection: session,
+  });
+  assert.deepEqual(authenticated, { status: 'authenticated', connection: session });
+  assert.deepEqual(
+    authReducer(authenticated, {
+      type: 'SESSION_REFRESHED',
+      accessToken: 'access-token-2',
+      refreshToken: 'refresh-token-2',
+      expiresAt: 2_100_000_000,
+      deviceId: 'ios-device',
+    }),
+    {
+      status: 'authenticated',
+      connection: {
+        ...session,
+        accessToken: 'access-token-2',
+        refreshToken: 'refresh-token-2',
+        expiresAt: 2_100_000_000,
+        deviceId: 'ios-device',
+      },
+    },
+  );
+  assert.deepEqual(
+    authReducer(authenticated, {
+      type: 'SESSION_EXPIRED',
+      error: '登录已过期，请重新登录。',
+    }),
+    {
+      status: 'provisioning',
+      mode: 'login',
+      setupTokenRequired: false,
+      busy: false,
+      error: '登录已过期，请重新登录。',
+    },
+  );
+});
+
+test('auth reducer preserves retryable Face ID unlock behavior', () => {
+  const locked = authReducer(initialAuthState, {
     type: 'BOOTSTRAP_LOCKED',
     baseUrl: 'https://hermes.test',
     error: 'Face ID 已取消，请重试。',
   });
-
-  assert.deepEqual(locked, {
-    status: 'locked',
-    baseUrl: 'https://hermes.test',
-    error: 'Face ID 已取消，请重试。',
-    busy: false,
-  });
-
   const retrying = authReducer(locked, { type: 'UNLOCK_STARTED' });
-  assert.equal(retrying.status, 'locked');
-  assert.equal(retrying.busy, true);
-  assert.equal(retrying.error, undefined);
-
-  const retryFailed = authReducer(retrying, {
-    type: 'UNLOCK_FAILED',
-    error: '无法解锁连接，请重试。',
-  });
-  assert.equal(retryFailed.status, 'locked');
-  assert.equal(retryFailed.busy, false);
-  assert.equal(retryFailed.error, '无法解锁连接，请重试。');
-
-  const logoutFailed = authReducer(retryFailed, {
-    type: 'LOGOUT_FAILED',
-    error: '无法移除已保存的连接，请重试。',
-  });
-  assert.deepEqual(logoutFailed, {
+  assert.deepEqual(retrying, {
     status: 'locked',
     baseUrl: 'https://hermes.test',
-    busy: false,
-    error: '无法移除已保存的连接，请重试。',
+    busy: true,
   });
-
-  const connection: SavedConnection = {
-    baseUrl: 'https://hermes.test',
-    apiKey: 'mobile-secret',
-  };
-  const authenticated = authReducer(logoutFailed, {
-    type: 'AUTHENTICATED',
-    connection,
-  });
-  assert.deepEqual(authenticated, { status: 'authenticated', connection });
-  assert.deepEqual(authReducer(authenticated, { type: 'LOGGED_OUT' }), {
-    status: 'provisioning',
-    busy: false,
-  });
-});
-
-test('auth reducer covers first-run provisioning, failure, retry, and success', () => {
-  const provisioning = authReducer(initialAuthState, { type: 'BOOTSTRAP_EMPTY' });
-  assert.deepEqual(provisioning, { status: 'provisioning', busy: false });
-
-  const submitting = authReducer(provisioning, { type: 'PROVISION_STARTED' });
-  assert.deepEqual(submitting, { status: 'provisioning', busy: true });
-
-  const failed = authReducer(submitting, {
-    type: 'PROVISION_FAILED',
-    error: '无法验证 Hermes 连接，请重试。',
-  });
-  assert.deepEqual(failed, {
-    status: 'provisioning',
-    busy: false,
-    error: '无法验证 Hermes 连接，请重试。',
-  });
-
-  const retried = authReducer(failed, { type: 'PROVISION_STARTED' });
-  assert.deepEqual(retried, { status: 'provisioning', busy: true });
-
-  const connection = { baseUrl: 'https://hermes.test', apiKey: 'mobile-secret' };
   assert.deepEqual(
-    authReducer(retried, { type: 'AUTHENTICATED', connection }),
-    { status: 'authenticated', connection },
+    authReducer(retrying, {
+      type: 'UNLOCK_FAILED',
+      error: '无法解锁连接，请重试。',
+    }),
+    {
+      status: 'locked',
+      baseUrl: 'https://hermes.test',
+      busy: false,
+      error: '无法解锁连接，请重试。',
+    },
   );
 });
 
-test('cold start reads the base URL first and directly performs one protected API-key read', async () => {
+test('cold start reads base URL, protected refresh token, then session metadata', async () => {
   const calls: string[] = [];
-  const unlocked = await bootstrapSavedConnection({
+  const result = await bootstrapSavedConnection({
     async readBaseUrl() {
       calls.push('baseUrl');
-      return 'https://hermes.test';
+      return session.baseUrl;
     },
-    async readApiKey() {
-      calls.push('apiKey');
-      return 'mobile-secret';
+    async readRefreshToken() {
+      calls.push('refreshToken');
+      return session.refreshToken;
+    },
+    async readUsername() {
+      calls.push('username');
+      return session.username;
+    },
+    async readAccessToken() {
+      calls.push('accessToken');
+      return session.accessToken;
+    },
+    async readAccessExpiresAt() {
+      calls.push('expiresAt');
+      return session.expiresAt;
     },
   });
 
-  assert.deepEqual(calls, ['baseUrl', 'apiKey']);
-  assert.deepEqual(unlocked, {
-    status: 'authenticated',
-    connection: { baseUrl: 'https://hermes.test', apiKey: 'mobile-secret' },
-  });
+  assert.deepEqual(calls, [
+    'baseUrl',
+    'refreshToken',
+    'username',
+    'accessToken',
+    'expiresAt',
+  ]);
+  assert.deepEqual(result, { status: 'authenticated', connection: session });
+});
 
-  calls.length = 0;
+test('first run avoids biometric access and Face ID cancellation remains retryable', async () => {
+  const firstRunCalls: string[] = [];
   const firstRun = await bootstrapSavedConnection({
     async readBaseUrl() {
-      calls.push('baseUrl');
+      firstRunCalls.push('baseUrl');
       return null;
     },
-    async readApiKey() {
-      calls.push('apiKey');
-      return 'should-not-be-read';
+    async readRefreshToken() {
+      firstRunCalls.push('refreshToken');
+      return 'must-not-be-read';
+    },
+    async readUsername() {
+      return null;
+    },
+    async readAccessToken() {
+      return null;
+    },
+    async readAccessExpiresAt() {
+      return null;
     },
   });
   assert.deepEqual(firstRun, { status: 'provisioning' });
-  assert.deepEqual(calls, ['baseUrl']);
-});
+  assert.deepEqual(firstRunCalls, ['baseUrl']);
 
-test('cold-start Face ID cancellation becomes a retryable locked result', async () => {
-  const result = await bootstrapSavedConnection({
+  const canceled = await bootstrapSavedConnection({
     async readBaseUrl() {
-      return 'https://hermes.test';
+      return session.baseUrl;
     },
-    async readApiKey() {
+    async readRefreshToken() {
       throw new Error('User canceled authentication');
     },
+    async readUsername() {
+      return session.username;
+    },
+    async readAccessToken() {
+      return session.accessToken;
+    },
+    async readAccessExpiresAt() {
+      return session.expiresAt;
+    },
   });
-
-  assert.deepEqual(result, { status: 'locked', baseUrl: 'https://hermes.test' });
+  assert.deepEqual(canceled, { status: 'locked', baseUrl: session.baseUrl });
 });
 
-test('SecureStore uses exactly two keys and protects API-key writes and reads', async () => {
+test('SecureStore protects only refresh-token reads and writes with Face ID', async () => {
   const values = new Map<string, string>([
-    [BASE_URL_STORAGE_KEY, 'https://hermes.test'],
-    [API_KEY_STORAGE_KEY, 'mobile-secret'],
+    [BASE_URL_STORAGE_KEY, session.baseUrl],
+    [USERNAME_STORAGE_KEY, session.username],
+    [ACCESS_TOKEN_STORAGE_KEY, session.accessToken],
+    [REFRESH_TOKEN_STORAGE_KEY, session.refreshToken],
+    [ACCESS_EXPIRES_AT_STORAGE_KEY, String(session.expiresAt)],
   ]);
   const operations: Array<{
     operation: 'get' | 'set' | 'delete';
@@ -181,20 +253,35 @@ test('SecureStore uses exactly two keys and protects API-key writes and reads', 
 
   assert.deepEqual(CREDENTIAL_STORAGE_KEYS, [
     'hermes.native.baseUrl',
-    'hermes.native.apiKey',
+    'hermes.native.username',
+    'hermes.native.accessToken',
+    'hermes.native.refreshToken',
+    'hermes.native.refreshTokenKey',
+    'hermes.native.accessExpiresAt',
+    'hermes.native.deviceId',
   ]);
-  assert.equal(await store.readBaseUrl(), 'https://hermes.test');
-  assert.equal(await store.readApiKey(), 'mobile-secret');
-  await store.save({ baseUrl: 'https://new.test', apiKey: 'new-secret' });
+  assert.equal(await store.readBaseUrl(), session.baseUrl);
+  assert.equal(await store.readRefreshToken(), session.refreshToken);
+  assert.equal(await store.readUsername(), session.username);
+  assert.equal(await store.readAccessToken(), session.accessToken);
+  assert.equal(await store.readAccessExpiresAt(), session.expiresAt);
+  await store.save({ ...session, accessToken: 'new-access' });
+  await store.saveSessionTokens(
+    'rotated-access',
+    'rotated-refresh',
+    session.expiresAt + 100,
+  );
   await store.clear();
 
-  assert.deepEqual(
-    new Set(operations.map(({ key }) => key)),
-    new Set(CREDENTIAL_STORAGE_KEYS),
+  const operationKeys = new Set(operations.map(({ key }) => key));
+  for (const key of CREDENTIAL_STORAGE_KEYS) assert.ok(operationKeys.has(key));
+  assert.ok(
+    [...operationKeys].some((key) => key.startsWith(REFRESH_TOKEN_KEY_PREFIX)),
   );
   const protectedOperations = operations.filter(
     ({ operation, key }) =>
-      key === API_KEY_STORAGE_KEY && (operation === 'get' || operation === 'set'),
+      (key === REFRESH_TOKEN_STORAGE_KEY || key.startsWith(REFRESH_TOKEN_KEY_PREFIX))
+      && (operation === 'get' || operation === 'set'),
   );
   assert.ok(protectedOperations.length >= 2);
   for (const operation of protectedOperations) {
@@ -203,10 +290,21 @@ test('SecureStore uses exactly two keys and protects API-key writes and reads', 
       authenticationPrompt: FACE_ID_PROMPT,
     });
   }
+  const accessTokenOperations = operations.filter(
+    ({ operation, key }) =>
+      key === ACCESS_TOKEN_STORAGE_KEY && (operation === 'get' || operation === 'set'),
+  );
+  assert.ok(accessTokenOperations.length >= 2);
+  assert.ok(accessTokenOperations.every(({ options }) => options === undefined));
+  const pointerOperations = operations.filter(
+    ({ key }) => key === REFRESH_TOKEN_POINTER_STORAGE_KEY,
+  );
+  assert.ok(pointerOperations.length >= 2);
+  assert.ok(pointerOperations.every(({ options }) => options === undefined));
   assert.equal(FACE_ID_PROMPT, '使用 Face ID 登录 Hermes');
 });
 
-test('credential save rolls back both keys when the protected write fails', async () => {
+test('credential save rolls back every session key when protected storage fails', async () => {
   const deleted: string[] = [];
   const written: string[] = [];
   const secureStore: SecureStoreAdapter = {
@@ -215,71 +313,72 @@ test('credential save rolls back both keys when the protected write fails', asyn
     },
     async setItemAsync(key) {
       written.push(key);
-      if (key === API_KEY_STORAGE_KEY) throw new Error('biometric enrollment changed');
+      if (key.startsWith(REFRESH_TOKEN_KEY_PREFIX)) {
+        throw new Error('biometric enrollment changed');
+      }
     },
     async deleteItemAsync(key) {
       deleted.push(key);
     },
   };
 
-  await assert.rejects(
-    new CredentialStore(secureStore).save({
-      baseUrl: 'https://hermes.test',
-      apiKey: 'mobile-secret',
-    }),
-    /credential/i,
+  await assert.rejects(new CredentialStore(secureStore).save(session), /credential/i);
+  assert.deepEqual(written.slice(0, 4), [
+    BASE_URL_STORAGE_KEY,
+    USERNAME_STORAGE_KEY,
+    ACCESS_TOKEN_STORAGE_KEY,
+    ACCESS_EXPIRES_AT_STORAGE_KEY,
+  ]);
+  assert.ok(written[4].startsWith(REFRESH_TOKEN_KEY_PREFIX));
+  assert.deepEqual(
+    new Set(deleted),
+    new Set([...CREDENTIAL_STORAGE_KEYS, written[4]]),
   );
-  assert.deepEqual(written, [BASE_URL_STORAGE_KEY, API_KEY_STORAGE_KEY]);
-  assert.deepEqual(new Set(deleted), new Set(CREDENTIAL_STORAGE_KEYS));
 });
 
-test('provisioning verifies the real connection before saving normalized credentials', async () => {
+test('authenticated sessions are normalized, handshaken, and only then saved', async () => {
   const order: string[] = [];
   const saved: SavedConnection[] = [];
-  const store = {
-    async save(connection: SavedConnection) {
-      order.push('save');
-      saved.push(connection);
-    },
-  };
-
   const connection = await provisionConnection(
-    { baseUrl: ' https://hermes.test/ ', apiKey: ' mobile-secret ' },
     {
-      store,
+      ...session,
+      baseUrl: ' https://hermes.test/ ',
+      username: ' owner ',
+      accessToken: ' access-token ',
+      refreshToken: ' refresh-token ',
+    },
+    {
+      store: {
+        async save(candidate) {
+          order.push('save');
+          saved.push(candidate);
+        },
+      },
       async verify(candidate) {
         order.push('handshake');
-        assert.deepEqual(candidate, {
-          baseUrl: 'https://hermes.test',
-          apiKey: 'mobile-secret',
-        });
+        assert.deepEqual(candidate, session);
       },
     },
   );
-
   assert.deepEqual(order, ['handshake', 'save']);
   assert.deepEqual(saved, [connection]);
 
-  order.length = 0;
   await assert.rejects(
     provisionConnection(
-      { baseUrl: 'https://hermes.test', apiKey: 'mobile-secret' },
-      {
-        store,
-        async verify() {
-          order.push('handshake');
-          throw new Error('unauthorized');
-        },
-      },
+      { ...session, refreshToken: ' ' },
+      { store: { async save() {} }, async verify() {} },
     ),
-    /unauthorized/,
+    /refresh token/i,
   );
-  assert.deepEqual(order, ['handshake']);
 });
 
-test('native auth root is integrated without an AppState foreground re-prompt listener', () => {
+test('native auth integrates owner endpoints, refresh, Face ID, and the complete app root', () => {
   const providerSource = readFileSync(
     resolve(projectRoot, 'src/auth/AuthProvider.tsx'),
+    'utf8',
+  );
+  const mobileAuthSource = readFileSync(
+    resolve(projectRoot, 'src/auth/mobile-auth.ts'),
     'utf8',
   );
   const appSource = readFileSync(
@@ -290,20 +389,27 @@ test('native auth root is integrated without an AppState foreground re-prompt li
     resolve(projectRoot, 'src/auth/LoginScreen.tsx'),
     'utf8',
   );
-  const shellSource = readFileSync(
-    resolve(projectRoot, 'src/app/NativeShell.tsx'),
-    'utf8',
-  );
 
   assert.doesNotMatch(providerSource, /\bAppState\b/);
   assert.match(providerSource, /bootstrapSavedConnection/);
+  assert.match(providerSource, /AccessTokenController/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
+  assert.match(mobileAuthSource, /\/auth\/mobile\/status/);
+  assert.match(mobileAuthSource, /\/auth\/mobile\/register/);
+  assert.match(mobileAuthSource, /\/auth\/mobile\/token/);
+  assert.match(mobileAuthSource, /\/auth\/mobile\/refresh/);
   assert.match(appSource, /<AuthProvider>/);
   assert.match(appSource, /<LoginScreen/);
-  assert.match(loginSource, /TextInput/);
+  assert.match(appSource, /<NotificationProvider>/);
+  assert.match(appSource, /notificationTarget=\{notificationTarget\}/);
+  assert.doesNotMatch(appSource, /<NativeShell \/>/);
+  assert.match(loginSource, /accessibilityLabel="用户名"/);
+  assert.match(loginSource, /accessibilityLabel="密码"/);
   assert.match(loginSource, /secureTextEntry/);
-  assert.match(loginSource, /autoComplete="off"/);
-  assert.match(loginSource, /textContentType="none"/);
+  assert.match(loginSource, /autoComplete="username"/);
+  assert.match(loginSource, /current-password/);
+  assert.match(loginSource, /new-password/);
+  assert.doesNotMatch(`${providerSource}\n${loginSource}`, /apiKey|API 密钥/i);
   assert.match(loginSource, /KeyboardAvoidingView/);
   assert.match(loginSource, /react-native-svg/);
   assert.match(loginSource, /RadialGradient/);
@@ -333,21 +439,14 @@ test('native auth root is integrated without an AppState foreground re-prompt li
   assert.match(loginSource, /height\s*\*\s*0\.06/);
   assert.match(loginSource, /Math\.min\(96/);
   assert.match(loginSource, /Math\.max\(24/);
-  assert.match(loginSource, /marginBottom:\s*6\.4/);
-  assert.match(loginSource, /marginHorizontal:\s*9\.24/);
-  assert.match(loginSource, /marginBottom:\s*3\.024/);
-  assert.match(loginSource, /marginHorizontal:\s*7\.2/);
-  assert.match(loginSource, /marginBottom:\s*2\.4/);
   assert.doesNotMatch(loginSource, /input:\s*\{[^}]*minHeight/s);
   assert.match(loginSource, /inputFocusRing/);
   assert.match(loginSource, /FeGaussianBlur/);
   assert.match(loginSource, /FeOffset/);
   assert.match(loginSource, /FeFlood/);
   assert.match(loginSource, /FeComposite/);
-  assert.match(appSource, /<NativeShell \/>/);
-  assert.match(shellSource, /opaque\(tokens\.colors\.background\)/);
   assert.doesNotMatch(
-    `${providerSource}\n${appSource}\n${loginSource}\n${shellSource}`,
+    `${providerSource}\n${appSource}\n${loginSource}`,
     /WebView|\bdocument\b|\bwindow\b/,
   );
 });

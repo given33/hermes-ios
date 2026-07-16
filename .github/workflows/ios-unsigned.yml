@@ -6,7 +6,7 @@ on:
       frontend_preview:
         description: Build the standalone frontend preview without login
         required: true
-        default: true
+        default: false
         type: boolean
   push:
     tags:

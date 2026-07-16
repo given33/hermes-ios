@@ -173,7 +173,7 @@ test('confirm dialog keeps canonical blur, fonts, and native modal behavior', ()
   assert.match(liquidGlass, /layer\.cornerCurve = \.continuous/);
 });
 
-test('live blur and the app share an explicit iOS 16 deployment target', () => {
+test('all native modules and the app share an explicit iOS 18 deployment target', () => {
   const appConfig = JSON.parse(read('app.json')) as {
     expo: { plugins: Array<string | [string, Record<string, unknown>]> };
   };
@@ -188,8 +188,8 @@ test('live blur and the app share an explicit iOS 16 deployment target', () => {
 
   assert.equal(packageJson.dependencies['expo-build-properties'], '~1.0.10');
   assert.ok(buildProperties);
-  assert.equal(buildProperties[1].ios.deploymentTarget, '16.0');
-  assert.match(podspec, /s\.platforms\s*=\s*\{ :ios => '16\.0' \}/);
+  assert.equal(buildProperties[1].ios.deploymentTarget, '18.0');
+  assert.match(podspec, /s\.platforms\s*=\s*\{ :ios => '18\.0' \}/);
 });
 
 test('local native effects always launch through a development client', () => {

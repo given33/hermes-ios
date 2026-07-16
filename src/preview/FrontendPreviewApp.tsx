@@ -22,6 +22,7 @@ import {
   HermesSwiftUIRouteView,
   hasNativeSwiftUIPartialFrontend,
 } from '../../modules/hermes-ios-controls';
+import { HermesCloudApi, type JsonRecord } from '../api/HermesCloudApi';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
@@ -33,6 +34,7 @@ import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
 import { NativeLocalizationProvider } from '../i18n/NativeLocalization';
 import { NativeShell, type NativeShellSlotContext } from '../app/NativeShell';
+import { useHermesSwiftUIRouteData } from '../app/useHermesSwiftUIRouteData';
 import {
   BASELINE_PLUGIN_MANIFESTS,
   type ComposedRoute,
@@ -79,17 +81,37 @@ import {
   PreviewSettingRow,
   PreviewText,
 } from './PreviewPrimitives';
+import type { FrontendPreviewAppProps } from './frontend-preview-contract';
 
 type Picker = 'profile' | 'appearance' | 'language' | null;
 type SystemAction = 'restart' | 'update' | null;
 
-export function FrontendPreviewApp() {
+interface ProfileChoice {
+  name: string;
+  description: string;
+}
+
+interface SidebarSystemSummary {
+  activeSessions: number;
+  gatewayOnline: boolean;
+}
+
+export function FrontendPreviewApp({
+  client,
+  notificationTarget,
+}: FrontendPreviewAppProps = {}) {
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
   const useSwiftUIRoutes =
     Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
   const [locale, setLocale] = useState<NativeRouteLocale>('zh');
   const [profile, setProfile] = useState('default');
+  const [profileChoices, setProfileChoices] = useState<ProfileChoice[]>(() =>
+    client ? [] : [...PREVIEW_PROFILES]);
+  const [systemSummary, setSystemSummary] = useState<SidebarSystemSummary>({
+    activeSessions: 0,
+    gatewayOnline: false,
+  });
   const [picker, setPicker] = useState<Picker>(null);
   const [systemAction, setSystemAction] = useState<SystemAction>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -103,6 +125,65 @@ export function FrontendPreviewApp() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
   }, []);
 
+  useEffect(() => {
+    if (!client) return undefined;
+    let active = true;
+    const api = new HermesCloudApi(client);
+    void Promise.all([api.getProfiles(), api.getStatus()])
+      .then(([profiles, status]) => {
+        if (!active) return;
+        const choices = profiles.profiles.flatMap((entry): ProfileChoice[] => {
+          const name = stringField(entry, 'name');
+          if (!name) return [];
+          return [{ name, description: stringField(entry, 'description') }];
+        });
+        setProfileChoices(choices);
+        const activeProfile = stringField(profiles.active, 'active');
+        if (activeProfile && choices.some((choice) => choice.name === activeProfile)) {
+          setProfile(activeProfile);
+        }
+        setSystemSummary(systemSummaryFromStatus(status));
+      })
+      .catch((error) => {
+        if (active) notify(serverActionError(error, locale));
+      });
+    return () => {
+      active = false;
+    };
+  }, [client, locale, notify]);
+
+  const selectProfile = useCallback(async (next: string) => {
+    if (!next) return;
+    try {
+      if (client) await new HermesCloudApi(client).setActiveProfile(next);
+      setProfile(next);
+      setPicker(null);
+      notify(locale === 'zh' ? `正在管理 Profile：${next}` : `Managing profile: ${next}`);
+    } catch (error) {
+      notify(serverActionError(error, locale));
+    }
+  }, [client, locale, notify]);
+
+  const confirmSystemAction = useCallback(async () => {
+    const action = systemAction;
+    setSystemAction(null);
+    if (!action) return;
+    if (!client) {
+      notify(locale === 'zh' ? '预览模式不会执行服务器操作' : 'Preview mode does not run server actions');
+      return;
+    }
+    try {
+      const api = new HermesCloudApi(client);
+      if (action === 'update') await api.updateHermes();
+      else await api.restartGateway();
+      notify(action === 'update'
+        ? locale === 'zh' ? 'Hermes 更新已开始' : 'Hermes update started'
+        : locale === 'zh' ? '网关重启已开始' : 'Gateway restart started');
+    } catch (error) {
+      notify(serverActionError(error, locale));
+    }
+  }, [client, locale, notify, systemAction]);
+
   const slots = {
     profile: (context: NativeShellSlotContext) => (
       <ProfileSlot
@@ -115,6 +196,7 @@ export function FrontendPreviewApp() {
       <SystemSlot
         context={context}
         locale={locale}
+        summary={systemSummary}
         onRestart={() => setSystemAction('restart')}
         onUpdate={() => setSystemAction('update')}
       />
@@ -134,6 +216,7 @@ export function FrontendPreviewApp() {
     <NativeLocalizationProvider locale={locale}>
       <View style={styles.root}>
       <NativeShell
+        key={notificationTarget?.notificationId ?? 'standard-shell'}
         config={{ dashboard: { show_token_analytics: true } }}
         initialPath="/chat"
         locale={locale ?? 'zh'}
@@ -141,10 +224,13 @@ export function FrontendPreviewApp() {
         nativeRouteChrome={useSwiftUIRoutes}
         renderRoute={(route, _label, context) => (
           <PreviewRoute
+            client={client}
             locale={locale}
             navigate={context.navigate}
             notify={notify}
+            notificationTarget={notificationTarget}
             openNavigation={context.openNavigation}
+            profile={profile}
             reportRouteReady={context.reportRouteReady}
             route={route}
           />
@@ -177,13 +263,10 @@ export function FrontendPreviewApp() {
 
       <ProfilePicker
         onClose={() => setPicker(null)}
-        onSelect={(next) => {
-          setProfile(next);
-          setPicker(null);
-          notify(`Managing profile: ${next}`);
-        }}
+        onSelect={(next) => { void selectProfile(next); }}
         open={picker === 'profile'}
         profile={profile}
+        profiles={profileChoices}
       />
       <AppearancePicker
         onClose={() => setPicker(null)}
@@ -211,12 +294,7 @@ export function FrontendPreviewApp() {
             ? '这将重启 Hermes 网关进程。已连接的渠道和活跃会话随后会自动重新连接。'
             : 'This restarts the Hermes gateway process. Connected channels and active sessions will reconnect afterward.'}
         onCancel={() => setSystemAction(null)}
-        onConfirm={() => {
-          notify(systemAction === 'update'
-            ? locale === 'zh' ? 'Hermes 更新已开始' : 'Hermes update started'
-            : locale === 'zh' ? '网关重启已开始' : 'Gateway restart started');
-          setSystemAction(null);
-        }}
+        onConfirm={() => { void confirmSystemAction(); }}
         open={systemAction !== null}
         title={systemAction === 'update'
           ? locale === 'zh' ? '更新 Hermes？' : 'Update Hermes?'
@@ -228,18 +306,31 @@ export function FrontendPreviewApp() {
 }
 
 function PreviewRoute({
+  client,
   locale,
   navigate,
   notify,
+  notificationTarget,
   openNavigation,
+  profile,
   reportRouteReady,
   route,
 }: PreviewPageProps & {
+  client?: FrontendPreviewAppProps['client'];
+  notificationTarget?: FrontendPreviewAppProps['notificationTarget'];
   openNavigation?(): void;
+  profile: string;
   reportRouteReady(path: string): void;
   route: ComposedRoute;
 }) {
   const { tokens } = useTheme();
+  const routeData = useHermesSwiftUIRouteData({
+    client,
+    locale: locale ?? 'zh',
+    notify,
+    profile,
+    routeId: route.routeId ?? '',
+  });
   const props = { locale, navigate, notify };
   const usesNativeSwiftUIRoute =
     Platform.OS === 'ios'
@@ -254,8 +345,14 @@ function PreviewRoute({
     return (
       <HermesSwiftUIRouteView
         {...resolveSwiftUIThemeProps(tokens)}
+        dataJson={routeData.dataJson}
         locale={locale ?? 'zh'}
-        onAction={(event) => notify(event.nativeEvent.payload || event.nativeEvent.action)}
+        onAction={(event) => {
+          void routeData.onAction(
+            event.nativeEvent.action,
+            event.nativeEvent.payload,
+          );
+        }}
         onOpenNavigation={openNavigation}
         onReady={(event) => reportRouteReady(event.nativeEvent.path)}
         path={route.path}
@@ -271,7 +368,14 @@ function PreviewRoute({
     if (route.pluginName === 'collaboration') return <CollaborationPreviewPage {...props} />;
   }
   switch (route.routeId) {
-    case 'chat': return <ChatPreviewPage {...props} openNavigation={openNavigation} />;
+    case 'chat': return (
+      <ChatPreviewPage
+        {...props}
+        client={client}
+        notificationTarget={notificationTarget}
+        openNavigation={openNavigation}
+      />
+    );
     case 'sessions': return <SessionsPreviewPage {...props} />;
     case 'files': return <FilesPreviewPage {...props} />;
     case 'analytics': return <AnalyticsPreviewPage {...props} />;
@@ -325,11 +429,13 @@ function SystemSlot({
   locale,
   onRestart,
   onUpdate,
+  summary,
 }: {
   context: NativeShellSlotContext;
   locale: NativeRouteLocale;
   onRestart(): void;
   onUpdate(): void;
+  summary: SidebarSystemSummary;
 }) {
   const { tokens } = useTheme();
   if (context.collapsed) {
@@ -349,12 +455,19 @@ function SystemSlot({
       <IOSPressable onPress={() => context.navigate('/sessions')} style={styles.statusSummary}>
         <PreviewText variant="tiny">
           {locale === 'zh' ? '网关状态：' : 'Gateway status: '}
-          <PreviewText color={tokens.colors.success} variant="tiny">
-            {locale === 'zh' ? '运行中' : 'Running'}
+          <PreviewText
+            color={summary.gatewayOnline ? tokens.colors.success : tokens.colors.destructive}
+            variant="tiny"
+          >
+            {summary.gatewayOnline
+              ? locale === 'zh' ? '运行中' : 'Running'
+              : locale === 'zh' ? '离线' : 'Offline'}
           </PreviewText>
         </PreviewText>
         <PreviewText variant="tiny">
-          {locale === 'zh' ? '活跃会话：2' : 'Active sessions: 2'}
+          {locale === 'zh'
+            ? `活跃会话：${summary.activeSessions}`
+            : `Active sessions: ${summary.activeSessions}`}
         </PreviewText>
       </IOSPressable>
       <SystemActionRow
@@ -495,16 +608,18 @@ function ProfilePicker({
   onSelect,
   open,
   profile,
+  profiles,
 }: {
   onClose(): void;
   onSelect(profile: string): void;
   open: boolean;
   profile: string;
+  profiles: ProfileChoice[];
 }) {
   return (
     <PreviewModal onClose={onClose} open={open} title="Managing profile">
       <PreviewText variant="muted">Configuration, keys, skills, MCP, models, and new conversations apply to this profile.</PreviewText>
-      {PREVIEW_PROFILES.map((item) => (
+      {profiles.map((item) => (
         <PreviewChoice
           description={item.description}
           key={item.name}
@@ -591,6 +706,38 @@ function LanguagePicker({
       <PreviewChoice label="English" onPress={() => onSelect('en')} selected={locale === 'en'} />
     </PreviewModal>
   );
+}
+
+function stringField(record: JsonRecord, key: string): string {
+  const value = record[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function systemSummaryFromStatus(status: JsonRecord): SidebarSystemSummary {
+  const gateway = isRecord(status.gateway) ? status.gateway : {};
+  const gatewayState = stringField(status, 'gateway_state')
+    || stringField(gateway, 'state')
+    || stringField(gateway, 'status');
+  const activeSessionsValue = status.active_sessions ?? status.active_session_count;
+  return {
+    gatewayOnline:
+      status.gateway_running === true
+      || gateway.running === true
+      || ['online', 'running', 'active'].includes(gatewayState.toLowerCase()),
+    activeSessions:
+      typeof activeSessionsValue === 'number' && Number.isFinite(activeSessionsValue)
+        ? Math.max(0, Math.round(activeSessionsValue))
+        : 0,
+  };
+}
+
+function serverActionError(error: unknown, locale: NativeRouteLocale): string {
+  const detail = error instanceof Error && error.message ? `：${error.message}` : '';
+  return locale === 'zh' ? `服务器操作失败${detail}` : `Server operation failed${detail}`;
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 const styles = StyleSheet.create({
