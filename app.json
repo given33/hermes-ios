@@ -9,8 +9,8 @@
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "bundleIdentifier": "com.given33.hermesagent.nativebeta",
-      "buildNumber": "22",
+      "bundleIdentifier": "app.sunstone1029.fig1171",
+      "buildNumber": "23",
       "supportsTablet": true,
       "requireFullScreen": false,
       "entitlements": {

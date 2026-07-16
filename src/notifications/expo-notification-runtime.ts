@@ -82,7 +82,7 @@ export function createExpoNotificationRuntime(): ExpoNotificationRuntime {
 
 export function currentApnsRegistrationConfig(): ApnsRegistrationConfig {
   const bundleId = Constants.expoConfig?.ios?.bundleIdentifier
-    ?? 'com.given33.hermesagent.nativebeta';
+    ?? 'app.sunstone1029.fig1171';
   const environment: ApnsEnvironment = __DEV__ ? 'sandbox' : 'production';
   return { bundleId, environment };
 }

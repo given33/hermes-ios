@@ -116,9 +116,9 @@ test('native v2 uses the isolated beta identity and required Expo plugins', () =
       Array.isArray(plugin) && plugin[0] === 'expo-secure-store',
   );
 
-  assert.equal(appConfig.expo.ios.bundleIdentifier, 'com.given33.hermesagent.nativebeta');
+  assert.equal(appConfig.expo.ios.bundleIdentifier, 'app.sunstone1029.fig1171');
   assert.equal(appConfig.expo.version, '2.0.0-beta.1');
-  assert.equal(appConfig.expo.ios.buildNumber, '22');
+  assert.equal(appConfig.expo.ios.buildNumber, '23');
   assert.equal(packageConfig.version, '2.0.0-beta.1');
   assert.deepEqual(
     pluginNames.filter((name: string) => [
