@@ -118,7 +118,7 @@ test('native v2 uses the isolated beta identity and required Expo plugins', () =
 
   assert.equal(appConfig.expo.ios.bundleIdentifier, 'app.sunstone1029.fig1171');
   assert.equal(appConfig.expo.version, '2.0.0-beta.1');
-  assert.equal(appConfig.expo.ios.buildNumber, '23');
+  assert.equal(appConfig.expo.ios.buildNumber, '24');
   assert.equal(packageConfig.version, '2.0.0-beta.1');
   assert.deepEqual(
     pluginNames.filter((name: string) => [
