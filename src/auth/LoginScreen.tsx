@@ -28,7 +28,6 @@ import Svg, {
   Stop,
 } from 'react-native-svg';
 
-import { HERMES_ORIGIN } from '../config';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { IOS_MOTION } from '../design/ios-motion';
@@ -54,23 +53,34 @@ const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
 );
 
 export function LoginScreen() {
-  const { state, authenticate, unlock, logout } = useAuth();
+  const {
+    state,
+    registrationOpen,
+    authenticate,
+    register,
+    requestRegistrationCode,
+    unlock,
+    logout,
+  } = useAuth();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const usernameInput = useRef<TextInputHandle>(null);
   const passwordInput = useRef<TextInputHandle>(null);
-  const setupTokenInput = useRef<TextInputHandle>(null);
+  const emailInput = useRef<TextInputHandle>(null);
+  const verificationCodeInput = useRef<TextInputHandle>(null);
   const entranceOpacity = useRef(new Animated.Value(0)).current;
   const entranceOffset = useRef(new Animated.Value(LOGIN_ENTRANCE.translateY)).current;
-  const [baseUrl, setBaseUrl] = useState(
-    state.status === 'locked' ? state.baseUrl : HERMES_ORIGIN,
-  );
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [email, setEmail] = useState('');
+  const [verificationCode, setVerificationCode] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [setupToken, setSetupToken] = useState('');
+  const [sendingCode, setSendingCode] = useState(false);
+  const [codeCooldown, setCodeCooldown] = useState(0);
+  const [codeMessage, setCodeMessage] = useState('');
   const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
   const [focusedField, setFocusedField] = useState<
-    'baseUrl' | 'username' | 'password' | 'setupToken' | null
+    'email' | 'verificationCode' | 'username' | 'password' | null
   >(null);
 
   const loading = state.status === 'loading';
@@ -78,16 +88,17 @@ export function LoginScreen() {
   const busy = state.status !== 'loading' && state.status !== 'authenticated' && state.busy;
   const error =
     state.status === 'locked' || state.status === 'provisioning' ? state.error : undefined;
-  const mode = state.status === 'provisioning' ? state.mode : 'login';
-  const setupTokenRequired =
-    state.status === 'provisioning'
-    && state.mode === 'register'
-    && state.setupTokenRequired;
   const canSubmit =
-    baseUrl.trim().length > 0
-    && username.trim().length > 0
+    username.trim().length > 0
     && password.length > 0
-    && (!setupTokenRequired || setupToken.trim().length > 0)
+    && (
+      mode === 'login'
+      || (
+        registrationOpen
+        && email.trim().length > 0
+        && /^\d{6}$/.test(verificationCode.trim())
+      )
+    )
     && !busy;
   const verticalPadding = Math.min(96, Math.max(24, height * 0.06));
 
@@ -110,9 +121,39 @@ export function LoginScreen() {
     return () => animation.stop();
   }, [entranceOffset, entranceOpacity]);
 
+  useEffect(() => {
+    if (codeCooldown <= 0) return undefined;
+    const timer = setTimeout(() => setCodeCooldown((value) => Math.max(0, value - 1)), 1000);
+    return () => clearTimeout(timer);
+  }, [codeCooldown]);
+
   const submit = () => {
     if (state.status === 'provisioning' && canSubmit) {
-      void authenticate(baseUrl, username, password, setupToken);
+      if (mode === 'register') {
+        void register(email, verificationCode, username, password);
+      } else {
+        void authenticate(username, password);
+      }
+    }
+  };
+
+  const sendRegistrationCode = async () => {
+    if (!registrationOpen || sendingCode || codeCooldown > 0 || !email.trim()) return;
+    setSendingCode(true);
+    setCodeMessage('');
+    try {
+      const resendAfter = await requestRegistrationCode(email);
+      setCodeCooldown(Math.max(1, Math.ceil(resendAfter)));
+      setCodeMessage('验证码已发送，请查看 QQ 邮箱。');
+      verificationCodeInput.current?.focus();
+    } catch (sendError) {
+      if (sendError instanceof Error && /closed/i.test(sendError.message)) {
+        setCodeMessage('注册暂未开放。');
+      } else {
+        setCodeMessage('验证码发送失败，请稍后重试。');
+      }
+    } finally {
+      setSendingCode(false);
     }
   };
 
@@ -164,9 +205,9 @@ export function LoginScreen() {
                   {loading
                     ? '正在读取 Hermes 安全连接。'
                     : locked
-                      ? state.baseUrl
+                      ? '使用 Face ID 快速解锁已登录账号。'
                       : mode === 'register'
-                        ? '创建此 Hermes 服务器的所有者账号。'
+                        ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
                         : '登录后继续使用 Hermes Agent 管理面板。'}
                 </Text>
 
@@ -196,53 +237,121 @@ export function LoginScreen() {
                       pressedStyle={!busy ? styles.buttonPressed : undefined}
                       style={styles.secondaryButton}
                     >
-                      <Text style={styles.secondaryButtonText}>更换连接</Text>
+                      <Text style={styles.secondaryButtonText}>使用其他账号</Text>
                     </IOSPressable>
                   </View>
                 ) : (
                   <View style={styles.form}>
                     <Text style={styles.formTitle}>
-                      {mode === 'register' ? '创建所有者账号' : '使用账号密码登录'}
+                      {mode === 'register' ? '创建 HERMES 账号' : '使用账号密码登录'}
                     </Text>
-                    <View style={styles.field}>
-                      <Text style={styles.fieldLabel}>BASE URL</Text>
-                      <View style={styles.inputContainer}>
-                        <TextInput
-                          accessibilityLabel="Base URL"
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          editable={!busy}
-                          keyboardType="url"
-                          onBlur={() => setFocusedField(null)}
-                          onChangeText={setBaseUrl}
-                          onFocus={() => setFocusedField('baseUrl')}
-                          onSubmitEditing={() => usernameInput.current?.focus()}
-                          placeholder="https://daxueshenmai.top"
-                          placeholderTextColor="rgba(255, 255, 255, 0.32)"
-                          returnKeyType="next"
-                          selectTextOnFocus={false}
-                          style={[
-                            styles.input,
-                            focusedField === 'baseUrl' && styles.inputFocused,
-                          ]}
-                          textContentType="URL"
-                          value={baseUrl}
-                        />
-                        {focusedField === 'baseUrl' ? (
-                          <View pointerEvents="none" style={styles.inputFocusRing} />
+                    {mode === 'register' ? (
+                      <>
+                        {!registrationOpen ? (
+                          <Text accessibilityRole="alert" style={styles.registrationNotice}>
+                            注册暂未开放
+                          </Text>
                         ) : null}
-                      </View>
-                    </View>
+                        <View style={styles.field}>
+                          <Text style={styles.fieldLabel}>QQ 邮箱</Text>
+                          <View style={styles.inputContainer}>
+                            <TextInput
+                              ref={emailInput}
+                              accessibilityLabel="QQ 邮箱"
+                              autoComplete="email"
+                              autoCapitalize="none"
+                              autoCorrect={false}
+                              editable={!busy && registrationOpen}
+                              keyboardType="email-address"
+                              onBlur={() => setFocusedField(null)}
+                              onChangeText={setEmail}
+                              onFocus={() => setFocusedField('email')}
+                              onSubmitEditing={() => verificationCodeInput.current?.focus()}
+                              placeholder="QQ 邮箱"
+                              placeholderTextColor="rgba(255, 255, 255, 0.32)"
+                              returnKeyType="next"
+                              style={[
+                                styles.input,
+                                focusedField === 'email' && styles.inputFocused,
+                              ]}
+                              textContentType="emailAddress"
+                              value={email}
+                            />
+                            {focusedField === 'email' ? (
+                              <View pointerEvents="none" style={styles.inputFocusRing} />
+                            ) : null}
+                          </View>
+                        </View>
+                        <View style={styles.field}>
+                          <Text style={styles.fieldLabel}>邮箱验证码</Text>
+                          <View style={styles.verificationRow}>
+                            <View style={[styles.inputContainer, styles.verificationInput]}>
+                              <TextInput
+                                ref={verificationCodeInput}
+                                accessibilityLabel="邮箱验证码"
+                                autoComplete="one-time-code"
+                                editable={!busy && registrationOpen}
+                                keyboardType="number-pad"
+                                maxLength={6}
+                                onBlur={() => setFocusedField(null)}
+                                onChangeText={(value) => setVerificationCode(value.replace(/\D/g, ''))}
+                                onFocus={() => setFocusedField('verificationCode')}
+                                onSubmitEditing={() => usernameInput.current?.focus()}
+                                returnKeyType="next"
+                                style={[
+                                  styles.input,
+                                  focusedField === 'verificationCode' && styles.inputFocused,
+                                ]}
+                                textContentType="oneTimeCode"
+                                value={verificationCode}
+                              />
+                              {focusedField === 'verificationCode' ? (
+                                <View pointerEvents="none" style={styles.inputFocusRing} />
+                              ) : null}
+                            </View>
+                            <IOSPressable
+                              accessibilityRole="button"
+                              disabled={
+                                !registrationOpen
+                                || sendingCode
+                                || codeCooldown > 0
+                                || !email.trim()
+                              }
+                              onPress={() => void sendRegistrationCode()}
+                              pressedStyle={styles.buttonPressed}
+                              style={[
+                                styles.codeButton,
+                                (
+                                  !registrationOpen
+                                  || sendingCode
+                                  || codeCooldown > 0
+                                  || !email.trim()
+                                ) && styles.codeButtonDisabled,
+                              ]}
+                            >
+                              <Text style={styles.codeButtonText}>
+                                {sendingCode
+                                  ? '发送中'
+                                  : codeCooldown > 0 ? `${codeCooldown}秒` : '发送验证码'}
+                              </Text>
+                            </IOSPressable>
+                          </View>
+                          {codeMessage ? (
+                            <Text style={styles.codeMessage}>{codeMessage}</Text>
+                          ) : null}
+                        </View>
+                      </>
+                    ) : null}
                     <View style={styles.field}>
-                      <Text style={styles.fieldLabel}>用户名</Text>
+                      <Text style={styles.fieldLabel}>账号</Text>
                       <View style={styles.inputContainer}>
                         <TextInput
                           ref={usernameInput}
-                          accessibilityLabel="用户名"
+                          accessibilityLabel="账号"
                           autoComplete="username"
                           autoCapitalize="none"
                           autoCorrect={false}
-                          editable={!busy}
+                          editable={!busy && (mode === 'login' || registrationOpen)}
                           onBlur={() => setFocusedField(null)}
                           onChangeText={setUsername}
                           onFocus={() => setFocusedField('username')}
@@ -269,15 +378,12 @@ export function LoginScreen() {
                           autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
                           autoCapitalize="none"
                           autoCorrect={false}
-                          editable={!busy}
+                          editable={!busy && (mode === 'login' || registrationOpen)}
                           onBlur={() => setFocusedField(null)}
                           onChangeText={setPassword}
                           onFocus={() => setFocusedField('password')}
-                          onSubmitEditing={() => {
-                            if (setupTokenRequired) setupTokenInput.current?.focus();
-                            else submit();
-                          }}
-                          returnKeyType={setupTokenRequired ? 'next' : 'done'}
+                          onSubmitEditing={submit}
+                          returnKeyType="done"
                           secureTextEntry
                           style={[
                             styles.input,
@@ -291,35 +397,6 @@ export function LoginScreen() {
                         ) : null}
                       </View>
                     </View>
-                    {setupTokenRequired ? (
-                      <View style={styles.field}>
-                        <Text style={styles.fieldLabel}>服务器初始化码</Text>
-                        <View style={styles.inputContainer}>
-                          <TextInput
-                            ref={setupTokenInput}
-                            accessibilityLabel="服务器初始化码"
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                            editable={!busy}
-                            onBlur={() => setFocusedField(null)}
-                            onChangeText={setSetupToken}
-                            onFocus={() => setFocusedField('setupToken')}
-                            onSubmitEditing={submit}
-                            returnKeyType="done"
-                            secureTextEntry
-                            style={[
-                              styles.input,
-                              focusedField === 'setupToken' && styles.inputFocused,
-                            ]}
-                            textContentType="oneTimeCode"
-                            value={setupToken}
-                          />
-                          {focusedField === 'setupToken' ? (
-                            <View pointerEvents="none" style={styles.inputFocusRing} />
-                          ) : null}
-                        </View>
-                      </View>
-                    ) : null}
                     {error ? (
                       <Text accessibilityRole="alert" style={styles.errorText}>
                         {error}
@@ -333,6 +410,21 @@ export function LoginScreen() {
                         : mode === 'register' ? '注册并登录' : '登录'}
                       onPress={submit}
                     />
+                    <IOSPressable
+                      accessibilityRole="button"
+                      disabled={busy}
+                      onPress={() => {
+                        setMode((current) => current === 'login' ? 'register' : 'login');
+                        setCodeMessage('');
+                        setFocusedField(null);
+                      }}
+                      pressedStyle={styles.buttonPressed}
+                      style={styles.modeSwitch}
+                    >
+                      <Text style={styles.modeSwitchText}>
+                        {mode === 'login' ? '还没有账号？注册' : '已有账号？登录'}
+                      </Text>
+                    </IOSPressable>
                   </View>
                 )}
               </View>
@@ -745,6 +837,17 @@ const styles = StyleSheet.create({
   field: {
     gap: 4.8,
   },
+  registrationNotice: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 172, 2, 0.35)',
+    color: LOGIN_COLORS.accent,
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontSize: 13.12,
+    lineHeight: 19.68,
+    textAlign: 'center',
+  },
   fieldLabel: {
     color: 'rgba(255, 255, 255, 0.55)',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
@@ -769,6 +872,40 @@ const styles = StyleSheet.create({
   },
   inputContainer: {
     position: 'relative',
+  },
+  verificationRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 8,
+  },
+  verificationInput: {
+    flex: 1,
+  },
+  codeButton: {
+    minWidth: 104,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 172, 2, 0.55)',
+    backgroundColor: '#1c1207',
+  },
+  codeButtonDisabled: {
+    opacity: 0.45,
+  },
+  codeButtonText: {
+    color: LOGIN_COLORS.accent,
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
+    fontSize: 11.52,
+    lineHeight: 17.28,
+    textAlign: 'center',
+  },
+  codeMessage: {
+    color: 'rgba(255, 255, 255, 0.62)',
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontSize: 12,
+    lineHeight: 18,
   },
   inputFocusRing: {
     position: 'absolute',
@@ -862,6 +999,19 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.78,
+  },
+  modeSwitch: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  modeSwitchText: {
+    color: LOGIN_COLORS.accent,
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontSize: 13.12,
+    lineHeight: 19.68,
+    textAlign: 'center',
   },
   footer: {
     flexDirection: 'row',

@@ -9,6 +9,7 @@ import {
   useMemo,
   useReducer,
   useRef,
+  useState,
   type PropsWithChildren,
 } from 'react';
 
@@ -31,19 +32,21 @@ import { getMobileDeviceIdentity } from './device-identity';
 import {
   MobileAuthApiClient,
   MobileAuthApiError,
-  resolveMobileAuthMode,
-  type MobileAuthMode,
+  type MobileAuthSession,
 } from './mobile-auth';
 
 interface AuthContextValue {
   state: AuthState;
   client: HermesApiClient | null;
-  authenticate(
-    baseUrl: string,
+  registrationOpen: boolean;
+  authenticate(username: string, password: string): Promise<void>;
+  register(
+    email: string,
+    verificationCode: string,
     username: string,
     password: string,
-    setupToken?: string,
   ): Promise<void>;
+  requestRegistrationCode(email: string): Promise<number>;
   rememberDeviceId(deviceId: string): Promise<void>;
   unlock(): Promise<void>;
   logout(): Promise<void>;
@@ -61,6 +64,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
   const bootstrapStarted = useRef(false);
   const operationInFlight = useRef(false);
+  const [registrationOpen, setRegistrationOpen] = useState(false);
 
   useEffect(() => {
     if (bootstrapStarted.current) return;
@@ -71,21 +75,18 @@ export function AuthProvider({ children }: PropsWithChildren) {
       .then(async (result) => {
         if (!active) return;
         if (result.status === 'provisioning') {
-          let mode: MobileAuthMode = 'login';
-          let setupTokenRequired = false;
           let error: string | undefined;
           try {
             const status = await new MobileAuthApiClient(HERMES_ORIGIN).getStatus();
-            mode = resolveMobileAuthMode(status);
-            setupTokenRequired = status.setupTokenRequired;
+            setRegistrationOpen(status.registrationOpen);
           } catch {
             error = CONNECTION_ERROR;
           }
           if (active) {
             dispatch({
               type: 'BOOTSTRAP_EMPTY',
-              mode,
-              setupTokenRequired,
+              mode: 'login',
+              setupTokenRequired: false,
               error,
             });
           }
@@ -114,25 +115,41 @@ export function AuthProvider({ children }: PropsWithChildren) {
     };
   }, []);
 
+  const persistSession = useCallback(async (
+    mobileAuth: MobileAuthApiClient,
+    session: MobileAuthSession,
+  ) => {
+    const connection = await persistVerifiedConnection(
+      {
+        baseUrl: mobileAuth.baseUrl,
+        username: session.account.username,
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        expiresAt: session.expiresAt,
+        deviceId: session.deviceId,
+      },
+      {
+        store: credentialStore,
+        async verify(candidate) {
+          const client = new HermesApiClient(
+            candidate.baseUrl,
+            candidate.accessToken,
+          );
+          const response = await client.request<unknown>('/api/mobile/v1/handshake');
+          assertMobileHandshake(response);
+        },
+      },
+    );
+    dispatch({ type: 'AUTHENTICATED', connection });
+  }, []);
+
   const authenticate = useCallback(
-    async (
-      baseUrl: string,
-      username: string,
-      password: string,
-      setupToken = '',
-    ) => {
+    async (username: string, password: string) => {
       if (state.status !== 'provisioning' || state.busy || operationInFlight.current) return;
       operationInFlight.current = true;
       dispatch({ type: 'PROVISION_STARTED' });
       try {
-        const mobileAuth = new MobileAuthApiClient(baseUrl);
-        const status = await mobileAuth.getStatus();
-        const mode = resolveMobileAuthMode(status);
-        dispatch({
-          type: 'AUTH_MODE_RESOLVED',
-          mode,
-          setupTokenRequired: status.setupTokenRequired,
-        });
+        const mobileAuth = new MobileAuthApiClient(HERMES_ORIGIN);
         const device = await getMobileDeviceIdentity(SecureStore, {
           appVersion: Constants.expoConfig?.version,
           deviceName: Device.deviceName,
@@ -141,31 +158,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
           osName: Device.osName,
           osVersion: Device.osVersion,
         });
-        const session = mode === 'register'
-          ? await mobileAuth.register(username, password, device, setupToken)
-          : await mobileAuth.login(username, password, device);
-        const connection = await persistVerifiedConnection(
-          {
-            baseUrl: mobileAuth.baseUrl,
-            username: session.account.username,
-            accessToken: session.accessToken,
-            refreshToken: session.refreshToken,
-            expiresAt: session.expiresAt,
-            deviceId: session.deviceId,
-          },
-          {
-            store: credentialStore,
-            async verify(candidate) {
-              const client = new HermesApiClient(
-                candidate.baseUrl,
-                candidate.accessToken,
-              );
-              const response = await client.request<unknown>('/api/mobile/v1/handshake');
-              assertMobileHandshake(response);
-            },
-          },
-        );
-        dispatch({ type: 'AUTHENTICATED', connection });
+        const session = await mobileAuth.login(username, password, device);
+        await persistSession(mobileAuth, session);
       } catch (error) {
         dispatch({
           type: 'PROVISION_FAILED',
@@ -175,8 +169,53 @@ export function AuthProvider({ children }: PropsWithChildren) {
         operationInFlight.current = false;
       }
     },
-    [state],
+    [persistSession, state],
   );
+
+  const register = useCallback(async (
+    email: string,
+    verificationCode: string,
+    username: string,
+    password: string,
+  ) => {
+    if (state.status !== 'provisioning' || state.busy || operationInFlight.current) return;
+    operationInFlight.current = true;
+    dispatch({ type: 'PROVISION_STARTED' });
+    try {
+      const mobileAuth = new MobileAuthApiClient(HERMES_ORIGIN);
+      const status = await mobileAuth.getStatus();
+      setRegistrationOpen(status.registrationOpen);
+      if (!status.registrationOpen) {
+        throw new MobileAuthApiError(403, 'Owner registration is closed');
+      }
+      const device = await getMobileDeviceIdentity(SecureStore, {
+        appVersion: Constants.expoConfig?.version,
+        deviceName: Device.deviceName,
+        modelId: Device.modelId,
+        modelName: Device.modelName,
+        osName: Device.osName,
+        osVersion: Device.osVersion,
+      });
+      const session = await mobileAuth.register(
+        email,
+        verificationCode,
+        username,
+        password,
+        device,
+      );
+      await persistSession(mobileAuth, session);
+    } catch (error) {
+      dispatch({ type: 'PROVISION_FAILED', error: authenticationErrorMessage(error) });
+    } finally {
+      operationInFlight.current = false;
+    }
+  }, [persistSession, state]);
+
+  const requestRegistrationCode = useCallback(async (email: string) => {
+    const delivery = await new MobileAuthApiClient(HERMES_ORIGIN)
+      .requestRegistrationCode(email);
+    return delivery.resendAfter;
+  }, []);
 
   const unlock = useCallback(async () => {
     if (state.status !== 'locked' || state.busy || operationInFlight.current) return;
@@ -262,8 +301,28 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, [client, state]);
 
   const value = useMemo(
-    () => ({ state, client, authenticate, rememberDeviceId, unlock, logout }),
-    [authenticate, client, logout, rememberDeviceId, state, unlock],
+    () => ({
+      state,
+      client,
+      registrationOpen,
+      authenticate,
+      register,
+      requestRegistrationCode,
+      rememberDeviceId,
+      unlock,
+      logout,
+    }),
+    [
+      authenticate,
+      client,
+      logout,
+      register,
+      registrationOpen,
+      rememberDeviceId,
+      requestRegistrationCode,
+      state,
+      unlock,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -278,10 +337,11 @@ export function useAuth(): AuthContextValue {
 function authenticationErrorMessage(error: unknown): string {
   if (error instanceof MobileAuthApiError) {
     if (error.status === 401) return '用户名或密码不正确。';
-    if (error.status === 403) return '服务器初始化码不正确。';
+    if (error.status === 403) return '验证码错误、已过期或注册暂未开放。';
     if (error.status === 409) return '服务器已有所有者账号，请登录。';
-    if (error.status === 422) return '用户名或密码格式不符合要求。';
+    if (error.status === 422) return '邮箱、验证码、账号或密码格式不符合要求。';
     if (error.status === 429) return '尝试次数过多，请稍后重试。';
+    if (error.status === 502 || error.status === 503) return 'QQ 邮箱验证码服务尚未配置。';
   }
   return CONNECTION_ERROR;
 }

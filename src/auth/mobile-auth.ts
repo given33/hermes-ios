@@ -5,7 +5,13 @@ export type MobileAuthMode = 'register' | 'login';
 export interface MobileAuthStatus {
   registrationOpen: boolean;
   accountConfigured: boolean;
-  setupTokenRequired: boolean;
+  emailVerificationRequired: boolean;
+  ownerEmailConfigured: boolean;
+}
+
+export interface RegistrationCodeDelivery {
+  expiresIn: number;
+  resendAfter: number;
 }
 
 export interface MobileAuthAccount {
@@ -65,31 +71,63 @@ export class MobileAuthApiClient {
     const {
       registration_open: registrationOpen,
       account_configured: accountConfigured,
-      setup_token_required: setupTokenRequired,
+      email_verification_required: emailVerificationRequired,
+      owner_email_configured: ownerEmailConfigured,
     } = body;
     if (
       typeof registrationOpen !== 'boolean'
       || typeof accountConfigured !== 'boolean'
-      || typeof setupTokenRequired !== 'boolean'
+      || typeof emailVerificationRequired !== 'boolean'
+      || typeof ownerEmailConfigured !== 'boolean'
     ) {
       throw new Error('Hermes returned an invalid authentication status');
     }
-    return { registrationOpen, accountConfigured, setupTokenRequired };
+    return {
+      registrationOpen,
+      accountConfigured,
+      emailVerificationRequired,
+      ownerEmailConfigured,
+    };
   }
 
   register(
+    email: string,
+    verificationCode: string,
     username: string,
     password: string,
     device?: MobileDeviceIdentity,
-    setupToken = '',
   ): Promise<MobileAuthSession> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const code = verificationCode.trim();
+    if (!normalizedEmail) throw new Error('Hermes registration email is required');
+    if (!/^\d{6}$/.test(code)) throw new Error('Hermes verification code must contain 6 digits');
     return this.exchangeCredentials(
       '/auth/mobile/register',
       username,
       password,
       device,
-      setupToken,
+      { email: normalizedEmail, verification_code: code },
+      [code],
     );
+  }
+
+  async requestRegistrationCode(email: string): Promise<RegistrationCodeDelivery> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) throw new Error('Hermes registration email is required');
+    const body = await this.request('/auth/mobile/registration-code', {
+      method: 'POST',
+      body: JSON.stringify({ email: normalizedEmail }),
+    });
+    if (!isRecord(body)) throw new Error('Hermes returned an invalid verification delivery');
+    const { expires_in: expiresIn, resend_after: resendAfter, ok } = body;
+    if (
+      ok !== true
+      || typeof expiresIn !== 'number' || !Number.isFinite(expiresIn) || expiresIn <= 0
+      || typeof resendAfter !== 'number' || !Number.isFinite(resendAfter) || resendAfter < 0
+    ) {
+      throw new Error('Hermes returned an invalid verification delivery');
+    }
+    return { expiresIn, resendAfter };
   }
 
   login(
@@ -135,7 +173,8 @@ export class MobileAuthApiClient {
     username: string,
     password: string,
     device?: MobileDeviceIdentity,
-    setupToken = '',
+    extraBody: Record<string, string> = {},
+    extraSecrets: string[] = [],
   ): Promise<MobileAuthSession> {
     const normalizedUsername = username.trim();
     if (!normalizedUsername) throw new Error('Hermes username is required');
@@ -145,15 +184,13 @@ export class MobileAuthApiClient {
       {
         method: 'POST',
         body: JSON.stringify({
+          ...extraBody,
           username: normalizedUsername,
           password,
-          ...(path === '/auth/mobile/register' && setupToken.trim()
-            ? { setup_token: setupToken.trim() }
-            : {}),
           ...(device ? { device: serializeDevice(device) } : {}),
         }),
       },
-      [password, setupToken],
+      [password, ...extraSecrets],
     );
     return parseSession(body);
   }
@@ -193,18 +230,6 @@ export function resolveMobileAuthMode(status: MobileAuthStatus): MobileAuthMode 
   if (status.registrationOpen) return 'register';
   if (status.accountConfigured) return 'login';
   throw new Error('Hermes owner account is unavailable');
-}
-
-export async function authenticateOwner(
-  client: MobileAuthApiClient,
-  username: string,
-  password: string,
-): Promise<{ mode: MobileAuthMode; session: MobileAuthSession }> {
-  const mode = resolveMobileAuthMode(await client.getStatus());
-  const session = mode === 'register'
-    ? await client.register(username, password)
-    : await client.login(username, password);
-  return { mode, session };
 }
 
 function parseSession(value: unknown): MobileAuthSession {

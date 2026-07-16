@@ -7,7 +7,6 @@ import type { SavedConnection } from '../src/auth/credential-contract';
 import {
   MobileAuthApiClient,
   MobileAuthApiError,
-  authenticateOwner,
   resolveMobileAuthMode,
   type MobileAuthSession,
 } from '../src/auth/mobile-auth';
@@ -67,7 +66,8 @@ test('registration status selects first-owner registration or normal login', () 
     resolveMobileAuthMode({
       registrationOpen: true,
       accountConfigured: false,
-      setupTokenRequired: true,
+      emailVerificationRequired: true,
+      ownerEmailConfigured: true,
     }),
     'register',
   );
@@ -75,7 +75,8 @@ test('registration status selects first-owner registration or normal login', () 
     resolveMobileAuthMode({
       registrationOpen: false,
       accountConfigured: true,
-      setupTokenRequired: false,
+      emailVerificationRequired: true,
+      ownerEmailConfigured: true,
     }),
     'login',
   );
@@ -83,52 +84,31 @@ test('registration status selects first-owner registration or normal login', () 
     () => resolveMobileAuthMode({
       registrationOpen: false,
       accountConfigured: false,
-      setupTokenRequired: false,
+      emailVerificationRequired: true,
+      ownerEmailConfigured: true,
     }),
     /owner account/i,
   );
 });
 
-test('owner authentication checks status and posts credentials to register or token', async () => {
-  for (const scenario of [
-    { registrationOpen: true, path: '/auth/mobile/register', mode: 'register' },
-    { registrationOpen: false, path: '/auth/mobile/token', mode: 'login' },
-  ] as const) {
-    const calls: FetchCall[] = [];
-    const client = new MobileAuthApiClient(
-      'https://hermes.test',
-      async (input, init) => {
-        const url = String(input);
-        calls.push({ url, init: init ?? {} });
-        if (new URL(url).pathname === '/auth/mobile/status') {
-          return jsonResponse(url, {
-            registration_open: scenario.registrationOpen,
-            account_configured: !scenario.registrationOpen,
-            setup_token_required: scenario.registrationOpen,
-          });
-        }
-        return jsonResponse(url, tokenResponse());
-      },
-    );
+test('owner status exposes registration and QQ verification capability', async () => {
+  const client = new MobileAuthApiClient('https://hermes.test', async (input) =>
+    jsonResponse(String(input), {
+      registration_open: false,
+      account_configured: true,
+      email_verification_required: true,
+      owner_email_configured: true,
+    }));
 
-    const result = await authenticateOwner(client, ' owner ', 'correct-horse-42');
-    assert.equal(result.mode, scenario.mode);
-    assert.deepEqual(result.session, session());
-    assert.deepEqual(calls.map(({ url }) => new URL(url).pathname), [
-      '/auth/mobile/status',
-      scenario.path,
-    ]);
-    assert.equal(calls[0].init.method, undefined);
-    assert.equal(calls[1].init.method, 'POST');
-    assert.equal(
-      calls[1].init.body,
-      JSON.stringify({ username: 'owner', password: 'correct-horse-42' }),
-    );
-    assert.equal(new Headers(calls[1].init.headers).get('Content-Type'), 'application/json');
-  }
+  assert.deepEqual(await client.getStatus(), {
+    registrationOpen: false,
+    accountConfigured: true,
+    emailVerificationRequired: true,
+    ownerEmailConfigured: true,
+  });
 });
 
-test('first-owner registration sends the one-time server setup token only in the body', async () => {
+test('first-owner registration sends QQ email and verification code only in the body', async () => {
   const calls: FetchCall[] = [];
   const client = new MobileAuthApiClient('https://hermes.test', async (input, init) => {
     const url = String(input);
@@ -136,14 +116,36 @@ test('first-owner registration sends the one-time server setup token only in the
     return jsonResponse(url, tokenResponse());
   });
 
-  await client.register('owner', 'correct-horse-42', undefined, 'bootstrap-secret');
+  await client.register(
+    ' 2821961676@QQ.COM ',
+    '123456',
+    'owner',
+    'correct-horse-42',
+  );
 
   assert.equal(new URL(calls[0].url).search, '');
   assert.deepEqual(JSON.parse(String(calls[0].init.body)), {
+    email: '2821961676@qq.com',
+    verification_code: '123456',
     username: 'owner',
     password: 'correct-horse-42',
-    setup_token: 'bootstrap-secret',
   });
+});
+
+test('QQ registration code request parses resend timing', async () => {
+  const calls: FetchCall[] = [];
+  const client = new MobileAuthApiClient('https://hermes.test', async (input, init) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    return jsonResponse(url, { ok: true, expires_in: 600, resend_after: 60 });
+  });
+
+  assert.deepEqual(await client.requestRegistrationCode(' 2821961676@QQ.COM '), {
+    expiresIn: 600,
+    resendAfter: 60,
+  });
+  assert.equal(new URL(calls[0].url).pathname, '/auth/mobile/registration-code');
+  assert.equal(calls[0].init.body, JSON.stringify({ email: '2821961676@qq.com' }));
 });
 
 test('native login sends stable device metadata and retains the returned server device id', async () => {

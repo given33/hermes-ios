@@ -395,6 +395,7 @@ test('native auth integrates owner endpoints, refresh, Face ID, and the complete
   assert.match(providerSource, /AccessTokenController/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/status/);
+  assert.match(mobileAuthSource, /\/auth\/mobile\/registration-code/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/register/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/token/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/refresh/);
@@ -403,8 +404,13 @@ test('native auth integrates owner endpoints, refresh, Face ID, and the complete
   assert.match(appSource, /<NotificationProvider>/);
   assert.match(appSource, /notificationTarget=\{notificationTarget\}/);
   assert.doesNotMatch(appSource, /<NativeShell \/>/);
-  assert.match(loginSource, /accessibilityLabel="用户名"/);
+  assert.match(loginSource, /accessibilityLabel="账号"/);
   assert.match(loginSource, /accessibilityLabel="密码"/);
+  assert.match(loginSource, /accessibilityLabel="QQ 邮箱"/);
+  assert.match(loginSource, /accessibilityLabel="邮箱验证码"/);
+  assert.match(loginSource, /注册暂未开放/);
+  assert.doesNotMatch(loginSource, /accessibilityLabel="Base URL"/);
+  assert.doesNotMatch(loginSource, /服务器初始化码|setupToken/);
   assert.match(loginSource, /secureTextEntry/);
   assert.match(loginSource, /autoComplete="username"/);
   assert.match(loginSource, /current-password/);
