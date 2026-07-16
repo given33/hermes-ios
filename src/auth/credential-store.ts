@@ -9,7 +9,10 @@ import {
   REFRESH_TOKEN_KEY_PREFIX,
   REFRESH_TOKEN_POINTER_STORAGE_KEY,
   REFRESH_TOKEN_STORAGE_KEY,
+  REMEMBER_LOGIN_STORAGE_KEY,
+  REMEMBERED_PASSWORD_STORAGE_KEY,
   USERNAME_STORAGE_KEY,
+  type RememberedLogin,
   type SavedConnection,
 } from './credential-contract';
 
@@ -66,6 +69,43 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
 
   readUsername(): Promise<string | null> {
     return this.secureStore.getItemAsync(USERNAME_STORAGE_KEY);
+  }
+
+  async readRememberedLogin(): Promise<RememberedLogin> {
+    const [username, preference, password] = await Promise.all([
+      this.readUsername(),
+      this.secureStore.getItemAsync(REMEMBER_LOGIN_STORAGE_KEY),
+      this.secureStore.getItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY),
+    ]);
+    const enabled = preference === '1' && Boolean(password);
+    return {
+      enabled,
+      password: enabled ? password ?? '' : '',
+      username: username ?? '',
+    };
+  }
+
+  async saveRememberedLogin(
+    username: string,
+    password: string,
+    enabled: boolean,
+  ): Promise<void> {
+    if (!enabled) {
+      await Promise.all([
+        this.secureStore.setItemAsync(REMEMBER_LOGIN_STORAGE_KEY, '0'),
+        this.secureStore.deleteItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY),
+      ]);
+      return;
+    }
+    const normalizedUsername = username.trim();
+    if (!normalizedUsername || !password) {
+      throw new Error('Invalid remembered Hermes login');
+    }
+    await Promise.all([
+      this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, normalizedUsername),
+      this.secureStore.setItemAsync(REMEMBER_LOGIN_STORAGE_KEY, '1'),
+      this.secureStore.setItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY, password),
+    ]);
   }
 
   readAccessToken(): Promise<string | null> {
@@ -176,6 +216,39 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     );
     if (results.some(({ status }) => status === 'rejected')) {
       throw new Error('Unable to clear Hermes credentials');
+    }
+  }
+
+  async clearSession(): Promise<void> {
+    const [currentKey, rememberedLogin] = await Promise.all([
+      this.secureStore.getItemAsync(REFRESH_TOKEN_POINTER_STORAGE_KEY).catch(() => null),
+      this.readRememberedLogin().catch(() => ({
+        enabled: false,
+        password: '',
+        username: '',
+      })),
+    ]);
+    const keys = [
+      BASE_URL_STORAGE_KEY,
+      ACCESS_TOKEN_STORAGE_KEY,
+      REFRESH_TOKEN_STORAGE_KEY,
+      REFRESH_TOKEN_POINTER_STORAGE_KEY,
+      ACCESS_EXPIRES_AT_STORAGE_KEY,
+      DEVICE_ID_STORAGE_KEY,
+      ...(rememberedLogin.enabled
+        ? []
+        : [
+            USERNAME_STORAGE_KEY,
+            REMEMBER_LOGIN_STORAGE_KEY,
+            REMEMBERED_PASSWORD_STORAGE_KEY,
+          ]),
+      ...(isRefreshTokenKey(currentKey) ? [currentKey] : []),
+    ];
+    const results = await Promise.allSettled(
+      keys.map((key) => this.secureStore.deleteItemAsync(key)),
+    );
+    if (results.some(({ status }) => status === 'rejected')) {
+      throw new Error('Unable to clear Hermes session');
     }
   }
 

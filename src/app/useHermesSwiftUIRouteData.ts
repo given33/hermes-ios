@@ -2,7 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
-import { HermesCloudApi } from '../api/HermesCloudApi';
+import { conversationSessionSummary, HermesCloudApi } from '../api/HermesCloudApi';
+import {
+  ConversationLocalStore,
+  synchronizeConversationCache,
+} from '../api/conversation-local-store';
 import {
   decodeHermesSwiftUIRouteAction,
   encodeHermesSwiftUIRouteSnapshot,
@@ -12,9 +16,11 @@ import {
 import {
   loadHermesSwiftUIRouteSnapshot,
   performHermesSwiftUIRouteAction,
+  createHermesSwiftUISessionsSnapshot,
 } from './hermes-route-data';
 
 interface UseHermesSwiftUIRouteDataOptions {
+  cacheOwner?: string;
   client?: HermesApiClient;
   locale: 'en' | 'zh';
   notify(message: string): void;
@@ -31,6 +37,7 @@ interface HermesSwiftUIRouteDataController {
 const FOREGROUND_REFRESH_MS = 15_000;
 
 export function useHermesSwiftUIRouteData({
+  cacheOwner = '',
   client,
   locale,
   notify,
@@ -38,6 +45,10 @@ export function useHermesSwiftUIRouteData({
   routeId,
 }: UseHermesSwiftUIRouteDataOptions): HermesSwiftUIRouteDataController {
   const api = useMemo(() => client ? new HermesCloudApi(client) : null, [client]);
+  const localStore = useMemo(
+    () => cacheOwner ? new ConversationLocalStore() : null,
+    [cacheOwner],
+  );
   const requestVersion = useRef(0);
   const selectedItemId = useRef('');
   const [dataJson, setDataJson] = useState(() => encodeHermesSwiftUIRouteSnapshot({
@@ -49,30 +60,53 @@ export function useHermesSwiftUIRouteData({
     if (!api) return;
     const version = ++requestVersion.current;
     try {
-      const snapshot = await loadHermesSwiftUIRouteSnapshot(
-        api,
-        routeId,
-        profile,
-        selectedItemId.current,
-        locale === 'zh',
-      );
+      const snapshot = routeId === 'sessions' && localStore && cacheOwner
+        ? createHermesSwiftUISessionsSnapshot({
+            sessions: (
+              await synchronizeConversationCache(
+                api,
+                localStore,
+                cacheOwner,
+                profile,
+              )
+            ).conversations.map(conversationSessionSummary),
+          })
+        : await loadHermesSwiftUIRouteSnapshot(
+            api,
+            routeId,
+            profile,
+            selectedItemId.current,
+            locale === 'zh',
+          );
       if (version !== requestVersion.current) return;
       setDataJson(encodeHermesSwiftUIRouteSnapshot(snapshot));
     } catch (error) {
       if (version !== requestVersion.current) return;
       notify(serverErrorMessage(error));
     }
-  }, [api, locale, notify, profile, routeId]);
+  }, [api, cacheOwner, localStore, locale, notify, profile, routeId]);
 
   useEffect(() => {
-    requestVersion.current += 1;
+    const lifecycleVersion = ++requestVersion.current;
     selectedItemId.current = '';
     setDataJson(encodeHermesSwiftUIRouteSnapshot({
       version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
       route: routeId,
     }));
-    void reload();
-    if (!api) return undefined;
+    void (async () => {
+      if (routeId === 'sessions' && localStore && cacheOwner) {
+        const cached = await localStore.read(cacheOwner);
+        if (cached && lifecycleVersion === requestVersion.current) {
+          setDataJson(encodeHermesSwiftUIRouteSnapshot(
+            createHermesSwiftUISessionsSnapshot({
+              sessions: cached.conversations.map(conversationSessionSummary),
+            }),
+          ));
+        }
+      }
+      if (lifecycleVersion === requestVersion.current) await reload();
+    })();
+    if (!api || routeId === 'models') return undefined;
 
     const interval = setInterval(() => {
       if (AppState.currentState === 'active') void reload();
@@ -85,7 +119,7 @@ export function useHermesSwiftUIRouteData({
       clearInterval(interval);
       appState.remove();
     };
-  }, [api, reload, routeId]);
+  }, [api, cacheOwner, localStore, reload, routeId]);
 
   const onAction = useCallback(async (action: string, payloadJson: string) => {
     if (!api) return;
@@ -109,11 +143,38 @@ export function useHermesSwiftUIRouteData({
     }
     try {
       const result = await performHermesSwiftUIRouteAction(api, event, profile);
-      if (result === 'reload') await reload();
+      if (
+        localStore
+        && cacheOwner
+        && (
+          event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete
+          || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename
+        )
+      ) {
+        const cached = await localStore.read(cacheOwner);
+        if (cached) {
+          const value = event.payload.value?.trim() || event.payload.name?.trim() || '';
+          const conversations = event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete
+            ? cached.conversations.filter(({ id }) => id !== event.payload.id)
+            : cached.conversations.map((conversation) => (
+                conversation.id === event.payload.id && value
+                  ? { ...conversation, title: value, updated_at: Date.now() }
+                  : conversation
+              ));
+          const activeId = conversations.some(({ id }) => id === cached.activeConversationId)
+            ? cached.activeConversationId
+            : conversations[0]?.id || '';
+          await localStore.write(cacheOwner, conversations, activeId);
+        }
+      }
+      if (result === 'reload' || (typeof result === 'object' && result.reload)) {
+        await reload();
+      }
+      if (typeof result === 'object' && result.message) notify(result.message);
     } catch (error) {
       notify(serverErrorMessage(error));
     }
-  }, [api, notify, profile, reload]);
+  }, [api, cacheOwner, localStore, notify, profile, reload]);
 
   return { dataJson, onAction, reload };
 }

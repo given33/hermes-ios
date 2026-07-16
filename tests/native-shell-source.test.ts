@@ -136,6 +136,14 @@ test('compact navigation is owned by UIKit native-stack instead of a simulated b
   assert.doesNotMatch(source, /routeHistory|backTranslation|backGesture/);
 });
 
+test('secondary root pages return to the sidebar while chat retains the menu button', () => {
+  const source = read('src/app/NativeShell.tsx');
+
+  assert.match(source, /route\.routeId === 'chat'[\s\S]*Open navigation[\s\S]*Back to sidebar/);
+  assert.match(source, /route\.routeId === 'chat' \? \([\s\S]*<Menu[\s\S]*<ChevronLeft/);
+  assert.match(source, /onPress=\{openMobile\}/);
+});
+
 test('sidebar selections reset the top-level stack instead of accumulating pages', () => {
   const source = read('src/app/NativeShell.tsx');
 

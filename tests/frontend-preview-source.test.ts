@@ -162,6 +162,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /当前窗口持续使用同一个会话/);
   assert.match(chat, /直接告诉 Hermes 你想做什么/);
   assert.match(chat, /function UnifiedMessage/);
+  assert.match(app, /clearPreferredConversationId/);
+  assert.match(chat, /onPreferredConversationConsumed\?\.\(preferredConversationId\)/);
+  assert.doesNotMatch(app, /继续对话|Continue conversation/);
   assert.match(chat, /function RoleActivityGroup/);
   assert.match(chat, /function ModelToolsDrawer/);
   assert.match(chat, /animationType="none"/);
@@ -406,7 +409,7 @@ test('sidebar system actions and status bar follow the WebUI mobile contract', (
   assert.match(app, /paddingVertical: 8/);
   assert.match(app, /网关状态：/);
   assert.match(app, /summary\.activeSessions/);
-  assert.match(app, /api\.getStatus\(\)/);
+  assert.match(app, /api\.getSystem\(\)/);
   assert.match(app, /api\.restartGateway\(\)/);
   assert.match(app, /api\.updateHermes\(\)/);
   assert.match(app, /function SidebarControl/);

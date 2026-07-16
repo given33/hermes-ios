@@ -81,6 +81,13 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routes, /\.kanbanCreate/);
   assert.match(routes, /\.kanbanUpdate/);
   assert.match(routes, /\.kanbanMove/);
+  assert.match(routes, /\.modelSave/);
+  assert.match(routes, /\.modelTest/);
+  assert.match(routes, /API key \(optional\)/);
+  assert.doesNotMatch(
+    routes,
+    /configuration\?\.apiKeyConfigured == true \|\| !apiKey\.isEmpty/,
+  );
   assert.match(routes, /\.integrationUpdate/);
   assert.match(routes, /编辑渠道配置/);
   assert.match(routes, /updateConfigValue\("stream_output"/);
@@ -92,6 +99,8 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routeData, /api\.rescanAchievements/);
   assert.match(routeData, /api\.createKanbanTask/);
   assert.match(routeData, /api\.updateKanbanTask/);
+  assert.match(routeData, /api\.saveCustomModel/);
+  assert.match(routeData, /api\.testCustomModel/);
   assert.match(routeData, /api\.updateChannel/);
 });
 
@@ -228,15 +237,45 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
   );
   assert.doesNotMatch(routeView, /\.onAppear \{ props\.applyTheme/);
   assert.doesNotMatch(routeView, /\.onChange\(of: props\.themeSignature\)/);
-  assert.match(native, /\.listStyle\(\.insetGrouped\)/);
+  assert.match(native, /\.listStyle\(\.plain\)/);
+  assert.doesNotMatch(native, /\.listStyle\(\.insetGrouped\)/);
+  assert.match(native, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
   assert.match(native, /\.font\(HermesFonts\.body\(15\)\)/);
-  assert.match(native, /\.padding\(14\)/);
   assert.doesNotMatch(native, /\.background\(\.ultraThinMaterial\)/);
   assert.doesNotMatch(native, /\.frame\(minHeight: 58\)/);
   assert.match(shell, /\.\.\.swiftUIThemeProps/);
   assert.match(shell, /<SymbolView[\s\S]*name=\{route\.symbol\}[\s\S]*size=\{18\}/);
   assert.match(shell, /referenceSidebarRow:[\s\S]*minHeight: 44/);
   assert.match(preview, /\.\.\.resolveSwiftUIThemeProps\(tokens\)/);
+});
+
+test('chat header exposes live dual-gateway status while SwiftUI keeps themes and back semantics', () => {
+  const native = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
+  );
+  const bridge = read('modules/hermes-ios-controls/index.ts');
+  const chat = read('src/preview/PreviewChatPage.tsx');
+  const shell = read('src/app/NativeShell.tsx');
+
+  assert.match(bridge, /gatewayStatusesJson: string/);
+  assert.match(bridge, /onThemeChange\?\(event: NativeSyntheticEvent<\{ name: string \}>\)/);
+  assert.match(native, /decodeGateways\(props\.gatewayStatusesJson\)/);
+  assert.match(chat, /gatewayStatuses\.map\(\(gateway\)/);
+  assert.match(chat, /gateway\.state === 'online'[\s\S]*tokens\.colors\.success/);
+  assert.match(chat, /gateway\.state === 'degraded'[\s\S]*tokens\.colors\.warning/);
+  assert.match(chat, /tokens\.colors\.destructive/);
+  assert.doesNotMatch(native, /v0\.9\.3|2 sessions|2 个会话/);
+  assert.match(native, /Menu \{\s*ForEach\(themes\)/);
+  assert.match(native, /props\.onThemeChange\(\["name": name\]\)/);
+  assert.match(native, /Image\(systemName: "chevron\.backward"\)/);
+  assert.match(native, /返回侧边栏/);
+  assert.match(native, /\.toolbarBackground\(appearance\.palette\.background, for: \.navigationBar\)/);
+  assert.match(native, /\.toolbarBackground\(\.visible, for: \.navigationBar\)/);
+  assert.match(shell, /gatewayStatusesJson=\{gatewayStatusesJson\}/);
+  assert.match(shell, /themeName=\{themeName\}/);
+  assert.match(shell, /themesJson=\{sidebarThemesJson\}/);
+  assert.match(shell, /id: 'dbb3', label: 'DBB3', state: 'unknown'/);
+  assert.match(shell, /id: 'wsl', label: 'WSL', state: 'unknown'/);
 });
 
 test('heavy analytics content is staged before the sidebar close signal', () => {

@@ -1,4 +1,5 @@
 import type { HermesApiClient, HermesRequestOptions } from './HermesApiClient';
+import { normalizeOfficialSessionMessages } from './official-session-adoption';
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -59,6 +60,7 @@ export interface CollaborationMessage {
   status?: string;
   kind?: string;
   created_at?: number;
+  timestamp?: number;
   meta?: JsonRecord;
 }
 
@@ -73,6 +75,9 @@ export interface SingleConversation {
   hosted_turns?: Record<string, JsonRecord>;
   created_at?: number;
   updated_at?: number;
+  official_session_id?: string;
+  official_model?: string;
+  preview?: string;
 }
 
 export interface RouteDecision {
@@ -90,6 +95,25 @@ export interface NativeUpload {
   name: string;
   mimeType?: string | null;
   uri: string;
+}
+
+export interface CustomModelConfiguration {
+  apiKey?: string;
+  apiKeyConfigured?: boolean;
+  apiKeyPreview?: string;
+  apiMode: 'anthropic_messages' | 'chat_completions' | 'codex_responses';
+  baseUrl: string;
+  contextLength: number;
+  model: string;
+  reasoningEffort: 'high' | 'low' | 'max' | 'medium' | 'minimal' | 'none' | 'ultra' | 'xhigh';
+}
+
+export interface CustomModelConnectionResult {
+  latency_ms: number;
+  message: string;
+  ok: boolean;
+  reachable: boolean;
+  status: number;
 }
 
 const COLLABORATION = '/api/plugins/collaboration';
@@ -117,6 +141,21 @@ export class HermesCloudApi {
       profile,
       query: { limit, offset, order: 'recent' },
     });
+  }
+
+  async getAllSessions(profile = 'default', pageSize = 100) {
+    const sessions: SessionSummary[] = [];
+    let offset = 0;
+    let total = Number.POSITIVE_INFINITY;
+    while (offset < total) {
+      const page = await this.getSessions(pageSize, offset, profile);
+      const entries = Array.isArray(page.sessions) ? page.sessions : [];
+      sessions.push(...entries);
+      total = Number.isFinite(page.total) ? Math.max(0, page.total) : sessions.length;
+      if (!entries.length || entries.length < pageSize) break;
+      offset += entries.length;
+    }
+    return { sessions, total: sessions.length, limit: pageSize, offset: 0 };
   }
 
   getSession(id: string, profile = 'default') {
@@ -194,12 +233,56 @@ export class HermesCloudApi {
 
   getModels(profile = 'default') {
     return Promise.all([
-      this.request<JsonRecord>('/api/model/info', { profile }),
-      this.request<JsonRecord>('/api/model/options', {
-        profile,
-        query: { include_unconfigured: 1 },
-      }),
-    ]).then(([info, options]) => ({ info, options }));
+      this.getModelInfo(profile),
+      this.getModelOptions(profile),
+      this.getCustomModel(profile),
+    ]).then(([info, options, custom]) => ({ custom, info, options }));
+  }
+
+  getModelInfo(profile = 'default') {
+    return this.request<JsonRecord>('/api/model/info', { profile });
+  }
+
+  getModelOptions(profile = 'default') {
+    return this.request<JsonRecord>('/api/model/options', {
+      profile,
+      query: { include_unconfigured: 1 },
+    });
+  }
+
+  async getCustomModel(profile = 'default'): Promise<CustomModelConfiguration> {
+    const value = await this.request<JsonRecord>('/api/model/custom', { profile });
+    return {
+      apiKeyConfigured: value.api_key_configured === true,
+      apiKeyPreview: stringValue(value.api_key_preview),
+      apiMode: customApiMode(value.api_mode),
+      baseUrl: stringValue(value.base_url),
+      contextLength: numberValue(value.context_length),
+      model: stringValue(value.model),
+      reasoningEffort: customReasoningEffort(value.reasoning_effort),
+    };
+  }
+
+  saveCustomModel(configuration: CustomModelConfiguration, profile = 'default') {
+    return this.json<JsonRecord>('/api/model/custom', 'PUT', {
+      api_key: configuration.apiKey || '',
+      api_mode: configuration.apiMode,
+      base_url: configuration.baseUrl,
+      context_length: configuration.contextLength,
+      model: configuration.model,
+      reasoning_effort: configuration.reasoningEffort,
+      profile,
+    });
+  }
+
+  testCustomModel(configuration: CustomModelConfiguration, profile = 'default') {
+    return this.json<CustomModelConnectionResult>('/api/model/custom/test', 'POST', {
+      api_key: configuration.apiKey || '',
+      api_mode: configuration.apiMode,
+      base_url: configuration.baseUrl,
+      model: configuration.model,
+      profile,
+    });
   }
 
   setModel(provider: string, model: string, profile = 'default') {
@@ -451,7 +534,8 @@ export class HermesCloudApi {
     return Promise.all([
       this.request<JsonRecord>('/api/status'),
       this.request<JsonRecord>('/api/system/stats'),
-    ]).then(([status, stats]) => ({ status, stats }));
+      this.request<JsonRecord>('/api/managed-nodes/status'),
+    ]).then(([status, stats, managedNodes]) => ({ managedNodes, status, stats }));
   }
 
   restartGateway() {
@@ -490,6 +574,20 @@ export class HermesCloudApi {
     return this.request<{ rooms: JsonRecord[] }>(`${COLLABORATION}/rooms`);
   }
 
+  createCollaborationRoom(name: string, profiles: string[]) {
+    return this.json<{ room: JsonRecord }>(`${COLLABORATION}/rooms`, 'POST', {
+      name,
+      profiles,
+    });
+  }
+
+  deleteCollaborationRoom(id: string) {
+    return this.request<{ ok: boolean }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+  }
+
   getCollaborationRoom(id: string) {
     return this.request<{ room: JsonRecord }>(
       `${COLLABORATION}/rooms/${encodeURIComponent(id)}`,
@@ -517,6 +615,20 @@ export class HermesCloudApi {
     );
   }
 
+  async getUnifiedConversations(_profile = 'default') {
+    const [cloud, official] = await Promise.all([
+      this.getConversations(),
+      this.getAllSessions('default'),
+    ]);
+    return {
+      conversations: mergeUnifiedConversationIndex(
+        cloud.conversations,
+        official.sessions,
+        'default',
+      ),
+    };
+  }
+
   getConversation(id: string) {
     return this.request<{ conversation: SingleConversation }>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
@@ -531,10 +643,48 @@ export class HermesCloudApi {
     );
   }
 
+  async adoptOfficialConversation(sessionId: string, profile = 'default', title = '') {
+    const normalizedSessionId = sessionId.replace(/^official:/, '').trim();
+    if (!normalizedSessionId) throw new Error('Official Hermes session id is required');
+    const [detail, messageData, profiles] = await Promise.all([
+      this.getSession(normalizedSessionId, profile),
+      this.getSessionMessages(normalizedSessionId, profile),
+      this.getCollaborationProfiles(),
+    ]);
+    const availableProfiles = profiles.profiles.map(({ name }) => name).filter(Boolean);
+    const adoptionProfile = availableProfiles.includes('default')
+      ? 'default'
+      : availableProfiles[0] || 'default';
+    const messages = normalizeOfficialSessionMessages(
+      messageData.messages,
+      adoptionProfile,
+      normalizedSessionId,
+    );
+    const firstUser = messages.find((message) => message.role === 'user' && message.content);
+    return this.json<{ conversation: SingleConversation; created: boolean }>(
+      `${COLLABORATION}/single/conversations/adopt`,
+      'POST',
+      {
+        messages,
+        profile: adoptionProfile,
+        session_id: normalizedSessionId,
+        title: stringValue(detail.title) || title || firstUser?.content.slice(0, 36) || '历史会话',
+      },
+    );
+  }
+
   deleteConversation(id: string) {
     return this.request<{ ok: boolean }>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
+    );
+  }
+
+  renameConversation(id: string, title: string) {
+    return this.json<{ conversation: SingleConversation }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
+      'PATCH',
+      { title },
     );
   }
 
@@ -551,7 +701,7 @@ export class HermesCloudApi {
     profile: string,
     sessionId: string,
     turnId: string,
-    status: 'completed' | 'running',
+    status: 'completed' | 'failed' | 'running',
   ) {
     return this.json<JsonRecord>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/runtime-session`,
@@ -617,13 +767,24 @@ export class HermesCloudApi {
     );
   }
 
+  downloadConversationAttachment(downloadUrl: string) {
+    if (!downloadUrl.startsWith(`${COLLABORATION}/single/conversations/`)) {
+      throw new Error('Invalid conversation attachment URL');
+    }
+    return this.client.download(downloadUrl);
+  }
+
   async loadRoute(routeId: string, profile = 'default', selectedId = ''): Promise<unknown> {
     switch (routeId) {
       case 'sessions': {
-        const sessions = await this.getSessions(50, 0, profile);
-        if (!selectedId) return sessions;
-        const messages = await this.getSessionMessages(selectedId, profile);
-        return { ...sessions, selectedId, selectedMessages: messages.messages };
+        const result = await this.getUnifiedConversations(profile);
+        const sessions = result.conversations.map(conversationSessionSummary);
+        return {
+          sessions,
+          total: sessions.length,
+          limit: sessions.length,
+          offset: 0,
+        };
       }
       case 'files': {
         const listing = await this.listFiles();
@@ -692,6 +853,41 @@ export class HermesCloudApi {
   }
 }
 
+export function mergeUnifiedConversationIndex(
+  conversations: readonly SingleConversation[],
+  officialSessions: readonly SessionSummary[],
+  profile = 'default',
+): SingleConversation[] {
+  const mappedSessionIds = new Set<string>();
+  for (const conversation of conversations) {
+    if (conversation.official_session_id) {
+      mappedSessionIds.add(conversation.official_session_id);
+    }
+    for (const sessionId of Object.values(conversation.runtime_sessions || {})) {
+      if (sessionId) mappedSessionIds.add(sessionId);
+    }
+  }
+  const officialConversations = officialSessions.flatMap((session): SingleConversation[] => {
+    if (!session.id || mappedSessionIds.has(session.id)) return [];
+    return [{
+      id: `official:${session.id}`,
+      profile,
+      title: session.title?.trim() || session.preview?.trim() || '官方会话',
+      messages: [],
+      message_count: Math.max(0, numberValue(session.message_count)),
+      runtime_sessions: {},
+      created_at: secondsToMilliseconds(session.started_at),
+      updated_at: secondsToMilliseconds(session.last_active || session.started_at),
+      official_session_id: session.id,
+      official_model: session.model || undefined,
+      preview: session.preview || undefined,
+    }];
+  });
+  return [...conversations, ...officialConversations].sort(
+    (left, right) => numberValue(right.updated_at) - numberValue(left.updated_at),
+  );
+}
+
 async function nativeFileBody(uri: string): Promise<Blob> {
   const { File: ExpoFile } = await import('expo-file-system');
   const file = new ExpoFile(uri);
@@ -702,4 +898,81 @@ async function nativeFileBody(uri: string): Promise<Blob> {
 function headersToObject(headers?: HeadersInit): Record<string, string> {
   if (!headers) return {};
   return Object.fromEntries(new Headers(headers).entries());
+}
+
+export function conversationSessionSummary(conversation: SingleConversation): SessionSummary {
+  const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+  const latestVisible = [...messages].reverse().find((message) => (
+    message.role === 'assistant' || message.role === 'user'
+  ));
+  const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+  const meta = isRecord(latestAssistant?.meta) ? latestAssistant.meta : {};
+  const provider = stringValue(meta.actual_provider);
+  const model = stringValue(meta.actual_model);
+  const createdAt = numberValue(conversation.created_at);
+  const updatedAt = numberValue(conversation.updated_at) || createdAt;
+  const running = hasRunningConversationRecord(conversation.runtime_runs)
+    || hasRunningConversationRecord(conversation.hosted_turns);
+  return {
+    id: conversation.id,
+    source: conversation.official_session_id ? 'official' : 'ios-unified',
+    model: conversation.official_model
+      || [provider, model].filter(Boolean).join('/')
+      || null,
+    title: conversation.title || null,
+    started_at: createdAt,
+    ended_at: running ? null : updatedAt,
+    last_active: updatedAt,
+    is_active: running,
+    message_count: numberValue(conversation.message_count) || messages.length,
+    tool_call_count: messages.reduce((count, message) => {
+      const activities = isRecord(message.meta) && Array.isArray(message.meta.activities)
+        ? message.meta.activities
+        : [];
+      return count + activities.filter((activity) => (
+        isRecord(activity) && activity.category === 'tool'
+      )).length;
+    }, 0),
+    input_tokens: 0,
+    output_tokens: 0,
+    preview: latestVisible?.content || conversation.preview || null,
+  };
+}
+
+function hasRunningConversationRecord(value?: Record<string, JsonRecord>): boolean {
+  return Object.values(value || {}).some((entry) => {
+    const status = stringValue(entry.status).toLowerCase();
+    return ['pending', 'queued', 'running', 'starting'].includes(status);
+  });
+}
+
+function customApiMode(value: unknown): CustomModelConfiguration['apiMode'] {
+  return value === 'anthropic_messages' || value === 'codex_responses'
+    ? value
+    : 'chat_completions';
+}
+
+function customReasoningEffort(value: unknown): CustomModelConfiguration['reasoningEffort'] {
+  const normalized = stringValue(value);
+  return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(normalized)
+    ? normalized as CustomModelConfiguration['reasoningEffort']
+    : 'medium';
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function numberValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function secondsToMilliseconds(value: unknown): number {
+  const number = numberValue(value);
+  if (!number) return 0;
+  return number < 10_000_000_000 ? number * 1000 : number;
 }

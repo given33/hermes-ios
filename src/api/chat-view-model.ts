@@ -18,6 +18,7 @@ export interface HermesChatActivity {
 
 export interface HermesChatViewMessage {
   activities?: HermesChatActivity[];
+  attachments?: HermesChatAttachment[];
   content: string;
   id: string;
   model?: string;
@@ -25,6 +26,14 @@ export interface HermesChatViewMessage {
   role: 'assistant' | 'user';
   roleLabel?: string;
   roleStage?: 'chat' | 'reporter' | 'reviewer' | 'worker';
+}
+
+export interface HermesChatAttachment {
+  downloadUrl: string;
+  id: string;
+  mimeType?: string;
+  name: string;
+  size?: number;
 }
 
 const TERMINAL_TURN_STATES = new Set([
@@ -38,10 +47,59 @@ export function conversationMessagesToView(
   conversation: SingleConversation,
   chinese = true,
 ): HermesChatViewMessage[] {
-  return (conversation.messages ?? []).flatMap((message) => {
+  const converted = (conversation.messages ?? []).flatMap((message) => {
     const converted = collaborationMessageToView(message, chinese);
     return converted ? [converted] : [];
   });
+  return deduplicateMessages(converted);
+}
+
+export function chatModelConfigurationError(
+  source: { custom?: unknown; info: unknown; options: unknown },
+  chinese = true,
+): string | null {
+  const info = isRecord(source.info) ? source.info : {};
+  const options = isRecord(source.options) ? source.options : {};
+  const custom = isRecord(source.custom) ? source.custom : {};
+  const model = stringValue(custom.model) || stringValue(info.model) || stringValue(options.model);
+  const provider = stringValue(info.provider) || stringValue(options.provider);
+  const customBaseUrl = stringValue(custom.baseUrl);
+  const customKeyConfigured = custom.apiKeyConfigured === true;
+  if (!model || (Object.keys(custom).length > 0 && (!customBaseUrl || !customKeyConfigured))) {
+    return chinese
+      ? '尚未配置可用模型。请先在“模型与工具”中填写 Base URL、API 密钥并选择模型。'
+      : 'No usable model is configured. Add a Base URL and API key, then select a model in Model & tools.';
+  }
+  const providers = Array.isArray(options.providers) ? options.providers : [];
+  const currentProvider = providers.find((entry) => {
+    if (!isRecord(entry)) return false;
+    const slug = stringValue(entry.slug) || stringValue(entry.name);
+    return Boolean(provider) && slug.toLowerCase() === provider.toLowerCase();
+  });
+  if (isRecord(currentProvider) && currentProvider.authenticated === false) {
+    return chinese
+      ? '当前模型没有可用的连接凭据。请在“模型与工具”中检查 Base URL 和 API 密钥后重试。'
+      : 'The current model has no usable credentials. Check its Base URL and API key in Model & tools.';
+  }
+  return null;
+}
+
+export function shouldRenderPendingMessage(
+  messages: HermesChatViewMessage[],
+  sending: boolean,
+): boolean {
+  return sending && messages[messages.length - 1]?.role !== 'assistant';
+}
+
+export function upsertChatMessage(
+  messages: HermesChatViewMessage[],
+  message: HermesChatViewMessage,
+): HermesChatViewMessage[] {
+  const index = messages.findIndex(({ id }) => id === message.id);
+  if (index < 0) return [...messages, message];
+  return messages.map((current, currentIndex) => (
+    currentIndex === index ? { ...current, ...message } : current
+  ));
 }
 
 export function collaborationMessageToView(
@@ -65,6 +123,7 @@ export function collaborationMessageToView(
   const model = stringValue(meta.actual_model);
   return {
     activities: mapActivities(meta.activities),
+    attachments: mapMessageAttachments(meta.attachments),
     content: message.content || '',
     id: message.id,
     model: [provider, model].filter(Boolean).join(' · ') || undefined,
@@ -73,6 +132,24 @@ export function collaborationMessageToView(
     roleLabel,
     roleStage,
   };
+}
+
+function mapMessageAttachments(value: unknown): HermesChatAttachment[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry): HermesChatAttachment[] => {
+    if (!isRecord(entry)) return [];
+    const downloadUrl = stringValue(entry.download_url);
+    const name = stringValue(entry.name);
+    if (!downloadUrl || !name) return [];
+    const size = numberValue(entry.size);
+    return [{
+      downloadUrl,
+      id: stringValue(entry.id) || downloadUrl,
+      mimeType: stringValue(entry.mime_type) || undefined,
+      name,
+      size: size > 0 ? size : undefined,
+    }];
+  });
 }
 
 export function conversationHasRunningWork(conversation: SingleConversation): boolean {
@@ -145,6 +222,21 @@ function mapActivities(value: unknown): HermesChatActivity[] | undefined {
     }];
   });
   return activities.length ? activities : undefined;
+}
+
+function deduplicateMessages(messages: HermesChatViewMessage[]): HermesChatViewMessage[] {
+  const indices = new Map<string, number>();
+  const result: HermesChatViewMessage[] = [];
+  for (const message of messages) {
+    const existingIndex = indices.get(message.id);
+    if (existingIndex === undefined) {
+      indices.set(message.id, result.length);
+      result.push(message);
+    } else {
+      result[existingIndex] = message;
+    }
+  }
+  return result;
 }
 
 function hasRunningRecord(records: SingleConversation['hosted_turns'] | undefined): boolean {

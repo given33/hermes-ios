@@ -24,6 +24,7 @@ import {
 } from './swiftui-route-contract';
 import {
   HermesCloudApi,
+  type CustomModelConfiguration,
   type ManagedFileEntry,
   type SessionSummary,
 } from '../api/HermesCloudApi';
@@ -94,7 +95,7 @@ export async function performHermesSwiftUIRouteAction(
   api: HermesCloudApi,
   event: HermesSwiftUIRouteActionEvent,
   profile: string,
-): Promise<'reload' | 'none'> {
+): Promise<'reload' | 'none' | { message: string; reload?: boolean }> {
   const { action, payload } = event;
   const value = payload.value?.trim() || payload.name?.trim() || '';
   switch (action) {
@@ -102,11 +103,19 @@ export async function performHermesSwiftUIRouteAction(
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete:
       if (!payload.id) return 'none';
-      await api.deleteSession(payload.id, profile);
+      if (payload.id.startsWith('official:')) {
+        await api.deleteSession(payload.id.slice('official:'.length), profile);
+      } else {
+        await api.deleteConversation(payload.id);
+      }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename:
       if (!payload.id || !value) return 'none';
-      await api.renameSession(payload.id, value, profile);
+      if (payload.id.startsWith('official:')) {
+        await api.renameSession(payload.id.slice('official:'.length), value, profile);
+      } else {
+        await api.renameConversation(payload.id, value);
+      }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileDelete:
       if (!payload.id) return 'none';
@@ -133,6 +142,18 @@ export async function performHermesSwiftUIRouteAction(
       if (!selection) return 'none';
       await api.setModel(selection.provider, selection.model, profile);
       return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.modelSave:
+      await api.saveCustomModel(customModelConfiguration(payload.fields), profile);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.modelTest: {
+      const result = await api.testCustomModel(customModelConfiguration(payload.fields), profile);
+      if (!result.ok || !result.reachable) {
+        throw new Error(result.message || `Model endpoint returned HTTP ${result.status || 0}`);
+      }
+      return {
+        message: result.message || `Model connection succeeded in ${result.latency_ms} ms`,
+      };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronCreate:
       await api.createCronJob({
@@ -286,6 +307,19 @@ export async function performHermesSwiftUIRouteAction(
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSelect:
       return 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationCreate: {
+      const profiles = (payload.fields?.profiles || '')
+        .split(',')
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      if (!value || !profiles.length) return 'none';
+      await api.createCollaborationRoom(value, profiles);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationDelete:
+      if (!payload.id) return 'none';
+      await api.deleteCollaborationRoom(payload.id);
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSend:
       if (!payload.id || !value) return 'none';
       await api.sendCollaborationRoomMessage(payload.id, value);
@@ -300,16 +334,6 @@ export async function performHermesSwiftUIRouteAction(
 
 function sessionsSnapshot(source: unknown): HermesSwiftUISessionSnapshot[] {
   if (!isRecord(source) || !Array.isArray(source.sessions)) return [];
-  const selectedId = stringValue(source.selectedId);
-  const selectedMessages = Array.isArray(source.selectedMessages)
-    ? source.selectedMessages
-    : [];
-  const transcript = selectedMessages.flatMap((entry): string[] => {
-    if (!isRecord(entry)) return [];
-    const role = stringValue(entry.role) || 'message';
-    const content = structuredContent(entry.content ?? entry.text);
-    return content ? [`${role}: ${content}`] : [];
-  }).join('\n\n');
   return source.sessions
     .filter(isSessionSummary)
     .map((session) => ({
@@ -318,10 +342,18 @@ function sessionsSnapshot(source: unknown): HermesSwiftUISessionSnapshot[] {
       model: session.model?.trim() || 'Hermes',
       date: formatTimestamp(session.last_active || session.started_at),
       running: session.is_active,
-      detail: session.id === selectedId && transcript
-        ? transcript
-        : `${session.message_count} 条消息 · ${session.tool_call_count} 次工具调用`,
+      detail: `${session.message_count} 条消息 · ${session.tool_call_count} 次工具调用`,
     }));
+}
+
+export function createHermesSwiftUISessionsSnapshot(
+  source: unknown,
+): HermesSwiftUIRouteSnapshot {
+  return {
+    version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+    route: 'sessions',
+    sessions: sessionsSnapshot(source),
+  };
 }
 
 function filesSnapshot(source: unknown): HermesSwiftUIFileSnapshot[] {
@@ -379,37 +411,53 @@ function analyticsSnapshot(source: unknown) {
 function modelsSnapshot(source: unknown): HermesSwiftUIModelSnapshot[] {
   if (!isRecord(source)) return [];
   const info = isRecord(source.info) ? source.info : {};
-  const options = isRecord(source.options) ? source.options : {};
-  const currentModel = stringValue(info.model) || stringValue(options.model);
-  const currentProvider = stringValue(info.provider) || stringValue(options.provider);
-  const providers = Array.isArray(options.providers) ? options.providers : [];
-  const rows: HermesSwiftUIModelSnapshot[] = [];
-  for (const providerEntry of providers) {
-    if (!isRecord(providerEntry)) continue;
-    const provider = stringValue(providerEntry.slug) || stringValue(providerEntry.name);
-    const models = Array.isArray(providerEntry.models)
-      ? providerEntry.models.filter((model): model is string => typeof model === 'string')
-      : [];
-    for (const model of models) {
-      rows.push({
-        id: encodeModelSelection(provider, model),
-        provider,
-        context: provider === currentProvider && model === currentModel
-          ? formatContextLength(numberValue(info.effective_context_length))
-          : '',
-        active: provider === currentProvider && model === currentModel,
-      });
-    }
-  }
-  if (currentModel && !rows.some((row) => row.active)) {
-    rows.unshift({
-      id: encodeModelSelection(currentProvider, currentModel),
-      provider: currentProvider,
-      context: formatContextLength(numberValue(info.effective_context_length)),
-      active: true,
-    });
-  }
-  return rows;
+  const custom = isRecord(source.custom) ? source.custom : {};
+  const currentModel = stringValue(custom.model) || stringValue(info.model);
+  if (!currentModel) return [];
+  return [{
+    id: encodeModelSelection('custom', currentModel),
+    model: currentModel,
+    provider: 'custom',
+    context: formatContextLength(
+      numberValue(custom.contextLength) || numberValue(info.effective_context_length),
+    ),
+    baseUrl: stringValue(custom.baseUrl),
+    apiKeyConfigured: custom.apiKeyConfigured === true,
+    apiKeyPreview: stringValue(custom.apiKeyPreview),
+    apiMode: customApiMode(stringValue(custom.apiMode)),
+    contextLength: numberValue(custom.contextLength) || numberValue(info.effective_context_length),
+    reasoningEffort: customReasoningEffort(stringValue(custom.reasoningEffort)),
+    active: true,
+  }];
+}
+
+function customModelConfiguration(
+  fields: Readonly<Record<string, string>> | undefined,
+): CustomModelConfiguration {
+  const source = fields || {};
+  const contextLength = Number.parseInt(source.contextLength || '', 10);
+  const configuration: CustomModelConfiguration = {
+    apiMode: customApiMode(source.apiMode),
+    baseUrl: source.baseUrl?.trim() || '',
+    contextLength: Number.isFinite(contextLength) ? contextLength : 0,
+    model: source.model?.trim() || '',
+    reasoningEffort: customReasoningEffort(source.reasoningEffort),
+  };
+  if (source.apiKey?.trim()) configuration.apiKey = source.apiKey.trim();
+  return configuration;
+}
+
+function customApiMode(value: string): CustomModelConfiguration['apiMode'] {
+  return value === 'anthropic_messages' || value === 'codex_responses'
+    ? value
+    : 'chat_completions';
+}
+
+function customReasoningEffort(value: string): CustomModelConfiguration['reasoningEffort'] {
+  const valid = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
+  return valid.includes(value as typeof valid[number])
+    ? value as CustomModelConfiguration['reasoningEffort']
+    : 'none';
 }
 
 function logsSnapshot(source: unknown, chinese: boolean): HermesSwiftUILogSnapshot[] {
@@ -574,6 +622,11 @@ function collaborationSnapshot(source: unknown): HermesSwiftUICollaborationSnaps
   const messages = selected && Array.isArray(selected.messages) ? selected.messages : [];
   return {
     selectedRoomId: selectedId,
+    availableProfiles: Array.isArray(root.profiles)
+      ? root.profiles.flatMap((entry) => isRecord(entry) && stringValue(entry.name)
+        ? [stringValue(entry.name)]
+        : [])
+      : [],
     rooms: conversations.flatMap((entry, index) => isRecord(entry) ? [{
       id: stringValue(entry.id) || `room-${index}`,
       name: stringValue(entry.title) || stringValue(entry.name) || `Room ${index + 1}`,
@@ -611,7 +664,7 @@ function kanbanSnapshot(source: unknown, chinese: boolean): HermesSwiftUIKanbanC
 
 function kanbanColumn(entry: unknown, index: number, chinese: boolean): HermesSwiftUIKanbanColumnSnapshot[] {
   if (!isRecord(entry)) return [];
-  const id = stringValue(entry.id) || `column-${index}`;
+  const id = stringValue(entry.id) || stringValue(entry.name) || `column-${index}`;
   const cards = Array.isArray(entry.cards) ? entry.cards : Array.isArray(entry.tasks) ? entry.tasks : [];
   return [{
     id,
@@ -688,30 +741,57 @@ function systemSnapshot(source: unknown): HermesSwiftUISystemSnapshot {
   const root = isRecord(source) ? source : {};
   const status = isRecord(root.status) ? root.status : {};
   const stats = isRecord(root.stats) ? root.stats : {};
+  const managed = isRecord(root.managedNodes) ? root.managedNodes : {};
+  const managedNodes = Array.isArray(managed.nodes) ? managed.nodes.filter(isRecord) : [];
+  const nodeSnapshots = managedNodes.map((node) => {
+    const metrics = isRecord(node.metrics) ? node.metrics : {};
+    const memoryTotal = numberValue(metrics.memory_total_bytes);
+    const memoryAvailable = numberValue(metrics.memory_available_bytes);
+    const gatewayState = stringValue(node.gateway_state);
+    const gatewayOnline = node.online === true
+      && ['active', 'online', 'ready', 'running'].includes(gatewayState.toLowerCase());
+    return {
+      id: stringValue(node.id),
+      label: stringValue(node.label) || stringValue(node.id),
+      cpu: numberValue(metrics.cpu_percent),
+      memory: numberValue(metrics.memory_percent),
+      disk: numberValue(metrics.disk_percent),
+      memoryLabel: formatBytes(Math.max(0, memoryTotal - memoryAvailable)),
+      uptimeLabel: formatDuration(numberValue(metrics.uptime_seconds)),
+      activeTasks: String(node.active_tasks ?? '-'),
+      gatewayOnline,
+      gatewayState,
+      version: stringValue(node.version) || stringValue(node.gateway_version),
+      observedAt: stringValue(node.observed_at),
+      metricsSource: stringValue(node.metrics_source),
+    };
+  }).filter((node) => node.id);
+  const primaryNode = nodeSnapshots.find((node) => node.id === 'dbb3') || nodeSnapshots[0];
   const memory = isRecord(stats.memory) ? stats.memory : {};
   const disk = isRecord(stats.disk) ? stats.disk : {};
   const gateway = isRecord(status.gateway) ? status.gateway : {};
   return {
-    cpu: numberValue(stats.cpu_percent ?? stats.cpu),
-    memory: numberValue(stats.memory_percent ?? memory.percent),
-    disk: numberValue(stats.disk_percent ?? disk.percent),
-    memoryLabel: stringValue(stats.memory_label)
+    cpu: primaryNode?.cpu ?? numberValue(stats.cpu_percent ?? stats.cpu),
+    memory: primaryNode?.memory ?? numberValue(stats.memory_percent ?? memory.percent),
+    disk: primaryNode?.disk ?? numberValue(stats.disk_percent ?? disk.percent),
+    memoryLabel: primaryNode?.memoryLabel || stringValue(stats.memory_label)
       || formatBytes(numberValue(stats.memory_bytes ?? memory.used)),
-    uptimeLabel: stringValue(stats.uptime)
+    uptimeLabel: primaryNode?.uptimeLabel || stringValue(stats.uptime)
       || formatDuration(numberValue(stats.uptime_seconds)),
-    activeTasks: String(
+    activeTasks: primaryNode?.activeTasks || String(
       stats.active_tasks
         ?? status.active_tasks
         ?? status.active_sessions
         ?? '-',
     ),
-    gatewayOnline: Boolean(
+    gatewayOnline: primaryNode?.gatewayOnline ?? Boolean(
       status.online
         ?? status.gateway_online
         ?? status.gateway_running
         ?? gateway.running
         ?? status.running,
     ),
+    nodes: nodeSnapshots,
     operationMessage: stringValue(root.operation_message) || undefined,
   };
 }

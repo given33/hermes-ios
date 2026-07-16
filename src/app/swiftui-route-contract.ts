@@ -35,8 +35,15 @@ export interface HermesSwiftUIAnalyticsSnapshot {
 
 export interface HermesSwiftUIModelSnapshot {
   id: string;
+  model: string;
   provider: string;
   context: string;
+  baseUrl: string;
+  apiKeyConfigured: boolean;
+  apiKeyPreview: string;
+  apiMode: 'anthropic_messages' | 'chat_completions' | 'codex_responses';
+  contextLength: number;
+  reasoningEffort: 'high' | 'low' | 'max' | 'medium' | 'minimal' | 'none' | 'ultra' | 'xhigh';
   active: boolean;
 }
 
@@ -115,6 +122,7 @@ export interface HermesSwiftUICollaborationMessageSnapshot {
 
 export interface HermesSwiftUICollaborationSnapshot {
   selectedRoomId?: string;
+  availableProfiles: readonly string[];
   rooms: readonly HermesSwiftUICollaborationRoomSnapshot[];
   messages: readonly HermesSwiftUICollaborationMessageSnapshot[];
 }
@@ -168,7 +176,24 @@ export interface HermesSwiftUISystemSnapshot {
   uptimeLabel: string;
   activeTasks: string;
   gatewayOnline: boolean;
+  nodes: readonly HermesSwiftUISystemNodeSnapshot[];
   operationMessage?: string;
+}
+
+export interface HermesSwiftUISystemNodeSnapshot {
+  id: string;
+  label: string;
+  cpu: number;
+  memory: number;
+  disk: number;
+  memoryLabel: string;
+  uptimeLabel: string;
+  activeTasks: string;
+  gatewayOnline: boolean;
+  gatewayState: string;
+  version: string;
+  observedAt: string;
+  metricsSource: string;
 }
 
 export interface HermesSwiftUIRouteSnapshot {
@@ -195,6 +220,7 @@ export interface HermesSwiftUIRouteSnapshot {
 export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   refresh: 'route.refresh',
   sessionSelect: 'session.select',
+  sessionOpen: 'session.open',
   sessionDelete: 'session.delete',
   sessionRename: 'session.rename',
   fileSelect: 'file.select',
@@ -203,6 +229,8 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   fileImport: 'file.import',
   folderCreate: 'folder.create',
   modelSelect: 'model.select',
+  modelSave: 'model.save',
+  modelTest: 'model.test',
   logsFilter: 'logs.filter',
   cronCreate: 'cron.create',
   cronToggle: 'cron.toggle',
@@ -235,6 +263,8 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   kanbanMove: 'kanban.move',
   kanbanDelete: 'kanban.delete',
   collaborationSelect: 'collaboration.select',
+  collaborationCreate: 'collaboration.create',
+  collaborationDelete: 'collaboration.delete',
   collaborationSend: 'collaboration.send',
 } as const;
 

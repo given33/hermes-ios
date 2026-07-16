@@ -1,4 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
+import { File as ExpoFile, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { SymbolView } from 'expo-symbols';
@@ -62,6 +63,7 @@ import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import type { HermesApiClient } from '../api/HermesApiClient';
+import type { SidebarGatewayStatus } from '../app/NativeShell';
 import { HermesChatStream, structuredText } from '../api/HermesChatStream';
 import { createNativeHermesChatStreamRuntime } from '../api/native-chat-stream-runtime';
 import {
@@ -70,11 +72,22 @@ import {
   type SingleConversation,
 } from '../api/HermesCloudApi';
 import {
+  ConversationLocalStore,
+  isCompleteConversation,
+  mergeDownloadedConversations,
+  reconcileConversationCache,
+  upsertCachedConversation,
+} from '../api/conversation-local-store';
+import {
   attachmentContext,
+  chatModelConfigurationError,
   conversationHasRunningWork,
   conversationMessagesToView,
+  shouldRenderPendingMessage,
   streamEventToActivity,
+  upsertChatMessage,
   type HermesChatActivity as ChatActivity,
+  type HermesChatAttachment as StoredChatAttachment,
   type HermesChatViewMessage as ChatMessage,
 } from '../api/chat-view-model';
 import { NativeButton } from '../components/ui/NativeButton';
@@ -141,26 +154,38 @@ const INITIAL_MESSAGES: ChatMessage[] = [
 ];
 
 interface ChatPreviewPageProps {
+  cacheOwner?: string;
   client?: HermesApiClient;
+  gatewayStatuses?: readonly SidebarGatewayStatus[];
   locale?: 'en' | 'zh';
   notify(message: string): void;
   notificationTarget?: HermesNotificationTarget | null;
   openNavigation?(): void;
+  onPreferredConversationConsumed?(conversationId: string): void;
+  preferredConversationId?: string;
   profile?: string;
 }
 
 export function ChatPreviewPage({
+  cacheOwner = '',
   client,
+  gatewayStatuses = [],
   locale = 'zh',
   notify,
   notificationTarget,
   openNavigation,
+  onPreferredConversationConsumed,
+  preferredConversationId = '',
   profile = 'default',
 }: ChatPreviewPageProps) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
   const { tokens } = useTheme();
   const cloudApi = useMemo(() => client ? new HermesCloudApi(client) : null, [client]);
+  const localStore = useMemo(
+    () => cacheOwner ? new ConversationLocalStore() : null,
+    [cacheOwner],
+  );
   const [content, setContent] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>(() => client ? [] : INITIAL_MESSAGES);
   const [conversations, setConversations] = useState<SingleConversation[]>([]);
@@ -176,6 +201,10 @@ export function ChatPreviewPage({
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeStream = useRef<HermesChatStream | null>(null);
   const activeConversationIdRef = useRef('');
+  const conversationIndexRef = useRef<SingleConversation[]>([]);
+  const conversationSyncGenerationRef = useRef(0);
+  const hydratedCacheOwnerRef = useRef('');
+  const cacheWriteRef = useRef<Promise<void>>(Promise.resolve());
   const runtimeSessionsRef = useRef<Record<string, string>>({});
   const pendingAttachmentCleanup = useRef<(() => void) | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
@@ -225,6 +254,26 @@ export function ChatPreviewPage({
     [keepLatestVisible],
   );
 
+  const persistConversationCache = useCallback((
+    conversations: readonly SingleConversation[],
+    activeId: string,
+  ) => {
+    if (!localStore || !cacheOwner) return;
+    cacheWriteRef.current = cacheWriteRef.current
+      .catch(() => undefined)
+      .then(() => localStore.write(cacheOwner, conversations, activeId));
+  }, [cacheOwner, localStore]);
+
+  const commitConversationIndex = useCallback((
+    conversations: readonly SingleConversation[],
+    activeId = activeConversationIdRef.current,
+  ) => {
+    const next = [...conversations];
+    conversationIndexRef.current = next;
+    setConversations(next);
+    persistConversationCache(next, activeId);
+  }, [persistConversationCache]);
+
   const applyConversation = useCallback((conversation: SingleConversation) => {
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
@@ -233,11 +282,24 @@ export function ChatPreviewPage({
     const running = conversationHasRunningWork(conversation);
     setHostedRunning(running);
     setSending(running);
-  }, [isChinese]);
+    commitConversationIndex(
+      upsertCachedConversation(conversationIndexRef.current, conversation),
+      conversation.id,
+    );
+  }, [commitConversationIndex, isChinese]);
 
-  const loadConversation = useCallback(async (conversationId: string) => {
+  const loadConversation = useCallback(async (
+    conversationId: string,
+    expectedGeneration = 0,
+  ) => {
     if (!cloudApi || !conversationId) return null;
     const result = await cloudApi.getConversation(conversationId);
+    if (
+      expectedGeneration
+      && expectedGeneration !== conversationSyncGenerationRef.current
+    ) {
+      return result.conversation;
+    }
     if (activeConversationIdRef.current && activeConversationIdRef.current !== conversationId) {
       return result.conversation;
     }
@@ -245,14 +307,94 @@ export function ChatPreviewPage({
     return result.conversation;
   }, [applyConversation, cloudApi]);
 
+  const openConversation = useCallback(async (
+    conversationId: string,
+    expectedGeneration = 0,
+  ) => {
+    if (!cloudApi || !conversationId) return null;
+    if (conversationId.startsWith('official:')) {
+      const placeholder = conversationIndexRef.current.find(({ id }) => id === conversationId);
+      const result = await cloudApi.adoptOfficialConversation(
+        conversationId,
+        placeholder?.profile || 'default',
+        placeholder?.title || '',
+      );
+      if (
+        expectedGeneration
+        && expectedGeneration !== conversationSyncGenerationRef.current
+      ) {
+        return result.conversation;
+      }
+      const next = upsertCachedConversation(
+        conversationIndexRef.current,
+        result.conversation,
+        conversationId,
+      );
+      conversationIndexRef.current = next;
+      applyConversation(result.conversation);
+      return result.conversation;
+    }
+    const cached = conversationIndexRef.current.find(({ id }) => id === conversationId);
+    if (cached && isCompleteConversation(cached)) {
+      if (
+        expectedGeneration
+        && expectedGeneration !== conversationSyncGenerationRef.current
+      ) {
+        return cached;
+      }
+      applyConversation(cached);
+      return cached;
+    }
+    return loadConversation(conversationId, expectedGeneration);
+  }, [applyConversation, cloudApi, loadConversation, profile]);
+
   const loadConversationIndex = useCallback(async (preferredId = '') => {
     if (!cloudApi) return;
-    const result = await cloudApi.getConversations();
-    setConversations(result.conversations);
-    const activeId = preferredId
-      || activeConversationIdRef.current
-      || result.conversations[0]?.id
-      || '';
+    const syncGeneration = ++conversationSyncGenerationRef.current;
+    let localConversations = conversationIndexRef.current;
+    let rememberedId = activeConversationIdRef.current;
+    if (localStore && cacheOwner && hydratedCacheOwnerRef.current !== cacheOwner) {
+      const cached = await localStore.read(cacheOwner);
+      if (syncGeneration !== conversationSyncGenerationRef.current) return;
+      hydratedCacheOwnerRef.current = cacheOwner;
+      if (cached) {
+        localConversations = cached.conversations;
+        rememberedId = cached.activeConversationId;
+        conversationIndexRef.current = localConversations;
+        setConversations(localConversations);
+        const immediateId = resolveConversationId(
+          preferredId || rememberedId || localConversations[0]?.id || '',
+          localConversations,
+        );
+        const immediate = localConversations.find(({ id }) => id === immediateId);
+        if (immediate && isCompleteConversation(immediate)) applyConversation(immediate);
+      }
+    }
+    const result = await cloudApi.getUnifiedConversations(profile);
+    if (syncGeneration !== conversationSyncGenerationRef.current) return;
+    const reconciliation = reconcileConversationCache(
+      localConversations,
+      result.conversations,
+    );
+    const downloaded = await mapWithConcurrency(
+      reconciliation.downloadIds,
+      4,
+      async (id) => (await cloudApi.getConversation(id)).conversation,
+    );
+    if (syncGeneration !== conversationSyncGenerationRef.current) return;
+    const synchronized = mergeDownloadedConversations(
+      reconciliation.conversations,
+      downloaded,
+    );
+    const activeId = resolveConversationId(
+      preferredId
+        || activeConversationIdRef.current
+        || rememberedId
+        || synchronized[0]?.id
+        || '',
+      synchronized,
+    );
+    commitConversationIndex(synchronized, activeId);
     if (!activeId) {
       activeConversationIdRef.current = '';
       setActiveConversationId('');
@@ -261,16 +403,30 @@ export function ChatPreviewPage({
       setSending(false);
       return;
     }
-    activeConversationIdRef.current = activeId;
-    await loadConversation(activeId);
-  }, [cloudApi, loadConversation]);
+    await openConversation(activeId, syncGeneration);
+  }, [
+    applyConversation,
+    cacheOwner,
+    cloudApi,
+    commitConversationIndex,
+    localStore,
+    openConversation,
+    profile,
+  ]);
 
   useEffect(() => {
     if (!cloudApi) return undefined;
     let disposed = false;
-    void loadConversationIndex(notificationTarget?.conversationId).catch((error) => {
-      if (!disposed) notify(serverFailure(error, isChinese));
-    });
+    const requestedConversationId = preferredConversationId || notificationTarget?.conversationId;
+    void loadConversationIndex(requestedConversationId)
+      .then(() => {
+        if (!disposed && preferredConversationId) {
+          onPreferredConversationConsumed?.(preferredConversationId);
+        }
+      })
+      .catch((error) => {
+        if (!disposed) notify(serverFailure(error, isChinese));
+      });
     const appState = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       void loadConversationIndex(activeConversationIdRef.current).catch((error) => {
@@ -279,10 +435,7 @@ export function ChatPreviewPage({
     });
     const indexTimer = setInterval(() => {
       if (AppState.currentState !== 'active' || activeStream.current) return;
-      void cloudApi.getConversations()
-        .then((result) => {
-          if (!disposed) setConversations(result.conversations);
-        })
+      void loadConversationIndex(activeConversationIdRef.current)
         .catch(() => {});
     }, 15_000);
     return () => {
@@ -297,14 +450,19 @@ export function ChatPreviewPage({
     notificationTarget?.conversationId,
     notificationTarget?.notificationId,
     notify,
+    onPreferredConversationConsumed,
+    preferredConversationId,
   ]);
 
   useEffect(() => {
-    if (!cloudApi || !activeConversationId || activeStream.current) return undefined;
+    if (!cloudApi || !activeConversationId || activeStream.current || !hostedRunning) {
+      return undefined;
+    }
     const interval = setInterval(() => {
       if (AppState.currentState !== 'active' || activeStream.current) return;
-      void loadConversation(activeConversationId).catch(() => {});
-    }, hostedRunning ? 1_000 : 4_000);
+      const generation = ++conversationSyncGenerationRef.current;
+      void loadConversation(activeConversationId, generation).catch(() => {});
+    }, 1_000);
     return () => clearInterval(interval);
   }, [activeConversationId, cloudApi, hostedRunning, loadConversation]);
 
@@ -328,10 +486,6 @@ export function ChatPreviewPage({
     if (cloudApi) {
       try {
         const result = await cloudApi.createConversation(profile, isChinese ? '新对话' : 'New conversation');
-        setConversations((current) => [
-          result.conversation,
-          ...current.filter((item) => item.id !== result.conversation.id),
-        ]);
         applyConversation(result.conversation);
       } catch (error) {
         notify(serverFailure(error, isChinese));
@@ -350,6 +504,44 @@ export function ChatPreviewPage({
     const trimmed = currentContent.trim();
     if ((!trimmed && attachmentCount === 0) || sending) return;
     const pendingAttachments = [...attachments];
+    const configurationErrorId = `model-configuration-${activeConversationIdRef.current || 'new'}`;
+    if (cloudApi && client) {
+      setSending(true);
+      try {
+        const modelConfiguration = await cloudApi.getModels(profile);
+        const configurationError = chatModelConfigurationError(
+          modelConfiguration,
+          isChinese,
+        );
+        if (configurationError) {
+          setMessages((current) => upsertChatMessage(current, {
+            content: configurationError,
+            id: configurationErrorId,
+            name: 'Hermes Agent',
+            role: 'assistant',
+            roleLabel: isChinese ? '配置错误' : 'Configuration error',
+            roleStage: 'chat',
+          }));
+          notify(configurationError);
+          setSending(false);
+          return;
+        }
+        setMessages((current) => current.filter(({ id }) => id !== configurationErrorId));
+      } catch (error) {
+        const failure = serverFailure(error, isChinese);
+        setMessages((current) => upsertChatMessage(current, {
+          content: failure,
+          id: configurationErrorId,
+          name: 'Hermes Agent',
+          role: 'assistant',
+          roleLabel: isChinese ? '配置检查失败' : 'Configuration check failed',
+          roleStage: 'chat',
+        }));
+        notify(failure);
+        setSending(false);
+        return;
+      }
+    }
     const userMessageId = `user-${Date.now()}`;
     const userMessage: ChatMessage = {
       content: trimmed || (isChinese ? `已添加 ${attachmentCount} 个附件` : `${attachmentCount} attachments`),
@@ -385,6 +577,7 @@ export function ChatPreviewPage({
     }
 
     let keepServerRunning = false;
+    let streamId = '';
     try {
       let conversationId = activeConversationIdRef.current;
       if (!conversationId) {
@@ -395,7 +588,10 @@ export function ChatPreviewPage({
         conversationId = created.conversation.id;
         activeConversationIdRef.current = conversationId;
         setActiveConversationId(conversationId);
-        setConversations((current) => [created.conversation, ...current]);
+        commitConversationIndex(
+          upsertCachedConversation(conversationIndexRef.current, created.conversation),
+          conversationId,
+        );
       }
 
       const uploaded: Record<string, unknown>[] = [];
@@ -452,11 +648,12 @@ export function ChatPreviewPage({
         });
         keepServerRunning = true;
         setHostedRunning(true);
-        await loadConversation(conversationId);
+        const generation = ++conversationSyncGenerationRef.current;
+        await loadConversation(conversationId, generation);
         return;
       }
 
-      const streamId = uniqueTurnId('stream');
+      streamId = uniqueTurnId('stream');
       let accumulatedText = '';
       let activities: ChatActivity[] = [];
       let actualModel = '';
@@ -473,9 +670,7 @@ export function ChatPreviewPage({
             : message
         )));
       };
-      setMessages((current) => [
-        ...current,
-        {
+      setMessages((current) => upsertChatMessage(current, {
           activities: [],
           content: '',
           id: streamId,
@@ -483,8 +678,7 @@ export function ChatPreviewPage({
           role: 'assistant',
           roleLabel: 'Hermes Agent',
           roleStage: 'chat',
-        },
-      ]);
+        }));
       const stream = new HermesChatStream(client, async (event) => {
         const payload = event.payload;
         if (event.type === 'session.ready') {
@@ -557,26 +751,24 @@ export function ChatPreviewPage({
       await cloudApi.recordConversationMessage(conversationId, assistantMessage);
       await cloudApi.saveRuntimeSession(
         conversationId,
-        'default',
+        profile,
         result.storedSessionId,
         streamId,
-        'completed',
+        result.status === 'error' ? 'failed' : 'completed',
       );
       await loadConversationIndex(conversationId);
     } catch (error) {
       if (!(error instanceof Error && error.name === 'HermesStreamDetachedError')) {
         notify(serverFailure(error, isChinese));
-        setMessages((current) => [
-          ...current,
-          {
-            content: serverFailure(error, isChinese),
-            id: uniqueTurnId('error'),
+        const failure = serverFailure(error, isChinese);
+        setMessages((current) => upsertChatMessage(current, {
+            content: failure,
+            id: streamId || uniqueTurnId('error'),
             name: 'Hermes Agent',
             role: 'assistant',
             roleLabel: isChinese ? '执行失败' : 'Failed',
             roleStage: 'chat',
-          },
-        ]);
+          }));
       }
     } finally {
       activeStream.current = null;
@@ -605,10 +797,9 @@ export function ChatPreviewPage({
     setContent('');
     contentRef.current = '';
     setAttachments([]);
-    activeConversationIdRef.current = conversationId;
-    setActiveConversationId(conversationId);
     try {
-      await loadConversation(conversationId);
+      const generation = ++conversationSyncGenerationRef.current;
+      await openConversation(conversationId, generation);
     } catch (error) {
       notify(serverFailure(error, isChinese));
     }
@@ -768,6 +959,32 @@ export function ChatPreviewPage({
     Keyboard.dismiss();
   };
 
+  const openStoredAttachment = async (
+    attachment: StoredChatAttachment,
+    share = false,
+  ) => {
+    if (!cloudApi) return;
+    try {
+      const target = new ExpoFile(
+        Paths.cache,
+        `${stableStringHash(attachment.downloadUrl)}-${attachment.name.replace(/[\\/:*?"<>|]+/g, '_')}`,
+      );
+      if (!target.exists) {
+        const blob = await cloudApi.downloadConversationAttachment(attachment.downloadUrl);
+        target.write(new Uint8Array(await blob.arrayBuffer()));
+      }
+      if (!share && await presentQuickLook(target.uri, attachment.name)) return;
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(target.uri, {
+          dialogTitle: attachment.name,
+          mimeType: attachment.mimeType,
+        });
+      }
+    } catch (error) {
+      notify(serverFailure(error, isChinese));
+    }
+  };
+
   return (
     <Reanimated.View
       style={[
@@ -839,6 +1056,31 @@ export function ChatPreviewPage({
               </View>
             </View>
             <View style={styles.headerControls}>
+              <View style={styles.gatewayStatuses}>
+                {gatewayStatuses.map((gateway) => (
+                  <View key={gateway.id} style={styles.gatewayStatusRow}>
+                    <View
+                      accessibilityLabel={`${gateway.label} ${gateway.state}`}
+                      style={[
+                        styles.gatewayStatusDot,
+                        {
+                          backgroundColor: gateway.state === 'online'
+                            ? tokens.colors.success
+                            : gateway.state === 'degraded'
+                              ? tokens.colors.warning
+                              : tokens.colors.destructive,
+                        },
+                      ]}
+                    />
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.gatewayStatusText, { color: tokens.colors.textSecondary }]}
+                    >
+                      {`${gateway.label}${gateway.version ? ` · ${gateway.version.split(' ')[0]}` : ''}`}
+                    </Text>
+                  </View>
+                ))}
+              </View>
               <IOSPressable
                 accessibilityLabel={isChinese ? '模型与工具' : 'Model and tools'}
                 onPress={() => {
@@ -903,9 +1145,16 @@ export function ChatPreviewPage({
                 </Text>
               </Reanimated.View>
             ) : messages.map((message, index) => (
-              <UnifiedMessage index={index} key={message.id} message={message} />
+              <UnifiedMessage
+                index={index}
+                key={message.id}
+                message={message}
+                onOpenAttachment={openStoredAttachment}
+              />
             ))}
-            {sending ? <PendingMessage index={messages.length} /> : null}
+            {shouldRenderPendingMessage(messages, sending)
+              ? <PendingMessage index={messages.length} />
+              : null}
           </ScrollView>
 
           <Reanimated.View
@@ -1235,6 +1484,53 @@ function uniqueTurnId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function stableStringHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function resolveConversationId(
+  requestedId: string,
+  conversations: readonly SingleConversation[],
+): string {
+  if (!requestedId) return conversations[0]?.id || '';
+  if (conversations.some(({ id }) => id === requestedId)) return requestedId;
+  if (requestedId.startsWith('official:')) {
+    const sessionId = requestedId.slice('official:'.length);
+    const adopted = conversations.find((conversation) => (
+      conversation.official_session_id === sessionId
+      || Object.values(conversation.runtime_sessions || {}).includes(sessionId)
+    ));
+    if (adopted) return adopted.id;
+  }
+  return conversations[0]?.id || '';
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+): Promise<R[]> {
+  if (!values.length) return [];
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await operation(values[index]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, worker),
+  );
+  return results;
+}
+
 function mergeStreamActivity(
   current: ChatActivity[],
   next: ChatActivity,
@@ -1315,7 +1611,15 @@ function ConversationHistory({
   );
 }
 
-function UnifiedMessage({ index, message }: { index: number; message: ChatMessage }) {
+function UnifiedMessage({
+  index,
+  message,
+  onOpenAttachment,
+}: {
+  index: number;
+  message: ChatMessage;
+  onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
+}) {
   const { tokens } = useTheme();
   const isUser = message.role === 'user';
   return (
@@ -1366,6 +1670,45 @@ function UnifiedMessage({ index, message }: { index: number; message: ChatMessag
           ]}
         >
           <Text style={[styles.messageText, { color: tokens.colors.foreground }]}>{message.content}</Text>
+          {message.attachments?.length ? (
+            <View style={styles.storedAttachments}>
+              {message.attachments.map((attachment) => (
+                <IOSContextMenu
+                  accessibilityLabel={`打开附件 ${attachment.name}`}
+                  actions={[
+                    {
+                      id: 'preview',
+                      onPress: () => onOpenAttachment(attachment),
+                      systemImage: 'doc.text.magnifyingglass',
+                      title: '快速查看',
+                    },
+                    {
+                      id: 'share',
+                      onPress: () => onOpenAttachment(attachment, true),
+                      systemImage: 'square.and.arrow.up',
+                      title: '分享',
+                    },
+                  ]}
+                  key={attachment.id}
+                  onPress={() => onOpenAttachment(attachment)}
+                  style={styles.storedAttachment}
+                >
+                  <File color={tokens.colors.primary} size={18} strokeWidth={1.7} />
+                  <View style={styles.storedAttachmentCopy}>
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.storedAttachmentName, { color: tokens.colors.foreground }]}
+                    >
+                      {attachment.name}
+                    </Text>
+                    <Text style={[styles.storedAttachmentSize, { color: tokens.colors.textSecondary }]}>
+                      {formatAttachmentSize(attachment.size)}
+                    </Text>
+                  </View>
+                </IOSContextMenu>
+              ))}
+            </View>
+          ) : null}
         </View>
       </View>
     </Reanimated.View>
@@ -1795,6 +2138,10 @@ const styles = StyleSheet.create({
   headingTitleCompact: { fontSize: 12, lineHeight: 16 },
   headingSubtitle: { fontFamily: BODY_REGULAR, fontSize: 10, lineHeight: 14 },
   headerControls: { alignItems: 'center', flexDirection: 'row', gap: 4, justifyContent: 'flex-end' },
+  gatewayStatuses: { gap: 2, justifyContent: 'center', maxWidth: 94 },
+  gatewayStatusRow: { alignItems: 'center', flexDirection: 'row', gap: 4, height: 13 },
+  gatewayStatusDot: { borderRadius: 3, height: 6, width: 6 },
+  gatewayStatusText: { flexShrink: 1, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10 },
   modelTools: { alignItems: 'center', borderRadius: 8, borderWidth: 1, height: 32, justifyContent: 'center', paddingHorizontal: 7 },
   modelToolsText: { fontFamily: BODY_BOLD, fontSize: 9, lineHeight: 12 },
   liveDot: { backgroundColor: '#20a879', borderRadius: 4, height: 8, marginHorizontal: 5, width: 8 },
@@ -1858,6 +2205,11 @@ const styles = StyleSheet.create({
   attachmentSize: { fontFamily: BODY_REGULAR, fontSize: 11, lineHeight: 15, marginTop: 2 },
   attachmentRemove: { alignItems: 'center', height: 30, justifyContent: 'center', position: 'absolute', right: -8, top: -8, width: 30, zIndex: 3 },
   attachmentRemoveFallback: { alignItems: 'center', backgroundColor: '#636366', borderRadius: 11, height: 22, justifyContent: 'center', width: 22 },
+  storedAttachments: { gap: 6, marginTop: 10 },
+  storedAttachment: { alignItems: 'center', flexDirection: 'row', gap: 8, minHeight: 38 },
+  storedAttachmentCopy: { flex: 1, minWidth: 0 },
+  storedAttachmentName: { fontFamily: BODY_MEDIUM, fontSize: 12, lineHeight: 16 },
+  storedAttachmentSize: { fontFamily: BODY_REGULAR, fontSize: 10, lineHeight: 13 },
   inputShell: { alignItems: 'flex-end', alignSelf: 'center', borderRadius: 15, borderWidth: 1, flexDirection: 'row', gap: 4, maxWidth: 920, overflow: 'hidden', paddingBottom: 5, paddingLeft: 5, paddingRight: 5, paddingTop: 5, position: 'relative', width: '100%' },
   composerFrostedBackground: { zIndex: 0 },
   composerFrostedTint: { zIndex: 0 },

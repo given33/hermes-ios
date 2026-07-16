@@ -51,6 +51,15 @@ test('analytics and model snapshots do not invent unavailable server values', as
       },
     },
     models: {
+      custom: {
+        apiKeyConfigured: true,
+        apiKeyPreview: 'sk-••••',
+        apiMode: 'chat_completions',
+        baseUrl: 'https://model.example/v1',
+        contextLength: 200000,
+        model: 'model-a',
+        reasoningEffort: 'high',
+      },
       info: {
         effective_context_length: 200000,
         model: 'model-a',
@@ -76,10 +85,23 @@ test('analytics and model snapshots do not invent unavailable server values', as
     label: '07/16',
     output: 400,
   });
-  assert.equal(models.models?.find((model) => model.active)?.provider, 'provider-a');
+  assert.equal(models.models?.find((model) => model.active)?.provider, 'custom');
+  assert.deepEqual(models.models?.[0], {
+    active: true,
+    apiKeyConfigured: true,
+    apiKeyPreview: 'sk-••••',
+    apiMode: 'chat_completions',
+    baseUrl: 'https://model.example/v1',
+    context: '20万 context',
+    contextLength: 200000,
+    id: encodeModelSelection('custom', 'model-a'),
+    model: 'model-a',
+    provider: 'custom',
+    reasoningEffort: 'high',
+  });
   assert.deepEqual(
     decodeModelSelection(models.models?.[0].id ?? ''),
-    { model: 'model-a', provider: 'provider-a' },
+    { model: 'model-a', provider: 'custom' },
   );
   assert.equal(decodeModelSelection('provider/model'), null);
 });
@@ -87,8 +109,13 @@ test('analytics and model snapshots do not invent unavailable server values', as
 test('native route actions mutate the server and request a fresh snapshot', async () => {
   const calls: unknown[][] = [];
   const api = {
-    deleteSession: async (...args: unknown[]) => { calls.push(['delete', ...args]); },
+    deleteConversation: async (...args: unknown[]) => { calls.push(['delete', ...args]); },
+    saveCustomModel: async (...args: unknown[]) => { calls.push(['model-save', ...args]); },
     setModel: async (...args: unknown[]) => { calls.push(['model', ...args]); },
+    testCustomModel: async (...args: unknown[]) => {
+      calls.push(['model-test', ...args]);
+      return { latency_ms: 84, message: '连接成功', ok: true, reachable: true, status: 200 };
+    },
   } as unknown as HermesCloudApi;
 
   const deleted = await performHermesSwiftUIRouteAction(api, {
@@ -102,12 +129,40 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
       route: 'models',
     },
   }, 'reviewer');
+  const fields = {
+    apiKey: 'secret',
+    apiMode: 'chat_completions',
+    baseUrl: 'https://model.example/v1',
+    contextLength: '131072',
+    model: 'model-a',
+    reasoningEffort: 'high',
+  };
+  const saved = await performHermesSwiftUIRouteAction(api, {
+    action: 'model.save',
+    payload: { fields, route: 'models' },
+  }, 'reviewer');
+  const tested = await performHermesSwiftUIRouteAction(api, {
+    action: 'model.test',
+    payload: { fields, route: 'models' },
+  }, 'reviewer');
 
   assert.equal(deleted, 'reload');
   assert.equal(selected, 'reload');
+  assert.equal(saved, 'reload');
+  assert.deepEqual(tested, { message: '连接成功' });
+  const custom = {
+    apiKey: 'secret',
+    apiMode: 'chat_completions',
+    baseUrl: 'https://model.example/v1',
+    contextLength: 131072,
+    model: 'model-a',
+    reasoningEffort: 'high',
+  };
   assert.deepEqual(calls, [
-    ['delete', 'session-1', 'reviewer'],
+    ['delete', 'session-1'],
     ['model', 'provider-a', 'model-a', 'reviewer'],
+    ['model-save', custom, 'reviewer'],
+    ['model-test', custom, 'reviewer'],
   ]);
 });
 
@@ -181,6 +236,57 @@ test('all native management routes render the current cloud workspace response',
   assert.equal(system.system?.memory, 53);
   assert.equal(system.system?.disk, 31);
   assert.equal(system.system?.uptimeLabel, '14天 1小时');
+});
+
+test('system snapshots expose real DBB3 and WSL gateway metrics and versions', async () => {
+  const api = {
+    loadRoute: async () => ({
+      managedNodes: {
+        nodes: [
+          {
+            id: 'dbb3',
+            label: 'DBB3',
+            online: true,
+            gateway_state: 'active',
+            version: 'v0.18.2 (2026.7.7.2)',
+            active_tasks: 2,
+            observed_at: '2026-07-16T10:00:00Z',
+            metrics_source: 'linux_procfs',
+            metrics: {
+              cpu_percent: 21,
+              memory_percent: 63,
+              disk_percent: 35,
+              memory_total_bytes: 8_000,
+              memory_available_bytes: 3_000,
+              uptime_seconds: 3_600,
+            },
+          },
+          {
+            id: 'wsl',
+            label: 'WSL',
+            online: true,
+            gateway_state: 'active',
+            version: 'v0.18.3 (2026.7.8.1)',
+            active_tasks: 0,
+            observed_at: '2026-07-16T10:00:00Z',
+            metrics_source: 'windows_psutil_push',
+            metrics: { cpu_percent: 12, memory_percent: 54, disk_percent: 42 },
+          },
+        ],
+      },
+      status: {},
+      stats: {},
+    }),
+  } as unknown as HermesCloudApi;
+
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'system', 'default');
+
+  assert.equal(snapshot.system?.gatewayOnline, true);
+  assert.equal(snapshot.system?.cpu, 21);
+  assert.equal(snapshot.system?.nodes.length, 2);
+  assert.equal(snapshot.system?.nodes[0].version, 'v0.18.2 (2026.7.7.2)');
+  assert.equal(snapshot.system?.nodes[1].version, 'v0.18.3 (2026.7.8.1)');
+  assert.equal(snapshot.system?.nodes[1].metricsSource, 'windows_psutil_push');
 });
 
 test('native management actions write through the canonical cloud APIs', async () => {

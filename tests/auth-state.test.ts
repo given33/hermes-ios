@@ -8,6 +8,7 @@ import {
   authReducer,
   bootstrapSavedConnection,
   initialAuthState,
+  MAX_FACE_ID_ATTEMPTS,
 } from '../src/auth/auth-state';
 import {
   ACCESS_EXPIRES_AT_STORAGE_KEY,
@@ -19,6 +20,8 @@ import {
   REFRESH_TOKEN_KEY_PREFIX,
   REFRESH_TOKEN_POINTER_STORAGE_KEY,
   REFRESH_TOKEN_STORAGE_KEY,
+  REMEMBER_LOGIN_STORAGE_KEY,
+  REMEMBERED_PASSWORD_STORAGE_KEY,
   USERNAME_STORAGE_KEY,
   type SavedConnection,
 } from '../src/auth/credential-contract';
@@ -127,6 +130,7 @@ test('auth reducer preserves retryable Face ID unlock behavior', () => {
     status: 'locked',
     baseUrl: 'https://hermes.test',
     busy: true,
+    failedAttempts: 0,
   });
   assert.deepEqual(
     authReducer(retrying, {
@@ -137,9 +141,38 @@ test('auth reducer preserves retryable Face ID unlock behavior', () => {
       status: 'locked',
       baseUrl: 'https://hermes.test',
       busy: false,
+      failedAttempts: 1,
       error: '无法解锁连接，请重试。',
     },
   );
+});
+
+test('Face ID stays retryable through four failures and falls back on the fifth', () => {
+  let state = authReducer(initialAuthState, {
+    type: 'BOOTSTRAP_LOCKED',
+    baseUrl: session.baseUrl,
+  });
+  for (let attempt = 1; attempt < MAX_FACE_ID_ATTEMPTS; attempt += 1) {
+    state = authReducer(authReducer(state, { type: 'UNLOCK_STARTED' }), {
+      type: 'UNLOCK_FAILED',
+      error: 'Face ID 验证失败，请重试。',
+      fallbackError: '请使用账号密码登录。',
+    });
+    assert.equal(state.status, 'locked');
+    if (state.status === 'locked') assert.equal(state.failedAttempts, attempt);
+  }
+  state = authReducer(authReducer(state, { type: 'UNLOCK_STARTED' }), {
+    type: 'UNLOCK_FAILED',
+    error: 'Face ID 验证失败，请重试。',
+    fallbackError: '请使用账号密码登录。',
+  });
+  assert.deepEqual(state, {
+    status: 'provisioning',
+    mode: 'login',
+    setupTokenRequired: false,
+    busy: false,
+    error: '请使用账号密码登录。',
+  });
 });
 
 test('cold start reads base URL, protected refresh token, then session metadata', async () => {
@@ -259,12 +292,31 @@ test('SecureStore protects only refresh-token reads and writes with Face ID', as
     'hermes.native.refreshTokenKey',
     'hermes.native.accessExpiresAt',
     'hermes.native.deviceId',
+    'hermes.native.rememberLogin',
+    'hermes.native.rememberedPassword',
   ]);
   assert.equal(await store.readBaseUrl(), session.baseUrl);
   assert.equal(await store.readRefreshToken(), session.refreshToken);
   assert.equal(await store.readUsername(), session.username);
   assert.equal(await store.readAccessToken(), session.accessToken);
   assert.equal(await store.readAccessExpiresAt(), session.expiresAt);
+  assert.deepEqual(await store.readRememberedLogin(), {
+    enabled: false,
+    password: '',
+    username: session.username,
+  });
+  await store.saveRememberedLogin(session.username, 'account-password', true);
+  assert.deepEqual(await store.readRememberedLogin(), {
+    enabled: true,
+    password: 'account-password',
+    username: session.username,
+  });
+  await store.saveRememberedLogin(session.username, 'account-password', false);
+  assert.deepEqual(await store.readRememberedLogin(), {
+    enabled: false,
+    password: '',
+    username: session.username,
+  });
   await store.save({ ...session, accessToken: 'new-access' });
   await store.saveSessionTokens(
     'rotated-access',
@@ -301,6 +353,15 @@ test('SecureStore protects only refresh-token reads and writes with Face ID', as
   );
   assert.ok(pointerOperations.length >= 2);
   assert.ok(pointerOperations.every(({ options }) => options === undefined));
+  const rememberedPasswordOperations = operations.filter(
+    ({ key }) => key === REMEMBERED_PASSWORD_STORAGE_KEY,
+  );
+  assert.ok(rememberedPasswordOperations.length >= 3);
+  assert.ok(rememberedPasswordOperations.every(({ options }) => options === undefined));
+  assert.ok(operations.some(
+    ({ key, operation, value }) =>
+      key === REMEMBER_LOGIN_STORAGE_KEY && operation === 'set' && value === '1',
+  ));
   assert.equal(FACE_ID_PROMPT, '使用 Face ID 登录 Hermes');
 });
 
@@ -334,6 +395,51 @@ test('credential save rolls back every session key when protected storage fails'
     new Set(deleted),
     new Set([...CREDENTIAL_STORAGE_KEYS, written[4]]),
   );
+});
+
+test('session clearing preserves remembered login only when the user opted in', async () => {
+  const refreshPointer = `${REFRESH_TOKEN_KEY_PREFIX}current`;
+  const values = new Map<string, string>([
+    [BASE_URL_STORAGE_KEY, session.baseUrl],
+    [USERNAME_STORAGE_KEY, session.username],
+    [ACCESS_TOKEN_STORAGE_KEY, session.accessToken],
+    [REFRESH_TOKEN_POINTER_STORAGE_KEY, refreshPointer],
+    [refreshPointer, session.refreshToken],
+    [ACCESS_EXPIRES_AT_STORAGE_KEY, String(session.expiresAt)],
+    [DEVICE_ID_STORAGE_KEY, 'device-id'],
+    [REMEMBER_LOGIN_STORAGE_KEY, '1'],
+    [REMEMBERED_PASSWORD_STORAGE_KEY, 'account-password'],
+  ]);
+  const secureStore: SecureStoreAdapter = {
+    async getItemAsync(key) {
+      return values.get(key) ?? null;
+    },
+    async setItemAsync(key, value) {
+      values.set(key, value);
+    },
+    async deleteItemAsync(key) {
+      values.delete(key);
+    },
+  };
+  const store = new CredentialStore(secureStore);
+
+  await store.clearSession();
+
+  assert.deepEqual(await store.readRememberedLogin(), {
+    enabled: true,
+    password: 'account-password',
+    username: session.username,
+  });
+  assert.equal(values.has(ACCESS_TOKEN_STORAGE_KEY), false);
+  assert.equal(values.has(REFRESH_TOKEN_POINTER_STORAGE_KEY), false);
+  assert.equal(values.has(refreshPointer), false);
+  assert.equal(values.has(BASE_URL_STORAGE_KEY), false);
+
+  await store.saveRememberedLogin(session.username, 'account-password', false);
+  await store.clearSession();
+  assert.equal(values.has(USERNAME_STORAGE_KEY), false);
+  assert.equal(values.has(REMEMBER_LOGIN_STORAGE_KEY), false);
+  assert.equal(values.has(REMEMBERED_PASSWORD_STORAGE_KEY), false);
 });
 
 test('authenticated sessions are normalized, handshaken, and only then saved', async () => {

@@ -63,6 +63,7 @@ function NativeAuthRoot() {
         style={styles.nativeContent}
       >
         <FrontendPreviewApp
+          cacheOwner={`${state.connection.baseUrl}|${state.connection.username}`}
           client={client}
           notificationTarget={notificationTarget}
         />

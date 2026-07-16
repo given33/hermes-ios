@@ -1,6 +1,7 @@
 import type { SavedConnection } from './credential-contract';
 
 export type AuthMode = 'register' | 'login';
+export const MAX_FACE_ID_ATTEMPTS = 5;
 
 export type AuthState =
   | { status: 'loading' }
@@ -11,7 +12,13 @@ export type AuthState =
       busy: boolean;
       error?: string;
     }
-  | { status: 'locked'; baseUrl: string; busy: boolean; error?: string }
+  | {
+      status: 'locked';
+      baseUrl: string;
+      busy: boolean;
+      failedAttempts: number;
+      error?: string;
+    }
   | { status: 'authenticated'; connection: SavedConnection };
 
 export type AuthAction =
@@ -28,7 +35,7 @@ export type AuthAction =
       setupTokenRequired?: boolean;
     }
   | { type: 'UNLOCK_STARTED' }
-  | { type: 'UNLOCK_FAILED'; error: string }
+  | { type: 'UNLOCK_FAILED'; error: string; fallbackError?: string }
   | { type: 'PROVISION_STARTED' }
   | { type: 'PROVISION_FAILED'; error: string }
   | { type: 'AUTHENTICATED'; connection: SavedConnection }
@@ -89,6 +96,7 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
         status: 'locked',
         baseUrl: action.baseUrl,
         busy: false,
+        failedAttempts: 0,
         ...(action.error ? { error: action.error } : {}),
       };
     case 'AUTH_MODE_RESOLVED':
@@ -101,17 +109,30 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
         : state;
     case 'UNLOCK_STARTED':
       return state.status === 'locked'
-        ? { status: 'locked', baseUrl: state.baseUrl, busy: true }
-        : state;
-    case 'UNLOCK_FAILED':
-      return state.status === 'locked'
         ? {
             status: 'locked',
             baseUrl: state.baseUrl,
-            busy: false,
-            error: action.error,
+            busy: true,
+            failedAttempts: state.failedAttempts,
           }
         : state;
+    case 'UNLOCK_FAILED':
+      if (state.status !== 'locked') return state;
+      if (state.failedAttempts + 1 >= MAX_FACE_ID_ATTEMPTS) {
+        return {
+          status: 'provisioning',
+          mode: 'login',
+          setupTokenRequired: false,
+          busy: false,
+          error: action.fallbackError ?? action.error,
+        };
+      }
+      return {
+        ...state,
+        busy: false,
+        failedAttempts: state.failedAttempts + 1,
+        error: action.error,
+      };
     case 'PROVISION_STARTED':
       return state.status === 'provisioning'
         ? {

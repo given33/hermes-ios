@@ -33,8 +33,16 @@ import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
 import { NativeLocalizationProvider } from '../i18n/NativeLocalization';
-import { NativeShell, type NativeShellSlotContext } from '../app/NativeShell';
+import {
+  NativeShell,
+  type NativeShellSlotContext,
+  type SidebarGatewayStatus,
+} from '../app/NativeShell';
 import { useHermesSwiftUIRouteData } from '../app/useHermesSwiftUIRouteData';
+import {
+  decodeHermesSwiftUIRouteAction,
+  HERMES_SWIFTUI_ROUTE_ACTIONS,
+} from '../app/swiftui-route-contract';
 import {
   BASELINE_PLUGIN_MANIFESTS,
   type ComposedRoute,
@@ -97,6 +105,7 @@ interface SidebarSystemSummary {
 }
 
 export function FrontendPreviewApp({
+  cacheOwner = '',
   client,
   notificationTarget,
 }: FrontendPreviewAppProps = {}) {
@@ -112,6 +121,11 @@ export function FrontendPreviewApp({
     activeSessions: 0,
     gatewayOnline: false,
   });
+  const [gatewayStatuses, setGatewayStatuses] = useState<SidebarGatewayStatus[]>([]);
+  const [preferredConversationId, setPreferredConversationId] = useState('');
+  const clearPreferredConversationId = useCallback((conversationId: string) => {
+    setPreferredConversationId((current) => current === conversationId ? '' : current);
+  }, []);
   const [picker, setPicker] = useState<Picker>(null);
   const [systemAction, setSystemAction] = useState<SystemAction>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -129,8 +143,13 @@ export function FrontendPreviewApp({
     if (!client) return undefined;
     let active = true;
     const api = new HermesCloudApi(client);
-    void Promise.all([api.getProfiles(), api.getStatus()])
-      .then(([profiles, status]) => {
+    const applySystem = (system: Awaited<ReturnType<HermesCloudApi['getSystem']>>) => {
+      if (!active) return;
+      setSystemSummary(systemSummaryFromStatus(system.status));
+      setGatewayStatuses(gatewayStatusesFromManagedNodes(system.managedNodes));
+    };
+    void Promise.all([api.getProfiles(), api.getSystem()])
+      .then(([profiles, system]) => {
         if (!active) return;
         const choices = profiles.profiles.flatMap((entry): ProfileChoice[] => {
           const name = stringField(entry, 'name');
@@ -142,13 +161,17 @@ export function FrontendPreviewApp({
         if (activeProfile && choices.some((choice) => choice.name === activeProfile)) {
           setProfile(activeProfile);
         }
-        setSystemSummary(systemSummaryFromStatus(status));
+        applySystem(system);
       })
       .catch((error) => {
         if (active) notify(serverActionError(error, locale));
       });
+    const interval = setInterval(() => {
+      void api.getSystem().then(applySystem).catch(() => undefined);
+    }, 15_000);
     return () => {
       active = false;
+      clearInterval(interval);
     };
   }, [client, locale, notify]);
 
@@ -222,15 +245,21 @@ export function FrontendPreviewApp({
         locale={locale ?? 'zh'}
         manifests={BASELINE_PLUGIN_MANIFESTS}
         nativeRouteChrome={useSwiftUIRoutes}
+        gatewayStatuses={gatewayStatuses}
         renderRoute={(route, _label, context) => (
           <PreviewRoute
+            cacheOwner={cacheOwner}
             client={client}
+            gatewayStatuses={gatewayStatuses}
             locale={locale}
             navigate={context.navigate}
             notify={notify}
             notificationTarget={notificationTarget}
+            onOpenConversation={setPreferredConversationId}
+            onPreferredConversationConsumed={clearPreferredConversationId}
             openNavigation={context.openNavigation}
             profile={profile}
+            preferredConversationId={preferredConversationId}
             reportRouteReady={context.reportRouteReady}
             route={route}
           />
@@ -306,25 +335,36 @@ export function FrontendPreviewApp({
 }
 
 function PreviewRoute({
+  cacheOwner,
   client,
+  gatewayStatuses,
   locale,
   navigate,
   notify,
   notificationTarget,
+  onOpenConversation,
+  onPreferredConversationConsumed,
   openNavigation,
   profile,
+  preferredConversationId,
   reportRouteReady,
   route,
 }: PreviewPageProps & {
+  cacheOwner: string;
   client?: FrontendPreviewAppProps['client'];
+  gatewayStatuses: readonly SidebarGatewayStatus[];
   notificationTarget?: FrontendPreviewAppProps['notificationTarget'];
+  onOpenConversation(conversationId: string): void;
+  onPreferredConversationConsumed(conversationId: string): void;
   openNavigation?(): void;
   profile: string;
+  preferredConversationId: string;
   reportRouteReady(path: string): void;
   route: ComposedRoute;
 }) {
   const { tokens } = useTheme();
   const routeData = useHermesSwiftUIRouteData({
+    cacheOwner,
     client,
     locale: locale ?? 'zh',
     notify,
@@ -348,6 +388,19 @@ function PreviewRoute({
         dataJson={routeData.dataJson}
         locale={locale ?? 'zh'}
         onAction={(event) => {
+          const action = decodeHermesSwiftUIRouteAction(
+            event.nativeEvent.action,
+            event.nativeEvent.payload,
+          );
+          if (action?.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionOpen) {
+            if (action.payload.id) {
+              onOpenConversation(action.payload.id);
+              navigate('/chat');
+            } else {
+              notify(locale === 'zh' ? '会话跳转失败，请重试。' : 'Conversation navigation failed.');
+            }
+            return;
+          }
           void routeData.onAction(
             event.nativeEvent.action,
             event.nativeEvent.payload,
@@ -371,9 +424,13 @@ function PreviewRoute({
     case 'chat': return (
       <ChatPreviewPage
         {...props}
+        cacheOwner={cacheOwner}
         client={client}
+        gatewayStatuses={gatewayStatuses}
         notificationTarget={notificationTarget}
         openNavigation={openNavigation}
+        onPreferredConversationConsumed={onPreferredConversationConsumed}
+        preferredConversationId={preferredConversationId}
         profile={profile}
       />
     );
@@ -730,6 +787,42 @@ function systemSummaryFromStatus(status: JsonRecord): SidebarSystemSummary {
         ? Math.max(0, Math.round(activeSessionsValue))
         : 0,
   };
+}
+
+function gatewayStatusesFromManagedNodes(source: JsonRecord): SidebarGatewayStatus[] {
+  const nodes = Array.isArray(source.nodes) ? source.nodes : [];
+  const sources = Array.isArray(source.sources) ? source.sources.filter(isRecord) : [];
+  return ['dbb3', 'wsl'].map((id): SidebarGatewayStatus => {
+    const value = nodes.find((entry) => (
+      isRecord(entry) && stringField(entry, 'id').toLowerCase() === id
+    ));
+    if (!isRecord(value)) {
+      const directSource = sources.find((entry) => stringField(entry, 'id').toLowerCase() === id);
+      const sourceState = directSource || sources[0];
+      return {
+        id,
+        label: id.toUpperCase(),
+        state: sourceState?.online === false ? 'offline' : 'unknown',
+      };
+    }
+    const gatewayState = stringField(value, 'gateway_state').toLowerCase();
+    const observed = Boolean(stringField(value, 'observed_at'));
+    const nodeOnline = value.online === true;
+    const gatewayOnline = ['active', 'online', 'ready', 'running'].includes(gatewayState);
+    const state: SidebarGatewayStatus['state'] = nodeOnline && gatewayOnline
+      ? 'online'
+      : nodeOnline
+        ? 'degraded'
+        : observed
+          ? 'offline'
+          : 'unknown';
+    return {
+      id,
+      label: id.toUpperCase(),
+      state,
+      version: stringField(value, 'version') || stringField(value, 'gateway_version') || undefined,
+    };
+  });
 }
 
 function serverActionError(error: unknown, locale: NativeRouteLocale): string {

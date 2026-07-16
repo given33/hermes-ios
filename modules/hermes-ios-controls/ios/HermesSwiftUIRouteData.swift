@@ -208,8 +208,15 @@ struct HermesAnalyticsPointSnapshot: Decodable, Equatable, Identifiable {
 
 struct HermesModelSnapshot: Decodable, Equatable, Identifiable {
   let id: String
+  let model: String
   let provider: String
   let context: String
+  let baseUrl: String
+  let apiKeyConfigured: Bool
+  let apiKeyPreview: String
+  let apiMode: String
+  let contextLength: Int
+  let reasoningEffort: String
   let active: Bool
 }
 
@@ -297,10 +304,16 @@ struct HermesCollaborationMessageSnapshot: Decodable, Equatable, Identifiable {
 
 struct HermesCollaborationSnapshot: Decodable, Equatable {
   let selectedRoomId: String?
+  let availableProfiles: [String]
   let rooms: [HermesCollaborationRoomSnapshot]
   let messages: [HermesCollaborationMessageSnapshot]
 
-  static let empty = HermesCollaborationSnapshot(selectedRoomId: nil, rooms: [], messages: [])
+  static let empty = HermesCollaborationSnapshot(
+    selectedRoomId: nil,
+    availableProfiles: [],
+    rooms: [],
+    messages: []
+  )
 }
 
 struct HermesKanbanCardSnapshot: Decodable, Equatable, Identifiable, Hashable {
@@ -355,6 +368,22 @@ struct HermesEnvironmentSecretSnapshot: Decodable, Equatable, Identifiable {
   let maskedValue: String
 }
 
+struct HermesSystemNodeSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let label: String
+  let cpu: Double
+  let memory: Double
+  let disk: Double
+  let memoryLabel: String
+  let uptimeLabel: String
+  let activeTasks: String
+  let gatewayOnline: Bool
+  let gatewayState: String
+  let version: String
+  let observedAt: String
+  let metricsSource: String
+}
+
 struct HermesSystemSnapshot: Decodable, Equatable {
   let cpu: Double
   let memory: Double
@@ -363,6 +392,7 @@ struct HermesSystemSnapshot: Decodable, Equatable {
   let uptimeLabel: String
   let activeTasks: String
   let gatewayOnline: Bool
+  let nodes: [HermesSystemNodeSnapshot]
   let operationMessage: String?
 
   static let empty = HermesSystemSnapshot(
@@ -373,6 +403,7 @@ struct HermesSystemSnapshot: Decodable, Equatable {
     uptimeLabel: "-",
     activeTasks: "-",
     gatewayOnline: false,
+    nodes: [],
     operationMessage: nil
   )
 }
@@ -426,6 +457,7 @@ final class HermesRouteDataStore: ObservableObject {
 enum HermesRouteAction: String, CaseIterable {
   case refresh = "route.refresh"
   case sessionSelect = "session.select"
+  case sessionOpen = "session.open"
   case sessionDelete = "session.delete"
   case sessionRename = "session.rename"
   case fileSelect = "file.select"
@@ -434,6 +466,8 @@ enum HermesRouteAction: String, CaseIterable {
   case fileImport = "file.import"
   case folderCreate = "folder.create"
   case modelSelect = "model.select"
+  case modelSave = "model.save"
+  case modelTest = "model.test"
   case logsFilter = "logs.filter"
   case cronCreate = "cron.create"
   case cronToggle = "cron.toggle"
@@ -466,6 +500,8 @@ enum HermesRouteAction: String, CaseIterable {
   case kanbanMove = "kanban.move"
   case kanbanDelete = "kanban.delete"
   case collaborationSelect = "collaboration.select"
+  case collaborationCreate = "collaboration.create"
+  case collaborationDelete = "collaboration.delete"
   case collaborationSend = "collaboration.send"
 }
 

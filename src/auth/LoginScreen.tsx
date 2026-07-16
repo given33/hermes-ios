@@ -55,6 +55,7 @@ const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
 export function LoginScreen() {
   const {
     state,
+    rememberedLogin,
     registrationOpen,
     authenticate,
     register,
@@ -75,6 +76,7 @@ export function LoginScreen() {
   const [verificationCode, setVerificationCode] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberLogin, setRememberLogin] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [codeCooldown, setCodeCooldown] = useState(0);
   const [codeMessage, setCodeMessage] = useState('');
@@ -101,6 +103,15 @@ export function LoginScreen() {
     )
     && !busy;
   const verticalPadding = Math.min(96, Math.max(24, height * 0.06));
+  const rememberedLoginApplied = useRef(false);
+
+  useEffect(() => {
+    if (rememberedLoginApplied.current || state.status !== 'provisioning') return;
+    rememberedLoginApplied.current = true;
+    setUsername(rememberedLogin.username);
+    setPassword(rememberedLogin.password);
+    setRememberLogin(rememberedLogin.enabled);
+  }, [rememberedLogin, state.status]);
 
   useEffect(() => {
     const animation = Animated.parallel([
@@ -132,7 +143,7 @@ export function LoginScreen() {
       if (mode === 'register') {
         void register(email, verificationCode, username, password);
       } else {
-        void authenticate(username, password);
+        void authenticate(username, password, rememberLogin);
       }
     }
   };
@@ -219,6 +230,11 @@ export function LoginScreen() {
                 ) : locked ? (
                   <View style={styles.form}>
                     <Text style={styles.formTitle}>使用 FACE ID 登录</Text>
+                    <Text style={styles.attemptText}>
+                      {state.failedAttempts > 0
+                        ? `已尝试 ${state.failedAttempts}/5 次`
+                        : '验证失败后可继续重试，连续 5 次后使用密码登录'}
+                    </Text>
                     {error ? (
                       <Text accessibilityRole="alert" style={styles.errorText}>
                         {error}
@@ -397,6 +413,25 @@ export function LoginScreen() {
                         ) : null}
                       </View>
                     </View>
+                    {mode === 'login' ? (
+                      <IOSPressable
+                        accessibilityLabel="记住账号和密码"
+                        accessibilityRole="checkbox"
+                        accessibilityState={{ checked: rememberLogin }}
+                        disabled={busy}
+                        onPress={() => setRememberLogin((current) => !current)}
+                        opacityTo={0.72}
+                        style={styles.rememberRow}
+                      >
+                        <View style={[
+                          styles.rememberCheckbox,
+                          rememberLogin && styles.rememberCheckboxChecked,
+                        ]}>
+                          {rememberLogin ? <Text style={styles.rememberCheckmark}>✓</Text> : null}
+                        </View>
+                        <Text style={styles.rememberText}>记住账号和密码</Text>
+                      </IOSPressable>
+                    ) : null}
                     {error ? (
                       <Text accessibilityRole="alert" style={styles.errorText}>
                         {error}
@@ -999,6 +1034,42 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.78,
+  },
+  attemptText: {
+    color: 'rgba(255, 255, 255, 0.58)',
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  rememberRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  rememberCheckbox: {
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 172, 2, 0.5)',
+  },
+  rememberCheckboxChecked: {
+    backgroundColor: LOGIN_COLORS.accent,
+    borderColor: LOGIN_COLORS.accent,
+  },
+  rememberCheckmark: {
+    color: '#080604',
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
+    fontSize: 14,
+    lineHeight: 17,
+  },
+  rememberText: {
+    color: 'rgba(255, 255, 255, 0.76)',
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontSize: 13.12,
+    lineHeight: 19.68,
   },
   modeSwitch: {
     minHeight: 44,

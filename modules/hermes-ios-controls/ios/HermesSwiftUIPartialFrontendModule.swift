@@ -182,9 +182,12 @@ extension HermesThemeProviding {
 
 final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
   @Field var activePath = "/chat"
+  @Field var gatewayStatusesJson = "[]"
   @Field var locale = "zh"
   @Field var open = false
   @Field var presentation = "drawer"
+  @Field var themeName = "default"
+  @Field var themesJson = "[]"
   @Field var themeAccentColor = "#ffe6cb"
   @Field var themeBackgroundColor = "#041c1c"
   @Field var themeBorderColor = "#ffe6cb26"
@@ -200,6 +203,7 @@ final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps, HermesThemeProvidi
   @Field var themeWarningColor = "#ffbd38"
   var onNavigate = EventDispatcher()
   var onRequestClose = EventDispatcher()
+  var onThemeChange = EventDispatcher()
 }
 
 struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
@@ -215,15 +219,24 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   var body: some View {
     GeometryReader { proxy in
       let drawerWidth = isDrawer ? proxy.size.width : min(360, proxy.size.width)
-      HermesSidebarContent(
-        activePath: props.activePath,
-        chinese: chinese,
-        onNavigate: select
-      )
-      .environmentObject(appearance)
+      ZStack(alignment: .leading) {
+        appearance.palette.background
+          .ignoresSafeArea()
+
+        HermesSidebarContent(
+          activePath: props.activePath,
+          chinese: chinese,
+          gateways: decodeGateways(props.gatewayStatusesJson),
+          onNavigate: select,
+          onThemeChange: { name in props.onThemeChange(["name": name]) },
+          themeName: props.themeName,
+          themes: decodeThemes(props.themesJson)
+        )
+        .environmentObject(appearance)
+      }
       .frame(width: drawerWidth)
       .frame(maxHeight: .infinity, alignment: .leading)
-      .background(appearance.palette.background)
+      .background(appearance.palette.background.ignoresSafeArea())
       .offset(x: isDrawer ? drawerOffset(width: drawerWidth) : 0)
       .shadow(
         color: .black.opacity(isDrawer && presented ? 0.22 : 0),
@@ -286,11 +299,37 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
   }
 }
 
+private struct HermesSidebarGateway: Decodable, Identifiable {
+  let id: String
+  let label: String
+  let state: String
+  let version: String?
+}
+
+private struct HermesSidebarTheme: Decodable, Identifiable {
+  let label: String
+  let name: String
+
+  var id: String { name }
+}
+
+private func decodeGateways(_ json: String) -> [HermesSidebarGateway] {
+  (try? JSONDecoder().decode([HermesSidebarGateway].self, from: Data(json.utf8))) ?? []
+}
+
+private func decodeThemes(_ json: String) -> [HermesSidebarTheme] {
+  (try? JSONDecoder().decode([HermesSidebarTheme].self, from: Data(json.utf8))) ?? []
+}
+
 private struct HermesSidebarContent: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let activePath: String
   let chinese: Bool
+  let gateways: [HermesSidebarGateway]
   let onNavigate: (HermesRoute) -> Void
+  let onThemeChange: (String) -> Void
+  let themeName: String
+  let themes: [HermesSidebarTheme]
 
   var body: some View {
     List {
@@ -303,7 +342,7 @@ private struct HermesSidebarContent: View {
         .accessibilityAddTraits(.isHeader)
 
       ForEach(0..<4, id: \.self) { group in
-        Section(sectionTitle(group)) {
+        Section {
           ForEach(HermesRoute.allCases.filter { $0.group == group }) { route in
             Button {
               onNavigate(route)
@@ -325,34 +364,51 @@ private struct HermesSidebarContent: View {
               .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20))
             .listRowBackground(
               activePath == route.path
                 ? appearance.palette.accent.opacity(0.10)
-                : nil
+                : Color.clear
             )
+            .listRowSeparatorTint(appearance.palette.border)
           }
+        } header: {
+          Text(sectionTitle(group))
+            .font(HermesFonts.body(13))
+            .foregroundStyle(appearance.palette.tertiary)
+            .textCase(nil)
         }
       }
     }
     .scrollContentBackground(.hidden)
-    .listStyle(.insetGrouped)
-    .background(appearance.palette.background)
-    .safeAreaInset(edge: .bottom) {
-      HStack(spacing: 10) {
-        Circle()
-          .fill(appearance.palette.success)
-          .frame(width: 8, height: 8)
-          .shadow(color: appearance.palette.success, radius: 5)
-        VStack(alignment: .leading, spacing: 2) {
-          Text(chinese ? "网关在线" : "Gateway online")
-            .font(HermesFonts.bodyBold(13))
-          Text(chinese ? "v0.9.3 · 2 个会话" : "v0.9.3 · 2 sessions")
-            .font(HermesFonts.mono(10))
-            .foregroundStyle(appearance.palette.secondary)
+    .listStyle(.plain)
+    .background(appearance.palette.background.ignoresSafeArea())
+    .safeAreaInset(edge: .bottom, spacing: 0) {
+      HStack {
+        Menu {
+          ForEach(themes) { theme in
+            Button {
+              onThemeChange(theme.name)
+            } label: {
+              if theme.name == themeName {
+                Label(theme.label, systemImage: "checkmark")
+              } else {
+                Text(theme.label)
+              }
+            }
+          }
+        } label: {
+          Image(systemName: "paintpalette")
+            .font(.system(size: 18, weight: .medium))
+            .foregroundStyle(appearance.palette.foreground)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
         }
-        Spacer()
+        .accessibilityLabel(chinese ? "切换主题" : "Change theme")
       }
-      .padding(14)
+      .padding(.horizontal, 20)
+      .padding(.vertical, 10)
+      .background(appearance.palette.background)
     }
   }
 
@@ -436,14 +492,16 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
           Button {
             props.onOpenNavigation([:])
           } label: {
-            Image(systemName: "line.3.horizontal")
+            Image(systemName: "chevron.backward")
           }
-          .accessibilityLabel(chinese ? "打开侧边栏" : "Open sidebar")
+          .accessibilityLabel(chinese ? "返回侧边栏" : "Back to sidebar")
         }
       }
+      .toolbarBackground(appearance.palette.background, for: .navigationBar)
+      .toolbarBackground(.visible, for: .navigationBar)
     }
     .tint(appearance.palette.accent)
-    .background(appearance.palette.background)
+    .background(appearance.palette.background.ignoresSafeArea())
     .background {
       HermesRouteReadinessProbe(
         enabled: routeContentReady,

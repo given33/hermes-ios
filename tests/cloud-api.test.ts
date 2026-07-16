@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApiClient';
-import { HermesCloudApi } from '../src/api/HermesCloudApi';
+import {
+  HermesCloudApi,
+  mergeUnifiedConversationIndex,
+} from '../src/api/HermesCloudApi';
 
 interface Call {
   options: HermesRequestOptions;
@@ -14,6 +17,12 @@ function createApi() {
   const client = {
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
       calls.push({ path, options });
+      if (path.endsWith('/single/conversations')) {
+        return Promise.resolve({ conversations: [] } as T);
+      }
+      if (path === '/api/model/custom') {
+        return Promise.resolve({} as T);
+      }
       return Promise.resolve({} as T);
     },
   } as HermesApiClient;
@@ -31,6 +40,7 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
   assert.deepEqual(
     calls.map(({ path }) => path),
     [
+      '/api/plugins/collaboration/single/conversations',
       '/api/sessions',
       '/api/analytics/usage',
       '/api/analytics/models',
@@ -39,9 +49,15 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
       '/api/messaging/platforms',
     ],
   );
-  assert.equal(calls[0].options.profile, 'reviewer');
-  assert.equal(calls[1].options.profile, 'reviewer');
+  assert.equal(calls[0].options.profile, undefined);
+  assert.equal(calls[1].options.profile, 'default');
+  assert.deepEqual(calls[1].options.query, {
+    limit: 100,
+    offset: 0,
+    order: 'recent',
+  });
   assert.equal(calls[2].options.profile, 'reviewer');
+  assert.equal(calls[3].options.profile, 'reviewer');
 });
 
 test('management mutations preserve the official method and body contracts', async () => {
@@ -122,6 +138,163 @@ test('the collaboration client keeps conversation and hosted-turn state on the s
     profiles: ['default', 'dbb3-worker', 'reviewer'],
     title: '部署项目',
     turn_id: 'hosted-1',
+  });
+});
+
+test('conversation history reads, renames, and deletes the same server records as chat', async () => {
+  const calls: Call[] = [];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ path, options });
+      if (path.endsWith('/single/conversations')) {
+        return Promise.resolve({
+          conversations: [{
+            id: 'chat-1',
+            profile: 'default',
+            title: '历史会话',
+            messages: [{ id: 'm-1', role: 'user', name: '你', content: '继续' }],
+            message_count: 1,
+            created_at: 1_720_000_000_000,
+            updated_at: 1_720_000_100_000,
+          }],
+        } as T);
+      }
+      if (path.endsWith('/single/conversations/chat-1')) {
+        return Promise.resolve({
+          conversation: {
+            id: 'chat-1',
+            profile: 'default',
+            title: '历史会话',
+            messages: [{ id: 'm-1', role: 'user', name: '你', content: '继续' }],
+          },
+        } as T);
+      }
+      return Promise.resolve({ ok: true } as T);
+    },
+  } as HermesApiClient;
+  const api = new HermesCloudApi(client);
+
+  const history = await api.loadRoute('sessions', 'default') as {
+    sessions: Array<{ id: string; message_count: number }>;
+  };
+  const opened = await api.getConversation('chat-1');
+  await api.renameConversation('chat-1', '继续处理');
+  await api.deleteConversation('chat-1');
+
+  assert.equal(history.sessions[0].id, 'chat-1');
+  assert.equal(history.sessions[0].message_count, 1);
+  assert.equal(opened.conversation.messages[0].content, '继续');
+  assert.deepEqual(calls.map(({ path }) => path), [
+    '/api/plugins/collaboration/single/conversations',
+    '/api/sessions',
+    '/api/plugins/collaboration/single/conversations/chat-1',
+    '/api/plugins/collaboration/single/conversations/chat-1',
+    '/api/plugins/collaboration/single/conversations/chat-1',
+  ]);
+  assert.equal(calls[3].options.method, 'PATCH');
+  assert.equal(calls[4].options.method, 'DELETE');
+});
+
+test('unified history adds official task titles and suppresses mapped sessions', () => {
+  const merged = mergeUnifiedConversationIndex(
+    [{
+      id: 'chat-1',
+      profile: 'default',
+      title: '已认领',
+      messages: [],
+      runtime_sessions: { default: 'official-mapped' },
+      updated_at: 2_000,
+    }],
+    [
+      {
+        id: 'official-new',
+        source: 'cli',
+        model: 'model-a',
+        title: 'Hermes 任务摘要标题',
+        started_at: 1,
+        ended_at: 2,
+        last_active: 3,
+        is_active: false,
+        message_count: 4,
+        tool_call_count: 2,
+        input_tokens: 0,
+        output_tokens: 0,
+        preview: '摘要预览',
+      },
+      {
+        id: 'official-mapped',
+        source: 'cli',
+        model: null,
+        title: '不应重复',
+        started_at: 1,
+        ended_at: 2,
+        last_active: 2,
+        is_active: false,
+        message_count: 1,
+        tool_call_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        preview: null,
+      },
+    ],
+  );
+
+  assert.deepEqual(merged.map(({ id }) => id), ['official:official-new', 'chat-1']);
+  assert.equal(merged[0].title, 'Hermes 任务摘要标题');
+  assert.equal(merged[0].official_model, 'model-a');
+  assert.equal(merged[0].message_count, 4);
+});
+
+test('official session history paginates until the complete account index is loaded', async () => {
+  const offsets: number[] = [];
+  const all = ['one', 'two', 'three'];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      assert.equal(path, '/api/sessions');
+      const offset = Number(options.query?.offset || 0);
+      const limit = Number(options.query?.limit || 2);
+      offsets.push(offset);
+      return Promise.resolve({
+        sessions: all.slice(offset, offset + limit).map((id) => ({ id })),
+        total: all.length,
+        limit,
+        offset,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getAllSessions('default', 2);
+
+  assert.deepEqual(offsets, [0, 2]);
+  assert.deepEqual(result.sessions.map(({ id }) => id), all);
+});
+
+test('custom model configuration carries the full runtime contract', async () => {
+  const { api, calls } = createApi();
+  const configuration = {
+    apiKey: 'secret',
+    apiMode: 'codex_responses' as const,
+    baseUrl: 'https://model.example/v1',
+    contextLength: 200_000,
+    model: 'model-a',
+    reasoningEffort: 'high' as const,
+  };
+
+  await api.saveCustomModel(configuration, 'reviewer');
+  await api.testCustomModel(configuration, 'reviewer');
+
+  assert.deepEqual(calls.map(({ path }) => path), [
+    '/api/model/custom',
+    '/api/model/custom/test',
+  ]);
+  assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
+    api_key: 'secret',
+    api_mode: 'codex_responses',
+    base_url: 'https://model.example/v1',
+    context_length: 200000,
+    model: 'model-a',
+    profile: 'reviewer',
+    reasoning_effort: 'high',
   });
 });
 

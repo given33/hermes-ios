@@ -28,6 +28,7 @@ import {
   CredentialStore,
   provisionConnection as persistVerifiedConnection,
 } from './credential-store';
+import type { RememberedLogin } from './credential-contract';
 import { getMobileDeviceIdentity } from './device-identity';
 import {
   MobileAuthApiClient,
@@ -38,8 +39,9 @@ import {
 interface AuthContextValue {
   state: AuthState;
   client: HermesApiClient | null;
+  rememberedLogin: RememberedLogin;
   registrationOpen: boolean;
-  authenticate(username: string, password: string): Promise<void>;
+  authenticate(username: string, password: string, rememberLogin: boolean): Promise<void>;
   register(
     email: string,
     verificationCode: string,
@@ -59,19 +61,32 @@ const UNLOCK_ERROR = 'Face ID 已取消或凭据不可用，请重试。';
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
 const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
+const FACE_ID_PASSWORD_FALLBACK = 'Face ID 已连续失败 5 次，请输入账号密码。';
+const EMPTY_REMEMBERED_LOGIN: RememberedLogin = {
+  enabled: false,
+  password: '',
+  username: '',
+};
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
   const bootstrapStarted = useRef(false);
   const operationInFlight = useRef(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
+  const [rememberedLogin, setRememberedLogin] = useState<RememberedLogin>(
+    EMPTY_REMEMBERED_LOGIN,
+  );
 
   useEffect(() => {
     if (bootstrapStarted.current) return;
     bootstrapStarted.current = true;
     let active = true;
 
-    void bootstrapSavedConnection(credentialStore)
+    void credentialStore.readRememberedLogin()
+      .then((savedLogin) => {
+        if (active) setRememberedLogin(savedLogin);
+        return bootstrapSavedConnection(credentialStore);
+      })
       .then(async (result) => {
         if (!active) return;
         if (result.status === 'provisioning') {
@@ -144,7 +159,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   }, []);
 
   const authenticate = useCallback(
-    async (username: string, password: string) => {
+    async (username: string, password: string, rememberLogin: boolean) => {
       if (state.status !== 'provisioning' || state.busy || operationInFlight.current) return;
       operationInFlight.current = true;
       dispatch({ type: 'PROVISION_STARTED' });
@@ -160,6 +175,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
         });
         const session = await mobileAuth.login(username, password, device);
         await persistSession(mobileAuth, session);
+        await credentialStore.saveRememberedLogin(username, password, rememberLogin);
+        setRememberedLogin({
+          enabled: rememberLogin,
+          password: rememberLogin ? password : '',
+          username: username.trim(),
+        });
       } catch (error) {
         dispatch({
           type: 'PROVISION_FAILED',
@@ -228,7 +249,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
       dispatch({ type: 'AUTHENTICATED', connection: result.connection });
     } catch {
-      dispatch({ type: 'UNLOCK_FAILED', error: UNLOCK_ERROR });
+      dispatch({
+        type: 'UNLOCK_FAILED',
+        error: UNLOCK_ERROR,
+        fallbackError: FACE_ID_PASSWORD_FALLBACK,
+      });
     } finally {
       operationInFlight.current = false;
     }
@@ -245,7 +270,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           return await mobileAuth.refresh(refreshToken);
         } catch (error) {
           if (error instanceof MobileAuthApiError && error.status === 401) {
-            await credentialStore.clear().catch(() => undefined);
+            await credentialStore.clearSession().catch(() => undefined);
             dispatch({ type: 'SESSION_EXPIRED', error: SESSION_EXPIRED_ERROR });
           }
           throw error;
@@ -291,19 +316,21 @@ export function AuthProvider({ children }: PropsWithChildren) {
           state.connection.accessToken,
         ).catch(() => undefined);
       }
-      await credentialStore.clear();
+      await credentialStore.clearSession();
+      if (!rememberedLogin.enabled) setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
       dispatch({ type: 'LOGGED_OUT' });
     } catch {
       dispatch({ type: 'LOGOUT_FAILED', error: LOGOUT_ERROR });
     } finally {
       operationInFlight.current = false;
     }
-  }, [client, state]);
+  }, [client, rememberedLogin.enabled, state]);
 
   const value = useMemo(
     () => ({
       state,
       client,
+      rememberedLogin,
       registrationOpen,
       authenticate,
       register,
@@ -316,6 +343,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       authenticate,
       client,
       logout,
+      rememberedLogin,
       register,
       registrationOpen,
       rememberDeviceId,

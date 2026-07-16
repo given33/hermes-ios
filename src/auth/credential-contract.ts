@@ -6,6 +6,8 @@ export const REFRESH_TOKEN_POINTER_STORAGE_KEY = 'hermes.native.refreshTokenKey'
 export const REFRESH_TOKEN_KEY_PREFIX = 'hermes.native.refreshToken.';
 export const ACCESS_EXPIRES_AT_STORAGE_KEY = 'hermes.native.accessExpiresAt';
 export const DEVICE_ID_STORAGE_KEY = 'hermes.native.deviceId';
+export const REMEMBER_LOGIN_STORAGE_KEY = 'hermes.native.rememberLogin';
+export const REMEMBERED_PASSWORD_STORAGE_KEY = 'hermes.native.rememberedPassword';
 export const INSTALLATION_ID_STORAGE_KEY = 'hermes.native.installationId';
 export const FACE_ID_PROMPT = '使用 Face ID 登录 Hermes';
 
@@ -17,7 +19,15 @@ export const CREDENTIAL_STORAGE_KEYS = [
   REFRESH_TOKEN_POINTER_STORAGE_KEY,
   ACCESS_EXPIRES_AT_STORAGE_KEY,
   DEVICE_ID_STORAGE_KEY,
+  REMEMBER_LOGIN_STORAGE_KEY,
+  REMEMBERED_PASSWORD_STORAGE_KEY,
 ] as const;
+
+export interface RememberedLogin {
+  enabled: boolean;
+  password: string;
+  username: string;
+}
 
 export interface SavedConnection {
   baseUrl: string;

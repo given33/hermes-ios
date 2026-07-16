@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   BookOpen,
+  ChevronLeft,
   ChevronRight,
   Clock,
   Code,
@@ -16,6 +17,7 @@ import {
   Menu,
   MessageSquare,
   Package,
+  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
@@ -260,8 +262,24 @@ export interface NativeShellSlots {
   footer?(context: NativeShellSlotContext): ReactNode;
 }
 
+export type SidebarGatewayState =
+  | 'online'
+  | 'offline'
+  | 'degraded'
+  | 'unknown';
+
+export interface SidebarGatewayStatus {
+  id: string;
+  label: string;
+  state: SidebarGatewayState;
+  version?: string | null;
+}
+
+const EMPTY_SIDEBAR_GATEWAY_STATUSES: readonly SidebarGatewayStatus[] = [];
+
 export interface NativeShellProps {
   config?: RouteDashboardConfig | null;
+  gatewayStatuses?: readonly SidebarGatewayStatus[];
   initialPath?: string;
   locale?: NativeRouteLocale;
   manifests?: readonly PluginManifest[];
@@ -276,6 +294,7 @@ export interface NativeShellProps {
 
 export function NativeShell({
   config,
+  gatewayStatuses = EMPTY_SIDEBAR_GATEWAY_STATUSES,
   initialPath = '/sessions',
   locale = 'zh',
   manifests = [],
@@ -287,7 +306,12 @@ export function NativeShell({
   const layout = useAdaptiveLayout();
   const useSwiftUISidebar =
     Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
-  const { tokens } = useTheme();
+  const {
+    availableThemes,
+    setTheme,
+    themeName,
+    tokens,
+  } = useTheme();
   const compactNavigationRef = useNavigationContainerRef<CompactStackParamList>();
   const composition = useMemo(
     () => composeRouteRegistry({ config, locale, manifests }),
@@ -321,6 +345,22 @@ export function NativeShell({
   const pendingSidebarCloseFrame = useRef<number | null>(null);
   const typography = resolveShellTypography(tokens);
   const swiftUIThemeProps = resolveSwiftUIThemeProps(tokens);
+  const resolvedGatewayStatuses = useMemo(
+    () => resolveSidebarGatewayStatuses(gatewayStatuses),
+    [gatewayStatuses],
+  );
+  const gatewayStatusesJson = useMemo(
+    () => JSON.stringify(resolvedGatewayStatuses),
+    [resolvedGatewayStatuses],
+  );
+  const sidebarThemesJson = useMemo(
+    () => JSON.stringify(availableThemes.map(({ label, name }) => ({ label, name }))),
+    [availableThemes],
+  );
+  const changeSidebarTheme = useCallback((name: string) => {
+    if (!availableThemes.some((theme) => theme.name === name)) return;
+    void setTheme(name);
+  }, [availableThemes, setTheme]);
   const rootBackground = opaque(tokens.colors.background);
   const sidebarBackground = multiplyAlpha(
     rootBackground,
@@ -592,11 +632,15 @@ export function NativeShell({
               <HermesSwiftUISidebarView
                 {...swiftUIThemeProps}
                 activePath={state.activePath}
+                gatewayStatusesJson={gatewayStatusesJson}
                 locale={locale}
                 onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
                 onRequestClose={closeMobile}
+                onThemeChange={(event) => changeSidebarTheme(event.nativeEvent.name)}
                 open
                 presentation="split"
+                themeName={themeName}
+                themesJson={sidebarThemesJson}
                 style={styles.swiftUISidebar}
               />
             ) : (
@@ -605,14 +649,18 @@ export function NativeShell({
                 borderStrong={borderStrong}
                 closeMobile={closeMobile}
                 composition={composition}
+                gatewayStatuses={resolvedGatewayStatuses}
                 insets={insets}
                 locale={locale}
                 navigate={selectSidebarRoute}
+                onThemeChange={changeSidebarTheme}
                 onToggleCollapsed={toggleCollapsed}
                 sidebarBackground={sidebarBackground}
                 slotContext={slotContext}
                 slots={slots}
                 state={state}
+                themeName={themeName}
+                themes={availableThemes}
                 typography={typography}
               />
             )}
@@ -695,7 +743,9 @@ export function NativeShell({
                           ? undefined
                           : () => (
                               <IOSPressable
-                                accessibilityLabel={locale === 'zh' ? '\u6253\u5f00\u5bfc\u822a' : 'Open navigation'}
+                                accessibilityLabel={route.routeId === 'chat'
+                                  ? locale === 'zh' ? '\u6253\u5f00\u5bfc\u822a' : 'Open navigation'
+                                  : locale === 'zh' ? '\u8fd4\u56de\u4fa7\u8fb9\u680f' : 'Back to sidebar'}
                                 haptic="none"
                                 hitSlop={10}
                                 onPress={openMobile}
@@ -703,7 +753,11 @@ export function NativeShell({
                                 scaleTo={0.9}
                                 style={styles.nativeHeaderButton}
                               >
-                                <Menu color={tokens.colors.foreground} size={22} />
+                                {route.routeId === 'chat' ? (
+                                  <Menu color={tokens.colors.foreground} size={22} />
+                                ) : (
+                                  <ChevronLeft color={tokens.colors.foreground} size={26} />
+                                )}
                               </IOSPressable>
                             ),
                         headerShown: !chatRoute && !nativeRouteChrome,
@@ -822,11 +876,15 @@ export function NativeShell({
               <HermesSwiftUISidebarView
                 {...swiftUIThemeProps}
                 activePath={state.activePath}
+                gatewayStatusesJson={gatewayStatusesJson}
                 locale={locale}
                 onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
                 onRequestClose={closeMobile}
+                onThemeChange={(event) => changeSidebarTheme(event.nativeEvent.name)}
                 open={state.mobileOpen}
                 presentation="drawer"
+                themeName={themeName}
+                themesJson={sidebarThemesJson}
                 style={styles.swiftUISidebar}
               />
             </View>
@@ -887,14 +945,18 @@ export function NativeShell({
                 borderStrong={borderStrong}
                 closeMobile={closeMobile}
                 composition={composition}
+                gatewayStatuses={resolvedGatewayStatuses}
                 insets={insets}
                 locale={locale}
                 navigate={selectSidebarRoute}
+                onThemeChange={changeSidebarTheme}
                 onToggleCollapsed={toggleCollapsed}
                 sidebarBackground={sidebarBackground}
                 slotContext={slotContext}
                 slots={slots}
                 state={state}
+                themeName={themeName}
+                themes={availableThemes}
                 typography={typography}
               />
             </Reanimated.View>
@@ -911,28 +973,36 @@ function Sidebar({
   borderStrong,
   closeMobile,
   composition,
+  gatewayStatuses,
   insets,
   locale,
   navigate,
+  onThemeChange,
   onToggleCollapsed,
   sidebarBackground,
   slotContext,
   slots,
   state,
+  themeName,
+  themes,
   typography,
 }: {
   borderSoft: string;
   borderStrong: string;
   closeMobile(): void;
   composition: ReturnType<typeof composeRouteRegistry>;
+  gatewayStatuses: readonly SidebarGatewayStatus[];
   insets: ReturnType<typeof useSafeAreaInsets>;
   locale: NativeRouteLocale;
   navigate(path: string): void;
+  onThemeChange(name: string): void;
   onToggleCollapsed(): void;
   sidebarBackground: string;
   slotContext: NativeShellSlotContext;
   slots?: NativeShellSlots;
   state: ReturnType<typeof createNativeShellState>;
+  themeName: string;
+  themes: readonly { label: string; name: string }[];
   typography: ReturnType<typeof resolveShellTypography>;
 }) {
   const { tokens } = useTheme();
@@ -943,9 +1013,13 @@ function Sidebar({
     return (
       <ExpoReferenceSidebar
         activePath={state.activePath}
+        gatewayStatuses={gatewayStatuses}
         insets={insets}
         locale={locale}
         navigate={navigate}
+        onThemeChange={onThemeChange}
+        themeName={themeName}
+        themes={themes}
       />
     );
   }
@@ -1096,14 +1170,22 @@ function Sidebar({
 
 function ExpoReferenceSidebar({
   activePath,
+  gatewayStatuses,
   insets,
   locale,
   navigate,
+  onThemeChange,
+  themeName,
+  themes,
 }: {
   activePath: string;
+  gatewayStatuses: readonly SidebarGatewayStatus[];
   insets: ReturnType<typeof useSafeAreaInsets>;
   locale: NativeRouteLocale;
   navigate(path: string): void;
+  onThemeChange(name: string): void;
+  themeName: string;
+  themes: readonly { label: string; name: string }[];
 }) {
   const { tokens } = useTheme();
   return (
@@ -1224,33 +1306,51 @@ function ExpoReferenceSidebar({
         ))}
       </ScrollView>
 
-      <View
-        style={styles.referenceSidebarFooter}
-      >
-        <View
-          style={[
-            styles.referenceSidebarStatusDot,
-            { backgroundColor: tokens.colors.success },
-          ]}
-        />
-        <View style={styles.referenceSidebarStatusCopy}>
-          <Text
-            style={[
-              styles.referenceSidebarStatusTitle,
-              { color: tokens.colors.foreground },
-            ]}
-          >
-            {locale === 'zh' ? '网关在线' : 'Gateway online'}
-          </Text>
-          <Text
-            style={[
-              styles.referenceSidebarStatusMeta,
-              { color: tokens.colors.textSecondary },
-            ]}
-          >
-            {locale === 'zh' ? 'v0.9.3 · 2 个会话' : 'v0.9.3 · 2 sessions'}
-          </Text>
+      <View style={styles.referenceSidebarFooter}>
+        <View style={styles.referenceSidebarGatewayList}>
+          {gatewayStatuses.map((gateway) => (
+            <View key={gateway.id} style={styles.referenceSidebarGatewayRow}>
+              <View
+                style={[
+                  styles.referenceSidebarStatusDot,
+                  { backgroundColor: gatewayStateColor(gateway.state, tokens) },
+                ]}
+              />
+              <View style={styles.referenceSidebarStatusCopy}>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.referenceSidebarStatusTitle,
+                    { color: tokens.colors.foreground },
+                  ]}
+                >
+                  {gateway.label}
+                </Text>
+                <Text
+                  numberOfLines={1}
+                  style={[
+                    styles.referenceSidebarStatusMeta,
+                    { color: tokens.colors.textSecondary },
+                  ]}
+                >
+                  {gatewayStatusMeta(gateway, locale)}
+                </Text>
+              </View>
+            </View>
+          ))}
         </View>
+        <IOSPressable
+          accessibilityLabel={locale === 'zh' ? '\u5207\u6362\u4e3b\u9898' : 'Change theme'}
+          haptic="selection"
+          onPress={() => {
+            const currentIndex = themes.findIndex((theme) => theme.name === themeName);
+            const next = themes[(currentIndex + 1 + themes.length) % themes.length];
+            if (next) onThemeChange(next.name);
+          }}
+          style={styles.referenceSidebarThemeButton}
+        >
+          <Palette color={tokens.colors.foreground} size={19} />
+        </IOSPressable>
       </View>
     </View>
   );
@@ -1428,6 +1528,46 @@ function RoutePreview({ label }: { label: string }) {
   );
 }
 
+function resolveSidebarGatewayStatuses(
+  statuses: readonly SidebarGatewayStatus[],
+): SidebarGatewayStatus[] {
+  const byId = new Map(statuses.map((status) => [status.id.toLowerCase(), status]));
+  return [
+    byId.get('dbb3') ?? { id: 'dbb3', label: 'DBB3', state: 'unknown' },
+    byId.get('wsl') ?? { id: 'wsl', label: 'WSL', state: 'unknown' },
+  ].map((status) => ({
+    id: status.id,
+    label: status.label.trim() || status.id,
+    state: status.state,
+    version: status.version?.trim() || null,
+  }));
+}
+
+function gatewayStatusMeta(
+  gateway: SidebarGatewayStatus,
+  locale: NativeRouteLocale,
+): string {
+  const stateLabel = locale === 'zh'
+    ? {
+        degraded: '\u5f02\u5e38',
+        offline: '\u79bb\u7ebf',
+        online: '\u5728\u7ebf',
+        unknown: '\u68c0\u6d4b\u4e2d',
+      }[gateway.state]
+    : gateway.state === 'unknown' ? 'Checking' : gateway.state;
+  return gateway.version ? `${stateLabel} \u00b7 ${gateway.version}` : stateLabel;
+}
+
+function gatewayStateColor(
+  state: SidebarGatewayState,
+  tokens: ReturnType<typeof useTheme>['tokens'],
+): string {
+  if (state === 'online') return tokens.colors.success;
+  if (state === 'degraded') return tokens.colors.warning;
+  if (state === 'offline') return tokens.colors.destructive;
+  return tokens.colors.textDisabled;
+}
+
 function navigationItemKey(
   item: ComposedNavigationItem,
   index: number,
@@ -1565,10 +1705,19 @@ const styles = StyleSheet.create({
   referenceSidebarFooter: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
     minHeight: 58,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 9,
+  },
+  referenceSidebarGatewayList: {
+    flex: 1,
+    gap: 6,
+  },
+  referenceSidebarGatewayRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 9,
   },
   referenceSidebarStatusDot: {
     borderRadius: 4,
@@ -1590,6 +1739,12 @@ const styles = StyleSheet.create({
     fontSize: 10,
     letterSpacing: 0,
     lineHeight: 14,
+  },
+  referenceSidebarThemeButton: {
+    alignItems: 'center',
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
   },
   navigation: {
     borderTopWidth: SHELL_METRICS.borderWidth,
