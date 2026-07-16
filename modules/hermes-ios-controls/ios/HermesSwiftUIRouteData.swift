@@ -23,6 +23,27 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let environment: [HermesEnvironmentSecretSnapshot]
   let system: HermesSystemSnapshot
 
+  private enum CodingKeys: String, CodingKey {
+    case version
+    case route
+    case sessions
+    case files
+    case analytics
+    case models
+    case logs
+    case cron
+    case skills
+    case integrations
+    case pairing
+    case achievements
+    case collaboration
+    case kanban
+    case profiles
+    case config
+    case environment
+    case system
+  }
+
   init(
     version: Int = hermesRouteSnapshotVersion,
     route: String? = nil,
@@ -140,6 +161,14 @@ struct HermesAnalyticsSnapshot: Decodable, Equatable {
   let monthlyCost: String
   let successRate: String
   let points: [HermesAnalyticsPointSnapshot]
+
+  private enum CodingKeys: String, CodingKey {
+    case inputTokens
+    case outputTokens
+    case monthlyCost
+    case successRate
+    case points
+  }
 
   init(
     inputTokens: String = "-",
