@@ -300,28 +300,30 @@ export class HermesCloudApi {
     );
   }
 
-  getMcp() {
+  getMcp(profile = 'default') {
     return Promise.all([
-      this.request<JsonRecord>('/api/mcp/servers'),
-      this.request<JsonRecord>('/api/mcp/catalog'),
+      this.request<JsonRecord>('/api/mcp/servers', { query: { profile } }),
+      this.request<JsonRecord>('/api/mcp/catalog', { query: { profile } }),
     ]).then(([servers, catalog]) => ({ servers, catalog }));
   }
 
-  addMcpServer(server: JsonRecord) {
-    return this.json<JsonRecord>('/api/mcp/servers', 'POST', server);
+  addMcpServer(server: JsonRecord, profile = 'default') {
+    return this.json<JsonRecord>('/api/mcp/servers', 'POST', server, { query: { profile } });
   }
 
-  setMcpServerEnabled(name: string, enabled: boolean) {
+  setMcpServerEnabled(name: string, enabled: boolean, profile = 'default') {
     return this.json<JsonRecord>(
       `/api/mcp/servers/${encodeURIComponent(name)}/enabled`,
       'PUT',
       { enabled },
+      { query: { profile } },
     );
   }
 
-  removeMcpServer(name: string) {
+  removeMcpServer(name: string, profile = 'default') {
     return this.request<{ ok: boolean }>(`/api/mcp/servers/${encodeURIComponent(name)}`, {
       method: 'DELETE',
+      query: { profile },
     });
   }
 
@@ -344,15 +346,15 @@ export class HermesCloudApi {
     return this.request<JsonRecord>('/api/pairing/clear-pending', { method: 'POST' });
   }
 
-  getChannels() {
-    return this.request<JsonRecord>('/api/messaging/platforms');
+  getChannels(profile = 'default') {
+    return this.request<JsonRecord>('/api/messaging/platforms', { query: { profile } });
   }
 
-  updateChannel(id: string, update: JsonRecord) {
+  updateChannel(id: string, update: JsonRecord, profile = 'default') {
     return this.json<JsonRecord>(
       `/api/messaging/platforms/${encodeURIComponent(id)}`,
       'PUT',
-      update,
+      { ...update, profile },
     );
   }
 
@@ -433,16 +435,16 @@ export class HermesCloudApi {
     return this.json<{ ok: boolean }>('/api/config', 'PUT', { config }, { profile });
   }
 
-  getEnvironment() {
-    return this.request<Record<string, JsonRecord>>('/api/env');
+  getEnvironment(profile = 'default') {
+    return this.request<Record<string, JsonRecord>>('/api/env', { query: { profile } });
   }
 
-  setEnvironmentVariable(key: string, value: string) {
-    return this.json<{ ok: boolean }>('/api/env', 'PUT', { key, value });
+  setEnvironmentVariable(key: string, value: string, profile = 'default') {
+    return this.json<{ ok: boolean }>('/api/env', 'PUT', { key, value, profile });
   }
 
-  deleteEnvironmentVariable(key: string) {
-    return this.json<{ ok: boolean }>('/api/env', 'DELETE', { key });
+  deleteEnvironmentVariable(key: string, profile = 'default') {
+    return this.json<{ ok: boolean }>('/api/env', 'DELETE', { key, profile });
   }
 
   getSystem() {
@@ -470,6 +472,10 @@ export class HermesCloudApi {
 
   getKanbanBoard() {
     return this.request<JsonRecord>(`${KANBAN}/board`);
+  }
+
+  createKanbanTask(task: JsonRecord) {
+    return this.json<JsonRecord>(`${KANBAN}/tasks`, 'POST', task);
   }
 
   updateKanbanTask(id: string, update: JsonRecord) {
@@ -634,17 +640,22 @@ export class HermesCloudApi {
       case 'analytics': return this.getAnalytics(30, profile);
       case 'models': return this.getModels(profile);
       case 'logs': return this.getLogs();
-      case 'cron': return this.getCronJobs('all');
-      case 'skills': return this.getSkills(profile);
+      case 'cron': return this.getCronJobs(profile);
+      case 'skills': {
+        const skills = await this.getSkills(profile);
+        if (!selectedId) return skills;
+        const selected = await this.getSkillContent(selectedId, profile);
+        return { ...skills, selectedId, selectedContent: selected };
+      }
       case 'plugins': return this.getPlugins();
-      case 'mcp': return this.getMcp();
+      case 'mcp': return this.getMcp(profile);
       case 'pairing': return this.getPairing();
-      case 'channels': return this.getChannels();
+      case 'channels': return this.getChannels(profile);
       case 'webhooks': return this.getWebhooks();
       case 'profiles':
       case 'profile-new': return this.getProfiles();
       case 'config': return this.getConfig(profile);
-      case 'env': return this.getEnvironment();
+      case 'env': return this.getEnvironment(profile);
       case 'system': return this.getSystem();
       case 'achievements': return this.getAchievements();
       case 'kanban': return this.getKanbanBoard();

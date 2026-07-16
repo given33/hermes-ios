@@ -90,6 +90,9 @@ private enum HermesRemoteEditor: String, Identifiable {
   case pairing
   case profiles
   case soul
+  case skill
+  case kanban
+  case channel
   case environment
   case config
 
@@ -104,9 +107,12 @@ private struct HermesRemoteRoutePage: View {
   let onAction: HermesRouteActionSink
   @State private var collaborationDraft = ""
   @State private var editor: HermesRemoteEditor?
+  @State private var editorID = ""
   @State private var editorName = ""
   @State private var editorValue = ""
   @State private var editorDetail = ""
+  @State private var importingConfiguration = false
+  @State private var requestedSkillID = ""
 
   var body: some View {
     routeBody
@@ -129,10 +135,22 @@ private struct HermesRemoteRoutePage: View {
           name: $editorName,
           value: $editorValue,
           detail: $editorDetail,
+          kanbanColumns: data.kanban,
           onCancel: { editor = nil },
           onSave: { saveEditor(kind) }
         )
         .environmentObject(appearance)
+      }
+      .onChange(of: data.skills) { _, skills in
+        guard !requestedSkillID.isEmpty,
+              let skill = skills.first(where: { $0.id == requestedSkillID }),
+              let content = skill.content else { return }
+        editorID = skill.id
+        editorName = skill.name
+        editorValue = ""
+        editorDetail = content
+        requestedSkillID = ""
+        editor = .skill
       }
   }
 
@@ -168,6 +186,12 @@ private struct HermesRemoteRoutePage: View {
           )).labelsHidden()
         }
         .contextMenu {
+          Button {
+            requestedSkillID = skill.id
+            onAction(.skillSelect, HermesRouteActionPayload(route: "skills", id: skill.id))
+          } label: {
+            Label(chinese ? "编辑 SKILL.md" : "Edit SKILL.md", systemImage: "square.and.pencil")
+          }
           Button { onAction(.skillView, HermesRouteActionPayload(route: "skills", id: skill.id)) } label: {
             Label(chinese ? "查看 SKILL.md" : "View SKILL.md", systemImage: "doc.text")
           }
@@ -188,6 +212,19 @@ private struct HermesRemoteRoutePage: View {
             Button(role: .destructive) {
               onAction(.integrationDelete, HermesRouteActionPayload(route: route.rawValue, id: item.id))
             } label: { Label(chinese ? "删除" : "Delete", systemImage: "trash") }
+          }
+        }
+        .contextMenu {
+          if route == .channels {
+            Button {
+              editorID = item.id
+              editorName = item.name
+              editorValue = ""
+              editorDetail = item.configuration ?? "{}"
+              editor = .channel
+            } label: {
+              Label(chinese ? "编辑渠道配置" : "Edit channel configuration", systemImage: "gearshape")
+            }
           }
         }
       }
@@ -267,6 +304,12 @@ private struct HermesRemoteRoutePage: View {
             Label(chinese ? "分享成就" : "Share achievements", systemImage: "square.and.arrow.up")
           }.buttonStyle(HermesPrimaryButtonStyle())
         }
+        Button {
+          onAction(.achievementsRescan, HermesRouteActionPayload(route: "achievements"))
+        } label: {
+          Label(chinese ? "重新扫描成就" : "Rescan achievements", systemImage: "arrow.clockwise")
+        }
+        .buttonStyle(.bordered)
       }
     case .collaboration:
       VStack(spacing: 0) {
@@ -312,6 +355,27 @@ private struct HermesRemoteRoutePage: View {
                   }
                 }
                 .contextMenu {
+                  Button {
+                    editorID = card.id
+                    editorName = card.title
+                    editorValue = column.id
+                    editorDetail = card.detail
+                    editor = .kanban
+                  } label: {
+                    Label(chinese ? "编辑任务" : "Edit task", systemImage: "square.and.pencil")
+                  }
+                  Menu {
+                    ForEach(data.kanban.filter { $0.id != column.id }) { target in
+                      Button(target.title) {
+                        onAction(
+                          .kanbanMove,
+                          HermesRouteActionPayload(route: "kanban", id: card.id, targetId: target.id)
+                        )
+                      }
+                    }
+                  } label: {
+                    Label(chinese ? "移动到" : "Move to", systemImage: "arrow.right.circle")
+                  }
                   Button(role: .destructive) { onAction(.kanbanDelete, HermesRouteActionPayload(route: "kanban", id: card.id)) } label: { Label(chinese ? "归档" : "Archive", systemImage: "archivebox") }
                 }
               }
@@ -343,11 +407,37 @@ private struct HermesRemoteRoutePage: View {
         }
         Section(chinese ? "执行" : "Execution") {
           LabeledContent(chinese ? "最大迭代" : "Max iterations", value: String(Int(data.config.maxIterations)))
-          Toggle(chinese ? "流式输出" : "Stream output", isOn: .constant(data.config.streamOutput))
-          Toggle(chinese ? "自动压缩" : "Automatic compaction", isOn: .constant(data.config.autoCompact))
+          Toggle(chinese ? "流式输出" : "Stream output", isOn: Binding(
+            get: { data.config.streamOutput },
+            set: { updateConfigValue("stream_output", value: $0) }
+          ))
+          Toggle(chinese ? "自动压缩" : "Automatic compaction", isOn: Binding(
+            get: { data.config.autoCompact },
+            set: { updateConfigValue("auto_compact", value: $0) }
+          ))
         }
-        Section(chinese ? "导出" : "Export") { ShareLink(item: data.config.exportText) { Label(chinese ? "分享配置" : "Share configuration", systemImage: "square.and.arrow.up") } }
+        Section(chinese ? "导入与导出" : "Import and export") {
+          Button {
+            importingConfiguration = true
+          } label: {
+            Label(chinese ? "导入配置" : "Import configuration", systemImage: "square.and.arrow.down")
+          }
+          ShareLink(item: data.config.exportText) {
+            Label(chinese ? "分享配置" : "Share configuration", systemImage: "square.and.arrow.up")
+          }
+        }
       }.scrollContentBackground(.hidden).background(appearance.palette.background)
+        .fileImporter(
+          isPresented: $importingConfiguration,
+          allowedContentTypes: [.json, .plainText],
+          allowsMultipleSelection: false
+        ) { result in
+          guard case let .success(urls) = result, let url = urls.first else { return }
+          let accessed = url.startAccessingSecurityScopedResource()
+          defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+          guard let content = try? String(contentsOf: url, encoding: .utf8) else { return }
+          onAction(.configImport, HermesRouteActionPayload(route: "config", value: content))
+        }
     case .env:
       List(data.environment) { secret in
         HermesRemoteRow(icon: "key.fill", title: secret.key, detail: secret.maskedValue, tint: appearance.palette.accent) {
@@ -386,6 +476,7 @@ private struct HermesRemoteRoutePage: View {
     case .webhooks: return .webhooks
     case .pairing: return .pairing
     case .profiles: return .profiles
+    case .kanban: return .kanban
     case .env: return .environment
     case .config: return .config
     default: return nil
@@ -393,8 +484,9 @@ private struct HermesRemoteRoutePage: View {
   }
 
   private func prepareEditor(_ kind: HermesRemoteEditor) {
+    editorID = ""
     editorName = ""
-    editorValue = ""
+    editorValue = kind == .kanban ? (data.kanban.first?.id ?? "") : ""
     editorDetail = ""
     if kind == .config { editorDetail = data.config.exportText }
     editor = kind
@@ -423,6 +515,19 @@ private struct HermesRemoteRoutePage: View {
     case .soul:
       guard !name.isEmpty else { return }
       onAction(.profileUpdate, HermesRouteActionPayload(route: "profiles", id: name, detail: editorDetail))
+    case .skill:
+      guard !editorID.isEmpty else { return }
+      onAction(.skillUpdate, HermesRouteActionPayload(route: "skills", id: editorID, detail: editorDetail))
+    case .kanban:
+      guard !name.isEmpty else { return }
+      if editorID.isEmpty {
+        onAction(.kanbanCreate, HermesRouteActionPayload(route: "kanban", name: name, detail: detail, targetId: value))
+      } else {
+        onAction(.kanbanUpdate, HermesRouteActionPayload(route: "kanban", id: editorID, name: name, detail: detail, targetId: value))
+      }
+    case .channel:
+      guard !editorID.isEmpty, !detail.isEmpty else { return }
+      onAction(.integrationUpdate, HermesRouteActionPayload(route: "channels", id: editorID, value: detail))
     case .environment:
       guard !name.isEmpty else { return }
       onAction(.environmentUpsert, HermesRouteActionPayload(route: "env", id: name, value: editorValue))
@@ -431,6 +536,15 @@ private struct HermesRemoteRoutePage: View {
       onAction(.configUpdate, HermesRouteActionPayload(route: "config", value: detail))
     }
     editor = nil
+  }
+
+  private func updateConfigValue(_ key: String, value: Any) {
+    guard let data = self.data.config.exportText.data(using: .utf8),
+          var config = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+    config[key] = value
+    guard let updated = try? JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys]),
+          let json = String(data: updated, encoding: .utf8) else { return }
+    onAction(.configUpdate, HermesRouteActionPayload(route: "config", value: json))
   }
 }
 
@@ -441,14 +555,15 @@ private struct HermesRemoteEditorSheet: View {
   @Binding var name: String
   @Binding var value: String
   @Binding var detail: String
+  let kanbanColumns: [HermesKanbanColumnSnapshot]
   let onCancel: () -> Void
   let onSave: () -> Void
 
   var body: some View {
     NavigationStack {
       Form {
-        if kind == .config || kind == .soul {
-          Section(kind == .soul ? "SOUL.md" : "config.json") {
+        if kind == .config || kind == .soul || kind == .skill || kind == .channel {
+          Section(kind == .soul ? "SOUL.md" : kind == .skill ? "SKILL.md" : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : "config.json") {
             TextEditor(text: $detail)
               .font(HermesFonts.mono(12))
               .frame(minHeight: 320)
@@ -459,10 +574,16 @@ private struct HermesRemoteEditorSheet: View {
           TextField(nameLabel, text: $name)
             .textInputAutocapitalization(kind == .environment ? .characters : .never)
             .autocorrectionDisabled()
-          if kind == .cron || kind == .mcp || kind == .pairing || kind == .profiles || kind == .environment {
+          if kind == .cron || kind == .mcp || kind == .pairing || kind == .profiles || kind == .environment || kind == .kanban {
             Group {
               if kind == .environment {
                 SecureField(valueLabel, text: $value)
+              } else if kind == .kanban {
+                Picker(chinese ? "状态" : "Status", selection: $value) {
+                  ForEach(kanbanColumns) { column in
+                    Text(column.title).tag(column.id)
+                  }
+                }
               } else {
                 TextField(valueLabel, text: $value)
                   .textInputAutocapitalization(.never)
@@ -470,7 +591,7 @@ private struct HermesRemoteEditorSheet: View {
               }
             }
           }
-          if kind == .cron || kind == .webhooks || kind == .profiles {
+          if kind == .cron || kind == .webhooks || kind == .profiles || kind == .kanban {
             TextField(detailLabel, text: $detail, axis: .vertical)
               .lineLimit(3...8)
           }
@@ -489,7 +610,7 @@ private struct HermesRemoteEditorSheet: View {
         }
       }
     }
-    .presentationDetents(kind == .config || kind == .soul ? [.large] : [.medium, .large])
+    .presentationDetents(kind == .config || kind == .soul || kind == .skill || kind == .channel ? [.large] : [.medium, .large])
     .presentationDragIndicator(.visible)
   }
 
@@ -497,6 +618,9 @@ private struct HermesRemoteEditorSheet: View {
     if !chinese {
       if kind == .config { return "Edit Configuration" }
       if kind == .soul { return "Edit SOUL.md" }
+      if kind == .skill { return "Edit SKILL.md" }
+      if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
+      if kind == .channel { return "Edit Channel Configuration" }
       return "Add \(kind.rawValue.capitalized)"
     }
     switch kind {
@@ -506,6 +630,9 @@ private struct HermesRemoteEditorSheet: View {
     case .pairing: return "批准配对用户"
     case .profiles: return "新建 Profile"
     case .soul: return "编辑 SOUL.md"
+    case .skill: return "编辑 SKILL.md"
+    case .kanban: return name.isEmpty ? "新建任务" : "编辑任务"
+    case .channel: return "编辑渠道配置"
     case .environment: return "添加或替换密钥"
     case .config: return "编辑配置"
     }
@@ -513,6 +640,7 @@ private struct HermesRemoteEditorSheet: View {
 
   private var nameLabel: String {
     if kind == .pairing { return chinese ? "平台" : "Platform" }
+    if kind == .kanban { return chinese ? "标题" : "Title" }
     return chinese ? "名称" : "Name"
   }
   private var valueLabel: String {
@@ -522,11 +650,12 @@ private struct HermesRemoteEditorSheet: View {
     case .mcp: return "服务器 URL"
     case .pairing: return "配对码"
     case .profiles: return "模型"
+    case .kanban: return "状态"
     default: return "密钥值"
     }
   }
   private var detailLabel: String {
-    chinese ? (kind == .cron ? "任务提示词" : "说明") : (kind == .cron ? "Prompt" : "Description")
+    chinese ? (kind == .cron ? "任务提示词" : kind == .kanban ? "任务内容" : "说明") : (kind == .cron ? "Prompt" : kind == .kanban ? "Task details" : "Description")
   }
 }
 

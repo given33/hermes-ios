@@ -69,6 +69,24 @@ test('management mutations preserve the official method and body contracts', asy
   assert.equal(calls[3].options.method, 'POST');
 });
 
+test('profile-scoped management routes keep the active Profile on every request', async () => {
+  const { api, calls } = createApi();
+
+  await api.loadRoute('cron', 'reviewer');
+  await api.loadRoute('mcp', 'reviewer');
+  await api.loadRoute('channels', 'reviewer');
+  await api.loadRoute('env', 'reviewer');
+
+  assert.deepEqual(calls.map(({ path }) => path), [
+    '/api/cron/jobs',
+    '/api/mcp/servers',
+    '/api/mcp/catalog',
+    '/api/messaging/platforms',
+    '/api/env',
+  ]);
+  assert.ok(calls.every(({ options }) => options.query?.profile === 'reviewer'));
+});
+
 test('the collaboration client keeps conversation and hosted-turn state on the server', async () => {
   const { api, calls } = createApi();
 

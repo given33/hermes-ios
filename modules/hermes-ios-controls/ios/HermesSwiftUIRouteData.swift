@@ -235,6 +235,7 @@ struct HermesSkillSnapshot: Decodable, Equatable, Identifiable {
   let detail: String
   let bundled: Bool
   let enabled: Bool
+  let content: String?
   let notes: String?
   let source: String?
 }
@@ -244,6 +245,7 @@ struct HermesIntegrationSnapshot: Decodable, Equatable, Identifiable {
   let name: String
   let detail: String
   let enabled: Bool
+  let configuration: String?
 }
 
 struct HermesPairingEntrySnapshot: Decodable, Equatable, Identifiable {
@@ -438,6 +440,7 @@ enum HermesRouteAction: String, CaseIterable {
   case cronRun = "cron.run"
   case cronDelete = "cron.delete"
   case skillToggle = "skill.toggle"
+  case skillSelect = "skill.select"
   case skillView = "skill.view"
   case skillUpdate = "skill.update"
   case integrationCreate = "integration.create"
@@ -447,6 +450,7 @@ enum HermesRouteAction: String, CaseIterable {
   case pairingApprove = "pairing.approve"
   case pairingRevoke = "pairing.revoke"
   case pairingClearPending = "pairing.clear-pending"
+  case achievementsRescan = "achievements.rescan"
   case profileCreate = "profile.create"
   case profileUpdate = "profile.update"
   case profileActivate = "profile.activate"
@@ -457,6 +461,8 @@ enum HermesRouteAction: String, CaseIterable {
   case environmentDelete = "environment.delete"
   case systemRestart = "system.restart"
   case systemUpdate = "system.update"
+  case kanbanCreate = "kanban.create"
+  case kanbanUpdate = "kanban.update"
   case kanbanMove = "kanban.move"
   case kanbanDelete = "kanban.delete"
   case collaborationSelect = "collaboration.select"

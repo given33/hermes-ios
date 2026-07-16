@@ -374,6 +374,7 @@ function PreviewRoute({
         client={client}
         notificationTarget={notificationTarget}
         openNavigation={openNavigation}
+        profile={profile}
       />
     );
     case 'sessions': return <SessionsPreviewPage {...props} />;

@@ -99,6 +99,7 @@ export function useHermesSwiftUIRouteData({
         event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSelect
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.fileSelect
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionSelect
+        || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.skillSelect
       )
       && event.payload.id
     ) {

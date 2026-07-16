@@ -50,6 +50,11 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
   assert.doesNotMatch(routes, /case \.chat:[\s\S]*HermesChatPage\(/);
   assert.match(preview, /route\.routeId !== 'chat'/);
   assert.match(preview, /<ChatPreviewPage/);
+  assert.match(preview, /<ChatPreviewPage[\s\S]*profile=\{profile\}/);
+  const chat = read('src/preview/PreviewChatPage.tsx');
+  assert.match(chat, /createConversation\(profile,/);
+  assert.match(chat, /existingSessionId: runtimeSessionsRef\.current\[profile\]/);
+  assert.match(chat, /profile,\s*prompt:/);
   assert.equal(
     existsSync(resolve(
       projectRoot,
@@ -64,6 +69,30 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
     )),
     false,
   );
+});
+
+test('SwiftUI management pages expose the server write operations', () => {
+  const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const routeData = read('src/app/hermes-route-data.ts');
+
+  assert.match(routes, /\.skillSelect/);
+  assert.match(routes, /\.skillUpdate/);
+  assert.match(routes, /\.achievementsRescan/);
+  assert.match(routes, /\.kanbanCreate/);
+  assert.match(routes, /\.kanbanUpdate/);
+  assert.match(routes, /\.kanbanMove/);
+  assert.match(routes, /\.integrationUpdate/);
+  assert.match(routes, /编辑渠道配置/);
+  assert.match(routes, /updateConfigValue\("stream_output"/);
+  assert.match(routes, /updateConfigValue\("auto_compact"/);
+  assert.match(routes, /\.fileImporter\(/);
+  assert.match(routes, /\.configImport/);
+  assert.doesNotMatch(routes, /isOn: \.constant\(data\.config\.(?:streamOutput|autoCompact)\)/);
+  assert.match(routeData, /api\.updateSkillContent/);
+  assert.match(routeData, /api\.rescanAchievements/);
+  assert.match(routeData, /api\.createKanbanTask/);
+  assert.match(routeData, /api\.updateKanbanTask/);
+  assert.match(routeData, /api\.updateChannel/);
 });
 
 test('SwiftUI owns one synchronized sidebar transition and native page navigation', () => {

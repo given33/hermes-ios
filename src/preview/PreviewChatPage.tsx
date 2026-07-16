@@ -146,6 +146,7 @@ interface ChatPreviewPageProps {
   notify(message: string): void;
   notificationTarget?: HermesNotificationTarget | null;
   openNavigation?(): void;
+  profile?: string;
 }
 
 export function ChatPreviewPage({
@@ -154,6 +155,7 @@ export function ChatPreviewPage({
   notify,
   notificationTarget,
   openNavigation,
+  profile = 'default',
 }: ChatPreviewPageProps) {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -325,7 +327,7 @@ export function ChatPreviewPage({
     activeStream.current = null;
     if (cloudApi) {
       try {
-        const result = await cloudApi.createConversation('default', isChinese ? '新对话' : 'New conversation');
+        const result = await cloudApi.createConversation(profile, isChinese ? '新对话' : 'New conversation');
         setConversations((current) => [
           result.conversation,
           ...current.filter((item) => item.id !== result.conversation.id),
@@ -387,7 +389,7 @@ export function ChatPreviewPage({
       let conversationId = activeConversationIdRef.current;
       if (!conversationId) {
         const created = await cloudApi.createConversation(
-          'default',
+          profile,
           trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
         );
         conversationId = created.conversation.id;
@@ -491,11 +493,11 @@ export function ChatPreviewPage({
           if (storedSessionId) {
             runtimeSessionsRef.current = {
               ...runtimeSessionsRef.current,
-              default: storedSessionId,
+              [profile]: storedSessionId,
             };
             await cloudApi.saveRuntimeSession(
               conversationId,
-              'default',
+              profile,
               storedSessionId,
               streamId,
               'running',
@@ -523,8 +525,8 @@ export function ChatPreviewPage({
       activeStream.current = stream;
       const result = await stream.run({
         conversationId,
-        existingSessionId: runtimeSessionsRef.current.default,
-        profile: 'default',
+        existingSessionId: runtimeSessionsRef.current[profile],
+        profile,
         prompt: [
           trimmed || userMessage.content,
           filesContext,

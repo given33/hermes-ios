@@ -27,7 +27,11 @@ import {
   type ManagedFileEntry,
   type SessionSummary,
 } from '../api/HermesCloudApi';
-import { localizeHermesServerText } from '../i18n/hermes-server-content-zh';
+import {
+  localizeHermesIntegrationDescription,
+  localizeHermesIntegrationName,
+  localizeHermesServerText,
+} from '../i18n/hermes-server-content-zh';
 
 export async function loadHermesSwiftUIRouteSnapshot(
   api: HermesCloudApi,
@@ -162,26 +166,37 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       await api.updateSkillContent(payload.id, payload.detail || '', profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.achievementsRescan:
+      await api.rescanAchievements();
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationToggle:
       if (!payload.id || payload.enabled === undefined) return 'none';
       if (payload.route === 'plugins') {
         await api.setPluginEnabled(payload.id, payload.enabled);
       } else if (payload.route === 'mcp') {
-        await api.setMcpServerEnabled(payload.id, payload.enabled);
+        await api.setMcpServerEnabled(payload.id, payload.enabled, profile);
       } else if (payload.route === 'webhooks') {
         await api.setWebhookEnabled(payload.id, payload.enabled);
       } else {
-        await api.updateChannel(payload.id, { enabled: payload.enabled });
+        await api.updateChannel(payload.id, { enabled: payload.enabled }, profile);
       }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationDelete:
       if (!payload.id) return 'none';
-      if (payload.route === 'mcp') await api.removeMcpServer(payload.id);
+      if (payload.route === 'mcp') await api.removeMcpServer(payload.id, profile);
       else if (payload.route === 'webhooks') await api.deleteWebhook(payload.id);
       return payload.route === 'mcp' || payload.route === 'webhooks' ? 'reload' : 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationUpdate:
+      if (!payload.id || payload.route !== 'channels') return 'none';
+      {
+        const update = payload.value ? parseJsonRecord(payload.value) : payload.fields;
+        if (!update) return 'none';
+        await api.updateChannel(payload.id, update, profile);
+      }
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationCreate:
       if (payload.route === 'mcp') {
-        await api.addMcpServer({ name: payload.name || 'mcp-server', ...(payload.fields || {}) });
+        await api.addMcpServer({ name: payload.name || 'mcp-server', ...(payload.fields || {}) }, profile);
         return 'reload';
       }
       if (payload.route === 'webhooks') {
@@ -224,17 +239,39 @@ export async function performHermesSwiftUIRouteAction(
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.environmentUpsert:
       if (!payload.id && !payload.name) return 'none';
-      await api.setEnvironmentVariable(payload.id || payload.name || '', payload.value || '');
+      await api.setEnvironmentVariable(payload.id || payload.name || '', payload.value || '', profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.environmentDelete:
       if (!payload.id) return 'none';
-      await api.deleteEnvironmentVariable(payload.id);
+      await api.deleteEnvironmentVariable(payload.id, profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRestart:
       await api.restartGateway();
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemUpdate:
       await api.updateHermes();
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanCreate:
+      if (!payload.name && !payload.value) return 'none';
+      {
+        const created = await api.createKanbanTask({
+          title: payload.name || payload.value || '新任务',
+          body: payload.detail || '',
+        });
+        const task = isRecord(created.task) ? created.task : {};
+        const taskId = stringValue(task.id);
+        if (taskId && payload.targetId && payload.targetId !== 'triage') {
+          await api.updateKanbanTask(taskId, { status: payload.targetId });
+        }
+      }
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanUpdate:
+      if (!payload.id) return 'none';
+      await api.updateKanbanTask(payload.id, {
+        ...(payload.name ? { title: payload.name } : {}),
+        ...(payload.detail !== undefined ? { body: payload.detail } : {}),
+        ...(payload.targetId ? { status: payload.targetId } : {}),
+      });
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanMove:
       if (!payload.id) return 'none';
@@ -411,6 +448,10 @@ function cronSnapshot(source: unknown, chinese: boolean): HermesSwiftUICronJobSn
 
 function skillsSnapshot(source: unknown, chinese: boolean): HermesSwiftUISkillSnapshot[] {
   const rows = isRecord(source) && Array.isArray(source.skills) ? source.skills : [];
+  const selectedId = isRecord(source) ? stringValue(source.selectedId) : '';
+  const selectedContent = isRecord(source) && isRecord(source.selectedContent)
+    ? structuredContent(source.selectedContent.content ?? source.selectedContent.text)
+    : '';
   return rows.flatMap((entry, index) => {
     if (!isRecord(entry)) return [];
     const id = stringValue(entry.name) || stringValue(entry.id) || `skill-${index}`;
@@ -420,6 +461,7 @@ function skillsSnapshot(source: unknown, chinese: boolean): HermesSwiftUISkillSn
       detail: localizeHermesServerText(stringValue(entry.description) || stringValue(entry.detail) || '', chinese),
       bundled: Boolean(entry.bundled || entry.source === 'bundled' || entry.provenance === 'bundled'),
       enabled: entry.enabled !== false,
+      ...(id === selectedId ? { content: selectedContent } : {}),
       notes: stringValue(entry.notes),
       source: stringValue(entry.source),
     }];
@@ -440,18 +482,40 @@ function integrationsSnapshot(source: unknown, kind: string, chinese: boolean): 
     const id = stringValue(entry.name) || stringValue(entry.id) || stringValue(entry.slug) || `${kind}-${index}`;
     return [{
       id,
-      name: localizeHermesServerText(stringValue(entry.display_name) || stringValue(entry.name) || id, chinese),
-      detail: localizeHermesServerText(
+      name: localizeHermesIntegrationName(
+        id,
+        stringValue(entry.display_name) || stringValue(entry.name) || id,
+        kind,
+        chinese,
+      ),
+      detail: localizeHermesIntegrationDescription(
+        id,
         stringValue(entry.description)
           || stringValue(entry.detail)
           || stringValue(entry.endpoint)
           || stringValue(entry.url)
           || [stringValue(entry.command), stringArray(entry.args).join(' ')].filter(Boolean).join(' '),
+        kind,
         chinese,
       ),
       enabled: entry.enabled !== false && entry.disabled !== true,
+      ...(kind === 'channels' ? { configuration: channelConfiguration(entry) } : {}),
     }];
   });
+}
+
+function channelConfiguration(entry: Record<string, unknown>): string {
+  const envVars = Array.isArray(entry.env_vars) ? entry.env_vars : [];
+  const env = Object.fromEntries(envVars.flatMap((field): [string, string][] => {
+    if (!isRecord(field)) return [];
+    const key = stringValue(field.key);
+    return key ? [[key, '']] : [];
+  }));
+  return JSON.stringify({
+    enabled: entry.enabled !== false,
+    env,
+    clear_env: [],
+  }, null, 2);
 }
 
 function pairingSnapshot(source: unknown): HermesSwiftUIPairingSnapshot {

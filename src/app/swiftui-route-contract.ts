@@ -62,6 +62,7 @@ export interface HermesSwiftUISkillSnapshot {
   detail: string;
   bundled: boolean;
   enabled: boolean;
+  content?: string;
   notes?: string;
   source?: string;
 }
@@ -71,6 +72,7 @@ export interface HermesSwiftUIIntegrationSnapshot {
   name: string;
   detail: string;
   enabled: boolean;
+  configuration?: string;
 }
 
 export interface HermesSwiftUIPairingSnapshot {
@@ -207,6 +209,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   cronRun: 'cron.run',
   cronDelete: 'cron.delete',
   skillToggle: 'skill.toggle',
+  skillSelect: 'skill.select',
   skillView: 'skill.view',
   skillUpdate: 'skill.update',
   integrationCreate: 'integration.create',
@@ -216,6 +219,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   pairingApprove: 'pairing.approve',
   pairingRevoke: 'pairing.revoke',
   pairingClearPending: 'pairing.clear-pending',
+  achievementsRescan: 'achievements.rescan',
   profileCreate: 'profile.create',
   profileUpdate: 'profile.update',
   profileActivate: 'profile.activate',
@@ -226,6 +230,8 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   environmentDelete: 'environment.delete',
   systemRestart: 'system.restart',
   systemUpdate: 'system.update',
+  kanbanCreate: 'kanban.create',
+  kanbanUpdate: 'kanban.update',
   kanbanMove: 'kanban.move',
   kanbanDelete: 'kanban.delete',
   collaborationSelect: 'collaboration.select',

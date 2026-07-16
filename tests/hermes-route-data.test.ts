@@ -117,6 +117,7 @@ test('all native management routes render the current cloud workspace response',
     skills: { skills: [{ name: 'browser', description: '浏览网页', bundled: true, enabled: true }] },
     plugins: { manifests: [{ name: 'collaboration', description: '多 Agent 协作', enabled: true }] },
     mcp: { servers: { servers: [{ name: 'filesystem', command: 'npx', args: ['server-filesystem'], enabled: true }] }, catalog: { entries: [] } },
+    channels: { platforms: [{ id: 'telegram', name: 'Telegram', description: 'Telegram messaging', enabled: true, env_vars: [{ key: 'TELEGRAM_BOT_TOKEN', is_set: true, redacted_value: '123•••456' }] }] },
     webhooks: { enabled: true, subscriptions: [{ name: 'deploy', description: '部署回调', enabled: true }] },
     pairing: {
       pending: [{ platform: 'telegram', user_id: '42', user_name: 'Alice', age_minutes: 3 }],
@@ -141,6 +142,7 @@ test('all native management routes render the current cloud workspace response',
   const skills = await loadHermesSwiftUIRouteSnapshot(api, 'skills', 'default');
   const plugins = await loadHermesSwiftUIRouteSnapshot(api, 'plugins', 'default');
   const mcp = await loadHermesSwiftUIRouteSnapshot(api, 'mcp', 'default');
+  const channels = await loadHermesSwiftUIRouteSnapshot(api, 'channels', 'default');
   const webhooks = await loadHermesSwiftUIRouteSnapshot(api, 'webhooks', 'default');
   const pairing = await loadHermesSwiftUIRouteSnapshot(api, 'pairing', 'default');
   const achievements = await loadHermesSwiftUIRouteSnapshot(api, 'achievements', 'default');
@@ -156,6 +158,13 @@ test('all native management routes render the current cloud workspace response',
   assert.equal(plugins.integrations?.[0].detail, '多 Agent 协作');
   assert.equal(mcp.integrations?.[0].name, '文件系统');
   assert.equal(mcp.integrations?.[0].detail, 'npx server-filesystem');
+  assert.equal(channels.integrations?.[0].name, 'Telegram 消息渠道');
+  assert.equal(channels.integrations?.[0].detail, '通过 Telegram 消息渠道收发 Hermes 消息。');
+  assert.deepEqual(JSON.parse(channels.integrations?.[0].configuration ?? ''), {
+    enabled: true,
+    env: { TELEGRAM_BOT_TOKEN: '' },
+    clear_env: [],
+  });
   assert.equal(webhooks.integrations?.[0].name, 'deploy');
   assert.equal(pairing.pairing?.pending[0].platform, 'telegram');
   assert.equal(pairing.pairing?.pending[0].detail, 'Alice · 3 分钟前');
@@ -177,11 +186,19 @@ test('all native management routes render the current cloud workspace response',
 test('native management actions write through the canonical cloud APIs', async () => {
   const calls: unknown[][] = [];
   const api = {
+    createKanbanTask: async (...args: unknown[]) => {
+      calls.push(['kanban-create', ...args]);
+      return { task: { id: 'task-new' } };
+    },
+    rescanAchievements: async (...args: unknown[]) => { calls.push(['achievement-rescan', ...args]); },
     setCronJobPaused: async (...args: unknown[]) => { calls.push(['cron-toggle', ...args]); },
     toggleSkill: async (...args: unknown[]) => { calls.push(['skill-toggle', ...args]); },
+    updateChannel: async (...args: unknown[]) => { calls.push(['channel-update', ...args]); },
     setPluginEnabled: async (...args: unknown[]) => { calls.push(['plugin-toggle', ...args]); },
     setActiveProfile: async (...args: unknown[]) => { calls.push(['profile-active', ...args]); },
     setEnvironmentVariable: async (...args: unknown[]) => { calls.push(['env-upsert', ...args]); },
+    updateKanbanTask: async (...args: unknown[]) => { calls.push(['kanban-update', ...args]); },
+    updateSkillContent: async (...args: unknown[]) => { calls.push(['skill-update', ...args]); },
     restartGateway: async (...args: unknown[]) => { calls.push(['restart', ...args]); },
   } as unknown as HermesCloudApi;
 
@@ -191,15 +208,40 @@ test('native management actions write through the canonical cloud APIs', async (
   await performHermesSwiftUIRouteAction(api, { action: 'profile.activate', payload: { route: 'profiles', id: 'worker' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'environment.upsert', payload: { route: 'env', id: 'API_KEY', value: 'secret' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'system.restart', payload: { route: 'system' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'skill.update', payload: { route: 'skills', id: 'browser', detail: '# Browser' } }, 'reviewer');
+  await performHermesSwiftUIRouteAction(api, { action: 'achievements.rescan', payload: { route: 'achievements' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'kanban.create', payload: { route: 'kanban', name: '云端任务', detail: '检查同步', targetId: 'ready' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'kanban.update', payload: { route: 'kanban', id: 'task-1', name: '新标题', detail: '新内容', targetId: 'doing' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'integration.update', payload: { route: 'channels', id: 'telegram', value: '{"enabled":true,"mode":"polling"}' } }, 'default');
 
   assert.deepEqual(calls, [
     ['cron-toggle', 'cron-1', true, 'default'],
     ['skill-toggle', 'browser', true, 'reviewer'],
     ['plugin-toggle', 'kanban', false],
     ['profile-active', 'worker'],
-    ['env-upsert', 'API_KEY', 'secret'],
+    ['env-upsert', 'API_KEY', 'secret', 'default'],
     ['restart'],
+    ['skill-update', 'browser', '# Browser', 'reviewer'],
+    ['achievement-rescan'],
+    ['kanban-create', { title: '云端任务', body: '检查同步' }],
+    ['kanban-update', 'task-new', { status: 'ready' }],
+    ['kanban-update', 'task-1', { title: '新标题', body: '新内容', status: 'doing' }],
+    ['channel-update', 'telegram', { enabled: true, mode: 'polling' }, 'default'],
   ]);
+});
+
+test('selected skills include the current server SKILL.md for native editing', async () => {
+  const api = {
+    loadRoute: async (_route: string, _profile: string, selectedId: string) => ({
+      selectedId,
+      selectedContent: { content: '# Browser\n\nUse browser tools.' },
+      skills: [{ name: 'browser', description: 'Browser tools', enabled: true }],
+    }),
+  } as unknown as HermesCloudApi;
+
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'skills', 'reviewer', 'browser');
+
+  assert.equal(snapshot.skills?.[0].content, '# Browser\n\nUse browser tools.');
 });
 
 test('native file imports upload every selected system URI to the server workspace', async () => {
