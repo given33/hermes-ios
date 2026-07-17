@@ -11,6 +11,8 @@ const CACHE_VERSION = 1 as const;
 const CACHE_PREFIX = 'hermes.native.conversations.v1';
 const OUTBOX_VERSION = 1 as const;
 const OUTBOX_PREFIX = 'hermes.native.hosted-turn-outbox.v1';
+const ROOM_OUTBOX_VERSION = 1 as const;
+const ROOM_OUTBOX_PREFIX = 'hermes.native.collaboration-room-outbox.v1';
 const cacheWriteChains = new Map<string, Promise<void>>();
 const synchronizationGenerations = new Map<string, number>();
 
@@ -47,6 +49,14 @@ export interface HostedTurnPendingAttachment {
   uploaded?: JsonRecord;
 }
 
+export interface CollaborationRoomOutboxItem {
+  content: string;
+  profiles: string[];
+  queuedAt: number;
+  requestId: string;
+  roomId: string;
+}
+
 export interface ConversationStorageAdapter {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
@@ -58,7 +68,11 @@ export class ConversationLocalStore {
   async read(owner: string): Promise<ConversationCacheSnapshot | null> {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return null;
-    const raw = await this.storage.getItem(cacheKey(normalizedOwner));
+    const raw = await readCurrentOrLegacy(
+      this.storage,
+      cacheKey(normalizedOwner),
+      legacyCacheKey(normalizedOwner),
+    );
     if (!raw) return null;
     try {
       const value = JSON.parse(raw) as unknown;
@@ -133,7 +147,11 @@ export class ConversationLocalStore {
   async readPendingEnqueues(owner: string): Promise<HostedTurnOutboxItem[]> {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return [];
-    const raw = await this.storage.getItem(outboxKey(normalizedOwner));
+    const raw = await readCurrentOrLegacy(
+      this.storage,
+      outboxKey(normalizedOwner),
+      legacyOutboxKey(normalizedOwner),
+    );
     return parsePendingEnqueues(raw, normalizedOwner);
   }
 
@@ -143,7 +161,11 @@ export class ConversationLocalStore {
     if (!normalizedOwner || !normalizedItem) return;
     await enqueueCacheWrite(normalizedOwner, async () => {
       const current = parsePendingEnqueues(
-        await this.storage.getItem(outboxKey(normalizedOwner)),
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
         normalizedOwner,
       );
       const next = current.filter(({ input }) => input.requestId !== normalizedItem.input.requestId);
@@ -162,7 +184,11 @@ export class ConversationLocalStore {
     if (!normalizedOwner || !normalizedRequestId) return;
     await enqueueCacheWrite(normalizedOwner, async () => {
       const current = parsePendingEnqueues(
-        await this.storage.getItem(outboxKey(normalizedOwner)),
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
         normalizedOwner,
       );
       const next = current.filter(({ input }) => input.requestId !== normalizedRequestId);
@@ -170,6 +196,66 @@ export class ConversationLocalStore {
         version: OUTBOX_VERSION,
         owner: normalizedOwner,
         items: next,
+      }));
+    });
+  }
+
+  async readPendingRoomMessages(owner: string): Promise<CollaborationRoomOutboxItem[]> {
+    const normalizedOwner = normalizeOwner(owner);
+    if (!normalizedOwner) return [];
+    return parsePendingRoomMessages(
+      await readCurrentOrLegacy(
+        this.storage,
+        roomOutboxKey(normalizedOwner),
+        legacyRoomOutboxKey(normalizedOwner),
+      ),
+      normalizedOwner,
+    );
+  }
+
+  async upsertPendingRoomMessage(
+    owner: string,
+    item: CollaborationRoomOutboxItem,
+  ): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingRoomMessage(item);
+    if (!normalizedOwner || !normalizedItem) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingRoomMessages(
+        await readCurrentOrLegacy(
+          this.storage,
+          roomOutboxKey(normalizedOwner),
+          legacyRoomOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const next = current.filter(({ requestId }) => requestId !== normalizedItem.requestId);
+      next.push(normalizedItem);
+      await this.storage.setItem(roomOutboxKey(normalizedOwner), JSON.stringify({
+        version: ROOM_OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+    });
+  }
+
+  async removePendingRoomMessage(owner: string, requestId: string): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedRequestId = stringValue(requestId);
+    if (!normalizedOwner || !normalizedRequestId) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingRoomMessages(
+        await readCurrentOrLegacy(
+          this.storage,
+          roomOutboxKey(normalizedOwner),
+          legacyRoomOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      await this.storage.setItem(roomOutboxKey(normalizedOwner), JSON.stringify({
+        version: ROOM_OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: current.filter(({ requestId: currentId }) => currentId !== normalizedRequestId),
       }));
     });
   }
@@ -336,20 +422,52 @@ function normalizeConversation(value: unknown): SingleConversation[] {
 }
 
 function cacheKey(owner: string): string {
-  return `${CACHE_PREFIX}.${ownerHash(owner)}`;
+  return `${CACHE_PREFIX}.${ownerStorageKey(owner)}`;
 }
 
 function outboxKey(owner: string): string {
-  return `${OUTBOX_PREFIX}.${ownerHash(owner)}`;
+  return `${OUTBOX_PREFIX}.${ownerStorageKey(owner)}`;
 }
 
-function ownerHash(owner: string): string {
+function roomOutboxKey(owner: string): string {
+  return `${ROOM_OUTBOX_PREFIX}.${ownerStorageKey(owner)}`;
+}
+
+function legacyCacheKey(owner: string): string {
+  return `${CACHE_PREFIX}.${legacyOwnerHash(owner)}`;
+}
+
+function legacyOutboxKey(owner: string): string {
+  return `${OUTBOX_PREFIX}.${legacyOwnerHash(owner)}`;
+}
+
+function legacyRoomOutboxKey(owner: string): string {
+  return `${ROOM_OUTBOX_PREFIX}.${legacyOwnerHash(owner)}`;
+}
+
+function ownerStorageKey(owner: string): string {
+  let encoded = 'u';
+  for (let index = 0; index < owner.length; index += 1) {
+    encoded += owner.charCodeAt(index).toString(16).padStart(4, '0');
+  }
+  return encoded;
+}
+
+function legacyOwnerHash(owner: string): string {
   let hash = 0x811c9dc5;
   for (const character of owner) {
     hash ^= character.charCodeAt(0);
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16);
+}
+
+async function readCurrentOrLegacy(
+  storage: ConversationStorageAdapter,
+  currentKey: string,
+  legacyKey: string,
+): Promise<string | null> {
+  return (await storage.getItem(currentKey)) ?? storage.getItem(legacyKey);
 }
 
 function parsePendingEnqueues(raw: string | null, owner: string): HostedTurnOutboxItem[] {
@@ -383,6 +501,9 @@ function normalizePendingEnqueue(value: unknown): HostedTurnOutboxItem | null {
     requestId,
     turnId,
     message: { ...value.input.message, id: messageId, content, role },
+    profiles: Array.isArray(value.input.profiles)
+      ? value.input.profiles.flatMap((entry) => stringValue(entry) || [])
+      : [],
     recentMessages: value.input.recentMessages.flatMap((entry) => {
       if (!isRecord(entry)) return [];
       const recentContent = stringValue(entry.content);
@@ -421,6 +542,41 @@ function normalizePendingEnqueue(value: unknown): HostedTurnOutboxItem | null {
       })
       : [],
     queuedAt: numberValue(value.queuedAt) || Date.now(),
+  };
+}
+
+function parsePendingRoomMessages(
+  raw: string | null,
+  owner: string,
+): CollaborationRoomOutboxItem[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || value.version !== ROOM_OUTBOX_VERSION) return [];
+    if (normalizeOwner(value.owner) !== owner || !Array.isArray(value.items)) return [];
+    return value.items.flatMap((item) => {
+      const normalized = normalizePendingRoomMessage(item);
+      return normalized ? [normalized] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function normalizePendingRoomMessage(value: unknown): CollaborationRoomOutboxItem | null {
+  if (!isRecord(value)) return null;
+  const content = stringValue(value.content);
+  const requestId = stringValue(value.requestId);
+  const roomId = stringValue(value.roomId);
+  if (!content || !requestId || !roomId) return null;
+  return {
+    content,
+    profiles: Array.isArray(value.profiles)
+      ? value.profiles.flatMap((profile) => stringValue(profile) || [])
+      : [],
+    queuedAt: numberValue(value.queuedAt) || Date.now(),
+    requestId,
+    roomId,
   };
 }
 

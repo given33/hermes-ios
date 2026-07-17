@@ -108,6 +108,9 @@ private struct HermesRemoteRoutePage: View {
   let chinese: Bool
   let onAction: HermesRouteActionSink
   @State private var collaborationDraft = ""
+  @State private var collaborationPendingRequestId = ""
+  @State private var collaborationPendingRoomId = ""
+  @State private var collaborationPendingText = ""
   @State private var editor: HermesRemoteEditor?
   @State private var editorID = ""
   @State private var editorName = ""
@@ -356,14 +359,48 @@ private struct HermesRemoteRoutePage: View {
               .textFieldStyle(.roundedBorder)
             Button {
               let text = collaborationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-              guard !text.isEmpty else { return }
-              collaborationDraft = ""
-              onAction(.collaborationSend, HermesRouteActionPayload(route: "collaboration", id: data.collaboration.selectedRoomId, value: text))
+              let roomId = data.collaboration.selectedRoomId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+              guard !text.isEmpty, !roomId.isEmpty else { return }
+              let requestId: String
+              if collaborationPendingRoomId == roomId,
+                 collaborationPendingText == text,
+                 !collaborationPendingRequestId.isEmpty {
+                requestId = collaborationPendingRequestId
+              } else {
+                requestId = "room-request-\(UUID().uuidString.lowercased())"
+                collaborationPendingRequestId = requestId
+                collaborationPendingRoomId = roomId
+                collaborationPendingText = text
+              }
+              onAction(
+                .collaborationSend,
+                HermesRouteActionPayload(
+                  route: "collaboration",
+                  id: roomId,
+                  value: text,
+                  requestId: requestId
+                )
+              )
             } label: { Image(systemName: "arrow.up.circle.fill") }
           }.padding(12).background(.ultraThinMaterial)
         }
       }
       .background(appearance.palette.background)
+      .onChange(of: collaborationDraft) { next in
+        let normalized = next.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !collaborationPendingRequestId.isEmpty && normalized != collaborationPendingText {
+          collaborationPendingRequestId = ""
+          collaborationPendingRoomId = ""
+          collaborationPendingText = ""
+        }
+      }
+      .onChange(of: data.collaboration.acknowledgedRequestId) { acknowledged in
+        guard acknowledged == collaborationPendingRequestId else { return }
+        collaborationDraft = ""
+        collaborationPendingRequestId = ""
+        collaborationPendingRoomId = ""
+        collaborationPendingText = ""
+      }
     case .kanban:
       Group {
         if data.kanban.isEmpty {

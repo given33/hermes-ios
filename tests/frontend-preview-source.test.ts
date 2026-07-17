@@ -378,6 +378,19 @@ test('preview share, import, export, and model selection open iOS system surface
   assert.doesNotMatch(settings, /Config import picker opened|Config JSON export prepared/);
 });
 
+test('chat continuation keeps the opened conversation Profile on every send step', () => {
+  const chat = read('src/preview/PreviewChatPage.tsx');
+
+  assert.match(
+    chat,
+    /conversationIndexRef\.current\.find\([\s\S]*activeConversationIdRef\.current[\s\S]*\?\.profile\?\.trim\(\)[\s\S]*\|\| profile/,
+  );
+  assert.match(chat, /getModels\(conversationProfile\)/);
+  assert.match(chat, /profiles: \[conversationProfile\]/);
+  assert.match(chat, /conversationProfile,\s*conversationTitle:/);
+  assert.match(chat, /profile: conversationProfile,\s*turnId:/);
+});
+
 test('Chinese preview mode translates every shared visible control surface', () => {
   const i18n = read('src/i18n/NativeLocalization.tsx');
   const app = read('src/preview/FrontendPreviewApp.tsx');

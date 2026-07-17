@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApiClient';
-import { HermesCloudApi, type SingleConversation } from '../src/api/HermesCloudApi';
+import {
+  HermesCloudApi,
+  officialConversationPlaceholderId,
+  type SingleConversation,
+} from '../src/api/HermesCloudApi';
 import {
   ConversationLocalStore,
   mergeDownloadedConversations,
@@ -63,6 +67,46 @@ test('local conversation history is isolated by server account and restores the 
   assert.equal(restoredB?.conversations[0].messages[0].content, 'B 的本地历史');
 });
 
+test('local account keys remain isolated for owners that collide under the legacy hash', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const ownerA = 'owner-1i52j08-1jc8';
+  const ownerB = 'owner-1t58hz4-3eq8';
+  const chatA = conversation('collision-a', 10, [
+    { id: 'a', role: 'user', name: '你', content: '账户 A' },
+  ]);
+  const chatB = conversation('collision-b', 20, [
+    { id: 'b', role: 'user', name: '你', content: '账户 B' },
+  ]);
+
+  await store.write(ownerA, [chatA], chatA.id);
+  await store.write(ownerB, [chatB], chatB.id);
+
+  assert.equal(storage.values.size, 2);
+  assert.equal((await store.read(ownerA))?.conversations[0].id, 'collision-a');
+  assert.equal((await store.read(ownerB))?.conversations[0].id, 'collision-b');
+});
+
+test('local conversation history can still read the legacy owner-hash key', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'legacy-owner';
+  let hash = 0x811c9dc5;
+  for (const character of owner) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  storage.values.set(`hermes.native.conversations.v1.${(hash >>> 0).toString(16)}`, JSON.stringify({
+    version: 1,
+    owner,
+    activeConversationId: 'legacy-chat',
+    conversations: [conversation('legacy-chat', 10, [])],
+    syncedAt: 10,
+  }));
+
+  assert.equal((await store.read(owner))?.activeConversationId, 'legacy-chat');
+});
+
 test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed after acknowledgement', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
@@ -117,6 +161,33 @@ test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed a
   await store.removePendingEnqueue(ownerA, 'request-stable-1');
   assert.deepEqual(await store.readPendingEnqueues(ownerA), []);
   assert.equal((await store.readPendingEnqueues(ownerB)).length, 1);
+});
+
+test('collaboration room outbox keeps one stable request until server acknowledgement', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const ownerA = 'https://example.test|owner-a@example.test';
+  const ownerB = 'https://example.test|owner-b@example.test';
+  const pending = {
+    content: '并行检查并汇报',
+    profiles: ['dbb3-worker', 'pc-worker'],
+    queuedAt: 100,
+    requestId: 'room-request-stable-1',
+    roomId: 'room-1',
+  };
+
+  await store.upsertPendingRoomMessage(ownerA, pending);
+  await store.upsertPendingRoomMessage(ownerA, { ...pending, queuedAt: 200 });
+  await store.upsertPendingRoomMessage(ownerB, { ...pending, roomId: 'room-2' });
+
+  const ownerAPending = await store.readPendingRoomMessages(ownerA.toUpperCase());
+  assert.equal(ownerAPending.length, 1);
+  assert.deepEqual(ownerAPending[0], { ...pending, queuedAt: 200 });
+  assert.equal((await store.readPendingRoomMessages(ownerB))[0].roomId, 'room-2');
+
+  await store.removePendingRoomMessage(ownerA, pending.requestId);
+  assert.deepEqual(await store.readPendingRoomMessages(ownerA), []);
+  assert.equal((await store.readPendingRoomMessages(ownerB)).length, 1);
 });
 
 test('cloud reconciliation reuses unchanged local transcripts and downloads only changed records', () => {
@@ -290,8 +361,8 @@ test('official sessions are adopted through the modified Hermes flow before chat
   } as HermesApiClient;
 
   const result = await new HermesCloudApi(client).adoptOfficialConversation(
-    'official:session-1',
-    'reviewer',
+    officialConversationPlaceholderId('reviewer', 'session-1'),
+    'default',
   );
   const body = JSON.parse(String(calls[2].options.body)) as {
     title: string;

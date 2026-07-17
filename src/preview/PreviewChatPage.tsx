@@ -67,6 +67,7 @@ import type { HermesApiClient } from '../api/HermesApiClient';
 import type { SidebarGatewayStatus } from '../app/NativeShell';
 import {
   HermesCloudApi,
+  parseOfficialConversationPlaceholderId,
   type CollaborationMessage,
   type HostedTurnEnqueueInput,
   type SingleConversation,
@@ -628,11 +629,17 @@ export function ChatPreviewPage({
     const trimmed = currentContent.trim();
     if ((!trimmed && attachmentCount === 0) || sending) return;
     const pendingAttachments = [...attachments];
+    const conversationProfile = (
+      conversationIndexRef.current.find(
+        ({ id }) => id === activeConversationIdRef.current,
+      )?.profile?.trim()
+      || profile
+    );
     const configurationErrorId = `model-configuration-${activeConversationIdRef.current || 'new'}`;
     if (cloudApi && client) {
       setSending(true);
       try {
-        const modelConfiguration = await cloudApi.getModels(profile);
+        const modelConfiguration = await cloudApi.getModels(conversationProfile);
         const configurationError = chatModelConfigurationError(
           modelConfiguration,
           isChinese,
@@ -767,6 +774,7 @@ export function ChatPreviewPage({
         )),
         deliveryContext: '由服务端意图路由判断是否需要交付文件；需要时上传账户云端并在会话中返回。',
         message: serverUserMessage,
+        profiles: [conversationProfile],
         recentMessages: [...messages, userMessage].slice(-12).map((message) => ({
           content: message.content,
           role: message.role,
@@ -777,7 +785,7 @@ export function ChatPreviewPage({
       queuedItem = {
         conversationId,
         conversationPending,
-        conversationProfile: profile,
+        conversationProfile,
         conversationTitle: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
         input: enqueueInput,
         pendingAttachments: durableAttachments,
@@ -792,7 +800,7 @@ export function ChatPreviewPage({
       } else {
         if (conversationPending) {
           await cloudApi.createConversation(
-            profile,
+            conversationProfile,
             queuedItem.conversationTitle,
             conversationId,
           );
@@ -809,7 +817,7 @@ export function ChatPreviewPage({
             },
             {
               messageId: userMessageId,
-              profile,
+              profile: conversationProfile,
               turnId: hostedTurnId,
               uploadId: attachment.id,
             },
@@ -1748,10 +1756,21 @@ function resolveConversationId(
   if (!requestedId) return conversations[0]?.id || '';
   if (conversations.some(({ id }) => id === requestedId)) return requestedId;
   if (requestedId.startsWith('official:')) {
-    const sessionId = requestedId.slice('official:'.length);
+    const placeholder = parseOfficialConversationPlaceholderId(requestedId);
+    const sessionId = placeholder?.sessionId || requestedId.slice('official:'.length);
     const adopted = conversations.find((conversation) => (
-      conversation.official_session_id === sessionId
-      || Object.values(conversation.runtime_sessions || {}).includes(sessionId)
+      (
+        conversation.official_session_id === sessionId
+        && (
+          !placeholder?.profile
+          || (conversation.official_profile || conversation.profile) === placeholder.profile
+        )
+      )
+      || (
+        placeholder?.profile
+          ? conversation.runtime_sessions?.[placeholder.profile] === sessionId
+          : Object.values(conversation.runtime_sessions || {}).includes(sessionId)
+      )
     ));
     if (adopted) return adopted.id;
   }

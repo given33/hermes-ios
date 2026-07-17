@@ -301,3 +301,25 @@ test('heavy analytics content is staged before the sidebar close signal', () => 
   assert.doesNotMatch(preview, /<HermesSwiftUIRouteView\s+key=\{route\.path\}/);
   assert.doesNotMatch(preview, /<PreviewRoute\s+key=\{route\.path\}/);
 });
+
+test('SwiftUI collaboration keeps its draft and stable request until durable acknowledgement', () => {
+  const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const controller = read('src/app/useHermesSwiftUIRouteData.ts');
+  const store = read('src/api/conversation-local-store.ts');
+
+  assert.match(routes, /collaborationPendingRequestId/);
+  assert.match(routes, /collaborationPendingRoomId == roomId/);
+  assert.match(routes, /collaborationPendingRoomId = roomId/);
+  assert.match(routes, /requestId: requestId/);
+  assert.match(routes, /onChange\(of: data\.collaboration\.acknowledgedRequestId\)/);
+  assert.doesNotMatch(
+    routes,
+    /guard !text\.isEmpty else \{ return \}\s*collaborationDraft = ""\s*onAction\(\.collaborationSend/,
+  );
+  assert.match(controller, /upsertPendingRoomMessage\(cacheOwner, item\)/);
+  assert.match(controller, /sendCollaborationRoomMessage\([\s\S]*item\.requestId/);
+  assert.match(controller, /removePendingRoomMessage\(cacheOwner, item\.requestId\)/);
+  assert.match(controller, /isPermanentRoomSendError\(error\)/);
+  assert.match(controller, /!\[401, 408, 429\]\.includes\(error\.status\)/);
+  assert.match(store, /hermes\.native\.collaboration-room-outbox\.v1/);
+});

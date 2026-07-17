@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
-import type { HermesApiClient } from '../api/HermesApiClient';
-import { conversationSessionSummary, HermesCloudApi } from '../api/HermesCloudApi';
+import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
+import {
+  conversationSessionSummary,
+  createCollaborationRoomRequestId,
+  HermesCloudApi,
+} from '../api/HermesCloudApi';
 import {
   ConversationLocalStore,
   synchronizeConversationCache,
@@ -51,16 +55,54 @@ export function useHermesSwiftUIRouteData({
   );
   const requestVersion = useRef(0);
   const selectedItemId = useRef('');
+  const acknowledgedRoomRequestId = useRef('');
+  const collaborationReplay = useRef<Promise<string> | null>(null);
   const [dataJson, setDataJson] = useState(() => encodeHermesSwiftUIRouteSnapshot({
     version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
     route: routeId,
   }));
 
+  const replayPendingCollaborationMessages = useCallback(async () => {
+    if (!api || !localStore || !cacheOwner || routeId !== 'collaboration') return '';
+    if (collaborationReplay.current) return collaborationReplay.current;
+    const replay = (async () => {
+      let lastAcknowledged = '';
+      let discarded = 0;
+      const pending = await localStore.readPendingRoomMessages(cacheOwner);
+      for (const item of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
+        try {
+          await api.sendCollaborationRoomMessage(
+            item.roomId,
+            item.content,
+            item.profiles,
+            item.requestId,
+          );
+          await localStore.removePendingRoomMessage(cacheOwner, item.requestId);
+          lastAcknowledged = item.requestId;
+        } catch (error) {
+          if (!isPermanentRoomSendError(error)) throw error;
+          await localStore.removePendingRoomMessage(cacheOwner, item.requestId);
+          discarded += 1;
+        }
+      }
+      if (discarded) notify(`${discarded} 条待发群聊消息已失效，请重新选择房间发送。`);
+      if (lastAcknowledged) acknowledgedRoomRequestId.current = lastAcknowledged;
+      return lastAcknowledged;
+    })();
+    collaborationReplay.current = replay;
+    try {
+      return await replay;
+    } finally {
+      if (collaborationReplay.current === replay) collaborationReplay.current = null;
+    }
+  }, [api, cacheOwner, localStore, notify, routeId]);
+
   const reload = useCallback(async () => {
     if (!api) return;
     const version = ++requestVersion.current;
     try {
-      const snapshot = routeId === 'sessions' && localStore && cacheOwner
+      await replayPendingCollaborationMessages().catch(() => undefined);
+      let snapshot = routeId === 'sessions' && localStore && cacheOwner
         ? createHermesSwiftUISessionsSnapshot({
             sessions: (
               await synchronizeConversationCache(
@@ -78,13 +120,35 @@ export function useHermesSwiftUIRouteData({
             selectedItemId.current,
             locale === 'zh',
           );
+      if (
+        routeId === 'collaboration'
+        && acknowledgedRoomRequestId.current
+        && snapshot.collaboration
+      ) {
+        snapshot = {
+          ...snapshot,
+          collaboration: {
+            ...snapshot.collaboration,
+            acknowledgedRequestId: acknowledgedRoomRequestId.current,
+          },
+        };
+      }
       if (version !== requestVersion.current) return;
       setDataJson(encodeHermesSwiftUIRouteSnapshot(snapshot));
     } catch (error) {
       if (version !== requestVersion.current) return;
       notify(serverErrorMessage(error));
     }
-  }, [api, cacheOwner, localStore, locale, notify, profile, routeId]);
+  }, [
+    api,
+    cacheOwner,
+    localStore,
+    locale,
+    notify,
+    profile,
+    replayPendingCollaborationMessages,
+    routeId,
+  ]);
 
   useEffect(() => {
     const lifecycleVersion = ++requestVersion.current;
@@ -142,6 +206,37 @@ export function useHermesSwiftUIRouteData({
       return;
     }
     try {
+      if (event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSend) {
+        const roomId = event.payload.id?.trim() || '';
+        const content = event.payload.value?.trim() || '';
+        if (!roomId || !content) return;
+        const requestId = event.payload.requestId?.trim()
+          || createCollaborationRoomRequestId();
+        const item = {
+          content,
+          profiles: [],
+          queuedAt: Date.now(),
+          requestId,
+          roomId,
+        };
+        if (localStore && cacheOwner) {
+          await localStore.upsertPendingRoomMessage(cacheOwner, item);
+        }
+        try {
+          await api.sendCollaborationRoomMessage(roomId, content, item.profiles, requestId);
+        } catch (error) {
+          if (localStore && cacheOwner && isPermanentRoomSendError(error)) {
+            await localStore.removePendingRoomMessage(cacheOwner, requestId);
+          }
+          throw error;
+        }
+        if (localStore && cacheOwner) {
+          await localStore.removePendingRoomMessage(cacheOwner, requestId);
+        }
+        acknowledgedRoomRequestId.current = requestId;
+        await reload();
+        return;
+      }
       const result = await performHermesSwiftUIRouteAction(api, event, profile);
       if (
         localStore
@@ -184,4 +279,11 @@ function serverErrorMessage(error: unknown): string {
     return `服务器操作失败：${error.message}`;
   }
   return '服务器操作失败，请稍后重试。';
+}
+
+function isPermanentRoomSendError(error: unknown): boolean {
+  return error instanceof HermesApiError
+    && error.status >= 400
+    && error.status < 500
+    && ![401, 408, 429].includes(error.status);
 }

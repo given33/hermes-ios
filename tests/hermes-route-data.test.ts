@@ -413,11 +413,21 @@ test('native collaboration sends messages through the modified Hermes room API',
 
   const result = await performHermesSwiftUIRouteAction(api, {
     action: 'collaboration.send',
-    payload: { route: 'collaboration', id: 'room-1', value: '请并行审查并汇报' },
+    payload: {
+      route: 'collaboration',
+      id: 'room-1',
+      requestId: 'room-request-stable-1',
+      value: '请并行审查并汇报',
+    },
   }, 'default');
 
   assert.equal(result, 'reload');
-  assert.deepEqual(calls, [['room-1', '请并行审查并汇报']]);
+  assert.deepEqual(calls, [[
+    'room-1',
+    '请并行审查并汇报',
+    [],
+    'room-request-stable-1',
+  ]]);
 });
 
 test('native configuration editor submits the complete server document', async () => {

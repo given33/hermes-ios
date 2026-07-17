@@ -129,6 +129,7 @@ export interface HermesSwiftUICollaborationMessageSnapshot {
 }
 
 export interface HermesSwiftUICollaborationSnapshot {
+  acknowledgedRequestId?: string;
   selectedRoomId?: string;
   availableProfiles: readonly string[];
   rooms: readonly HermesSwiftUICollaborationRoomSnapshot[];
@@ -289,6 +290,7 @@ export interface HermesSwiftUIRouteActionPayload {
   targetId?: string;
   enabled?: boolean;
   position?: number;
+  requestId?: string;
   fields?: Readonly<Record<string, string>>;
   uris?: readonly string[];
 }
@@ -335,6 +337,7 @@ function isActionPayload(value: unknown): value is HermesSwiftUIRouteActionPaylo
   if (value.targetId !== undefined && typeof value.targetId !== 'string') return false;
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') return false;
   if (value.position !== undefined && typeof value.position !== 'number') return false;
+  if (value.requestId !== undefined && typeof value.requestId !== 'string') return false;
   if (
     value.fields !== undefined
     && (!isRecord(value.fields)

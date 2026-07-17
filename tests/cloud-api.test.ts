@@ -5,6 +5,8 @@ import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApi
 import {
   HermesCloudApi,
   mergeUnifiedConversationIndex,
+  officialConversationPlaceholderId,
+  parseOfficialConversationPlaceholderId,
 } from '../src/api/HermesCloudApi';
 
 interface Call {
@@ -231,6 +233,7 @@ test('atomic hosted-turn enqueue carries one stable idempotency request and supp
     attachmentIds: ['file-1'],
     deliveryContext: '由服务端路由决定交付。',
     message,
+    profiles: ['reviewer'],
     recentMessages: [{ role: 'assistant', content: '准备完成。' }],
     requestId: 'request-stable-1',
     turnId: 'turn-stable-1',
@@ -246,6 +249,7 @@ test('atomic hosted-turn enqueue carries one stable idempotency request and supp
     attachment_ids: ['file-1'],
     delivery_context: '由服务端路由决定交付。',
     message,
+    profiles: ['reviewer'],
     recent_messages: [{ role: 'assistant', content: '准备完成。' }],
     request_id: 'request-stable-1',
     turn_id: 'turn-stable-1',
@@ -255,6 +259,28 @@ test('atomic hosted-turn enqueue carries one stable idempotency request and supp
     '/api/plugins/collaboration/single/conversations/conversation%20%2F%201/hosted-turns/turn%20%2F%201/cancel',
   );
   assert.deepEqual(JSON.parse(String(calls[1].options.body)), { reason: '用户取消' });
+});
+
+test('collaboration room retries reuse the caller supplied request and turn identity', async () => {
+  const { api, calls } = createApi();
+
+  await api.sendCollaborationRoomMessage(
+    'room / 1',
+    '继续执行',
+    ['dbb3-worker', 'pc-worker'],
+    'room-request-stable-1',
+  );
+
+  assert.equal(
+    calls[0].path,
+    '/api/plugins/collaboration/rooms/room%20%2F%201/messages',
+  );
+  assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
+    content: '继续执行',
+    profiles: ['dbb3-worker', 'pc-worker'],
+    request_id: 'room-request-stable-1',
+    turn_id: 'room-turn-stable-1',
+  });
 });
 
 test('conversation attachment retries carry one stable server idempotency identity', async () => {
@@ -388,12 +414,58 @@ test('unified history adds official task titles and suppresses mapped sessions',
     ],
   );
 
-  assert.deepEqual(merged.map(({ id }) => id), ['official:official-new', 'chat-1']);
+  assert.deepEqual(merged.map(({ id }) => id), [
+    officialConversationPlaceholderId('reviewer', 'official-new'),
+    'chat-1',
+  ]);
   assert.equal(merged[0].title, 'Hermes 任务摘要标题');
   assert.equal(merged[0].official_model, 'model-a');
   assert.equal(merged[0].profile, 'reviewer');
   assert.equal(merged[0].official_profile, 'reviewer');
   assert.equal(merged[0].message_count, 4);
+});
+
+test('official placeholders include Profile identity and legacy ids remain readable', () => {
+  const sessions = ['default', 'reviewer'].map((profile, index) => ({
+    id: 'shared-session',
+    profile,
+    source: 'cli',
+    model: null,
+    title: `${profile} session`,
+    started_at: 1,
+    ended_at: 2,
+    last_active: 3 + index,
+    is_active: false,
+    message_count: 1,
+    tool_call_count: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    preview: null,
+  }));
+
+  const merged = mergeUnifiedConversationIndex([], sessions);
+  assert.deepEqual(new Set(merged.map(({ id }) => id)), new Set([
+    officialConversationPlaceholderId('default', 'shared-session'),
+    officialConversationPlaceholderId('reviewer', 'shared-session'),
+  ]));
+  assert.deepEqual(
+    parseOfficialConversationPlaceholderId(
+      officialConversationPlaceholderId('reviewer', 'shared-session'),
+    ),
+    { profile: 'reviewer', sessionId: 'shared-session' },
+  );
+  assert.deepEqual(
+    parseOfficialConversationPlaceholderId('official:v2:reviewer:abc'),
+    { profile: '', sessionId: 'v2:reviewer:abc' },
+  );
+  assert.deepEqual(
+    parseOfficialConversationPlaceholderId('official:shared-session'),
+    { profile: '', sessionId: 'shared-session' },
+  );
+  assert.deepEqual(
+    parseOfficialConversationPlaceholderId('official:agent:main:telegram:123'),
+    { profile: '', sessionId: 'agent:main:telegram:123' },
+  );
 });
 
 test('official session history paginates until the complete account index is loaded', async () => {

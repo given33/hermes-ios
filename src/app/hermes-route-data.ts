@@ -24,6 +24,7 @@ import {
 } from './swiftui-route-contract';
 import {
   HermesCloudApi,
+  parseOfficialConversationPlaceholderId,
   type AccountFileEntry,
   type CustomModelConfiguration,
   type SessionSummary,
@@ -104,9 +105,10 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete:
       if (!payload.id) return 'none';
       if (payload.id.startsWith('official:')) {
+        const placeholder = parseOfficialConversationPlaceholderId(payload.id);
         await api.deleteSession(
-          payload.id.slice('official:'.length),
-          payload.fields?.profile || profile,
+          placeholder?.sessionId || payload.id.slice('official:'.length),
+          placeholder?.profile || payload.fields?.profile || profile,
         );
       } else {
         await api.deleteConversation(payload.id);
@@ -115,10 +117,11 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename:
       if (!payload.id || !value) return 'none';
       if (payload.id.startsWith('official:')) {
+        const placeholder = parseOfficialConversationPlaceholderId(payload.id);
         await api.renameSession(
-          payload.id.slice('official:'.length),
+          placeholder?.sessionId || payload.id.slice('official:'.length),
           value,
-          payload.fields?.profile || profile,
+          placeholder?.profile || payload.fields?.profile || profile,
         );
       } else {
         await api.renameConversation(payload.id, value);
@@ -343,7 +346,7 @@ export async function performHermesSwiftUIRouteAction(
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSend:
       if (!payload.id || !value) return 'none';
-      await api.sendCollaborationRoomMessage(payload.id, value);
+      await api.sendCollaborationRoomMessage(payload.id, value, [], payload.requestId);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionSelect:
     case HERMES_SWIFTUI_ROUTE_ACTIONS.logsFilter:

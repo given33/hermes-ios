@@ -156,6 +156,7 @@ export interface HostedTurnEnqueueInput {
   turnId: string;
   message: CollaborationMessage;
   recentMessages: Array<Pick<CollaborationMessage, 'content' | 'role'>>;
+  profiles?: string[];
   attachmentIds?: string[];
   attachmentContext?: string;
   deliveryContext?: string;
@@ -710,16 +711,24 @@ export class HermesCloudApi {
     );
   }
 
-  sendCollaborationRoomMessage(id: string, content: string, profiles: string[] = []) {
-    const requestId = newClientRequestId('room-request');
+  sendCollaborationRoomMessage(
+    id: string,
+    content: string,
+    profiles: string[] = [],
+    requestId = createCollaborationRoomRequestId(),
+  ) {
+    const stableRequestId = requestId.trim() || createCollaborationRoomRequestId();
+    const turnSuffix = stableRequestId.startsWith('room-request-')
+      ? stableRequestId.slice('room-request-'.length)
+      : stableRequestId;
     return this.json<JsonRecord>(
       `${COLLABORATION}/rooms/${encodeURIComponent(id)}/messages`,
       'POST',
       {
         content,
         profiles,
-        request_id: requestId,
-        turn_id: `room-turn-${requestId.slice('room-request-'.length)}`,
+        request_id: stableRequestId,
+        turn_id: `room-turn-${turnSuffix}`,
       },
     );
   }
@@ -849,9 +858,12 @@ export class HermesCloudApi {
   }
 
   async adoptOfficialConversation(sessionId: string, profile = 'default', title = '') {
-    const normalizedSessionId = sessionId.replace(/^official:/, '').trim();
+    const placeholder = parseOfficialConversationPlaceholderId(sessionId);
+    const normalizedSessionId = (
+      placeholder?.sessionId || sessionId.replace(/^official:/, '')
+    ).trim();
     if (!normalizedSessionId) throw new Error('Official Hermes session id is required');
-    const adoptionProfile = profile.trim() || 'default';
+    const adoptionProfile = placeholder?.profile || profile.trim() || 'default';
     const [detail, messageData] = await Promise.all([
       this.getSession(normalizedSessionId, adoptionProfile),
       this.getSessionMessages(normalizedSessionId, adoptionProfile),
@@ -957,6 +969,7 @@ export class HermesCloudApi {
         request_id: input.requestId,
         turn_id: input.turnId,
         message: input.message as unknown as JsonRecord,
+        profiles: input.profiles,
         recent_messages: input.recentMessages,
         attachment_ids: input.attachmentIds || [],
         attachment_context: input.attachmentContext || '',
@@ -1095,7 +1108,7 @@ export function mergeUnifiedConversationIndex(
     const sessionProfile = session.profile?.trim() || profile;
     if (!session.id || mappedSessionIds.has(`${sessionProfile}:${session.id}`)) return [];
     return [{
-      id: `official:${session.id}`,
+      id: officialConversationPlaceholderId(sessionProfile, session.id),
       profile: sessionProfile,
       title: session.title?.trim() || session.preview?.trim() || '官方会话',
       messages: [],
@@ -1132,6 +1145,65 @@ function newClientRequestId(prefix: string): string {
     .map(() => Math.random().toString(36).slice(2, 12))
     .join('');
   return `${prefix}-${Date.now().toString(36)}-${random}`;
+}
+
+export function officialConversationPlaceholderId(profile: string, sessionId: string): string {
+  const normalizedProfile = profile.trim() || 'default';
+  const normalizedSessionId = sessionId.trim();
+  const checksum = officialEnvelopeChecksum(`${normalizedProfile}\u0000${normalizedSessionId}`);
+  return [
+    'official:v3',
+    encodeURIComponent(normalizedProfile),
+    encodeURIComponent(normalizedSessionId),
+    checksum,
+  ].join(':');
+}
+
+export function parseOfficialConversationPlaceholderId(
+  value: string,
+): { profile: string; sessionId: string } | null {
+  if (!value.startsWith('official:')) return null;
+  const encoded = value.slice('official:'.length);
+  if (!encoded.startsWith('v3:')) return { profile: '', sessionId: encoded };
+  const versioned = encoded.slice('v3:'.length);
+  const firstSeparator = versioned.indexOf(':');
+  const lastSeparator = versioned.lastIndexOf(':');
+  if (firstSeparator <= 0 || lastSeparator <= firstSeparator) {
+    return { profile: '', sessionId: encoded };
+  }
+  const profile = decodeURIComponentSafely(versioned.slice(0, firstSeparator)).trim();
+  const sessionId = decodeURIComponentSafely(
+    versioned.slice(firstSeparator + 1, lastSeparator),
+  ).trim();
+  const checksum = versioned.slice(lastSeparator + 1);
+  if (!profile || !sessionId || checksum !== officialEnvelopeChecksum(`${profile}\u0000${sessionId}`)) {
+    return { profile: '', sessionId: encoded };
+  }
+  return {
+    profile,
+    sessionId,
+  };
+}
+
+function officialEnvelopeChecksum(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, '0');
+}
+
+function decodeURIComponentSafely(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+export function createCollaborationRoomRequestId(): string {
+  return newClientRequestId('room-request');
 }
 
 export function conversationSessionSummary(conversation: SingleConversation): SessionSummary {

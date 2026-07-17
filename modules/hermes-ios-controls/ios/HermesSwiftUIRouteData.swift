@@ -311,12 +311,14 @@ struct HermesCollaborationMessageSnapshot: Decodable, Equatable, Identifiable {
 }
 
 struct HermesCollaborationSnapshot: Decodable, Equatable {
+  let acknowledgedRequestId: String?
   let selectedRoomId: String?
   let availableProfiles: [String]
   let rooms: [HermesCollaborationRoomSnapshot]
   let messages: [HermesCollaborationMessageSnapshot]
 
   static let empty = HermesCollaborationSnapshot(
+    acknowledgedRequestId: nil,
     selectedRoomId: nil,
     availableProfiles: [],
     rooms: [],
@@ -523,6 +525,7 @@ struct HermesRouteActionPayload: Encodable, Equatable {
   let targetId: String?
   let enabled: Bool?
   let position: Int?
+  let requestId: String?
   let fields: [String: String]?
   let uris: [String]?
 
@@ -535,6 +538,7 @@ struct HermesRouteActionPayload: Encodable, Equatable {
     targetId: String? = nil,
     enabled: Bool? = nil,
     position: Int? = nil,
+    requestId: String? = nil,
     fields: [String: String]? = nil,
     uris: [String]? = nil
   ) {
@@ -546,6 +550,7 @@ struct HermesRouteActionPayload: Encodable, Equatable {
     self.targetId = targetId
     self.enabled = enabled
     self.position = position
+    self.requestId = requestId
     self.fields = fields
     self.uris = uris
   }
