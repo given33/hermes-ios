@@ -17,6 +17,7 @@ export interface SessionSummary {
   input_tokens: number;
   output_tokens: number;
   preview: string | null;
+  profile?: string;
 }
 
 export interface PaginatedSessions {
@@ -44,6 +45,45 @@ export interface ManagedFilesResponse {
   entries: ManagedFileEntry[];
 }
 
+export interface AccountFileEntry {
+  id: string;
+  name: string;
+  sha256: string;
+  mime_type: string;
+  extension: string;
+  file_type: string;
+  size: number;
+  source: 'model_output' | 'user_upload';
+  status: 'available' | 'failed' | 'uploading';
+  conversation_id?: string;
+  message_id?: string;
+  turn_id?: string;
+  profile?: string;
+  error?: string;
+  created_at: number;
+  updated_at: number;
+  available_at?: number;
+  download_url: string;
+}
+
+export interface AccountFilesResponse {
+  files: AccountFileEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AccountFilesQuery {
+  dateFrom?: string;
+  dateTo?: string;
+  fileType?: string;
+  keyword?: string;
+  limit?: number;
+  offset?: number;
+  source?: string;
+  status?: string;
+}
+
 export interface CollaborationProfile {
   name: string;
   description: string;
@@ -57,10 +97,29 @@ export interface CollaborationMessage {
   role: string;
   name: string;
   content: string;
+  activities?: JsonRecord[];
+  activity_count?: number;
+  attachments?: JsonRecord[];
+  avatar?: string;
+  avatar_symbol?: string;
+  completed_at?: number | string;
   status?: string;
   kind?: string;
-  created_at?: number;
-  timestamp?: number;
+  created_at?: number | string;
+  handoff_to?: string | string[];
+  metadata?: JsonRecord;
+  model?: string;
+  profile?: string;
+  provider?: string;
+  role_label?: string;
+  collaboration_role?: string;
+  sender?: string;
+  sender_id?: string;
+  sender_name?: string;
+  sender_role?: string;
+  started_at?: number | string;
+  timestamp?: number | string;
+  updated_at?: number | string;
   meta?: JsonRecord;
 }
 
@@ -76,11 +135,12 @@ export interface SingleConversation {
   created_at?: number;
   updated_at?: number;
   official_session_id?: string;
+  official_profile?: string;
   official_model?: string;
   preview?: string;
 }
 
-export interface RouteDecision {
+export interface RouteDecision extends JsonRecord {
   mode: 'chat' | 'work';
   label: string;
   title: string;
@@ -91,10 +151,38 @@ export interface RouteDecision {
   artifact_required: boolean;
 }
 
+export interface HostedTurnEnqueueInput {
+  requestId: string;
+  turnId: string;
+  message: CollaborationMessage;
+  recentMessages: Array<Pick<CollaborationMessage, 'content' | 'role'>>;
+  attachmentIds?: string[];
+  attachmentContext?: string;
+  deliveryContext?: string;
+}
+
+export interface HostedTurnEnqueueResponse {
+  accepted: boolean;
+  replayed: boolean;
+  request_id: string;
+  conversation_id: string;
+  message: CollaborationMessage;
+  route: RouteDecision;
+  route_message?: CollaborationMessage;
+  hosted_turn: JsonRecord;
+}
+
 export interface NativeUpload {
   name: string;
   mimeType?: string | null;
   uri: string;
+}
+
+export interface ConversationAttachmentUploadContext {
+  messageId?: string;
+  profile?: string;
+  turnId?: string;
+  uploadId: string;
 }
 
 export interface CustomModelConfiguration {
@@ -149,6 +237,34 @@ export class HermesCloudApi {
     let total = Number.POSITIVE_INFINITY;
     while (offset < total) {
       const page = await this.getSessions(pageSize, offset, profile);
+      const entries = Array.isArray(page.sessions) ? page.sessions : [];
+      sessions.push(...entries);
+      total = Number.isFinite(page.total) ? Math.max(0, page.total) : sessions.length;
+      if (!entries.length || entries.length < pageSize) break;
+      offset += entries.length;
+    }
+    return { sessions, total: sessions.length, limit: pageSize, offset: 0 };
+  }
+
+  getProfileSessions(limit = 100, offset = 0) {
+    return this.request<PaginatedSessions>('/api/profiles/sessions', {
+      query: {
+        archived: 'exclude',
+        limit,
+        min_messages: 0,
+        offset,
+        order: 'recent',
+        profile: 'all',
+      },
+    });
+  }
+
+  async getAllProfileSessions(pageSize = 100) {
+    const sessions: SessionSummary[] = [];
+    let offset = 0;
+    let total = Number.POSITIVE_INFINITY;
+    while (offset < total) {
+      const page = await this.getProfileSessions(pageSize, offset);
       const entries = Array.isArray(page.sessions) ? page.sessions : [];
       sessions.push(...entries);
       total = Number.isFinite(page.total) ? Math.max(0, page.total) : sessions.length;
@@ -595,17 +711,105 @@ export class HermesCloudApi {
   }
 
   sendCollaborationRoomMessage(id: string, content: string, profiles: string[] = []) {
+    const requestId = newClientRequestId('room-request');
     return this.json<JsonRecord>(
       `${COLLABORATION}/rooms/${encodeURIComponent(id)}/messages`,
       'POST',
-      { content, profiles },
+      {
+        content,
+        profiles,
+        request_id: requestId,
+        turn_id: `room-turn-${requestId.slice('room-request-'.length)}`,
+      },
     );
   }
 
-  routeMessage(content: string) {
+  routeMessage(
+    content: string,
+    recentMessages: Array<Pick<CollaborationMessage, 'content' | 'role'>> = [],
+    attachments: JsonRecord[] = [],
+  ) {
     return this.json<RouteDecision>(`${COLLABORATION}/route`, 'POST', {
+      attachments,
       content,
       mode: 'auto',
+      recent_messages: recentMessages,
+    });
+  }
+
+  getAccountFiles(query: AccountFilesQuery = {}) {
+    return this.request<AccountFilesResponse>(`${COLLABORATION}/files`, {
+      query: {
+        date_from: query.dateFrom,
+        date_to: query.dateTo,
+        limit: query.limit ?? 200,
+        offset: query.offset ?? 0,
+        q: query.keyword,
+        source: query.source,
+        status: query.status,
+        type: query.fileType,
+      },
+    });
+  }
+
+  async getAllAccountFiles(query: AccountFilesQuery = {}) {
+    const pageSize = Math.max(1, Math.min(200, Math.trunc(query.limit || 200)));
+    const startOffset = Math.max(0, Math.trunc(query.offset || 0));
+    const files = new Map<string, AccountFileEntry>();
+    let offset = startOffset;
+    let total = Number.POSITIVE_INFINITY;
+    while (offset < total) {
+      const page = await this.getAccountFiles({ ...query, limit: pageSize, offset });
+      const entries = Array.isArray(page.files) ? page.files : [];
+      for (const entry of entries) {
+        if (entry?.id) files.set(entry.id, entry);
+      }
+      total = Number.isFinite(page.total)
+        ? Math.max(0, page.total)
+        : offset + entries.length;
+      if (!entries.length || offset + entries.length >= total) break;
+      offset += entries.length;
+    }
+    const allFiles = [...files.values()];
+    return {
+      files: allFiles,
+      total: allFiles.length,
+      limit: pageSize,
+      offset: startOffset,
+    } satisfies AccountFilesResponse;
+  }
+
+  getAccountFile(id: string) {
+    return this.request<{ file: AccountFileEntry }>(
+      `${COLLABORATION}/files/${encodeURIComponent(id)}`,
+    );
+  }
+
+  deleteAccountFile(id: string) {
+    return this.request<{ id: string; ok: boolean }>(
+      `${COLLABORATION}/files/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  downloadAccountFile(id: string, preview = false) {
+    return this.client.download(
+      `${COLLABORATION}/files/${encodeURIComponent(id)}/download`,
+      { query: { preview: preview || undefined } },
+    );
+  }
+
+  async uploadAccountFile(upload: NativeUpload) {
+    const body = upload.uri.startsWith('file:')
+      ? await nativeFileBody(upload.uri)
+      : await fetch(upload.uri).then((response) => response.blob());
+    return this.request<{ file: AccountFileEntry }>(`${COLLABORATION}/files`, {
+      body,
+      headers: {
+        'Content-Type': upload.mimeType || 'application/octet-stream',
+        'X-Filename': encodeURIComponent(upload.name),
+      },
+      method: 'POST',
     });
   }
 
@@ -615,16 +819,17 @@ export class HermesCloudApi {
     );
   }
 
-  async getUnifiedConversations(_profile = 'default') {
+  async getUnifiedConversations(profile = 'default') {
+    const activeProfile = profile.trim() || 'default';
     const [cloud, official] = await Promise.all([
       this.getConversations(),
-      this.getAllSessions('default'),
+      this.getAllProfileSessions(),
     ]);
     return {
       conversations: mergeUnifiedConversationIndex(
         cloud.conversations,
         official.sessions,
-        'default',
+        activeProfile,
       ),
     };
   }
@@ -635,26 +840,22 @@ export class HermesCloudApi {
     );
   }
 
-  createConversation(profile = 'default', title = '新对话') {
+  createConversation(profile = 'default', title = '新对话', clientId = '') {
     return this.json<{ conversation: SingleConversation }>(
       `${COLLABORATION}/single/conversations`,
       'POST',
-      { profile, title },
+      { client_id: clientId || undefined, profile, title },
     );
   }
 
   async adoptOfficialConversation(sessionId: string, profile = 'default', title = '') {
     const normalizedSessionId = sessionId.replace(/^official:/, '').trim();
     if (!normalizedSessionId) throw new Error('Official Hermes session id is required');
-    const [detail, messageData, profiles] = await Promise.all([
-      this.getSession(normalizedSessionId, profile),
-      this.getSessionMessages(normalizedSessionId, profile),
-      this.getCollaborationProfiles(),
+    const adoptionProfile = profile.trim() || 'default';
+    const [detail, messageData] = await Promise.all([
+      this.getSession(normalizedSessionId, adoptionProfile),
+      this.getSessionMessages(normalizedSessionId, adoptionProfile),
     ]);
-    const availableProfiles = profiles.profiles.map(({ name }) => name).filter(Boolean);
-    const adoptionProfile = availableProfiles.includes('default')
-      ? 'default'
-      : availableProfiles[0] || 'default';
     const messages = normalizeOfficialSessionMessages(
       messageData.messages,
       adoptionProfile,
@@ -723,8 +924,11 @@ export class HermesCloudApi {
       title: string;
       profiles: string[];
       artifactRequired: boolean;
+      attachmentIds?: string[];
       attachmentContext?: string;
       deliveryContext?: string;
+      mode: RouteDecision['mode'];
+      routeMetadata: JsonRecord;
     },
   ) {
     return this.json<JsonRecord>(
@@ -736,6 +940,25 @@ export class HermesCloudApi {
         title: input.title,
         profiles: input.profiles,
         artifact_required: input.artifactRequired,
+        attachment_ids: input.attachmentIds || [],
+        attachment_context: input.attachmentContext || '',
+        delivery_context: input.deliveryContext || '',
+        mode: input.mode,
+        route_metadata: input.routeMetadata,
+      },
+    );
+  }
+
+  enqueueHostedTurn(conversationId: string, input: HostedTurnEnqueueInput) {
+    return this.json<HostedTurnEnqueueResponse>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/enqueue`,
+      'POST',
+      {
+        request_id: input.requestId,
+        turn_id: input.turnId,
+        message: input.message as unknown as JsonRecord,
+        recent_messages: input.recentMessages,
+        attachment_ids: input.attachmentIds || [],
         attachment_context: input.attachmentContext || '',
         delivery_context: input.deliveryContext || '',
       },
@@ -750,7 +973,11 @@ export class HermesCloudApi {
     );
   }
 
-  async uploadConversationAttachment(conversationId: string, upload: NativeUpload) {
+  async uploadConversationAttachment(
+    conversationId: string,
+    upload: NativeUpload,
+    context: ConversationAttachmentUploadContext,
+  ) {
     const body = upload.uri.startsWith('file:')
       ? await nativeFileBody(upload.uri)
       : await fetch(upload.uri).then((response) => response.blob());
@@ -761,6 +988,10 @@ export class HermesCloudApi {
         headers: {
           'Content-Type': upload.mimeType || 'application/octet-stream',
           'X-Filename': encodeURIComponent(upload.name),
+          'X-Message-ID': context.messageId || '',
+          'X-Profile': context.profile || '',
+          'X-Turn-ID': context.turnId || '',
+          'X-Upload-ID': context.uploadId,
         },
         body,
       },
@@ -787,16 +1018,7 @@ export class HermesCloudApi {
         };
       }
       case 'files': {
-        const listing = await this.listFiles();
-        if (!selectedId) return listing;
-        const selected = listing.entries.find((entry) => entry.path === selectedId);
-        if (!selected) return listing;
-        if (selected.is_directory) {
-          const children = await this.listFiles(selectedId);
-          return { ...listing, selectedId, selectedChildren: children.entries };
-        }
-        const preview = await this.readFile(selectedId);
-        return { ...listing, selectedId, selectedPreview: preview };
+        return this.getAllAccountFiles();
       }
       case 'analytics': return this.getAnalytics(30, profile);
       case 'models': return this.getModels(profile);
@@ -861,17 +1083,20 @@ export function mergeUnifiedConversationIndex(
   const mappedSessionIds = new Set<string>();
   for (const conversation of conversations) {
     if (conversation.official_session_id) {
-      mappedSessionIds.add(conversation.official_session_id);
+      mappedSessionIds.add(
+        `${conversation.official_profile || conversation.profile || profile}:${conversation.official_session_id}`,
+      );
     }
-    for (const sessionId of Object.values(conversation.runtime_sessions || {})) {
-      if (sessionId) mappedSessionIds.add(sessionId);
+    for (const [sessionProfile, sessionId] of Object.entries(conversation.runtime_sessions || {})) {
+      if (sessionId) mappedSessionIds.add(`${sessionProfile}:${sessionId}`);
     }
   }
   const officialConversations = officialSessions.flatMap((session): SingleConversation[] => {
-    if (!session.id || mappedSessionIds.has(session.id)) return [];
+    const sessionProfile = session.profile?.trim() || profile;
+    if (!session.id || mappedSessionIds.has(`${sessionProfile}:${session.id}`)) return [];
     return [{
       id: `official:${session.id}`,
-      profile,
+      profile: sessionProfile,
       title: session.title?.trim() || session.preview?.trim() || '官方会话',
       messages: [],
       message_count: Math.max(0, numberValue(session.message_count)),
@@ -879,6 +1104,7 @@ export function mergeUnifiedConversationIndex(
       created_at: secondsToMilliseconds(session.started_at),
       updated_at: secondsToMilliseconds(session.last_active || session.started_at),
       official_session_id: session.id,
+      official_profile: sessionProfile,
       official_model: session.model || undefined,
       preview: session.preview || undefined,
     }];
@@ -900,21 +1126,35 @@ function headersToObject(headers?: HeadersInit): Record<string, string> {
   return Object.fromEntries(new Headers(headers).entries());
 }
 
+function newClientRequestId(prefix: string): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  const random = uuid || [0, 1, 2, 3]
+    .map(() => Math.random().toString(36).slice(2, 12))
+    .join('');
+  return `${prefix}-${Date.now().toString(36)}-${random}`;
+}
+
 export function conversationSessionSummary(conversation: SingleConversation): SessionSummary {
   const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
   const latestVisible = [...messages].reverse().find((message) => (
     message.role === 'assistant' || message.role === 'user'
   ));
   const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
-  const meta = isRecord(latestAssistant?.meta) ? latestAssistant.meta : {};
-  const provider = stringValue(meta.actual_provider);
-  const model = stringValue(meta.actual_model);
+  const meta = {
+    ...(isRecord(latestAssistant?.metadata) ? latestAssistant.metadata : {}),
+    ...(isRecord(latestAssistant?.meta) ? latestAssistant.meta : {}),
+  };
+  const provider = stringValue(latestAssistant?.provider)
+    || stringValue(meta.actual_provider);
+  const model = stringValue(latestAssistant?.model)
+    || stringValue(meta.actual_model);
   const createdAt = numberValue(conversation.created_at);
   const updatedAt = numberValue(conversation.updated_at) || createdAt;
   const running = hasRunningConversationRecord(conversation.runtime_runs)
     || hasRunningConversationRecord(conversation.hosted_turns);
   return {
     id: conversation.id,
+    profile: conversation.official_profile || conversation.profile,
     source: conversation.official_session_id ? 'official' : 'ios-unified',
     model: conversation.official_model
       || [provider, model].filter(Boolean).join('/')
@@ -926,11 +1166,20 @@ export function conversationSessionSummary(conversation: SingleConversation): Se
     is_active: running,
     message_count: numberValue(conversation.message_count) || messages.length,
     tool_call_count: messages.reduce((count, message) => {
-      const activities = isRecord(message.meta) && Array.isArray(message.meta.activities)
-        ? message.meta.activities
-        : [];
+      const messageMeta = {
+        ...(isRecord(message.metadata) ? message.metadata : {}),
+        ...(isRecord(message.meta) ? message.meta : {}),
+      };
+      const activities = Array.isArray(message.activities)
+        ? message.activities
+        : Array.isArray(messageMeta.activities)
+          ? messageMeta.activities
+          : [];
       return count + activities.filter((activity) => (
-        isRecord(activity) && activity.category === 'tool'
+        isRecord(activity)
+        && !['handoff', 'model', 'reasoning', 'status'].includes(
+          stringValue(activity.category || activity.kind).toLowerCase(),
+        )
       )).length;
     }, 0),
     input_tokens: 0,

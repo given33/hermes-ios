@@ -41,7 +41,7 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
     calls.map(({ path }) => path),
     [
       '/api/plugins/collaboration/single/conversations',
-      '/api/sessions',
+      '/api/profiles/sessions',
       '/api/analytics/usage',
       '/api/analytics/models',
       '/api/dashboard/plugins',
@@ -50,14 +50,81 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
     ],
   );
   assert.equal(calls[0].options.profile, undefined);
-  assert.equal(calls[1].options.profile, 'default');
+  assert.equal(calls[1].options.profile, undefined);
   assert.deepEqual(calls[1].options.query, {
+    archived: 'exclude',
     limit: 100,
+    min_messages: 0,
     offset: 0,
     order: 'recent',
+    profile: 'all',
   });
   assert.equal(calls[2].options.profile, 'reviewer');
   assert.equal(calls[3].options.profile, 'reviewer');
+});
+
+test('account files and contextual routing use the collaboration cloud contract', async () => {
+  const { api, calls } = createApi();
+
+  await api.loadRoute('files');
+  await api.routeMessage(
+    '继续完成并发送文件',
+    [{ role: 'assistant', content: '报告已经生成。' }],
+    [{ name: 'input.csv', mime_type: 'text/csv', source: 'user_upload' }],
+  );
+  await api.deleteAccountFile('file / 中文');
+
+  assert.equal(calls[0].path, '/api/plugins/collaboration/files');
+  assert.deepEqual(calls[0].options.query, {
+    date_from: undefined,
+    date_to: undefined,
+    limit: 200,
+    offset: 0,
+    q: undefined,
+    source: undefined,
+    status: undefined,
+    type: undefined,
+  });
+  assert.equal(calls[1].path, '/api/plugins/collaboration/route');
+  assert.deepEqual(JSON.parse(String(calls[1].options.body)), {
+    attachments: [{ name: 'input.csv', mime_type: 'text/csv', source: 'user_upload' }],
+    content: '继续完成并发送文件',
+    mode: 'auto',
+    recent_messages: [{ role: 'assistant', content: '报告已经生成。' }],
+  });
+  assert.equal(
+    calls[2].path,
+    '/api/plugins/collaboration/files/file%20%2F%20%E4%B8%AD%E6%96%87',
+  );
+  assert.equal(calls[2].options.method, 'DELETE');
+});
+
+test('account file route drains every server page before SwiftUI search and date filtering', async () => {
+  const calls: Call[] = [];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ path, options });
+      const offset = Number(options.query?.offset || 0);
+      const limit = Number(options.query?.limit || 200);
+      const remaining = Math.max(0, 450 - offset);
+      const count = Math.min(125, limit, remaining);
+      return Promise.resolve({
+        files: Array.from({ length: count }, (_, index) => ({
+          id: `file-${offset + index}`,
+          name: `artifact-${offset + index}.txt`,
+        })),
+        limit,
+        offset,
+        total: 450,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).loadRoute('files') as { files: unknown[] };
+
+  assert.equal(result.files.length, 450);
+  assert.deepEqual(calls.map(({ options }) => options.query?.offset), [0, 125, 250, 375]);
+  assert.ok(calls.every(({ path }) => path === '/api/plugins/collaboration/files'));
 });
 
 test('management mutations preserve the official method and body contracts', async () => {
@@ -110,8 +177,11 @@ test('the collaboration client keeps conversation and hosted-turn state on the s
   await api.saveRuntimeSession('conversation-1', 'default', 'session-1', 'turn-1', 'running');
   await api.createHostedTurn('conversation-1', {
     artifactRequired: false,
+    attachmentIds: ['file-input'],
     content: '检查并部署项目',
+    mode: 'work',
     profiles: ['default', 'dbb3-worker', 'reviewer'],
+    routeMetadata: { confidence: 0.98, mode: 'work' },
     title: '部署项目',
     turnId: 'hosted-1',
   });
@@ -132,12 +202,90 @@ test('the collaboration client keeps conversation and hosted-turn state on the s
   });
   assert.deepEqual(JSON.parse(String(calls[2].options.body)), {
     artifact_required: false,
+    attachment_ids: ['file-input'],
     attachment_context: '',
     content: '检查并部署项目',
     delivery_context: '',
+    mode: 'work',
     profiles: ['default', 'dbb3-worker', 'reviewer'],
+    route_metadata: { confidence: 0.98, mode: 'work' },
     title: '部署项目',
     turn_id: 'hosted-1',
+  });
+});
+
+test('atomic hosted-turn enqueue carries one stable idempotency request and supports cancellation', async () => {
+  const { api, calls } = createApi();
+  const message = {
+    content: '检查并部署项目',
+    created_at: 1_752_700_000_000,
+    id: 'user-1',
+    kind: 'message',
+    name: '你',
+    role: 'user',
+    status: 'completed',
+  };
+
+  await api.enqueueHostedTurn('conversation / 1', {
+    attachmentContext: '- input.csv',
+    attachmentIds: ['file-1'],
+    deliveryContext: '由服务端路由决定交付。',
+    message,
+    recentMessages: [{ role: 'assistant', content: '准备完成。' }],
+    requestId: 'request-stable-1',
+    turnId: 'turn-stable-1',
+  });
+  await api.cancelHostedTurn('conversation / 1', 'turn / 1', '用户取消');
+
+  assert.equal(
+    calls[0].path,
+    '/api/plugins/collaboration/single/conversations/conversation%20%2F%201/enqueue',
+  );
+  assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
+    attachment_context: '- input.csv',
+    attachment_ids: ['file-1'],
+    delivery_context: '由服务端路由决定交付。',
+    message,
+    recent_messages: [{ role: 'assistant', content: '准备完成。' }],
+    request_id: 'request-stable-1',
+    turn_id: 'turn-stable-1',
+  });
+  assert.equal(
+    calls[1].path,
+    '/api/plugins/collaboration/single/conversations/conversation%20%2F%201/hosted-turns/turn%20%2F%201/cancel',
+  );
+  assert.deepEqual(JSON.parse(String(calls[1].options.body)), { reason: '用户取消' });
+});
+
+test('conversation attachment retries carry one stable server idempotency identity', async () => {
+  const { api, calls } = createApi();
+
+  await api.uploadConversationAttachment(
+    'conversation-1',
+    {
+      mimeType: 'text/plain',
+      name: 'input.txt',
+      uri: 'data:text/plain,hello',
+    },
+    {
+      messageId: 'message-1',
+      profile: 'reviewer',
+      turnId: 'turn-1',
+      uploadId: 'upload-stable-1',
+    },
+  );
+
+  assert.equal(
+    calls[0].path,
+    '/api/plugins/collaboration/single/conversations/conversation-1/attachments',
+  );
+  assert.deepEqual(calls[0].options.headers, {
+    'Content-Type': 'text/plain',
+    'X-Filename': 'input.txt',
+    'X-Message-ID': 'message-1',
+    'X-Profile': 'reviewer',
+    'X-Turn-ID': 'turn-1',
+    'X-Upload-ID': 'upload-stable-1',
   });
 });
 
@@ -186,7 +334,7 @@ test('conversation history reads, renames, and deletes the same server records a
   assert.equal(opened.conversation.messages[0].content, '继续');
   assert.deepEqual(calls.map(({ path }) => path), [
     '/api/plugins/collaboration/single/conversations',
-    '/api/sessions',
+    '/api/profiles/sessions',
     '/api/plugins/collaboration/single/conversations/chat-1',
     '/api/plugins/collaboration/single/conversations/chat-1',
     '/api/plugins/collaboration/single/conversations/chat-1',
@@ -208,6 +356,7 @@ test('unified history adds official task titles and suppresses mapped sessions',
     [
       {
         id: 'official-new',
+        profile: 'reviewer',
         source: 'cli',
         model: 'model-a',
         title: 'Hermes 任务摘要标题',
@@ -242,6 +391,8 @@ test('unified history adds official task titles and suppresses mapped sessions',
   assert.deepEqual(merged.map(({ id }) => id), ['official:official-new', 'chat-1']);
   assert.equal(merged[0].title, 'Hermes 任务摘要标题');
   assert.equal(merged[0].official_model, 'model-a');
+  assert.equal(merged[0].profile, 'reviewer');
+  assert.equal(merged[0].official_profile, 'reviewer');
   assert.equal(merged[0].message_count, 4);
 });
 
@@ -267,6 +418,41 @@ test('official session history paginates until the complete account index is loa
 
   assert.deepEqual(offsets, [0, 2]);
   assert.deepEqual(result.sessions.map(({ id }) => id), all);
+});
+
+test('unified official history drains the all-profile session index and keeps ownership', async () => {
+  const offsets: number[] = [];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      assert.equal(path, '/api/profiles/sessions');
+      const offset = Number(options.query?.offset || 0);
+      offsets.push(offset);
+      const sessions = offset === 0
+        ? [
+          { id: 'default-session', profile: 'default' },
+          { id: 'review-session', profile: 'reviewer' },
+        ]
+        : [{ id: 'pc-session', profile: 'pc-worker' }];
+      return Promise.resolve({
+        sessions,
+        total: 3,
+        limit: 2,
+        offset,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getAllProfileSessions(2);
+
+  assert.deepEqual(offsets, [0, 2]);
+  assert.deepEqual(
+    result.sessions.map(({ id, profile }) => [id, profile]),
+    [
+      ['default-session', 'default'],
+      ['review-session', 'reviewer'],
+      ['pc-session', 'pc-worker'],
+    ],
+  );
 });
 
 test('custom model configuration carries the full runtime contract', async () => {
@@ -322,8 +508,11 @@ test('group collaboration reads and writes the modified Hermes room APIs', async
     '/api/plugins/collaboration/rooms/room-2',
   ]);
   assert.equal(calls[3].path, '/api/plugins/collaboration/rooms/room%20%2F%20%E4%B8%AD%E6%96%87/messages');
-  assert.deepEqual(JSON.parse(String(calls[3].options.body)), {
+  const roomBody = JSON.parse(String(calls[3].options.body)) as Record<string, unknown>;
+  assert.deepEqual({ content: roomBody.content, profiles: roomBody.profiles }, {
     content: '执行任务',
     profiles: ['worker', 'reviewer'],
   });
+  assert.match(String(roomBody.request_id), /^room-request-/);
+  assert.match(String(roomBody.turn_id), /^room-turn-/);
 });

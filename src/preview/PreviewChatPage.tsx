@@ -1,5 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
-import { File as ExpoFile, Paths } from 'expo-file-system';
+import { Directory as ExpoDirectory, File as ExpoFile, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import * as Sharing from 'expo-sharing';
 import { SymbolView } from 'expo-symbols';
@@ -53,6 +53,7 @@ import Reanimated, {
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
+import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -64,27 +65,32 @@ import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import type { HermesApiClient } from '../api/HermesApiClient';
 import type { SidebarGatewayStatus } from '../app/NativeShell';
-import { HermesChatStream, structuredText } from '../api/HermesChatStream';
-import { createNativeHermesChatStreamRuntime } from '../api/native-chat-stream-runtime';
 import {
   HermesCloudApi,
   type CollaborationMessage,
+  type HostedTurnEnqueueInput,
   type SingleConversation,
 } from '../api/HermesCloudApi';
 import {
   ConversationLocalStore,
+  type HostedTurnOutboxItem,
+  type HostedTurnPendingAttachment,
   isCompleteConversation,
   mergeDownloadedConversations,
   reconcileConversationCache,
   upsertCachedConversation,
 } from '../api/conversation-local-store';
 import {
+  activityCategoryLabel,
   attachmentContext,
   chatModelConfigurationError,
   conversationHasRunningWork,
   conversationMessagesToView,
+  conversationRunningHostedTurnId,
+  formatActivitySummary,
+  formatMessageLocalTime,
+  messageStatusLabel,
   shouldRenderPendingMessage,
-  streamEventToActivity,
   upsertChatMessage,
   type HermesChatActivity as ChatActivity,
   type HermesChatAttachment as StoredChatAttachment,
@@ -125,16 +131,21 @@ interface ChatAttachment {
 
 const INITIAL_MESSAGES: ChatMessage[] = [
   {
+    avatarRole: 'user',
     content: '帮我检查当前项目的状态。',
+    createdAt: Date.now() - 132_000,
+    durationMs: 0,
     id: 'user-1',
     name: '你',
     role: 'user',
+    status: 'completed',
   },
   {
     activities: [
       {
         category: 'command',
         duration: '0.4 s',
+        durationMs: 420,
         id: 'activity-1',
         input: 'git status --short',
         name: 'git status --short',
@@ -143,13 +154,20 @@ const INITIAL_MESSAGES: ChatMessage[] = [
         status: 'completed',
       },
     ],
+    avatarRole: 'hermes',
+    completedAt: Date.now(),
     content: '当前项目有未提交的前端修改，我会保留这些改动并继续处理单聊界面。',
+    createdAt: Date.now() - 132_000,
+    durationMs: 132_000,
     id: 'assistant-1',
     model: 'anthropic · claude-sonnet-4',
     name: 'Hermes Agent',
     role: 'assistant',
     roleLabel: 'Hermes Agent',
     roleStage: 'chat',
+    startedAt: Date.now() - 132_000,
+    status: 'completed',
+    updatedAt: Date.now(),
   },
 ];
 
@@ -190,8 +208,10 @@ export function ChatPreviewPage({
   const [messages, setMessages] = useState<ChatMessage[]>(() => client ? [] : INITIAL_MESSAGES);
   const [conversations, setConversations] = useState<SingleConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState('');
+  const [activeHostedTurnId, setActiveHostedTurnId] = useState('');
   const [hostedRunning, setHostedRunning] = useState(false);
   const [sending, setSending] = useState(false);
+  const [cancellingHostedTurn, setCancellingHostedTurn] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -199,17 +219,18 @@ export function ChatPreviewPage({
   const composerInputRef = useRef<TextInput>(null);
   const contentRef = useRef('');
   const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeStream = useRef<HermesChatStream | null>(null);
   const activeConversationIdRef = useRef('');
+  const activeHostedTurnIdRef = useRef('');
+  const cancelHostedTurnInFlightRef = useRef(false);
   const conversationIndexRef = useRef<SingleConversation[]>([]);
   const conversationSyncGenerationRef = useRef(0);
   const hydratedCacheOwnerRef = useRef('');
   const cacheWriteRef = useRef<Promise<void>>(Promise.resolve());
-  const runtimeSessionsRef = useRef<Record<string, string>>({});
   const pendingAttachmentCleanup = useRef<(() => void) | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
   const pendingSendFrame = useRef<number | null>(null);
   const pendingScrollFrame = useRef<number | null>(null);
+  const outboxReplayRef = useRef<Promise<void> | null>(null);
   const keyboard = useAnimatedKeyboard();
   const keyboardAvoidanceEnabled = useSharedValue(1);
   const isChinese = locale === 'zh';
@@ -222,6 +243,7 @@ export function ChatPreviewPage({
   const safeAreaTop = shellSplit ? 0 : insets.top;
   const attachmentCount = attachments.length;
   const canSend = !sending && Boolean(content.trim() || attachmentCount > 0);
+  const canCancelHostedTurn = hostedRunning && Boolean(activeHostedTurnId);
   const inputFontSize = resolveComposerFontSize(content);
   const keepLatestVisible = useCallback((animated = false) => {
     if (pendingScrollFrame.current !== null) return;
@@ -277,9 +299,11 @@ export function ChatPreviewPage({
   const applyConversation = useCallback((conversation: SingleConversation) => {
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
-    runtimeSessionsRef.current = { ...(conversation.runtime_sessions ?? {}) };
     setMessages(conversationMessagesToView(conversation, isChinese));
     const running = conversationHasRunningWork(conversation);
+    const runningHostedTurnId = conversationRunningHostedTurnId(conversation);
+    activeHostedTurnIdRef.current = runningHostedTurnId;
+    setActiveHostedTurnId(runningHostedTurnId);
     setHostedRunning(running);
     setSending(running);
     commitConversationIndex(
@@ -306,6 +330,100 @@ export function ChatPreviewPage({
     applyConversation(result.conversation);
     return result.conversation;
   }, [applyConversation, cloudApi]);
+
+  const deliverPendingEnqueue = useCallback(async (
+    source: HostedTurnOutboxItem,
+  ): Promise<HostedTurnOutboxItem> => {
+    if (!cloudApi || !localStore || !cacheOwner) {
+      throw new Error('Durable outbox is unavailable');
+    }
+    let item = hydrateOutboxInput(source);
+    if (!item.conversationId) {
+      item = {
+        ...item,
+        conversationId: `chat_${safeOutboxPathComponent(item.input.requestId).slice(0, 251)}`,
+        conversationPending: true,
+      };
+      await localStore.upsertPendingEnqueue(cacheOwner, item);
+    }
+    if (item.conversationPending) {
+      await cloudApi.createConversation(
+        item.conversationProfile || profile,
+        item.conversationTitle || (isChinese ? '新对话' : 'New conversation'),
+        item.conversationId,
+      );
+      item = { ...item, conversationPending: false };
+      await localStore.upsertPendingEnqueue(cacheOwner, item);
+    }
+    const pendingAttachments = [...(item.pendingAttachments || [])];
+    for (let index = 0; index < pendingAttachments.length; index += 1) {
+      const attachment = pendingAttachments[index];
+      if (attachment.uploaded) continue;
+      const result = await cloudApi.uploadConversationAttachment(
+        item.conversationId,
+        {
+          mimeType: attachment.mimeType,
+          name: attachment.name,
+          uri: attachment.uri,
+        },
+        {
+          messageId: item.input.message.id,
+          profile: item.conversationProfile || profile,
+          turnId: item.input.turnId,
+          uploadId: attachment.id,
+        },
+      );
+      if (!isRecord(result.attachment)) {
+        throw new Error('Attachment upload was not persisted');
+      }
+      pendingAttachments[index] = {
+        ...attachment,
+        uploaded: result.attachment,
+      };
+      item = hydrateOutboxInput({ ...item, pendingAttachments });
+      await localStore.upsertPendingEnqueue(cacheOwner, item);
+    }
+    item = hydrateOutboxInput({ ...item, pendingAttachments });
+    await localStore.upsertPendingEnqueue(cacheOwner, item);
+    await cloudApi.enqueueHostedTurn(item.conversationId, item.input);
+    return item;
+  }, [cacheOwner, cloudApi, isChinese, localStore, profile]);
+
+  const replayPendingEnqueues = useCallback(async () => {
+    if (!cloudApi || !localStore || !cacheOwner) return;
+    if (outboxReplayRef.current) return outboxReplayRef.current;
+    const replay = (async () => {
+      const pending = await localStore.readPendingEnqueues(cacheOwner);
+      for (const pendingItem of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
+        try {
+          const item = await deliverPendingEnqueue(pendingItem);
+          await localStore.removePendingEnqueue(cacheOwner, item.input.requestId);
+          cleanupPendingAttachments(item);
+          if (!activeConversationIdRef.current) {
+            activeConversationIdRef.current = item.conversationId;
+            setActiveConversationId(item.conversationId);
+          }
+          if (activeConversationIdRef.current === item.conversationId) {
+            activeHostedTurnIdRef.current = item.input.turnId;
+            setActiveHostedTurnId(item.input.turnId);
+            setHostedRunning(true);
+            setSending(true);
+            const generation = ++conversationSyncGenerationRef.current;
+            await loadConversation(item.conversationId, generation);
+          }
+        } catch {
+          // Preserve FIFO ordering; the same idempotency key is retried on the next foreground pass.
+          break;
+        }
+      }
+    })();
+    outboxReplayRef.current = replay;
+    try {
+      await replay;
+    } finally {
+      if (outboxReplayRef.current === replay) outboxReplayRef.current = null;
+    }
+  }, [cacheOwner, cloudApi, deliverPendingEnqueue, loadConversation, localStore]);
 
   const openConversation = useCallback(async (
     conversationId: string,
@@ -397,7 +515,9 @@ export function ChatPreviewPage({
     commitConversationIndex(synchronized, activeId);
     if (!activeId) {
       activeConversationIdRef.current = '';
+      activeHostedTurnIdRef.current = '';
       setActiveConversationId('');
+      setActiveHostedTurnId('');
       setMessages([]);
       setHostedRunning(false);
       setSending(false);
@@ -418,7 +538,9 @@ export function ChatPreviewPage({
     if (!cloudApi) return undefined;
     let disposed = false;
     const requestedConversationId = preferredConversationId || notificationTarget?.conversationId;
-    void loadConversationIndex(requestedConversationId)
+    void replayPendingEnqueues()
+      .catch(() => undefined)
+      .then(() => loadConversationIndex(requestedConversationId))
       .then(() => {
         if (!disposed && preferredConversationId) {
           onPreferredConversationConsumed?.(preferredConversationId);
@@ -429,13 +551,18 @@ export function ChatPreviewPage({
       });
     const appState = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
-      void loadConversationIndex(activeConversationIdRef.current).catch((error) => {
-        if (!disposed) notify(serverFailure(error, isChinese));
-      });
+      void replayPendingEnqueues()
+        .catch(() => undefined)
+        .then(() => loadConversationIndex(activeConversationIdRef.current))
+        .catch((error) => {
+          if (!disposed) notify(serverFailure(error, isChinese));
+        });
     });
     const indexTimer = setInterval(() => {
-      if (AppState.currentState !== 'active' || activeStream.current) return;
-      void loadConversationIndex(activeConversationIdRef.current)
+      if (AppState.currentState !== 'active') return;
+      void replayPendingEnqueues()
+        .catch(() => undefined)
+        .then(() => loadConversationIndex(activeConversationIdRef.current))
         .catch(() => {});
     }, 15_000);
     return () => {
@@ -452,14 +579,15 @@ export function ChatPreviewPage({
     notify,
     onPreferredConversationConsumed,
     preferredConversationId,
+    replayPendingEnqueues,
   ]);
 
   useEffect(() => {
-    if (!cloudApi || !activeConversationId || activeStream.current || !hostedRunning) {
+    if (!cloudApi || !activeConversationId || !hostedRunning) {
       return undefined;
     }
     const interval = setInterval(() => {
-      if (AppState.currentState !== 'active' || activeStream.current) return;
+      if (AppState.currentState !== 'active') return;
       const generation = ++conversationSyncGenerationRef.current;
       void loadConversation(activeConversationId, generation).catch(() => {});
     }, 1_000);
@@ -476,13 +604,9 @@ export function ChatPreviewPage({
     }
     pendingAttachmentCleanup.current?.();
     pendingNavigationCleanup.current?.();
-    activeStream.current?.detach();
-    activeStream.current = null;
   }, []);
 
   const createConversation = async () => {
-    activeStream.current?.detach();
-    activeStream.current = null;
     if (cloudApi) {
       try {
         const result = await cloudApi.createConversation(profile, isChinese ? '新对话' : 'New conversation');
@@ -514,13 +638,19 @@ export function ChatPreviewPage({
           isChinese,
         );
         if (configurationError) {
+          const failedAt = Date.now();
           setMessages((current) => upsertChatMessage(current, {
+            avatarRole: 'hermes',
             content: configurationError,
+            createdAt: failedAt,
+            durationMs: 0,
             id: configurationErrorId,
             name: 'Hermes Agent',
             role: 'assistant',
             roleLabel: isChinese ? '配置错误' : 'Configuration error',
             roleStage: 'chat',
+            status: 'failed',
+            updatedAt: failedAt,
           }));
           notify(configurationError);
           setSending(false);
@@ -529,45 +659,71 @@ export function ChatPreviewPage({
         setMessages((current) => current.filter(({ id }) => id !== configurationErrorId));
       } catch (error) {
         const failure = serverFailure(error, isChinese);
+        const failedAt = Date.now();
         setMessages((current) => upsertChatMessage(current, {
+          avatarRole: 'hermes',
           content: failure,
+          createdAt: failedAt,
+          durationMs: 0,
           id: configurationErrorId,
           name: 'Hermes Agent',
           role: 'assistant',
           roleLabel: isChinese ? '配置检查失败' : 'Configuration check failed',
           roleStage: 'chat',
+          status: 'failed',
+          updatedAt: failedAt,
         }));
         notify(failure);
         setSending(false);
         return;
       }
     }
-    const userMessageId = `user-${Date.now()}`;
+    const userMessageCreatedAt = Date.now();
+    const userMessageId = uniqueTurnId('user');
     const userMessage: ChatMessage = {
+      avatarRole: 'user',
       content: trimmed || (isChinese ? `已添加 ${attachmentCount} 个附件` : `${attachmentCount} attachments`),
+      createdAt: userMessageCreatedAt,
+      durationMs: 0,
       id: userMessageId,
       name: isChinese ? '你' : 'You',
       role: 'user',
+      status: 'completed',
+      updatedAt: userMessageCreatedAt,
     };
     setMessages((current) => [...current, userMessage]);
-    contentRef.current = '';
-    setContent('');
-    setAttachments([]);
+    let composerCleared = false;
+    const clearQueuedComposer = () => {
+      if (composerCleared) return;
+      composerCleared = true;
+      contentRef.current = '';
+      setContent('');
+      setAttachments([]);
+    };
     setSending(true);
     if (!cloudApi || !client) {
+      clearQueuedComposer();
       replyTimer.current = setTimeout(() => {
+        const repliedAt = Date.now();
         setMessages((current) => [
           ...current,
           {
+            avatarRole: 'hermes',
             content: isChinese
               ? '这是前端预览回复；正式登录构建会连接 Hermes 服务器。'
               : 'This is a frontend preview response; authenticated builds connect to Hermes.',
+            completedAt: repliedAt,
+            createdAt: userMessageCreatedAt,
+            durationMs: Math.max(0, repliedAt - userMessageCreatedAt),
             id: `assistant-${Date.now()}`,
             model: 'preview',
             name: 'Hermes Agent',
             role: 'assistant',
             roleLabel: 'Hermes Agent',
             roleStage: 'chat',
+            startedAt: userMessageCreatedAt,
+            status: 'completed',
+            updatedAt: repliedAt,
           },
         ]);
         setSending(false);
@@ -576,203 +732,136 @@ export function ChatPreviewPage({
       return;
     }
 
-    let keepServerRunning = false;
-    let streamId = '';
+    let hostedAccepted = false;
+    let enqueuePersisted = false;
+    const hostedTurnId = uniqueTurnId('hosted');
+    let queuedItem: HostedTurnOutboxItem | null = null;
     try {
-      let conversationId = activeConversationIdRef.current;
-      if (!conversationId) {
-        const created = await cloudApi.createConversation(
-          profile,
-          trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
-        );
-        conversationId = created.conversation.id;
-        activeConversationIdRef.current = conversationId;
-        setActiveConversationId(conversationId);
-        commitConversationIndex(
-          upsertCachedConversation(conversationIndexRef.current, created.conversation),
-          conversationId,
-        );
-      }
+      let conversationId = activeConversationIdRef.current
+        || `chat_${safeOutboxPathComponent(userMessageId).slice(0, 251)}`;
+      const conversationPending = !activeConversationIdRef.current;
+      const durableAttachments = await persistPendingAttachments(
+        userMessageId,
+        pendingAttachments,
+      );
 
       const uploaded: Record<string, unknown>[] = [];
-      for (const attachment of pendingAttachments) {
-        const result = await cloudApi.uploadConversationAttachment(conversationId, {
-          mimeType: attachment.mimeType,
-          name: attachment.name,
-          uri: attachment.uri,
-        });
-        if (isRecord(result.attachment)) uploaded.push(result.attachment);
-      }
       const filesContext = attachmentContext(uploaded);
       const serverUserMessage: CollaborationMessage = {
         content: userMessage.content,
+        created_at: userMessageCreatedAt,
         id: userMessageId,
         kind: 'message',
         meta: { attachments: uploaded },
         name: isChinese ? '你' : 'You',
         role: 'user',
+        sender_id: 'account-owner',
+        sender_name: isChinese ? '你' : 'You',
         status: 'completed',
+        updated_at: userMessageCreatedAt,
       };
-      await cloudApi.recordConversationMessage(conversationId, serverUserMessage);
-
-      const route = await cloudApi.routeMessage(userMessage.content);
-      const routeMessage: CollaborationMessage = {
-        content: route.reason,
-        id: `route-${Date.now()}`,
-        kind: 'route',
-        meta: {
-          artifact_required: route.artifact_required,
-          confidence: route.confidence,
-          mode: route.mode,
-          profiles: route.profiles,
-          source: route.source,
-        },
-        name: route.label,
-        role: 'system',
-        status: 'completed',
+      const enqueueInput: HostedTurnEnqueueInput = {
+        attachmentContext: filesContext,
+        attachmentIds: uploaded.flatMap((attachment) => (
+          typeof attachment.id === 'string' ? [attachment.id] : []
+        )),
+        deliveryContext: '由服务端意图路由判断是否需要交付文件；需要时上传账户云端并在会话中返回。',
+        message: serverUserMessage,
+        recentMessages: [...messages, userMessage].slice(-12).map((message) => ({
+          content: message.content,
+          role: message.role,
+        })),
+        requestId: userMessageId,
+        turnId: hostedTurnId,
       };
-      await cloudApi.recordConversationMessage(conversationId, routeMessage);
-
-      if (route.mode === 'work') {
-        const turnId = uniqueTurnId('hosted');
-        await cloudApi.createHostedTurn(conversationId, {
-          artifactRequired: route.artifact_required,
-          attachmentContext: filesContext,
-          content: userMessage.content,
-          deliveryContext: route.artifact_required
-            ? '仅生成用户明确要求的交付文件，并把最终文件放入会话输出目录。'
-            : '本任务未要求交付文件，不要创建交付文件。',
-          profiles: route.profiles,
-          title: route.title,
-          turnId,
+      queuedItem = {
+        conversationId,
+        conversationPending,
+        conversationProfile: profile,
+        conversationTitle: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
+        input: enqueueInput,
+        pendingAttachments: durableAttachments,
+        queuedAt: userMessageCreatedAt,
+      };
+      if (localStore && cacheOwner) {
+        await localStore.upsertPendingEnqueue(cacheOwner, queuedItem);
+        enqueuePersisted = true;
+        clearQueuedComposer();
+        queuedItem = await deliverPendingEnqueue(queuedItem);
+        conversationId = queuedItem.conversationId;
+      } else {
+        if (conversationPending) {
+          await cloudApi.createConversation(
+            profile,
+            queuedItem.conversationTitle,
+            conversationId,
+          );
+        }
+        const fallbackAttachments = [...durableAttachments];
+        for (let index = 0; index < fallbackAttachments.length; index += 1) {
+          const attachment = fallbackAttachments[index];
+          const result = await cloudApi.uploadConversationAttachment(
+            conversationId,
+            {
+              mimeType: attachment.mimeType,
+              name: attachment.name,
+              uri: attachment.uri,
+            },
+            {
+              messageId: userMessageId,
+              profile,
+              turnId: hostedTurnId,
+              uploadId: attachment.id,
+            },
+          );
+          if (!isRecord(result.attachment)) {
+            throw new Error('Attachment upload was not persisted');
+          }
+          fallbackAttachments[index] = { ...attachment, uploaded: result.attachment };
+        }
+        queuedItem = hydrateOutboxInput({
+          ...queuedItem,
+          conversationPending: false,
+          pendingAttachments: fallbackAttachments,
         });
-        keepServerRunning = true;
+        await cloudApi.enqueueHostedTurn(conversationId, queuedItem.input);
+      }
+      hostedAccepted = true;
+      clearQueuedComposer();
+      if (enqueuePersisted && localStore && cacheOwner) {
+        await localStore.removePendingEnqueue(cacheOwner, userMessageId).catch(() => undefined);
+      }
+      if (queuedItem) cleanupPendingAttachments(queuedItem);
+      activeConversationIdRef.current = conversationId;
+      setActiveConversationId(conversationId);
+      if (activeConversationIdRef.current === conversationId) {
+        activeHostedTurnIdRef.current = hostedTurnId;
+        setActiveHostedTurnId(hostedTurnId);
         setHostedRunning(true);
         const generation = ++conversationSyncGenerationRef.current;
         await loadConversation(conversationId, generation);
-        return;
       }
-
-      streamId = uniqueTurnId('stream');
-      let accumulatedText = '';
-      let activities: ChatActivity[] = [];
-      let actualModel = '';
-      let actualProvider = '';
-      const patchStreamMessage = () => {
-        setMessages((current) => current.map((message) => (
-          message.id === streamId
-            ? {
-                ...message,
-                activities: [...activities],
-                content: accumulatedText,
-                model: [actualProvider, actualModel].filter(Boolean).join(' · ') || undefined,
-              }
-            : message
-        )));
-      };
-      setMessages((current) => upsertChatMessage(current, {
-          activities: [],
-          content: '',
-          id: streamId,
-          name: 'Hermes Agent',
-          role: 'assistant',
-          roleLabel: 'Hermes Agent',
-          roleStage: 'chat',
-        }));
-      const stream = new HermesChatStream(client, async (event) => {
-        const payload = event.payload;
-        if (event.type === 'session.ready') {
-          const storedSessionId = stringValue(payload.stored_session_id)
-            || stringValue(payload.session_id);
-          if (storedSessionId) {
-            runtimeSessionsRef.current = {
-              ...runtimeSessionsRef.current,
-              [profile]: storedSessionId,
-            };
-            await cloudApi.saveRuntimeSession(
-              conversationId,
-              profile,
-              storedSessionId,
-              streamId,
-              'running',
-            );
-          }
-          return;
-        }
-        if (event.type === 'message.delta') {
-          accumulatedText += structuredText(payload.text);
-          patchStreamMessage();
-          return;
-        }
-        if (event.type === 'session.info') {
-          actualModel = stringValue(payload.model) || actualModel;
-          actualProvider = stringValue(payload.provider) || actualProvider;
-          patchStreamMessage();
-          return;
-        }
-        const activity = streamEventToActivity(event.type, payload);
-        if (activity) {
-          activities = mergeStreamActivity(activities, activity);
-          patchStreamMessage();
-        }
-      }, createNativeHermesChatStreamRuntime());
-      activeStream.current = stream;
-      const result = await stream.run({
-        conversationId,
-        existingSessionId: runtimeSessionsRef.current[profile],
-        profile,
-        prompt: [
-          trimmed || userMessage.content,
-          filesContext,
-          route.artifact_required
-            ? '用户明确要求文件交付，仅生成所需文件。'
-            : '本任务未要求文件交付，不要创建交付文件。',
-        ].filter(Boolean).join('\n\n'),
-        sessionTitle: route.title,
-        turnId: streamId,
-      });
-      if (result.text) accumulatedText = result.text;
-      patchStreamMessage();
-      const assistantMessage: CollaborationMessage = {
-        content: accumulatedText || result.text,
-        id: streamId,
-        kind: 'message',
-        meta: {
-          activities,
-          actual_model: actualModel,
-          actual_provider: actualProvider,
-          runtime_session_id: result.storedSessionId,
-          runtime_turn_id: streamId,
-        },
-        name: 'default',
-        role: 'assistant',
-        status: result.status === 'error' ? 'failed' : 'completed',
-      };
-      await cloudApi.recordConversationMessage(conversationId, assistantMessage);
-      await cloudApi.saveRuntimeSession(
-        conversationId,
-        profile,
-        result.storedSessionId,
-        streamId,
-        result.status === 'error' ? 'failed' : 'completed',
-      );
-      await loadConversationIndex(conversationId);
     } catch (error) {
-      if (!(error instanceof Error && error.name === 'HermesStreamDetachedError')) {
-        notify(serverFailure(error, isChinese));
+      if (enqueuePersisted && !hostedAccepted) {
+        notify(isChinese
+          ? '消息已保存在待发送队列，连接恢复后会自动继续。'
+          : 'Message queued and will continue automatically when the connection returns.');
+        void replayPendingEnqueues();
+      } else if (!hostedAccepted) {
+        if (queuedItem) cleanupPendingAttachments(queuedItem);
         const failure = serverFailure(error, isChinese);
+        notify(failure);
+        const failedAt = Date.now();
         setMessages((current) => upsertChatMessage(current, {
-            content: failure,
-            id: streamId || uniqueTurnId('error'),
-            name: 'Hermes Agent',
-            role: 'assistant',
-            roleLabel: isChinese ? '执行失败' : 'Failed',
-            roleStage: 'chat',
-          }));
+          ...userMessage,
+          status: 'failed',
+          updatedAt: failedAt,
+        }));
+      } else {
+        notify(serverFailure(error, isChinese));
       }
     } finally {
-      activeStream.current = null;
-      if (!keepServerRunning) {
+      if (!hostedAccepted) {
         setHostedRunning(false);
         setSending(false);
       }
@@ -788,10 +877,64 @@ export function ChatPreviewPage({
     });
   };
 
+  const cancelActiveHostedTurn = async () => {
+    const conversationId = activeConversationIdRef.current;
+    if (!cloudApi || !conversationId || cancelHostedTurnInFlightRef.current) return;
+    cancelHostedTurnInFlightRef.current = true;
+    setCancellingHostedTurn(true);
+    try {
+      let turnId = activeHostedTurnIdRef.current;
+      if (!turnId) {
+        const refreshed = await cloudApi.getConversation(conversationId);
+        turnId = conversationRunningHostedTurnId(refreshed.conversation);
+      }
+      if (!turnId) {
+        notify(isChinese ? '当前任务已经结束。' : 'The current task has already ended.');
+        if (activeConversationIdRef.current === conversationId) {
+          setHostedRunning(false);
+          setSending(false);
+        }
+        return;
+      }
+      await cloudApi.cancelHostedTurn(
+        conversationId,
+        turnId,
+        isChinese ? '用户在 iOS 会话中取消任务' : 'Cancelled by the user in the iOS chat',
+      );
+      if (activeConversationIdRef.current === conversationId) {
+        activeHostedTurnIdRef.current = '';
+        setActiveHostedTurnId('');
+        setHostedRunning(false);
+        setSending(false);
+        const generation = ++conversationSyncGenerationRef.current;
+        await loadConversation(conversationId, generation);
+      }
+      notify(isChinese ? '已取消任务' : 'Task cancelled');
+    } catch (error) {
+      try {
+        const refreshed = await cloudApi.getConversation(conversationId);
+        if (activeConversationIdRef.current === conversationId) {
+          applyConversation(refreshed.conversation);
+        }
+        if (!conversationRunningHostedTurnId(refreshed.conversation)) {
+          notify(isChinese ? '任务已结束' : 'Task already finished');
+          return;
+        }
+      } catch {
+        // Keep the original cancellation error when the reconciliation read also fails.
+      }
+      notify(serverFailure(error, isChinese));
+    } finally {
+      cancelHostedTurnInFlightRef.current = false;
+      setCancellingHostedTurn(false);
+    }
+  };
+
   const selectConversation = async (conversationId: string) => {
     if (!conversationId || conversationId === activeConversationIdRef.current) return;
-    activeStream.current?.detach();
-    activeStream.current = null;
+    activeHostedTurnIdRef.current = '';
+    setActiveHostedTurnId('');
+    setCancellingHostedTurn(false);
     setSending(false);
     setHostedRunning(false);
     setContent('');
@@ -1147,6 +1290,7 @@ export function ChatPreviewPage({
             ) : messages.map((message, index) => (
               <UnifiedMessage
                 index={index}
+                isChinese={isChinese}
                 key={message.id}
                 message={message}
                 onOpenAttachment={openStoredAttachment}
@@ -1241,31 +1385,56 @@ export function ChatPreviewPage({
                 value={content}
               />
               <IOSPressable
-                accessibilityLabel={isChinese ? '发送消息' : 'Send message'}
-                disabled={sending}
-                haptic={canSend ? 'light' : 'none'}
+                accessibilityLabel={canCancelHostedTurn
+                  ? isChinese ? '取消当前任务' : 'Cancel current task'
+                  : isChinese ? '发送消息' : 'Send message'}
+                disabled={canCancelHostedTurn ? cancellingHostedTurn : sending}
+                haptic={canCancelHostedTurn ? 'medium' : canSend ? 'light' : 'none'}
                 hitSlop={8}
-                onPress={requestSend}
+                onPress={canCancelHostedTurn ? () => void cancelActiveHostedTurn() : requestSend}
                 opacityTo={0.78}
                 pressRetentionOffset={12}
                 scaleTo={0.91}
                 style={[
                   styles.send,
                   {
-                    backgroundColor: tokens.colors.primary,
-                    opacity: canSend ? 1 : 0.38,
+                    backgroundColor: canCancelHostedTurn
+                      ? tokens.colors.destructive
+                      : tokens.colors.primary,
+                    opacity: canCancelHostedTurn ? (cancellingHostedTurn ? 0.55 : 1) : canSend ? 1 : 0.38,
                   },
                 ]}
               >
                 <SymbolView
                   fallback={(
-                    <Text style={[styles.sendGlyph, { color: tokens.colors.primaryForeground }]}>
-                      {sending ? '…' : '↑'}
+                    <Text style={[
+                      styles.sendGlyph,
+                      {
+                        color: canCancelHostedTurn
+                          ? tokens.colors.destructiveForeground
+                          : tokens.colors.primaryForeground,
+                      },
+                    ]}>
+                      {cancellingHostedTurn ? '…' : canCancelHostedTurn ? '■' : sending ? '…' : '↑'}
                     </Text>
                   )}
-                  name={sending ? 'ellipsis' : 'arrow.up'}
-                  size={sending ? 18 : 17}
-                  tintColor={tokens.colors.primaryForeground}
+                  name={cancellingHostedTurn
+                    ? 'ellipsis'
+                    : canCancelHostedTurn
+                      ? 'stop.fill'
+                      : sending
+                        ? 'ellipsis'
+                        : 'arrow.up'}
+                  size={cancellingHostedTurn
+                    ? 18
+                    : canCancelHostedTurn
+                      ? 14
+                      : sending
+                        ? 18
+                        : 17}
+                  tintColor={canCancelHostedTurn
+                    ? tokens.colors.destructiveForeground
+                    : tokens.colors.primaryForeground}
                   weight="bold"
                 />
               </IOSPressable>
@@ -1480,8 +1649,87 @@ function resolveComposerFontSize(value: string): number {
   return Math.max(12, 16 - (Math.min(glyphCount, 40) - 28) / 3);
 }
 
+async function persistPendingAttachments(
+  requestId: string,
+  attachments: readonly ChatAttachment[],
+): Promise<HostedTurnPendingAttachment[]> {
+  if (!attachments.length) return [];
+  const directory = new ExpoDirectory(
+    Paths.document,
+    'hermes-outbox',
+    safeOutboxPathComponent(requestId),
+  );
+  directory.create({ idempotent: true, intermediates: true });
+  try {
+    return attachments.map((attachment, index) => {
+      const uploadId = uniqueTurnId(`upload-${index}`);
+      const target = new ExpoFile(
+        directory,
+        `${index}-${safeOutboxPathComponent(attachment.name)}`,
+      );
+      if (target.exists) target.delete();
+      new ExpoFile(attachment.uri).copy(target);
+      return {
+        id: uploadId,
+        kind: attachment.kind,
+        mimeType: attachment.mimeType,
+        name: attachment.name,
+        size: attachment.size,
+        uri: target.uri,
+      };
+    });
+  } catch (error) {
+    if (directory.exists) directory.delete();
+    throw error;
+  }
+}
+
+function cleanupPendingAttachments(item: HostedTurnOutboxItem): void {
+  const root = new ExpoDirectory(Paths.document, 'hermes-outbox');
+  const rootUri = root.uri.endsWith('/') ? root.uri : `${root.uri}/`;
+  for (const attachment of item.pendingAttachments || []) {
+    if (!attachment.uri.startsWith(rootUri)) continue;
+    const file = new ExpoFile(attachment.uri);
+    if (file.exists) file.delete();
+  }
+  const directory = new ExpoDirectory(root, safeOutboxPathComponent(item.input.requestId));
+  if (directory.exists) directory.delete();
+}
+
+function hydrateOutboxInput(item: HostedTurnOutboxItem): HostedTurnOutboxItem {
+  const uploaded = (item.pendingAttachments || []).flatMap((attachment) => (
+    attachment.uploaded ? [attachment.uploaded] : []
+  ));
+  return {
+    ...item,
+    input: {
+      ...item.input,
+      attachmentContext: attachmentContext(uploaded),
+      attachmentIds: uploaded.flatMap((attachment) => (
+        typeof attachment.id === 'string' ? [attachment.id] : []
+      )),
+      message: {
+        ...item.input.message,
+        meta: {
+          ...(isRecord(item.input.message.meta) ? item.input.message.meta : {}),
+          attachments: uploaded,
+        },
+      },
+    },
+  };
+}
+
+function safeOutboxPathComponent(value: string): string {
+  const safe = value.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+|\.+$/g, '');
+  return safe.slice(0, 120) || 'pending';
+}
+
 function uniqueTurnId(prefix: string): string {
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const uuid = globalThis.crypto?.randomUUID?.();
+  const random = uuid || [0, 1, 2, 3]
+    .map(() => Math.random().toString(36).slice(2, 12))
+    .join('');
+  return `${prefix}-${Date.now().toString(36)}-${random}`;
 }
 
 function stableStringHash(value: string): string {
@@ -1531,23 +1779,6 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function mergeStreamActivity(
-  current: ChatActivity[],
-  next: ChatActivity,
-): ChatActivity[] {
-  const index = current.findIndex((activity) => activity.id === next.id);
-  if (index < 0) return [...current, next];
-  const merged = [...current];
-  merged[index] = {
-    ...merged[index],
-    ...next,
-    input: next.input || merged[index].input,
-    output: next.output || merged[index].output,
-    preview: next.preview || merged[index].preview,
-  };
-  return merged;
-}
-
 function serverFailure(error: unknown, chinese: boolean): string {
   if (error instanceof Error && error.message) {
     return chinese ? `服务器操作失败：${error.message}` : `Server operation failed: ${error.message}`;
@@ -1557,10 +1788,6 @@ function serverFailure(error: unknown, chinese: boolean): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value : '';
 }
 
 function ConversationHistory({
@@ -1613,15 +1840,38 @@ function ConversationHistory({
 
 function UnifiedMessage({
   index,
+  isChinese,
   message,
   onOpenAttachment,
 }: {
   index: number;
+  isChinese: boolean;
   message: ChatMessage;
   onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
 }) {
   const { tokens } = useTheme();
   const isUser = message.role === 'user';
+  const timestamp = formatMessageLocalTime(
+    message.createdAt || message.updatedAt,
+    isChinese,
+  );
+  const status = messageStatusLabel(message.status, isChinese);
+  const metadata = [timestamp, status].filter(Boolean).join(' · ');
+  const runtime = [
+    message.model,
+    message.handoffTarget
+      ? isChinese
+        ? `交接给 ${message.handoffTarget}`
+        : `Handoff to ${message.handoffTarget}`
+      : '',
+  ].filter(Boolean).join(' · ');
+  const messageForeground = isUser ? '#102014' : tokens.colors.foreground;
+  const markdownStyles = createMessageMarkdownStyles(
+    messageForeground,
+    tokens.colors.primary,
+    isUser ? 'rgba(16,32,20,0.08)' : multiplyAlpha(tokens.colors.foreground, 0.055),
+    isUser ? 'rgba(16,32,20,0.22)' : tokens.colors.border,
+  );
   return (
     <Reanimated.View
       entering={FadeInUp
@@ -1631,45 +1881,46 @@ function UnifiedMessage({
       layout={LinearTransition
         .duration(IOS_MOTION.duration.control)
         .easing(IOS_STANDARD_EASING)}
-      style={[styles.message, isUser ? styles.userMessage : styles.agentMessage]}
+      style={[
+        styles.messageEnvelope,
+        isUser ? styles.userMessageEnvelope : styles.agentMessageEnvelope,
+      ]}
     >
-      <View
-        style={[
-          styles.messageAvatar,
-          isUser ? styles.userAvatar : styles.hermesAvatar,
-          { borderColor: multiplyAlpha('#192320', 0.1) },
-        ]}
-      >
-        {isUser ? (
-          <Text style={styles.userAvatarText}>{'你'}</Text>
-        ) : (
-          <Image resizeMode="contain" source={HERMES_AVATAR} style={styles.avatarImage} />
-        )}
-      </View>
-      <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
-        <View style={[styles.messageMeta, isUser && styles.userMessageMeta]}>
-          <Text style={[styles.messageName, { color: tokens.colors.textSecondary }]}>{message.name}</Text>
-          {!isUser && message.roleStage !== 'chat' ? (
-            <Text style={[styles.roleLabel, { color: tokens.colors.textTertiary }]}>{message.roleLabel}</Text>
+      {!isUser && message.activities?.length ? (
+        <RoleActivityGroup isChinese={isChinese} message={message} />
+      ) : null}
+      <View style={[styles.messageRow, isUser && styles.userMessageRow]}>
+        <MessageAvatar isUser={isUser} message={message} />
+        <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
+          <View style={[styles.messageMeta, isUser && styles.userMessageMeta]}>
+            <View style={[styles.senderMeta, isUser && styles.userSenderMeta]}>
+              <Text numberOfLines={1} style={[styles.messageName, { color: tokens.colors.textSecondary }]}>{message.name}</Text>
+              {!isUser && message.roleStage !== 'chat' ? (
+                <Text numberOfLines={1} style={[styles.roleLabel, { color: tokens.colors.textTertiary }]}>{message.roleLabel}</Text>
+              ) : null}
+            </View>
+            {metadata ? (
+              <Text numberOfLines={1} style={[styles.messageTime, { color: tokens.colors.textTertiary }]}>
+                {metadata}
+              </Text>
+            ) : null}
+          </View>
+          {!isUser && runtime ? (
+            <Text numberOfLines={2} style={[styles.runtimeModel, { color: tokens.colors.textTertiary }]}>
+              {runtime}
+            </Text>
           ) : null}
-          {!isUser && message.model ? (
-            <Text numberOfLines={1} style={[styles.runtimeModel, { color: tokens.colors.textTertiary }]}>{message.model}</Text>
-          ) : null}
-        </View>
-        {message.activities?.length ? (
-          <RoleActivityGroup activities={message.activities} roleLabel={message.roleLabel ?? message.name} />
-        ) : null}
-        <View
+          <View
           style={[
             styles.messageBody,
             isUser ? styles.userMessageBody : styles.agentMessageBody,
             {
-              backgroundColor: tokens.colors.card,
-              borderColor: multiplyAlpha('#192320', 0.11),
+              backgroundColor: isUser ? '#95EC69' : tokens.colors.card,
+              borderColor: isUser ? '#80D15D' : multiplyAlpha('#192320', 0.11),
             },
           ]}
         >
-          <Text style={[styles.messageText, { color: tokens.colors.foreground }]}>{message.content}</Text>
+          <Markdown style={markdownStyles}>{message.content || ' '}</Markdown>
           {message.attachments?.length ? (
             <View style={styles.storedAttachments}>
               {message.attachments.map((attachment) => (
@@ -1693,15 +1944,15 @@ function UnifiedMessage({
                   onPress={() => onOpenAttachment(attachment)}
                   style={styles.storedAttachment}
                 >
-                  <File color={tokens.colors.primary} size={18} strokeWidth={1.7} />
+                  <File color={isUser ? '#0D5E3F' : tokens.colors.primary} size={18} strokeWidth={1.7} />
                   <View style={styles.storedAttachmentCopy}>
                     <Text
                       numberOfLines={1}
-                      style={[styles.storedAttachmentName, { color: tokens.colors.foreground }]}
+                      style={[styles.storedAttachmentName, { color: messageForeground }]}
                     >
                       {attachment.name}
                     </Text>
-                    <Text style={[styles.storedAttachmentSize, { color: tokens.colors.textSecondary }]}>
+                    <Text style={[styles.storedAttachmentSize, { color: isUser ? 'rgba(16,32,20,0.68)' : tokens.colors.textSecondary }]}>
                       {formatAttachmentSize(attachment.size)}
                     </Text>
                   </View>
@@ -1709,9 +1960,83 @@ function UnifiedMessage({
               ))}
             </View>
           ) : null}
+          </View>
         </View>
       </View>
     </Reanimated.View>
+  );
+}
+
+function MessageAvatar({
+  isUser,
+  message,
+}: {
+  isUser: boolean;
+  message: ChatMessage;
+}) {
+  const { tokens } = useTheme();
+  const avatarRole = message.avatarRole || (isUser ? 'user' : 'hermes');
+  const officialHermes = ['dispatcher', 'hermes', 'reporter'].includes(avatarRole);
+  const remoteAvatar = message.avatarUrl && /^(?:data:|file:|https?:)/.test(message.avatarUrl);
+  const symbols: Partial<Record<NonNullable<ChatMessage['avatarRole']>, string>> = {
+    'dbb3-worker': 'server.rack',
+    'pc-worker': 'desktopcomputer',
+    reviewer: 'checkmark.shield.fill',
+  };
+  const fallbacks: Partial<Record<NonNullable<ChatMessage['avatarRole']>, string>> = {
+    'dbb3-worker': 'D',
+    'pc-worker': 'P',
+    reviewer: 'R',
+  };
+  const backgrounds: Partial<Record<NonNullable<ChatMessage['avatarRole']>, string>> = {
+    'dbb3-worker': '#2F6B62',
+    'pc-worker': '#426A8C',
+    reviewer: '#8A5B24',
+    user: '#FFFFFF',
+  };
+  const symbol = message.avatarSymbol || symbols[avatarRole];
+  const fallback = fallbacks[avatarRole] || 'H';
+  const backgroundColor = backgrounds[avatarRole] || '#192320';
+  const badgeSymbol = avatarRole === 'dispatcher'
+    ? 'arrow.triangle.branch'
+    : avatarRole === 'reporter'
+      ? 'checkmark.seal.fill'
+      : '';
+  return (
+    <View
+      style={[
+        styles.messageAvatar,
+        { backgroundColor, borderColor: multiplyAlpha('#192320', 0.12) },
+      ]}
+    >
+      {isUser ? (
+        <Text style={styles.userAvatarText}>{'你'}</Text>
+      ) : remoteAvatar ? (
+        <Image resizeMode="cover" source={{ uri: message.avatarUrl }} style={styles.avatarImage} />
+      ) : officialHermes ? (
+        <Image resizeMode="contain" source={HERMES_AVATAR} style={styles.avatarImage} />
+      ) : (
+        <SymbolView
+          fallback={<Text style={styles.roleAvatarFallback}>{fallback}</Text>}
+          name={symbol as never}
+          size={17}
+          tintColor="#FFFFFF"
+          type="hierarchical"
+          weight="semibold"
+        />
+      )}
+      {badgeSymbol ? (
+        <View style={[styles.roleAvatarBadge, { borderColor: tokens.colors.background }]}>
+          <SymbolView
+            fallback={<Text style={styles.roleAvatarBadgeFallback}>{avatarRole === 'dispatcher' ? 'D' : 'R'}</Text>}
+            name={badgeSymbol as never}
+            size={8}
+            tintColor="#FFFFFF"
+            weight="bold"
+          />
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -1771,20 +2096,35 @@ function PendingDot({ delay }: { delay: number }) {
 }
 
 function RoleActivityGroup({
-  activities,
-  roleLabel,
+  isChinese,
+  message,
 }: {
-  activities: ChatActivity[];
-  roleLabel: string;
+  isChinese: boolean;
+  message: ChatMessage;
 }) {
   const { tokens } = useTheme();
   const [open, setOpen] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const activities = message.activities || [];
+  const running = ['pending', 'queued', 'running', 'starting', 'streaming'].includes(
+    (message.status || '').toLowerCase(),
+  ) || activities.some(({ status }) => status === 'running');
+  useEffect(() => {
+    if (!running) return undefined;
+    const interval = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(interval);
+  }, [running]);
   return (
-    <View style={[styles.activityGroup, { backgroundColor: multiplyAlpha(tokens.colors.card, 0.62), borderColor: tokens.colors.border }]}>
-      <IOSPressable haptic="selection" onPress={() => setOpen((current) => !current)} style={styles.activitySummary}>
-        <View style={styles.activityStatus} />
-        <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.foreground }]}>{`${roleLabel} · 详情`}</Text>
-        <Text style={[styles.activityCount, { color: tokens.colors.textSecondary }]}>{`${activities.length} 条动态`}</Text>
+    <View style={styles.activityGroup}>
+      <IOSPressable
+        accessibilityLabel={formatActivitySummary(message, isChinese, now)}
+        haptic="selection"
+        onPress={() => setOpen((current) => !current)}
+        style={styles.activitySummary}
+      >
+        <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.textSecondary }]}>
+          {formatActivitySummary(message, isChinese, now)}
+        </Text>
         <AnimatedChevron
           color={tokens.colors.textSecondary}
           open={open}
@@ -1801,21 +2141,40 @@ function RoleActivityGroup({
             .easing(IOS_STANDARD_EASING)}
           style={styles.activityTimeline}
         >
-          {activities.map((activity) => <ActivityCard activity={activity} key={activity.id} />)}
+          {activities.map((activity) => (
+            <ActivityCard activity={activity} isChinese={isChinese} key={activity.id} />
+          ))}
         </Reanimated.View>
       ) : null}
+      <View style={[styles.activityDivider, { backgroundColor: tokens.colors.border }]} />
     </View>
   );
 }
 
-function ActivityCard({ activity }: { activity: ChatActivity }) {
+function ActivityCard({
+  activity,
+  isChinese,
+}: {
+  activity: ChatActivity;
+  isChinese: boolean;
+}) {
   const { tokens } = useTheme();
   const [open, setOpen] = useState(false);
-  const label = activity.category === 'command' ? '命令' : activity.category === 'file' ? '文件' : '思考';
+  const label = activityCategoryLabel(activity.category, isChinese);
+  const statusColor = activity.status === 'failed'
+    ? tokens.colors.destructive
+    : activity.status === 'running' || activity.status === 'queued'
+      ? '#D28B22'
+      : '#20A879';
+  const runtime = [
+    activity.toolName,
+    [activity.provider, activity.model].filter(Boolean).join(' · '),
+    messageStatusLabel(activity.status, isChinese),
+  ].filter(Boolean).join(' · ');
   return (
     <View style={[styles.activityCard, { backgroundColor: multiplyAlpha(tokens.colors.card, 0.62), borderColor: tokens.colors.border }]}>
       <IOSPressable haptic="selection" onPress={() => setOpen((current) => !current)} style={styles.activityCardSummary}>
-        <View style={styles.activityStatusSmall} />
+        <View style={[styles.activityStatusSmall, { backgroundColor: statusColor }]} />
         <Text style={styles.activityKind}>{label}</Text>
         <Text numberOfLines={1} style={[styles.activityName, { color: tokens.colors.foreground }]}>{activity.name}</Text>
         <Text style={[styles.activityDuration, { color: tokens.colors.textTertiary }]}>{activity.duration}</Text>
@@ -1831,8 +2190,18 @@ function ActivityCard({ activity }: { activity: ChatActivity }) {
             .easing(IOS_STANDARD_EASING)}
           style={styles.activityDetail}
         >
-          {activity.input ? <ActivityDetail label={'输入'} value={activity.input} /> : null}
-          {activity.output ? <ActivityDetail label={'输出'} value={activity.output} /> : null}
+          {runtime ? (
+            <Text style={[styles.activityRuntime, { color: tokens.colors.textTertiary }]}>
+              {runtime}
+            </Text>
+          ) : null}
+          {activity.preview && activity.preview !== activity.name ? (
+            <ActivityDetail label={isChinese ? '摘要' : 'Summary'} value={activity.preview} />
+          ) : null}
+          {activity.input ? <ActivityDetail label={isChinese ? '输入' : 'Input'} value={activity.input} /> : null}
+          {activity.output ? <ActivityDetail label={isChinese ? '输出' : 'Output'} value={activity.output} /> : null}
+          {activity.detail ? <ActivityDetail label={isChinese ? '详情' : 'Detail'} value={activity.detail} /> : null}
+          {activity.error ? <ActivityDetail label={isChinese ? '错误' : 'Error'} value={activity.error} /> : null}
         </Reanimated.View>
       ) : null}
     </View>
@@ -1844,9 +2213,88 @@ function ActivityDetail({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.activityDetailSection}>
       <Text style={[styles.activityDetailLabel, { color: tokens.colors.textSecondary }]}>{label}</Text>
-      <Text style={[styles.activityCode, { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.05), color: tokens.colors.foreground }]}>{value}</Text>
+      <ScrollView
+        nestedScrollEnabled
+        scrollEventThrottle={8}
+        style={[
+          styles.activityCodeScroll,
+          { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.05) },
+        ]}
+      >
+        <Text style={[styles.activityCode, { color: tokens.colors.foreground }]}>{value}</Text>
+      </ScrollView>
     </View>
   );
+}
+
+function createMessageMarkdownStyles(
+  foreground: string,
+  accent: string,
+  codeBackground: string,
+  border: string,
+): Record<string, object> {
+  return {
+    body: {
+      color: foreground,
+      fontFamily: BODY_REGULAR,
+      fontSize: 14,
+      letterSpacing: 0,
+      lineHeight: 22,
+      margin: 0,
+      padding: 0,
+    },
+    blockquote: {
+      borderLeftColor: accent,
+      borderLeftWidth: 3,
+      marginBottom: 8,
+      marginTop: 2,
+      paddingLeft: 9,
+    },
+    bullet_list: { marginBottom: 7, marginTop: 1 },
+    code_block: {
+      backgroundColor: codeBackground,
+      borderColor: border,
+      borderRadius: 6,
+      borderWidth: StyleSheet.hairlineWidth,
+      color: foreground,
+      fontFamily: MONO_REGULAR,
+      fontSize: 11.5,
+      lineHeight: 17,
+      marginBottom: 9,
+      padding: 9,
+    },
+    code_inline: {
+      backgroundColor: codeBackground,
+      borderRadius: 4,
+      color: foreground,
+      fontFamily: MONO_REGULAR,
+      fontSize: 12,
+      paddingHorizontal: 4,
+      paddingVertical: 1,
+    },
+    fence: {
+      backgroundColor: codeBackground,
+      borderColor: border,
+      borderRadius: 6,
+      borderWidth: StyleSheet.hairlineWidth,
+      color: foreground,
+      fontFamily: MONO_REGULAR,
+      fontSize: 11.5,
+      lineHeight: 17,
+      marginBottom: 9,
+      padding: 9,
+    },
+    heading1: { color: foreground, fontFamily: BODY_BOLD, fontSize: 18, lineHeight: 25, marginBottom: 6, marginTop: 2 },
+    heading2: { color: foreground, fontFamily: BODY_BOLD, fontSize: 16, lineHeight: 23, marginBottom: 5, marginTop: 5 },
+    heading3: { color: foreground, fontFamily: BODY_SEMIBOLD, fontSize: 14.5, lineHeight: 21, marginBottom: 4, marginTop: 4 },
+    link: { color: accent, textDecorationLine: 'none' },
+    list_item: { marginBottom: 2 },
+    ordered_list: { marginBottom: 7, marginTop: 1 },
+    paragraph: { marginBottom: 8, marginTop: 0 },
+    table: { borderColor: border, borderWidth: StyleSheet.hairlineWidth, marginBottom: 9 },
+    td: { borderColor: border, borderWidth: StyleSheet.hairlineWidth, padding: 6 },
+    th: { borderColor: border, borderWidth: StyleSheet.hairlineWidth, fontFamily: BODY_SEMIBOLD, padding: 6 },
+  };
 }
 
 function AnimatedChevron({
@@ -2132,7 +2580,7 @@ const styles = StyleSheet.create({
   navToggle: { alignItems: 'center', borderRadius: 8, borderWidth: 1, height: 28, justifyContent: 'center', width: 28 },
   headerAvatar: { alignItems: 'center', backgroundColor: '#192320', borderRadius: 11, height: 34, justifyContent: 'center', overflow: 'hidden', width: 34 },
   headerAvatarCompact: { borderRadius: 9, height: 28, width: 28 },
-  avatarImage: { height: '100%', width: '100%' },
+  avatarImage: { borderRadius: 8, height: '100%', width: '100%' },
   headingCopy: { flex: 1, minWidth: 0 },
   headingTitle: { fontFamily: DISPLAY_BOLD, fontSize: 15, lineHeight: 19 },
   headingTitleCompact: { fontSize: 12, lineHeight: 16 },
@@ -2155,40 +2603,49 @@ const styles = StyleSheet.create({
   welcomeBody: { fontFamily: BODY_REGULAR, fontSize: 13, lineHeight: 21, marginTop: 7, textAlign: 'center' },
   message: { alignItems: 'flex-start', flexDirection: 'row', gap: 9, maxWidth: '96%' },
   agentMessage: { alignSelf: 'flex-start' },
-  userMessage: { alignSelf: 'flex-end', flexDirection: 'row-reverse' },
-  messageAvatar: { alignItems: 'center', borderRadius: 9, borderWidth: 1, height: 27, justifyContent: 'center', overflow: 'hidden', width: 27 },
+  messageEnvelope: { maxWidth: 820 },
+  agentMessageEnvelope: { alignSelf: 'flex-start', width: '96%' },
+  userMessageEnvelope: { alignItems: 'flex-end', alignSelf: 'flex-end', maxWidth: '88%' },
+  messageRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 9, maxWidth: '100%' },
+  userMessageRow: { flexDirection: 'row-reverse' },
+  messageAvatar: { alignItems: 'center', borderRadius: 9, borderWidth: 1, height: 30, justifyContent: 'center', overflow: 'visible', position: 'relative', width: 30 },
   hermesAvatar: { backgroundColor: '#192320' },
-  userAvatar: { backgroundColor: '#ffffff' },
   userAvatarText: { color: '#0d7164', fontFamily: BODY_BOLD, fontSize: 9 },
+  roleAvatarFallback: { color: '#FFFFFF', fontFamily: BODY_BOLD, fontSize: 11, lineHeight: 15 },
+  roleAvatarBadge: { alignItems: 'center', backgroundColor: '#0D7164', borderRadius: 7, borderWidth: 1.5, bottom: -4, height: 14, justifyContent: 'center', position: 'absolute', right: -4, width: 14 },
+  roleAvatarBadgeFallback: { color: '#FFFFFF', fontFamily: BODY_BOLD, fontSize: 6, lineHeight: 8 },
   messageStack: { alignItems: 'flex-start', flexShrink: 1, maxWidth: '88%', minWidth: 0 },
   userMessageStack: { alignItems: 'flex-end', maxWidth: '82%' },
-  messageMeta: { alignItems: 'center', flexDirection: 'row', gap: 5, marginBottom: 4, marginHorizontal: 3, minHeight: 17 },
+  messageMeta: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'space-between', marginBottom: 3, marginHorizontal: 3, minHeight: 16, width: '100%' },
   userMessageMeta: { flexDirection: 'row-reverse' },
-  messageName: { fontFamily: BODY_BOLD, fontSize: 11, lineHeight: 15 },
-  roleLabel: { fontFamily: BODY_SEMIBOLD, fontSize: 9, lineHeight: 13 },
-  runtimeModel: { flexShrink: 1, fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13, maxWidth: 180 },
-  messageBody: { borderRadius: 13, borderWidth: 1, maxWidth: '100%', minWidth: 38, paddingHorizontal: 11, paddingVertical: 9 },
-  agentMessageBody: { borderTopLeftRadius: 5 },
-  userMessageBody: { borderTopRightRadius: 5 },
-  messageText: { fontFamily: BODY_REGULAR, fontSize: 14, lineHeight: 22 },
+  senderMeta: { alignItems: 'center', flexDirection: 'row', flexShrink: 1, gap: 5 },
+  userSenderMeta: { flexDirection: 'row-reverse' },
+  messageName: { flexShrink: 1, fontFamily: BODY_BOLD, fontSize: 11, lineHeight: 15 },
+  roleLabel: { flexShrink: 1, fontFamily: BODY_SEMIBOLD, fontSize: 9, lineHeight: 13 },
+  messageTime: { flexShrink: 0, fontFamily: BODY_REGULAR, fontSize: 8.5, lineHeight: 12 },
+  runtimeModel: { fontFamily: MONO_REGULAR, fontSize: 8.5, lineHeight: 12, marginBottom: 4, marginHorizontal: 3, maxWidth: '100%' },
+  messageBody: { borderRadius: 8, borderWidth: 1, maxWidth: '100%', minWidth: 38, overflow: 'hidden', paddingHorizontal: 11, paddingTop: 9 },
+  agentMessageBody: { borderTopLeftRadius: 3 },
+  userMessageBody: { borderTopRightRadius: 3 },
   pendingDots: { alignItems: 'center', flexDirection: 'row', gap: 4, minHeight: 16 },
   pendingDot: { backgroundColor: '#0d7164', borderRadius: 3, height: 5, width: 5 },
-  activityGroup: { borderRadius: 10, borderWidth: 1, marginBottom: 6, maxWidth: 720, overflow: 'hidden', width: '100%' },
-  activitySummary: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 34, paddingHorizontal: 9, paddingVertical: 6 },
-  activityStatus: { backgroundColor: '#20a879', borderRadius: 4, height: 8, width: 8 },
-  activityTitle: { flex: 1, fontFamily: BODY_SEMIBOLD, fontSize: 10, lineHeight: 14 },
-  activityCount: { fontFamily: BODY_REGULAR, fontSize: 9, lineHeight: 13 },
-  activityTimeline: { gap: 6, paddingBottom: 8, paddingHorizontal: 8 },
-  activityCard: { borderRadius: 8, borderWidth: 1, overflow: 'hidden' },
+  activityGroup: { maxWidth: 720, width: '100%' },
+  activitySummary: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 27, paddingHorizontal: 2, paddingVertical: 4 },
+  activityTitle: { flex: 1, fontFamily: BODY_REGULAR, fontSize: 11, lineHeight: 15 },
+  activityDivider: { height: StyleSheet.hairlineWidth, marginBottom: 7, marginTop: 6, width: '100%' },
+  activityTimeline: { gap: 6, paddingBottom: 2, paddingHorizontal: 2 },
+  activityCard: { borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   activityCardSummary: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 30, paddingHorizontal: 8, paddingVertical: 6 },
-  activityStatusSmall: { backgroundColor: '#20a879', borderRadius: 3, height: 7, width: 7 },
-  activityKind: { backgroundColor: 'rgba(13,113,100,0.10)', borderRadius: 5, color: '#0d7164', fontFamily: BODY_BOLD, fontSize: 8, overflow: 'hidden', paddingHorizontal: 5, paddingVertical: 2 },
+  activityStatusSmall: { borderRadius: 3, height: 7, width: 7 },
+  activityKind: { backgroundColor: 'rgba(13,113,100,0.10)', borderRadius: 4, color: '#0d7164', fontFamily: BODY_BOLD, fontSize: 8, overflow: 'hidden', paddingHorizontal: 5, paddingVertical: 2 },
   activityName: { flex: 1, fontFamily: BODY_SEMIBOLD, fontSize: 9 },
   activityDuration: { fontFamily: MONO_REGULAR, fontSize: 8 },
   activityDetail: { gap: 7, paddingBottom: 8, paddingHorizontal: 8, paddingLeft: 22 },
+  activityRuntime: { fontFamily: MONO_REGULAR, fontSize: 8, lineHeight: 12 },
   activityDetailSection: { gap: 3 },
   activityDetailLabel: { fontFamily: BODY_BOLD, fontSize: 8 },
-  activityCode: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13, padding: 6 },
+  activityCodeScroll: { borderRadius: 5, maxHeight: 260 },
+  activityCode: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13, padding: 7 },
   composer: { paddingTop: 7 },
   attachmentStrip: { alignSelf: 'center', marginBottom: 8, maxHeight: 76, maxWidth: 920, width: '100%' },
   attachmentStripContent: { gap: 10, paddingHorizontal: 7, paddingTop: 7 },

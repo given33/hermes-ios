@@ -143,6 +143,7 @@ struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {
   let model: String
   let date: String
   let running: Bool
+  let profile: String?
   let detail: String?
 }
 
@@ -151,6 +152,13 @@ struct HermesFileSnapshot: Decodable, Equatable, Identifiable {
   let name: String
   let detail: String
   let folder: Bool
+  let createdAt: Double?
+  let dateLabel: String?
+  let fileType: String?
+  let mimeType: String?
+  let size: Double?
+  let source: String?
+  let status: String?
   let previewText: String?
   let children: [HermesFileSnapshot]?
 }
@@ -463,6 +471,7 @@ enum HermesRouteAction: String, CaseIterable {
   case fileSelect = "file.select"
   case fileDelete = "file.delete"
   case fileDownload = "file.download"
+  case fileShare = "file.share"
   case fileImport = "file.import"
   case folderCreate = "folder.create"
   case modelSelect = "model.select"

@@ -211,6 +211,19 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(quickLookNative, /QLPreviewController\(\)/);
   assert.match(quickLookNative, /\.runOnQueue\(\.main\)/);
   assert.match(chat, /function AttachmentItem/);
+  assert.match(
+    chat,
+    /await localStore\.upsertPendingEnqueue\([\s\S]{0,500}enqueuePersisted = true;\s*clearQueuedComposer\(\);/,
+  );
+  assert.match(
+    chat,
+    /queuedItem = await deliverPendingEnqueue\(queuedItem\);/,
+  );
+  assert.match(chat, /hostedAccepted = true;\s*clearQueuedComposer\(\);/);
+  assert.match(
+    chat,
+    /else if \(!hostedAccepted\) \{[\s\S]{0,320}\.\.\.userMessage,[\s\S]{0,80}status: 'failed'/,
+  );
   assert.doesNotMatch(chat, /<HermesLiquidGlassView/);
   assert.match(chat, /require\('\.\.\/\.\.\/assets\/icon\.png'\)/);
   assert.doesNotMatch(chat, /TerminalStatusBar|terminalTranscript/);
@@ -352,8 +365,8 @@ test('preview share, import, export, and model selection open iOS system surface
   const plugins = read('src/preview/PreviewPluginPages.tsx');
   const settings = read('src/preview/PreviewSettingsPages.tsx');
 
-  assert.match(chat, /haptic=\{canSend \? 'light' : 'none'\}/);
-  assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{requestSend\}/);
+  assert.match(chat, /haptic=\{canCancelHostedTurn \? 'medium' : canSend \? 'light' : 'none'\}/);
+  assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{canCancelHostedTurn \?[\s\S]*: requestSend\}/);
   assert.match(chat, /const currentContent = contentRef\.current/);
   assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*pendingSendFrame\.current = null;\s*void send\(\);/);
   assert.match(core, /ActionSheetIOS\.showActionSheetWithOptions/);

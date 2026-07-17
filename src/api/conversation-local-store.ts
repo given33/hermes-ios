@@ -1,9 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-import type { HermesCloudApi, SingleConversation } from './HermesCloudApi';
+import type {
+  HermesCloudApi,
+  HostedTurnEnqueueInput,
+  JsonRecord,
+  SingleConversation,
+} from './HermesCloudApi';
 
 const CACHE_VERSION = 1 as const;
 const CACHE_PREFIX = 'hermes.native.conversations.v1';
+const OUTBOX_VERSION = 1 as const;
+const OUTBOX_PREFIX = 'hermes.native.hosted-turn-outbox.v1';
 const cacheWriteChains = new Map<string, Promise<void>>();
 const synchronizationGenerations = new Map<string, number>();
 
@@ -18,6 +25,26 @@ export interface ConversationCacheSnapshot {
 export interface ConversationCacheReconciliation {
   conversations: SingleConversation[];
   downloadIds: string[];
+}
+
+export interface HostedTurnOutboxItem {
+  conversationId: string;
+  conversationPending?: boolean;
+  conversationProfile?: string;
+  conversationTitle?: string;
+  input: HostedTurnEnqueueInput;
+  pendingAttachments?: HostedTurnPendingAttachment[];
+  queuedAt: number;
+}
+
+export interface HostedTurnPendingAttachment {
+  id: string;
+  kind: 'file' | 'image';
+  mimeType?: string | null;
+  name: string;
+  size?: number | null;
+  uri: string;
+  uploaded?: JsonRecord;
 }
 
 export interface ConversationStorageAdapter {
@@ -101,6 +128,50 @@ export class ConversationLocalStore {
       wrote = true;
     });
     return wrote;
+  }
+
+  async readPendingEnqueues(owner: string): Promise<HostedTurnOutboxItem[]> {
+    const normalizedOwner = normalizeOwner(owner);
+    if (!normalizedOwner) return [];
+    const raw = await this.storage.getItem(outboxKey(normalizedOwner));
+    return parsePendingEnqueues(raw, normalizedOwner);
+  }
+
+  async upsertPendingEnqueue(owner: string, item: HostedTurnOutboxItem): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingEnqueue(item);
+    if (!normalizedOwner || !normalizedItem) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await this.storage.getItem(outboxKey(normalizedOwner)),
+        normalizedOwner,
+      );
+      const next = current.filter(({ input }) => input.requestId !== normalizedItem.input.requestId);
+      next.push(normalizedItem);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+    });
+  }
+
+  async removePendingEnqueue(owner: string, requestId: string): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedRequestId = stringValue(requestId);
+    if (!normalizedOwner || !normalizedRequestId) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await this.storage.getItem(outboxKey(normalizedOwner)),
+        normalizedOwner,
+      );
+      const next = current.filter(({ input }) => input.requestId !== normalizedRequestId);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+    });
   }
 }
 
@@ -265,12 +336,92 @@ function normalizeConversation(value: unknown): SingleConversation[] {
 }
 
 function cacheKey(owner: string): string {
+  return `${CACHE_PREFIX}.${ownerHash(owner)}`;
+}
+
+function outboxKey(owner: string): string {
+  return `${OUTBOX_PREFIX}.${ownerHash(owner)}`;
+}
+
+function ownerHash(owner: string): string {
   let hash = 0x811c9dc5;
   for (const character of owner) {
     hash ^= character.charCodeAt(0);
     hash = Math.imul(hash, 0x01000193);
   }
-  return `${CACHE_PREFIX}.${(hash >>> 0).toString(16)}`;
+  return (hash >>> 0).toString(16);
+}
+
+function parsePendingEnqueues(raw: string | null, owner: string): HostedTurnOutboxItem[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || value.version !== OUTBOX_VERSION) return [];
+    if (normalizeOwner(value.owner) !== owner || !Array.isArray(value.items)) return [];
+    return value.items.flatMap((item) => {
+      const normalized = normalizePendingEnqueue(item);
+      return normalized ? [normalized] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function normalizePendingEnqueue(value: unknown): HostedTurnOutboxItem | null {
+  if (!isRecord(value) || !isRecord(value.input)) return null;
+  const conversationId = stringValue(value.conversationId);
+  const requestId = stringValue(value.input.requestId);
+  const turnId = stringValue(value.input.turnId);
+  const conversationProfile = stringValue(value.conversationProfile) || 'default';
+  if (!requestId || !turnId || !isRecord(value.input.message)) return null;
+  const messageId = stringValue(value.input.message.id);
+  const content = stringValue(value.input.message.content);
+  const role = stringValue(value.input.message.role);
+  if (!messageId || !content || !role || !Array.isArray(value.input.recentMessages)) return null;
+  const input = {
+    ...value.input,
+    requestId,
+    turnId,
+    message: { ...value.input.message, id: messageId, content, role },
+    recentMessages: value.input.recentMessages.flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const recentContent = stringValue(entry.content);
+      const recentRole = stringValue(entry.role);
+      return recentContent && recentRole ? [{ content: recentContent, role: recentRole }] : [];
+    }),
+    attachmentIds: Array.isArray(value.input.attachmentIds)
+      ? value.input.attachmentIds.flatMap((entry) => stringValue(entry) || [])
+      : [],
+    attachmentContext: stringValue(value.input.attachmentContext),
+    deliveryContext: stringValue(value.input.deliveryContext),
+  } as HostedTurnEnqueueInput;
+  return {
+    conversationId,
+    conversationPending: Boolean(value.conversationPending),
+    conversationProfile,
+    conversationTitle: stringValue(value.conversationTitle),
+    input,
+    pendingAttachments: Array.isArray(value.pendingAttachments)
+      ? value.pendingAttachments.flatMap((entry) => {
+        if (!isRecord(entry)) return [];
+        const id = stringValue(entry.id);
+        const kind = entry.kind === 'image' ? 'image' : entry.kind === 'file' ? 'file' : '';
+        const name = stringValue(entry.name);
+        const uri = stringValue(entry.uri);
+        if (!id || !kind || !name || !uri) return [];
+        return [{
+          id,
+          kind,
+          mimeType: stringValue(entry.mimeType) || null,
+          name,
+          size: numberValue(entry.size) || null,
+          uri,
+          ...(isRecord(entry.uploaded) ? { uploaded: { ...entry.uploaded } } : {}),
+        } as HostedTurnPendingAttachment];
+      })
+      : [],
+    queuedAt: numberValue(value.queuedAt) || Date.now(),
+  };
 }
 
 function advanceSynchronization(owner: string): number {

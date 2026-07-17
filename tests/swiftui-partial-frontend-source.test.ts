@@ -53,8 +53,11 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
   assert.match(preview, /<ChatPreviewPage[\s\S]*profile=\{profile\}/);
   const chat = read('src/preview/PreviewChatPage.tsx');
   assert.match(chat, /createConversation\(profile,/);
-  assert.match(chat, /existingSessionId: runtimeSessionsRef\.current\[profile\]/);
-  assert.match(chat, /profile,\s*prompt:/);
+  assert.match(chat, /enqueueHostedTurn\(item\.conversationId, item\.input\)/);
+  assert.match(chat, /persistPendingAttachments\(/);
+  assert.match(chat, /upsertPendingEnqueue\(cacheOwner,/);
+  assert.match(chat, /cancelHostedTurn\(/);
+  assert.doesNotMatch(chat, /new HermesChatStream|existingSessionId:/);
   assert.equal(
     existsSync(resolve(
       projectRoot,

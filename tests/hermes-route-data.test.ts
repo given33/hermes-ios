@@ -20,6 +20,7 @@ test('session snapshots are derived from the current server response', async () 
           message_count: 8,
           model: 'claude-sonnet',
           preview: 'fallback preview',
+          profile: 'reviewer',
           started_at: 1_719_000_000,
           title: '云端会话',
           tool_call_count: 3,
@@ -35,6 +36,7 @@ test('session snapshots are derived from the current server response', async () 
   assert.equal(snapshot.sessions?.[0].id, 'session-1');
   assert.equal(snapshot.sessions?.[0].title, '云端会话');
   assert.equal(snapshot.sessions?.[0].running, true);
+  assert.equal(snapshot.sessions?.[0].profile, 'reviewer');
   assert.equal(snapshot.sessions?.[0].detail, '8 条消息 · 3 次工具调用');
 });
 
@@ -350,10 +352,10 @@ test('selected skills include the current server SKILL.md for native editing', a
   assert.equal(snapshot.skills?.[0].content, '# Browser\n\nUse browser tools.');
 });
 
-test('native file imports upload every selected system URI to the server workspace', async () => {
+test('native file imports upload every selected system URI to the account cloud library', async () => {
   const uploads: unknown[][] = [];
   const api = {
-    uploadManagedFile: async (...args: unknown[]) => { uploads.push(args); },
+    uploadAccountFile: async (...args: unknown[]) => { uploads.push(args); },
   } as unknown as HermesCloudApi;
 
   const result = await performHermesSwiftUIRouteAction(api, {
@@ -369,9 +371,38 @@ test('native file imports upload every selected system URI to the server workspa
 
   assert.equal(result, 'reload');
   assert.deepEqual(uploads, [
-    ['', { name: 'Report Final.pdf', uri: 'file:///private/var/mobile/Report%20Final.pdf' }],
-    ['', { name: 'photo.jpg', uri: 'file:///private/var/mobile/photo.jpg' }],
+    [{ name: 'Report Final.pdf', uri: 'file:///private/var/mobile/Report%20Final.pdf' }],
+    [{ name: 'photo.jpg', uri: 'file:///private/var/mobile/photo.jpg' }],
   ]);
+});
+
+test('file snapshots expose durable account metadata for native filtering and grouping', async () => {
+  const api = {
+    loadRoute: async () => ({
+      files: [{
+        id: 'file-1',
+        name: 'report.pdf',
+        sha256: 'abc',
+        mime_type: 'application/pdf',
+        extension: '.pdf',
+        file_type: 'document',
+        size: 2048,
+        source: 'model_output',
+        status: 'available',
+        created_at: 1_752_643_200_000,
+        updated_at: 1_752_643_200_000,
+        download_url: '/api/plugins/collaboration/files/file-1/download',
+      }],
+    }),
+  } as unknown as HermesCloudApi;
+
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'files', 'default');
+
+  assert.equal(snapshot.files?.[0].id, 'file-1');
+  assert.equal(snapshot.files?.[0].source, 'model_output');
+  assert.equal(snapshot.files?.[0].fileType, 'document');
+  assert.equal(snapshot.files?.[0].createdAt, 1_752_643_200_000);
+  assert.match(snapshot.files?.[0].detail || '', /模型生成/);
 });
 
 test('native collaboration sends messages through the modified Hermes room API', async () => {

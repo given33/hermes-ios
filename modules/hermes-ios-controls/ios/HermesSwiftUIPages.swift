@@ -789,7 +789,11 @@ private struct HermesSessionsPage: View {
           Button {
             onAction(
               .sessionOpen,
-              HermesRouteActionPayload(route: "sessions", id: session.id)
+              HermesRouteActionPayload(
+                route: "sessions",
+                id: session.id,
+                fields: session.profile.map { ["profile": $0] }
+              )
             )
           } label: {
             HStack(spacing: 12) {
@@ -815,7 +819,11 @@ private struct HermesSessionsPage: View {
             Button(role: .destructive) {
               onAction(
                 .sessionDelete,
-                HermesRouteActionPayload(route: "sessions", id: session.id)
+                HermesRouteActionPayload(
+                  route: "sessions",
+                  id: session.id,
+                  fields: session.profile.map { ["profile": $0] }
+                )
               )
             } label: {
               Label(chinese ? "删除" : "Delete", systemImage: "trash")
@@ -838,7 +846,11 @@ private struct HermesSessionsPage: View {
             Button(role: .destructive) {
               onAction(
                 .sessionDelete,
-                HermesRouteActionPayload(route: "sessions", id: session.id)
+                HermesRouteActionPayload(
+                  route: "sessions",
+                  id: session.id,
+                  fields: session.profile.map { ["profile": $0] }
+                )
               )
             } label: {
               Label(chinese ? "删除会话" : "Delete Session", systemImage: "trash")
@@ -873,7 +885,8 @@ private struct HermesSessionsPage: View {
                 HermesRouteActionPayload(
                   route: "sessions",
                   id: target.id,
-                  name: renameText
+                  name: renameText,
+                  fields: target.profile.map { ["profile": $0] }
                 )
               )
               renameTarget = nil
@@ -886,6 +899,20 @@ private struct HermesSessionsPage: View {
   }
 }
 
+private enum HermesFileSourceFilter: String, CaseIterable, Identifiable {
+  case all
+  case model
+  case user
+
+  var id: String { rawValue }
+}
+
+private struct HermesFileSection: Identifiable {
+  let id: String
+  let files: [HermesFileSnapshot]
+  let timestamp: Double
+}
+
 private struct HermesFilesPage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let chinese: Bool
@@ -893,37 +920,98 @@ private struct HermesFilesPage: View {
   let onAction: HermesRouteActionSink
   @State private var search = ""
   @State private var importerOpen = false
-  @State private var folderSheetOpen = false
-  @State private var newFolder = ""
-  @State private var selectedFile: HermesFileSnapshot?
+  @State private var filterByDate = false
+  @State private var selectedDate = Date()
+  @State private var sourceFilter = HermesFileSourceFilter.all
 
   private var filtered: [HermesFileSnapshot] {
-    search.isEmpty ? files : files.filter { $0.name.localizedCaseInsensitiveContains(search) }
+    files.filter { file in
+      let matchesSearch = search.isEmpty
+        || file.name.localizedCaseInsensitiveContains(search)
+        || file.detail.localizedCaseInsensitiveContains(search)
+      let matchesSource = switch sourceFilter {
+      case .all: true
+      case .model: file.source == "model_output"
+      case .user: file.source == "user_upload"
+      }
+      let matchesDate: Bool
+      if filterByDate, let timestamp = file.createdAt {
+        matchesDate = Calendar.current.isDate(
+          Date(timeIntervalSince1970: timestamp / 1000),
+          inSameDayAs: selectedDate
+        )
+      } else {
+        matchesDate = !filterByDate
+      }
+      return matchesSearch && matchesSource && matchesDate
+    }
+  }
+
+  private var sections: [HermesFileSection] {
+    Dictionary(grouping: filtered) { $0.dateLabel ?? (chinese ? "未知日期" : "Unknown Date") }
+      .map { label, entries in
+        HermesFileSection(
+          id: label,
+          files: entries.sorted { ($0.createdAt ?? 0) > ($1.createdAt ?? 0) },
+          timestamp: entries.map { $0.createdAt ?? 0 }.max() ?? 0
+        )
+      }
+      .sorted { $0.timestamp > $1.timestamp }
   }
 
   var body: some View {
     List {
-      Section("~/.hermes") {
-        ForEach(filtered) { file in
+      if sections.isEmpty {
+        ContentUnavailableView(
+          LocalizedStringKey(
+            search.isEmpty
+              ? (chinese ? "暂无云端文件" : "No Cloud Files")
+              : (chinese ? "没有匹配的文件" : "No Matching Files")
+          ),
+          systemImage: search.isEmpty ? "icloud" : "doc.text.magnifyingglass"
+        )
+      }
+      ForEach(sections) { section in
+        Section(section.id) {
+          ForEach(section.files) { file in
           Button {
-            selectedFile = file
+            guard file.status == "available" else { return }
             onAction(
-              .fileSelect,
-              HermesRouteActionPayload(route: "files", id: file.id)
+              .fileDownload,
+              HermesRouteActionPayload(route: "files", id: file.id, name: file.name)
             )
           } label: {
             HStack(spacing: 12) {
-              Image(systemName: file.folder ? "folder.fill" : "doc.text")
-                .foregroundStyle(file.folder ? appearance.palette.accent : appearance.palette.secondary)
+              Image(systemName: symbol(for: file))
+                .foregroundStyle(file.source == "model_output" ? appearance.palette.accent : appearance.palette.primary)
                 .frame(width: 26)
               VStack(alignment: .leading, spacing: 3) {
                 Text(file.name).font(HermesFonts.bodyBold(15))
                 Text(file.detail)
-                  .font(HermesFonts.mono(10))
+                  .font(HermesFonts.body(11))
                   .foregroundStyle(appearance.palette.secondary)
+                Label(
+                  file.source == "model_output"
+                    ? (chinese ? "Hermes 生成" : "Generated by Hermes")
+                    : (chinese ? "用户上传" : "Uploaded by User"),
+                  systemImage: file.source == "model_output" ? "sparkles" : "person.crop.circle"
+                )
+                .font(HermesFonts.body(10))
+                .foregroundStyle(appearance.palette.secondary)
               }
               Spacer()
+              if file.status == "uploading" {
+                ProgressView().controlSize(.small)
+              } else if file.status == "failed" {
+                Image(systemName: "exclamationmark.circle.fill")
+                  .foregroundStyle(appearance.palette.destructive)
+              } else {
+                Image(systemName: "chevron.right")
+                  .font(.caption.weight(.semibold))
+                  .foregroundStyle(appearance.palette.secondary.opacity(0.6))
+              }
             }
+            .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
           .swipeActions {
@@ -935,24 +1023,16 @@ private struct HermesFilesPage: View {
             } label: {
               Label(chinese ? "删除" : "Delete", systemImage: "trash")
             }
-            ShareLink(item: file.name) {
-              Label(chinese ? "分享" : "Share", systemImage: "square.and.arrow.up")
-            }
-            .tint(appearance.palette.primary)
-            if !file.folder {
+            if file.status == "available" {
               Button {
                 onAction(
-                  .fileDownload,
-                  HermesRouteActionPayload(
-                    route: "files",
-                    id: file.id,
-                    name: file.name
-                  )
+                  .fileShare,
+                  HermesRouteActionPayload(route: "files", id: file.id, name: file.name)
                 )
               } label: {
-                Label(chinese ? "下载" : "Download", systemImage: "arrow.down.circle")
+                Label(chinese ? "分享" : "Share", systemImage: "square.and.arrow.up")
               }
-              .tint(appearance.palette.accent)
+              .tint(appearance.palette.primary)
             }
           }
         }
@@ -966,10 +1046,22 @@ private struct HermesFilesPage: View {
     }
     .toolbar {
       ToolbarItemGroup(placement: .navigationBarTrailing) {
-        Button {
-          folderSheetOpen = true
+        Menu {
+          Picker(chinese ? "来源" : "Source", selection: $sourceFilter) {
+            Text(chinese ? "全部" : "All").tag(HermesFileSourceFilter.all)
+            Text(chinese ? "用户上传" : "User Uploads").tag(HermesFileSourceFilter.user)
+            Text(chinese ? "模型生成" : "Model Outputs").tag(HermesFileSourceFilter.model)
+          }
+          Toggle(chinese ? "按日期筛选" : "Filter by Date", isOn: $filterByDate)
+          if filterByDate {
+            DatePicker(
+              chinese ? "日期" : "Date",
+              selection: $selectedDate,
+              displayedComponents: .date
+            )
+          }
         } label: {
-          Label(chinese ? "新建文件夹" : "New folder", systemImage: "folder.badge.plus")
+          Label(chinese ? "筛选" : "Filter", systemImage: "line.3.horizontal.decrease.circle")
         }
         Button {
           importerOpen = true
@@ -989,86 +1081,18 @@ private struct HermesFilesPage: View {
         )
       }
     }
-    .sheet(isPresented: $folderSheetOpen) {
-      NavigationStack {
-        Form {
-          TextField(chinese ? "文件夹名称" : "Folder name", text: $newFolder)
-        }
-        .navigationTitle(chinese ? "新建文件夹" : "New Folder")
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button(chinese ? "取消" : "Cancel") { folderSheetOpen = false }
-          }
-          ToolbarItem(placement: .confirmationAction) {
-            Button(chinese ? "创建" : "Create") {
-              guard !newFolder.isEmpty else { return }
-              onAction(
-                .folderCreate,
-                HermesRouteActionPayload(route: "files", name: newFolder)
-              )
-              newFolder = ""
-              folderSheetOpen = false
-            }
-          }
-        }
-      }
-      .presentationDetents([.medium])
-    }
-    .sheet(item: $selectedFile) { file in
-      HermesFilePreview(file: file, chinese: chinese)
-        .environmentObject(appearance)
-    }
-    .onChange(of: files) { next in
-      guard let selectedFile else { return }
-      self.selectedFile = next.first { $0.id == selectedFile.id }
-    }
-  }
-}
-
-private struct HermesFilePreview: View {
-  @EnvironmentObject private var appearance: HermesAppearanceModel
-  @Environment(\.dismiss) private var dismiss
-  let file: HermesFileSnapshot
-  let chinese: Bool
-
-  var body: some View {
-    NavigationStack {
-      Group {
-        if file.folder {
-          List {
-            ForEach(file.children ?? []) { child in
-              Label(
-                child.name,
-                systemImage: child.folder ? "folder.fill" : "doc.text"
-              )
-            }
-          }
-          .hermesListStyle()
-        } else {
-          ScrollView {
-            Text(previewContent)
-              .font(HermesFonts.mono(13))
-              .textSelection(.enabled)
-              .frame(maxWidth: .infinity, alignment: .topLeading)
-              .padding(18)
-          }
-        }
-      }
-      .background(appearance.palette.background)
-      .navigationTitle(file.name)
-      .navigationBarTitleDisplayMode(.inline)
-      .toolbar {
-        ToolbarItem(placement: .confirmationAction) {
-          Button(chinese ? "完成" : "Done") { dismiss() }
-        }
-      }
-    }
-    .presentationDetents([.medium, .large])
-    .presentationDragIndicator(.visible)
   }
 
-  private var previewContent: String {
-    file.previewText ?? ""
+  private func symbol(for file: HermesFileSnapshot) -> String {
+    switch file.fileType {
+    case "image": "photo"
+    case "video": "film"
+    case "audio": "waveform"
+    case "archive": "archivebox"
+    case "code": "chevron.left.forwardslash.chevron.right"
+    case "document": "doc.text"
+    default: "doc"
+    }
   }
 }
 

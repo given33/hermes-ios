@@ -2,10 +2,16 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  activityCategoryLabel,
   attachmentContext,
+  avatarRoleFor,
   chatModelConfigurationError,
   conversationHasRunningWork,
   conversationMessagesToView,
+  conversationRunningHostedTurnId,
+  formatActivitySummary,
+  formatMessageLocalTime,
+  messageStatusLabel,
   shouldRenderPendingMessage,
   streamEventToActivity,
   upsertChatMessage,
@@ -74,6 +80,131 @@ test('cloud conversation messages preserve worker, reviewer, reporter, and activ
   ]);
   assert.equal(messages[0].activities?.[0].input, 'git status');
   assert.equal(messages[0].activities?.[0].duration, '420 ms');
+  assert.deepEqual(messages.map(({ avatarRole }) => avatarRole), [
+    'dbb3-worker',
+    'reviewer',
+    'reporter',
+  ]);
+});
+
+test('server workflow metadata restores sender, runtime, timestamps, handoff, and full activities', () => {
+  const startedAt = new Date(2026, 6, 16, 9, 5, 0).getTime();
+  const completedAt = startedAt + 132_000;
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      activities: [{
+        completed_at: startedAt + 32_000,
+        duration: 32,
+        input_text: 'Hermes hosted turn API',
+        kind: 'search',
+        label: '搜索 Hermes 托管接口',
+        metadata: { source_count: 3 },
+        model: 'gpt-5.6',
+        output_text: '已查询 3 个来源并保留完整详情',
+        provider: 'openai',
+        seq: 1,
+        started_at: startedAt,
+        status: 'completed',
+        tool_name: 'web_search',
+      }],
+      completed_at: completedAt,
+      content: '## 阶段结果\n\n搜索和文件检查均已完成。',
+      created_at: startedAt,
+      handoff_to: ['reviewer', 'reporter'],
+      id: 'worker-rich',
+      model: 'claude-sonnet-4',
+      name: 'dbb3-worker',
+      profile: 'dbb3-worker',
+      provider: 'anthropic',
+      role: 'worker',
+      role_label: 'DBB3 · 执行',
+      sender_id: 'profile:dbb3-worker',
+      sender: 'DBB3 执行员',
+      started_at: startedAt,
+      status: 'completed',
+      updated_at: completedAt,
+      meta: {
+        file_events: [{
+          command: 'apply_patch PATCH',
+          completed_at: completedAt,
+          detail: { path: 'src/app.ts', result: 'updated' },
+          id: 'file-1',
+          kind: 'file',
+          name: 'write_file',
+          started_at: completedAt - 30_000,
+          status: 'completed',
+        }],
+      },
+    }],
+  }));
+
+  assert.equal(message.name, 'DBB3 执行员');
+  assert.equal(message.profile, 'dbb3-worker');
+  assert.equal(message.senderId, 'profile:dbb3-worker');
+  assert.equal(message.avatarRole, 'dbb3-worker');
+  assert.equal(message.roleStage, 'worker');
+  assert.equal(message.roleLabel, 'DBB3 · 执行');
+  assert.equal(message.model, 'anthropic · claude-sonnet-4');
+  assert.equal(message.provider, 'anthropic');
+  assert.equal(message.handoffTarget, 'reviewer、reporter');
+  assert.equal(message.createdAt, startedAt);
+  assert.equal(message.updatedAt, completedAt);
+  assert.equal(message.durationMs, 132_000);
+  assert.equal(formatActivitySummary(message, true, completedAt), '已处理 2m 12s');
+  assert.equal(formatMessageLocalTime(startedAt, true, startedAt), '09:05');
+  assert.equal(messageStatusLabel(message.status, true), '已完成');
+  assert.deepEqual(message.activities?.map(({ category }) => category), ['search', 'file']);
+  assert.equal(message.activities?.[0].name, '搜索 Hermes 托管接口');
+  assert.equal(message.activities?.[0].toolName, 'web_search');
+  assert.equal(message.activities?.[0].durationMs, 32_000);
+  assert.match(message.activities?.[0].detail ?? '', /source_count/);
+  assert.equal(message.activities?.[0].input, 'Hermes hosted turn API');
+  assert.equal(message.activities?.[0].output, '已查询 3 个来源并保留完整详情');
+  assert.match(message.activities?.[1].detail ?? '', /src\/app\.ts/);
+});
+
+test('role avatars and activity labels distinguish every workflow participant', () => {
+  assert.equal(avatarRoleFor('default', 'dispatcher'), 'dispatcher');
+  assert.equal(avatarRoleFor('dbb3-worker', 'worker'), 'dbb3-worker');
+  assert.equal(avatarRoleFor('pc-wsl-worker', 'worker'), 'pc-worker');
+  assert.equal(avatarRoleFor('reviewer', 'reviewer'), 'reviewer');
+  assert.equal(avatarRoleFor('default', 'reporter'), 'reporter');
+  assert.equal(activityCategoryLabel('reasoning', true), '思考');
+  assert.equal(activityCategoryLabel('browser', true), '搜索');
+  assert.equal(activityCategoryLabel('mcp', false), 'MCP');
+});
+
+test('top-level sender_role wins over canonical transport role and phase suffixes', () => {
+  const [message, chat] = conversationMessagesToView(conversation({
+    messages: [
+      {
+        collaboration_role: 'dispatcher',
+        content: '本阶段已完成。',
+        id: 'phase-message',
+        meta: { role_stage: 'worker.progress' },
+        name: 'pc-worker',
+        profile: 'pc-worker',
+        role: 'assistant',
+        sender_role: 'worker',
+        status: 'completed',
+      },
+      {
+        content: '简单聊天回复。',
+        id: 'hosted-chat-message',
+        name: 'default',
+        profile: 'default',
+        role: 'assistant',
+        sender_role: 'hermes',
+        status: 'completed',
+      },
+    ],
+  }));
+
+  assert.equal(message.roleStage, 'worker');
+  assert.equal(message.avatarRole, 'pc-worker');
+  assert.equal(message.profile, 'pc-worker');
+  assert.equal(chat.roleStage, 'chat');
+  assert.equal(chat.avatarRole, 'hermes');
 });
 
 test('running state is derived from durable server runs, not client timers', () => {
@@ -84,6 +215,16 @@ test('running state is derived from durable server runs, not client timers', () 
     hosted_turns: { turn: { status: 'completed' } },
     runtime_runs: { default: { status: 'completed' } },
   })), false);
+  assert.equal(conversationRunningHostedTurnId(conversation({
+    hosted_turns: {
+      completed: { status: 'completed', updated_at: 300 },
+      older: { status: 'running', turn_id: 'turn-older', updated_at: 100 },
+      newest: { status: 'queued', turn_id: 'turn-newest', updated_at: 200 },
+    },
+  })), 'turn-newest');
+  assert.equal(conversationRunningHostedTurnId(conversation({
+    hosted_turns: { completed: { status: 'cancelled' } },
+  })), '');
 });
 
 test('attachments and stream events remain structured for the native chat UI', () => {
@@ -91,24 +232,20 @@ test('attachments and stream events remain structured for the native chat UI', (
     attachmentContext([{ name: 'report.pdf', path: '/uploads/report.pdf' }]),
     '用户为本轮上传的附件：\n- report.pdf: /uploads/report.pdf',
   );
-  assert.deepEqual(
-    streamEventToActivity('tool.end', {
+  const streamActivity = streamEventToActivity('tool.end', {
       duration_ms: 1200,
       name: 'read_file',
       output: 'done',
       tool_id: 'tool-1',
-    }),
-    {
-      category: 'file',
-      duration: '1.2 s',
-      id: 'tool-1',
-      input: undefined,
-      name: 'read_file',
-      output: 'done',
-      preview: 'read_file',
-      status: 'completed',
-    },
-  );
+    });
+  assert.equal(streamActivity?.category, 'file');
+  assert.equal(streamActivity?.duration, '1.2 s');
+  assert.equal(streamActivity?.durationMs, 1200);
+  assert.equal(streamActivity?.id, 'tool-1');
+  assert.equal(streamActivity?.name, 'read_file');
+  assert.equal(streamActivity?.output, 'done');
+  assert.equal(streamActivity?.status, 'completed');
+  assert.equal(streamActivity?.toolName, 'read_file');
   const restored = conversationMessagesToView(conversation({
     messages: [{
       content: '查看附件',

@@ -24,8 +24,8 @@ import {
 } from './swiftui-route-contract';
 import {
   HermesCloudApi,
+  type AccountFileEntry,
   type CustomModelConfiguration,
-  type ManagedFileEntry,
   type SessionSummary,
 } from '../api/HermesCloudApi';
 import {
@@ -104,7 +104,10 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete:
       if (!payload.id) return 'none';
       if (payload.id.startsWith('official:')) {
-        await api.deleteSession(payload.id.slice('official:'.length), profile);
+        await api.deleteSession(
+          payload.id.slice('official:'.length),
+          payload.fields?.profile || profile,
+        );
       } else {
         await api.deleteConversation(payload.id);
       }
@@ -112,24 +115,42 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename:
       if (!payload.id || !value) return 'none';
       if (payload.id.startsWith('official:')) {
-        await api.renameSession(payload.id.slice('official:'.length), value, profile);
+        await api.renameSession(
+          payload.id.slice('official:'.length),
+          value,
+          payload.fields?.profile || profile,
+        );
       } else {
         await api.renameConversation(payload.id, value);
       }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileDelete:
       if (!payload.id) return 'none';
-      await api.deleteFile(payload.id, payload.value === 'recursive');
+      await api.deleteAccountFile(payload.id);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileImport:
       for (const uri of payload.uris || []) {
         const name = fileNameFromUri(uri);
-        await api.uploadManagedFile('', { name, uri });
+        await api.uploadAccountFile({ name, uri });
       }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileDownload:
       if (!payload.id) return 'none';
-      await presentManagedFile(api, payload.id, payload.name || fileNameFromUri(payload.id));
+      await presentAccountFile(
+        api,
+        payload.id,
+        payload.name || fileNameFromUri(payload.id),
+        false,
+      );
+      return 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.fileShare:
+      if (!payload.id) return 'none';
+      await presentAccountFile(
+        api,
+        payload.id,
+        payload.name || fileNameFromUri(payload.id),
+        true,
+      );
       return 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileSelect:
       return 'none';
@@ -342,6 +363,7 @@ function sessionsSnapshot(source: unknown): HermesSwiftUISessionSnapshot[] {
       model: session.model?.trim() || 'Hermes',
       date: formatTimestamp(session.last_active || session.started_at),
       running: session.is_active,
+      profile: session.profile?.trim() || undefined,
       detail: `${session.message_count} 条消息 · ${session.tool_call_count} 次工具调用`,
     }));
 }
@@ -357,31 +379,40 @@ export function createHermesSwiftUISessionsSnapshot(
 }
 
 function filesSnapshot(source: unknown): HermesSwiftUIFileSnapshot[] {
-  if (!isRecord(source) || !Array.isArray(source.entries)) return [];
-  const selectedId = stringValue(source.selectedId);
-  const previewRoot = isRecord(source.selectedPreview) ? source.selectedPreview : {};
-  const previewText = structuredContent(previewRoot.content ?? previewRoot.text);
-  const children = Array.isArray(source.selectedChildren)
-    ? source.selectedChildren.filter(isManagedFileEntry).map(fileSnapshot)
-    : [];
-  return source.entries
-    .filter(isManagedFileEntry)
-    .map((entry) => ({
-      ...fileSnapshot(entry),
-      ...(entry.path === selectedId && entry.is_directory ? { children } : {}),
-      ...(entry.path === selectedId && !entry.is_directory ? { previewText } : {}),
-    }));
+  if (!isRecord(source) || !Array.isArray(source.files)) return [];
+  return source.files.filter(isAccountFileEntry).map(accountFileSnapshot);
 }
 
-function fileSnapshot(entry: ManagedFileEntry): HermesSwiftUIFileSnapshot {
+function accountFileSnapshot(entry: AccountFileEntry): HermesSwiftUIFileSnapshot {
+  const createdAt = numberValue(entry.created_at);
+  const sourceLabel = entry.source === 'model_output' ? '模型生成' : '用户上传';
+  const statusLabel = {
+    available: '可用',
+    failed: '失败',
+    uploading: '上传中',
+  }[entry.status];
   return {
-    id: entry.path,
+    createdAt,
+    dateLabel: formatFileDate(createdAt),
+    detail: `${sourceLabel} · ${formatBytes(entry.size)} · ${statusLabel}`,
+    fileType: entry.file_type,
+    folder: false,
+    id: entry.id,
+    mimeType: entry.mime_type,
     name: entry.name,
-    detail: entry.is_directory
-      ? `文件夹 · ${formatTimestamp(entry.mtime)}`
-      : `${formatBytes(entry.size)} · ${formatTimestamp(entry.mtime)}`,
-    folder: entry.is_directory,
+    size: entry.size,
+    source: entry.source,
+    status: entry.status,
   };
+}
+
+function formatFileDate(timestamp: number): string {
+  if (!timestamp) return '未知日期';
+  return new Intl.DateTimeFormat('zh-CN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(new Date(timestamp));
 }
 
 function analyticsSnapshot(source: unknown) {
@@ -802,8 +833,13 @@ function maskSecret(value: string): string {
   return `${value.slice(0, 3)}${'•'.repeat(Math.min(12, value.length - 6))}${value.slice(-3)}`;
 }
 
-async function presentManagedFile(api: HermesCloudApi, path: string, name: string) {
-  const blob = await api.downloadManagedFile(path);
+async function presentAccountFile(
+  api: HermesCloudApi,
+  id: string,
+  name: string,
+  shareOnly: boolean,
+) {
+  const blob = await api.downloadAccountFile(id, !shareOnly);
   const [{ File, Paths }, quickLook, Sharing] = await Promise.all([
     import('expo-file-system'),
     import('../../modules/hermes-quick-look'),
@@ -812,9 +848,9 @@ async function presentManagedFile(api: HermesCloudApi, path: string, name: strin
   const target = new File(Paths.cache, safeFileName(name));
   target.create({ intermediates: true, overwrite: true });
   target.write(new Uint8Array(await blob.arrayBuffer()));
-  const presented = await quickLook.presentQuickLook(target.uri, name);
+  const presented = shareOnly ? false : await quickLook.presentQuickLook(target.uri, name);
   if (!presented && await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(target.uri);
+    await Sharing.shareAsync(target.uri, { dialogTitle: name });
   }
 }
 
@@ -889,11 +925,16 @@ function isSessionSummary(value: unknown): value is SessionSummary {
     && typeof value.tool_call_count === 'number';
 }
 
-function isManagedFileEntry(value: unknown): value is ManagedFileEntry {
+function isAccountFileEntry(value: unknown): value is AccountFileEntry {
   return isRecord(value)
+    && typeof value.id === 'string'
     && typeof value.name === 'string'
-    && typeof value.path === 'string'
-    && typeof value.is_directory === 'boolean';
+    && typeof value.mime_type === 'string'
+    && typeof value.file_type === 'string'
+    && typeof value.size === 'number'
+    && (value.source === 'model_output' || value.source === 'user_upload')
+    && (value.status === 'available' || value.status === 'failed' || value.status === 'uploading')
+    && typeof value.created_at === 'number';
 }
 
 function formatTimestamp(value: number): string {

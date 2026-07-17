@@ -6,6 +6,7 @@ export interface HermesSwiftUISessionSnapshot {
   model: string;
   date: string;
   running: boolean;
+  profile?: string;
   detail?: string;
 }
 
@@ -14,6 +15,13 @@ export interface HermesSwiftUIFileSnapshot {
   name: string;
   detail: string;
   folder: boolean;
+  createdAt?: number;
+  dateLabel?: string;
+  fileType?: string;
+  mimeType?: string;
+  size?: number;
+  source?: 'model_output' | 'user_upload';
+  status?: 'available' | 'failed' | 'uploading';
   previewText?: string;
   children?: readonly HermesSwiftUIFileSnapshot[];
 }
@@ -226,6 +234,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   fileSelect: 'file.select',
   fileDelete: 'file.delete',
   fileDownload: 'file.download',
+  fileShare: 'file.share',
   fileImport: 'file.import',
   folderCreate: 'folder.create',
   modelSelect: 'model.select',

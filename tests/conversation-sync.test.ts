@@ -63,6 +63,62 @@ test('local conversation history is isolated by server account and restores the 
   assert.equal(restoredB?.conversations[0].messages[0].content, 'B 的本地历史');
 });
 
+test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed after acknowledgement', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const ownerA = 'https://example.test|owner-a@example.test';
+  const ownerB = 'https://example.test|owner-b@example.test';
+  const pending = {
+    conversationId: 'conversation-1',
+    conversationPending: true,
+    conversationProfile: 'reviewer',
+    conversationTitle: 'Durable upload',
+    input: {
+      attachmentIds: ['file-1'],
+      message: {
+        content: '继续任务',
+        id: 'user-stable-1',
+        name: '你',
+        role: 'user',
+      },
+      recentMessages: [{ role: 'assistant', content: '已准备。' }],
+      requestId: 'request-stable-1',
+      turnId: 'turn-stable-1',
+    },
+    pendingAttachments: [{
+      id: 'upload-stable-1',
+      kind: 'file' as const,
+      mimeType: 'text/plain',
+      name: 'input.txt',
+      size: 12,
+      uri: 'file:///documents/hermes-outbox/input.txt',
+      uploaded: { id: 'file-cloud-1', status: 'available' },
+    }],
+    queuedAt: 100,
+  };
+
+  await store.upsertPendingEnqueue(ownerA, pending);
+  await store.upsertPendingEnqueue(ownerA, { ...pending, queuedAt: 200 });
+  await store.upsertPendingEnqueue(ownerB, {
+    ...pending,
+    conversationId: 'conversation-2',
+  });
+
+  const ownerAPending = await store.readPendingEnqueues(ownerA.toUpperCase());
+  assert.equal(ownerAPending.length, 1);
+  assert.equal(ownerAPending[0].queuedAt, 200);
+  assert.equal(ownerAPending[0].input.requestId, 'request-stable-1');
+  assert.equal(ownerAPending[0].conversationPending, true);
+  assert.equal(ownerAPending[0].conversationProfile, 'reviewer');
+  assert.equal(ownerAPending[0].pendingAttachments?.[0].id, 'upload-stable-1');
+  assert.equal(ownerAPending[0].pendingAttachments?.[0].uploaded?.id, 'file-cloud-1');
+  assert.equal((await store.readPendingEnqueues(ownerB))[0].conversationId, 'conversation-2');
+
+  await store.removePendingEnqueue(ownerA, 'request-stable-1');
+  assert.deepEqual(await store.readPendingEnqueues(ownerA), []);
+  assert.equal((await store.readPendingEnqueues(ownerB)).length, 1);
+});
+
 test('cloud reconciliation reuses unchanged local transcripts and downloads only changed records', () => {
   const unchanged = conversation('unchanged', 100, [
     { id: 'm-1', role: 'user', name: '你', content: '完整本地正文' },
@@ -235,16 +291,24 @@ test('official sessions are adopted through the modified Hermes flow before chat
 
   const result = await new HermesCloudApi(client).adoptOfficialConversation(
     'official:session-1',
-    'default',
+    'reviewer',
   );
-  const body = JSON.parse(String(calls[3].options.body)) as {
+  const body = JSON.parse(String(calls[2].options.body)) as {
     title: string;
     session_id: string;
     messages: Array<Record<string, unknown>>;
   };
 
   assert.equal(result.conversation.id, 'adopted-1');
+  assert.equal(calls[0].options.profile, 'reviewer');
+  assert.equal(calls[1].options.profile, 'reviewer');
+  assert.deepEqual(calls.map(({ path }) => path), [
+    '/api/sessions/session-1',
+    '/api/sessions/session-1/messages',
+    '/api/plugins/collaboration/single/conversations/adopt',
+  ]);
   assert.equal(body.session_id, 'session-1');
+  assert.equal((body as { profile?: string }).profile, 'reviewer');
   assert.equal(body.title, '官方任务摘要标题');
   assert.deepEqual(body.messages.map(({ role }) => role), ['user', 'assistant']);
   assert.equal(body.messages[0].timestamp, 10);
