@@ -17,7 +17,8 @@ test('authenticated native content is reachable through the native ThemeProvider
   );
 
   assert.match(appSource, /ThemeProvider[\s\S]*from '\.\.\/design\/ThemeProvider'/);
-  assert.match(appSource, /const \{ state, client \} = useAuth\(\)/);
+  assert.match(appSource, /const \{ state, client, deleteAccount, logout \} = useAuth\(\)/);
+  assert.match(appSource, /account=\{\{[\s\S]*deleteAccount,[\s\S]*logout,[\s\S]*username:/);
   assert.match(appSource, /<ThemeProvider client=\{client\}>/);
   assert.match(appSource, /Hermes authenticated content/);
   assert.match(

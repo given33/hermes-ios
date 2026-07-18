@@ -33,6 +33,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm typecheck
+      - name: Generate and verify the iOS asset export
+        shell: bash
+        run: |
+          pnpm exec expo export --platform ios --output-dir "$RUNNER_TEMP/hermes-font-export"
+          node scripts/verify-native-font-export.mjs "$RUNNER_TEMP/hermes-font-export"
       - name: Select Xcode with Swift 6.2
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
@@ -40,6 +45,16 @@ jobs:
           swift --version
       - name: Generate the native iOS project
         run: pnpm exec expo prebuild --platform ios --clean --no-install
+      - name: Verify native extension targets
+        shell: bash
+        run: |
+          PROJECT_FILE="$(find ios -maxdepth 2 -name project.pbxproj -print -quit)"
+          test -n "$PROJECT_FILE"
+          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport; do
+            grep -q "$target" "$PROJECT_FILE"
+          done
+          DEPENDENCY_COUNT="$(grep -c 'isa = PBXTargetDependency;' "$PROJECT_FILE")"
+          test "$DEPENDENCY_COUNT" -ge 5
       - name: Install CocoaPods
         run: pod install --project-directory=ios
       - name: Compile without code signing
@@ -70,6 +85,17 @@ jobs:
             echo 'The unsigned .app bundle was not produced.' >&2
             exit 1
           fi
+          for extension in HermesWeatherWidget HermesDeviceActivityMonitor HermesDeviceActivityReport; do
+            EXTENSION_PATH="$APP_PATH/PlugIns/$extension.appex"
+            test -d "$EXTENSION_PATH"
+            plutil -extract CFBundleIdentifier raw "$EXTENSION_PATH/Info.plist" >/dev/null
+          done
+          WATCH_APP="$APP_PATH/Watch/HermesWatchApp.app"
+          WATCH_EXTENSION="$WATCH_APP/PlugIns/HermesWatchExtension.appex"
+          test -d "$WATCH_APP"
+          test -d "$WATCH_EXTENSION"
+          plutil -extract CFBundleIdentifier raw "$WATCH_APP/Info.plist" >/dev/null
+          plutil -extract CFBundleIdentifier raw "$WATCH_EXTENSION/Info.plist" >/dev/null
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"

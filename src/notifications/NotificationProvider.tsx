@@ -21,9 +21,12 @@ import {
   type NativePushToken,
 } from './mobile-notifications';
 import {
+  buildSmartWeatherFeedbackEvent,
   parseHermesNotificationResponse,
   type HermesNotificationTarget,
 } from './notification-target';
+import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
+import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
 
 const TaskNotificationContext = createContext<HermesNotificationTarget | null>(null);
 
@@ -38,7 +41,36 @@ export function NotificationProvider({ children }: PropsWithChildren) {
     if (!parsed || handledNotifications.current.has(parsed.notificationId)) return;
     handledNotifications.current.add(parsed.notificationId);
     setTarget(parsed);
-  }, []);
+    if (client && parsed.routePath === '/smart-weather') {
+      const sourceID = parsed.sourceNotificationId || parsed.notificationId;
+      const fallback = () => new IOSIntelligenceApi(client).feedback({
+        label: 'notification-value',
+        feedbackId: parsed.sourceNotificationId
+          ? `notification:${parsed.sourceNotificationId}`
+          : `notification-response:${parsed.notificationId}`,
+        payload: {
+          action: 'opened',
+          notification_id: sourceID,
+          useful: true,
+        },
+      });
+      if (hasNativeIOSContext && state.status === 'authenticated') {
+        const timestamp = Date.now();
+        const event = buildSmartWeatherFeedbackEvent(
+          sourceID,
+          state.connection.deviceId || '',
+          timestamp,
+        );
+        if (!event) return;
+        void HermesIOSContext.enqueueContextEvents([
+          event as unknown as Record<string, unknown>,
+        ])
+          .catch(() => fallback().catch(() => undefined));
+      } else {
+        void fallback().catch(() => undefined);
+      }
+    }
+  }, [client, state]);
 
   useEffect(() => {
     if (!runtime.available) return undefined;

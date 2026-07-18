@@ -172,6 +172,12 @@ const BUILTIN_NAV_REST = [
     icon: 'BarChart3',
   },
   {
+    routeId: 'smart-weather',
+    path: '/smart-weather',
+    labels: { en: 'Smart Weather', zh: '\u667a\u80fd\u5929\u6c14' },
+    icon: 'Globe',
+  },
+  {
     routeId: 'models',
     path: '/models',
     labels: { en: 'Models', zh: '\u6a21\u578b' },
@@ -236,6 +242,12 @@ const BUILTIN_NAV_REST = [
     path: '/config',
     labels: { en: 'Config', zh: '\u914d\u7f6e' },
     icon: 'Settings',
+  },
+  {
+    routeId: 'account',
+    path: '/account',
+    labels: { en: 'Account', zh: '\u8d26\u6237' },
+    icon: 'Users',
   },
   {
     routeId: 'env',

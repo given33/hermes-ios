@@ -48,6 +48,7 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
       '/sessions',
       '/files',
       '/analytics',
+      '/smart-weather',
       '/models',
       '/logs',
       '/cron',
@@ -61,6 +62,7 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
       '/profiles',
       '/profiles/new',
       '/config',
+      '/account',
       '/env',
       '/docs',
       '/chat',
@@ -118,7 +120,7 @@ test('native v2 uses the isolated beta identity and required Expo plugins', () =
 
   assert.equal(appConfig.expo.ios.bundleIdentifier, 'app.sunstone1029.fig1171');
   assert.equal(appConfig.expo.version, '2.0.0-beta.1');
-  assert.equal(appConfig.expo.ios.buildNumber, '24');
+  assert.equal(appConfig.expo.ios.buildNumber, '25');
   assert.equal(packageConfig.version, '2.0.0-beta.1');
   assert.deepEqual(
     pluginNames.filter((name: string) => [

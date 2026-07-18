@@ -1,0 +1,7 @@
+{
+  "name": "hermes-ios-context",
+  "version": "1.0.0",
+  "description": "Hermes iOS native context collectors and standard MapKit view",
+  "main": "index.ts",
+  "private": true
+}

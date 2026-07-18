@@ -10,6 +10,7 @@ import {
   useTaskNotificationTarget,
 } from '../notifications/NotificationProvider';
 import { FrontendPreviewApp } from '../preview/FrontendPreviewApp';
+import { IOSContextProvider } from '../context/IOSContextProvider';
 import {
   FrontendPreviewThemeProvider,
   ThemeProvider,
@@ -51,7 +52,7 @@ export function HermesNativeApp() {
 }
 
 function NativeAuthRoot() {
-  const { state, client } = useAuth();
+  const { state, client, deleteAccount, logout } = useAuth();
   const notificationTarget = useTaskNotificationTarget();
   if (state.status !== 'authenticated') return <LoginScreen />;
   if (!client) return null;
@@ -62,11 +63,22 @@ function NativeAuthRoot() {
         accessibilityLabel="Hermes authenticated content"
         style={styles.nativeContent}
       >
-        <FrontendPreviewApp
-          cacheOwner={`${state.connection.baseUrl}|${state.connection.username}`}
+        <IOSContextProvider
           client={client}
-          notificationTarget={notificationTarget}
-        />
+          deviceId={state.connection.deviceId || ''}
+          ownerScope={`${state.connection.baseUrl}|${state.connection.username}`}
+        >
+          <FrontendPreviewApp
+            account={{
+              deleteAccount,
+              logout,
+              username: state.connection.username,
+            }}
+            cacheOwner={`${state.connection.baseUrl}|${state.connection.username}`}
+            client={client}
+            notificationTarget={notificationTarget}
+          />
+        </IOSContextProvider>
       </View>
     </ThemeProvider>
   );

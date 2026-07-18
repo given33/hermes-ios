@@ -38,6 +38,8 @@ struct HermesRouteContent: View {
         renderChart: renderDeferredContent,
         onAction: onAction
       )
+    case .smartWeather:
+      EmptyView()
     case .models:
       HermesModelsPage(
         chinese: chinese,
@@ -74,6 +76,8 @@ struct HermesRouteContent: View {
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .config:
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
+    case .account:
+      EmptyView()
     case .env:
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .system:

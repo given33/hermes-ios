@@ -17,6 +17,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
   case sessions
   case files
   case analytics
+  case smartWeather = "smart-weather"
   case models
   case logs
   case cron
@@ -31,6 +32,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
   case kanban
   case profiles
   case config
+  case account
   case env
   case system
   case docs
@@ -44,6 +46,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .sessions: return "bubble.left.and.bubble.right"
     case .files: return "folder"
     case .analytics: return "chart.bar.xaxis"
+    case .smartWeather: return "cloud.rain"
     case .models: return "cpu"
     case .logs: return "doc.text.magnifyingglass"
     case .cron: return "clock.arrow.circlepath"
@@ -58,6 +61,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .kanban: return "rectangle.3.group"
     case .profiles: return "person.2"
     case .config: return "slider.horizontal.3"
+    case .account: return "person.crop.circle"
     case .env: return "key"
     case .system: return "gauge.with.dots.needle.67percent"
     case .docs: return "book.closed"
@@ -71,6 +75,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .sessions: return "会话"
     case .files: return "文件"
     case .analytics: return "分析"
+    case .smartWeather: return "智能天气"
     case .models: return "模型"
     case .logs: return "日志"
     case .cron: return "定时任务"
@@ -85,6 +90,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .kanban: return "看板"
     case .profiles: return "多 Agent 配置"
     case .config: return "配置"
+    case .account: return "账户"
     case .env: return "密钥"
     case .system: return "系统监控"
     case .docs: return "文档"
@@ -93,10 +99,10 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
 
   var group: Int {
     switch self {
-    case .chat, .sessions, .files, .analytics, .models, .logs: return 0
+    case .chat, .sessions, .files, .analytics, .smartWeather, .models, .logs: return 0
     case .cron, .skills, .plugins, .mcp, .pairing, .channels, .webhooks: return 1
     case .achievements, .collaboration, .kanban: return 2
-    case .profiles, .config, .env, .system, .docs: return 3
+    case .profiles, .config, .account, .env, .system, .docs: return 3
     }
   }
 

@@ -3,6 +3,7 @@ export type NativeRouteId =
   | 'sessions'
   | 'files'
   | 'analytics'
+  | 'smart-weather'
   | 'models'
   | 'logs'
   | 'cron'
@@ -16,6 +17,7 @@ export type NativeRouteId =
   | 'profiles'
   | 'profile-new'
   | 'config'
+  | 'account'
   | 'env'
   | 'docs'
   | 'chat';
@@ -37,6 +39,7 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'sessions', path: '/sessions', visibleInSidebar: true },
   { id: 'files', path: '/files', visibleInSidebar: false },
   { id: 'analytics', path: '/analytics', visibleInSidebar: true },
+  { id: 'smart-weather', path: '/smart-weather', visibleInSidebar: true },
   { id: 'models', path: '/models', visibleInSidebar: true },
   { id: 'logs', path: '/logs', visibleInSidebar: true },
   { id: 'cron', path: '/cron', visibleInSidebar: true },
@@ -50,6 +53,7 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'profiles', path: '/profiles', visibleInSidebar: true },
   { id: 'profile-new', path: '/profiles/new', visibleInSidebar: false },
   { id: 'config', path: '/config', visibleInSidebar: true },
+  { id: 'account', path: '/account', visibleInSidebar: true },
   { id: 'env', path: '/env', visibleInSidebar: true },
   { id: 'docs', path: '/docs', visibleInSidebar: true },
   { id: 'chat', path: '/chat', visibleInSidebar: true },

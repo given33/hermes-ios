@@ -151,6 +151,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
       { labels: { en: 'Sessions', zh: '会话' }, path: '/sessions', symbol: 'bubble.left.and.bubble.right' },
       { labels: { en: 'Files', zh: '文件' }, path: '/files', symbol: 'folder' },
       { labels: { en: 'Analytics', zh: '分析' }, path: '/analytics', symbol: 'chart.bar.xaxis' },
+      { labels: { en: 'Smart Weather', zh: '智能天气' }, path: '/smart-weather', symbol: 'cloud.rain' },
       { labels: { en: 'Models', zh: '模型' }, path: '/models', symbol: 'cpu' },
       { labels: { en: 'Logs', zh: '日志' }, path: '/logs', symbol: 'doc.text.magnifyingglass' },
     ],
@@ -180,6 +181,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     routes: [
       { labels: { en: 'Agent profiles', zh: '多 Agent 配置' }, path: '/profiles', symbol: 'person.2' },
       { labels: { en: 'Configuration', zh: '配置' }, path: '/config', symbol: 'slider.horizontal.3' },
+      { labels: { en: 'Account', zh: '账户' }, path: '/account', symbol: 'person.crop.circle' },
       { labels: { en: 'Secrets', zh: '密钥' }, path: '/env', symbol: 'key' },
       { labels: { en: 'System', zh: '系统监控' }, path: '/system', symbol: 'gauge' },
       { labels: { en: 'Documentation', zh: '文档' }, path: '/docs', symbol: 'book.closed' },
@@ -197,10 +199,12 @@ const REFERENCE_SIDEBAR_GROUPS = [
 const REFERENCE_SIDEBAR_FALLBACK_ICONS = {
   '/achievements': 'Star',
   '/analytics': 'BarChart3',
+  '/smart-weather': 'Globe',
   '/channels': 'Radio',
   '/chat': 'MessageSquare',
   '/collaboration': 'Users',
   '/config': 'Settings',
+  '/account': 'Users',
   '/cron': 'Clock',
   '/docs': 'BookOpen',
   '/env': 'KeyRound',

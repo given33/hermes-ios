@@ -32,6 +32,7 @@ import { resolveNativeFontStack } from '../design/native-font-faces';
 import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
+import { SmartWeatherPage } from '../context/SmartWeatherPage';
 import { NativeLocalizationProvider } from '../i18n/NativeLocalization';
 import {
   NativeShell,
@@ -66,6 +67,7 @@ import {
   type PreviewPageProps,
 } from './PreviewCorePages';
 import { ChatPreviewPage } from './PreviewChatPage';
+import { AccountPage } from '../auth/AccountPage';
 import {
   AchievementsPreviewPage,
   CollaborationPreviewPage,
@@ -105,6 +107,7 @@ interface SidebarSystemSummary {
 }
 
 export function FrontendPreviewApp({
+  account,
   cacheOwner = '',
   client,
   notificationTarget,
@@ -218,7 +221,7 @@ export function FrontendPreviewApp({
     system: (context: NativeShellSlotContext) => (
       <SystemSlot
         context={context}
-        locale={locale}
+        locale={locale ?? 'zh'}
         summary={systemSummary}
         onRestart={() => setSystemAction('restart')}
         onUpdate={() => setSystemAction('update')}
@@ -241,7 +244,7 @@ export function FrontendPreviewApp({
       <NativeShell
         key={notificationTarget?.notificationId ?? 'standard-shell'}
         config={{ dashboard: { show_token_analytics: true } }}
-        initialPath="/chat"
+        initialPath={notificationTarget?.routePath ?? "/chat"}
         locale={locale ?? 'zh'}
         manifests={BASELINE_PLUGIN_MANIFESTS}
         nativeRouteChrome={useSwiftUIRoutes}
@@ -249,6 +252,7 @@ export function FrontendPreviewApp({
         renderRoute={(route, _label, context) => (
           <PreviewRoute
             cacheOwner={cacheOwner}
+            account={account}
             client={client}
             gatewayStatuses={gatewayStatuses}
             locale={locale}
@@ -335,6 +339,7 @@ export function FrontendPreviewApp({
 }
 
 function PreviewRoute({
+  account,
   cacheOwner,
   client,
   gatewayStatuses,
@@ -350,6 +355,7 @@ function PreviewRoute({
   reportRouteReady,
   route,
 }: PreviewPageProps & {
+  account?: FrontendPreviewAppProps['account'];
   cacheOwner: string;
   client?: FrontendPreviewAppProps['client'];
   gatewayStatuses: readonly SidebarGatewayStatus[];
@@ -375,12 +381,24 @@ function PreviewRoute({
   const usesNativeSwiftUIRoute =
     Platform.OS === 'ios'
     && hasNativeSwiftUIPartialFrontend
+    && route.routeId !== 'smart-weather'
+    && route.routeId !== 'account'
     && route.routeId !== 'chat';
   useEffect(() => {
     if (usesNativeSwiftUIRoute) return undefined;
     const frame = requestAnimationFrame(() => reportRouteReady(route.path));
     return () => cancelAnimationFrame(frame);
   }, [reportRouteReady, route.path, usesNativeSwiftUIRoute]);
+  if (route.routeId === 'smart-weather') {
+    return (
+      <SmartWeatherPage
+        client={client}
+        locale={locale ?? 'zh'}
+        notify={notify}
+        onReady={() => reportRouteReady(route.path)}
+      />
+    );
+  }
   if (usesNativeSwiftUIRoute) {
     return (
       <HermesSwiftUIRouteView
@@ -450,6 +468,16 @@ function PreviewRoute({
     case 'profiles': return <ProfilesPreviewPage {...props} />;
     case 'profile-new': return <ProfileBuilderPreviewPage {...props} />;
     case 'config': return <ConfigPreviewPage {...props} />;
+    case 'account': return (
+      <AccountPage
+        client={client}
+        locale={locale ?? 'zh'}
+        notify={notify}
+        onDeleteAccount={account?.deleteAccount}
+        onLogout={account?.logout}
+        username={account?.username}
+      />
+    );
     case 'env': return <EnvPreviewPage {...props} />;
     case 'docs': return <DocsPreviewPage />;
     default: return <SessionsPreviewPage {...props} />;

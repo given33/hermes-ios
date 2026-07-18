@@ -506,6 +506,9 @@ test('native auth integrates owner endpoints, refresh, Face ID, and the complete
   assert.match(mobileAuthSource, /\/auth\/mobile\/token/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/refresh/);
   assert.match(appSource, /<AuthProvider>/);
+  assert.match(providerSource, /new IOSIntelligenceApi\(client\)\.deleteAccount\(ownerScope\)/);
+  assert.match(providerSource, /HermesIOSContext\.deleteOwnerScope\(ownerScope\)/);
+  assert.match(providerSource, /credentialStore\.clear\(\)/);
   assert.match(appSource, /<LoginScreen/);
   assert.match(appSource, /<NotificationProvider>/);
   assert.match(appSource, /notificationTarget=\{notificationTarget\}/);

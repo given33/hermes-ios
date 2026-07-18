@@ -10,11 +10,17 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "app.sunstone1029.fig1171",
-      "buildNumber": "24",
+      "buildNumber": "25",
       "supportsTablet": true,
       "requireFullScreen": false,
       "entitlements": {
-        "aps-environment": "production"
+        "aps-environment": "production",
+        "com.apple.developer.family-controls": true,
+        "com.apple.developer.healthkit": true,
+        "com.apple.developer.healthkit.access": [],
+        "com.apple.security.application-groups": [
+          "group.app.sunstone1029.fig1171.hermes"
+        ]
       },
       "infoPlist": {
         "CFBundleDisplayName": "Hermes Agent",
@@ -22,15 +28,37 @@
         "CFBundleDevelopmentRegion": "zh_CN",
         "CADisableMinimumFrameDurationOnPhone": true,
         "ITSAppUsesNonExemptEncryption": false,
+        "NSCalendarsFullAccessUsageDescription": "Hermes 使用日历信息理解日程，并仅在你要求时创建日历事件。",
+        "NSHealthShareUsageDescription": "Hermes 读取你授权的睡眠、心率、血氧、步数和锻炼摘要，用于个人行为预测。",
+        "NSHealthUpdateUsageDescription": "Hermes 仅在你明确要求时写入已授权的健康数据。",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Hermes 使用后台精确位置记录行程、识别停留地点并提供与出行相关的天气提醒。",
+        "NSLocationWhenInUseUsageDescription": "Hermes 使用精确位置在地图中显示当前位置、今日轨迹和停留地点。",
+        "NSLocationTemporaryUsageDescriptionDictionary": {
+          "HermesTripContext": "Hermes 临时请求精确位置，以记录当前出行路线和天气影响范围。"
+        },
+        "NSMotionUsageDescription": "Hermes 使用运动状态识别静止、步行、跑步、骑行和驾车，以优化定位频率和天气提醒。",
+        "NSRemindersFullAccessUsageDescription": "Hermes 读取提醒事项理解计划，并仅在你要求时创建提醒。",
         "NSCameraUsageDescription": "用于在 Hermes 会话中拍照并上传。",
         "NSMicrophoneUsageDescription": "用于在 Hermes 会话中录制并上传音频。",
         "NSPhotoLibraryUsageDescription": "用于从照片图库选择图片并上传到 Hermes 会话。",
         "UIFileSharingEnabled": true,
-        "LSSupportsOpeningDocumentsInPlace": true
+        "LSSupportsOpeningDocumentsInPlace": true,
+        "UIBackgroundModes": [
+          "fetch",
+          "location",
+          "processing",
+          "remote-notification"
+        ],
+        "BGTaskSchedulerPermittedIdentifiers": [
+          "app.sunstone1029.fig1171.hermes.context-refresh",
+          "app.sunstone1029.fig1171.hermes.context-processing"
+        ],
+        "NSSupportsLiveActivities": true
       }
     },
     "plugins": [
       "expo-dev-client",
+      "./plugins/with-hermes-native-extensions.js",
       [
         "expo-build-properties",
         {

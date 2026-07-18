@@ -16,7 +16,9 @@ import {
 import { HermesApiClient } from '../api/HermesApiClient';
 import { assertMobileHandshake } from '../api/hermes-types';
 import { HERMES_ORIGIN } from '../config';
+import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
 import { HermesMobileNotificationApi } from '../notifications/mobile-notifications';
+import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
 import { AccessTokenController } from './access-token-controller';
 import {
   authReducer,
@@ -52,6 +54,7 @@ interface AuthContextValue {
   rememberDeviceId(deviceId: string): Promise<void>;
   unlock(): Promise<void>;
   logout(): Promise<void>;
+  deleteAccount(): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -155,6 +158,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
         },
       },
     );
+    if (hasNativeIOSContext) {
+      await HermesIOSContext.activateOwnerScope(
+        `${connection.baseUrl}|${connection.username}`,
+      );
+    }
     dispatch({ type: 'AUTHENTICATED', connection });
   }, []);
 
@@ -326,6 +334,37 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
   }, [client, rememberedLogin.enabled, state]);
 
+  const deleteAccount = useCallback(async () => {
+    if (
+      operationInFlight.current
+      || state.status !== 'authenticated'
+      || !client
+    ) return;
+    operationInFlight.current = true;
+    let serverDeleted = false;
+    try {
+      const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
+      await new IOSIntelligenceApi(client).deleteAccount(ownerScope);
+      serverDeleted = true;
+      if (hasNativeIOSContext) {
+        await HermesIOSContext.deleteOwnerScope(ownerScope);
+      }
+      await credentialStore.clear();
+      setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
+      dispatch({ type: 'LOGGED_OUT' });
+    } catch {
+      if (serverDeleted) {
+        await credentialStore.clear().catch(() => undefined);
+        setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
+        dispatch({ type: 'LOGGED_OUT' });
+      } else {
+        dispatch({ type: 'LOGOUT_FAILED', error: LOGOUT_ERROR });
+      }
+    } finally {
+      operationInFlight.current = false;
+    }
+  }, [client, state]);
+
   const value = useMemo(
     () => ({
       state,
@@ -338,10 +377,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
       rememberDeviceId,
       unlock,
       logout,
+      deleteAccount,
     }),
     [
       authenticate,
       client,
+      deleteAccount,
       logout,
       rememberedLogin,
       register,

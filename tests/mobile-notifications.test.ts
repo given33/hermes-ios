@@ -14,6 +14,7 @@ import {
   type MobileNotificationApi,
 } from '../src/notifications/mobile-notifications';
 import {
+  buildSmartWeatherFeedbackEvent,
   parseHermesNotificationPayload,
   parseHermesNotificationResponse,
 } from '../src/notifications/notification-target';
@@ -146,7 +147,7 @@ test('notification API resolves the current auth device and uses only device del
   assert.equal(requests[2].init.method, 'DELETE');
 });
 
-test('Hermes notification taps accept only the conversation deep-link contract', () => {
+test('Hermes notification taps accept conversation and smart-weather deep links', () => {
   const target = parseHermesNotificationPayload({
     hermes: {
       conversation_id: 'conversation-42',
@@ -193,4 +194,47 @@ test('Hermes notification taps accept only the conversation deep-link contract',
     }),
     { notificationId: 'notification-2', conversationId: 'conversation-8' },
   );
+  assert.deepEqual(
+    parseHermesNotificationPayload({
+      hermes: {
+        category: 'smart-weather',
+        deep_link: 'hermes-agent://weather',
+        data: { valid_until: 1_800_000_000 },
+      },
+    }, 'weather-notification', 1_700_000_000_000),
+    {
+      notificationId: 'weather-notification',
+      conversationId: '',
+      routePath: '/smart-weather',
+      validUntil: 1_800_000_000_000,
+    },
+  );
+  assert.equal(
+    parseHermesNotificationPayload({
+      hermes: {
+        category: 'smart-weather',
+        deep_link: 'hermes-agent://weather',
+        data: { valid_until: 1_600_000_000 },
+      },
+    }, 'expired-weather', 1_700_000_000_000),
+    null,
+  );
+});
+
+test('smart-weather notification feedback is persisted through the native encrypted queue', () => {
+  assert.deepEqual(
+    buildSmartWeatherFeedbackEvent('weather-42', 'iphone-1', 1_700_000_000_000),
+    {
+      id: 'notification-feedback:weather-42',
+      kind: 'notification-feedback',
+      payload: {
+        action: 'opened',
+        notification_id: 'weather-42',
+        useful: true,
+      },
+      source_device_id: 'iphone-1',
+      timestamp: 1_700_000_000_000,
+    },
+  );
+  assert.equal(buildSmartWeatherFeedbackEvent('', 'iphone-1'), null);
 });

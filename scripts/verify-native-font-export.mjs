@@ -18,6 +18,26 @@ const exportedFontAssets = metadata.fileMetadata.ios.assets.filter(
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const expectedHashes = new Set(provenance.faces.map((face) => face.outputSha256));
+const runtimeSupplementPaths = [
+  '300Light/SpaceGrotesk_300Light.ttf',
+  '400Regular/SpaceGrotesk_400Regular.ttf',
+  '500Medium/SpaceGrotesk_500Medium.ttf',
+  '600SemiBold/SpaceGrotesk_600SemiBold.ttf',
+  '700Bold/SpaceGrotesk_700Bold.ttf',
+].map((path) => resolve(
+  projectRoot,
+  'node_modules',
+  '@expo-google-fonts',
+  'space-grotesk',
+  path,
+));
+const runtimeSupplementHashes = new Set(
+  runtimeSupplementPaths.map((path) => sha256(readFileSync(path))),
+);
+const expectedExportHashes = new Set([
+  ...expectedHashes,
+  ...runtimeSupplementHashes,
+]);
 const exportedHashes = new Set(
   exportedFontAssets.map((asset) =>
     sha256(readFileSync(resolve(exportDirectory, asset.path))),
@@ -26,7 +46,14 @@ const exportedHashes = new Set(
 
 assert.equal(provenance.faces.length, 50);
 assert.equal(expectedHashes.size, 50, 'font outputs must have unique hashes');
-assert.equal(exportedFontAssets.length, 50, 'iOS export must contain 50 font assets');
-assert.deepEqual(exportedHashes, expectedHashes);
+assert.equal(runtimeSupplementHashes.size, 5, 'Space Grotesk assets must have unique hashes');
+assert.equal(
+  exportedFontAssets.length,
+  expectedExportHashes.size,
+  'iOS export must contain only the tracked catalog and runtime supplement fonts',
+);
+assert.deepEqual(exportedHashes, expectedExportHashes);
 
-console.log(`Verified ${exportedFontAssets.length} font assets in the iOS export`);
+console.log(
+  `Verified ${expectedHashes.size} tracked and ${runtimeSupplementHashes.size} runtime font assets`,
+);
