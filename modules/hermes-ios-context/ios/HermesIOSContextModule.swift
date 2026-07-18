@@ -118,7 +118,7 @@ public final class HermesIOSContextModule: Module {
       HermesAuthorization.location(CLLocationManager().authorizationStatus)
     }.runOnQueue(.main)
 
-    AsyncFunction("requestLocationAuthorization") {
+    AsyncFunction("requestLocationAuthorization") { () async throws -> String in
       await self.location.requestAlwaysAuthorization()
     }.runOnQueue(.main)
 
@@ -315,7 +315,7 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func notificationDefinitions() -> ModuleDefinition {
-    AsyncFunction("requestNotificationAuthorization") {
+    AsyncFunction("requestNotificationAuthorization") { () async throws -> String in
       await withCheckedContinuation { continuation in
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
           DispatchQueue.main.async {
