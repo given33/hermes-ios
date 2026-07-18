@@ -1,1 +1,217 @@
-import { MapPin } from 'lucide-react-native';\nimport { useCallback, useEffect, useMemo, useState } from 'react';\nimport { ScrollView, StyleSheet, Text, View } from 'react-native';\nimport { useSafeAreaInsets } from 'react-native-safe-area-context';\n\nimport { HermesStandardMapView, type IOSCoordinate, type IOSTodayPlace } from '../../modules/hermes-ios-context';\nimport type { HermesApiClient } from '../api/HermesApiClient';\nimport { useTheme } from '../design/ThemeProvider';\nimport {\n  IOSIntelligenceApi,\n  type IOSActiveForecast,\n  type IOSIntelligenceSnapshot,\n} from './IOSIntelligenceApi';\n\ninterface SmartWeatherPageProps {\n  client?: HermesApiClient;\n  locale: 'en' | 'zh';\n  notify(message: string): void;\n  onReady?(): void;\n}\n\nconst EMPTY: IOSIntelligenceSnapshot = {\n  date: '',\n  timezone: 'Asia/Shanghai',\n  trajectory: [],\n  places: [],\n};\n\nexport function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeatherPageProps) {\n  const insets = useSafeAreaInsets();\n  const { tokens } = useTheme();\n  const api = useMemo(() => client ? new IOSIntelligenceApi(client) : null, [client]);\n  const [snapshot, setSnapshot] = useState<IOSIntelligenceSnapshot>(EMPTY);\n  const [localDayKey, setLocalDayKey] = useState(() => dayKey(new Date()));\n\n  const reload = useCallback(async () => {\n    if (!api) {\n      onReady?.();\n      return;\n    }\n    try {\n      setSnapshot(await api.snapshot());\n    } catch (error) {\n      notify(error instanceof Error ? error.message : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load'));\n    } finally {\n      onReady?.();\n    }\n  }, [api, locale, notify, onReady]);\n\n  useEffect(() => {\n    void reload();\n    const timer = setInterval(() => { void reload(); }, 30_000);\n    return () => clearInterval(timer);\n  }, [reload]);\n\n  useEffect(() => {\n    const timer = setInterval(() => {\n      const next = dayKey(new Date());\n      setLocalDayKey((current) => {\n        if (current === next) return current;\n        // The cloud keeps the immutable history; the native surface starts a\n        // fresh local-day view as soon as the device crosses midnight.\n        setSnapshot((previous) => ({\n          ...previous,\n          trajectory: [],\n          places: [],\n        }));\n        return next;\n      });\n    }, 30_000);\n    return () => clearInterval(timer);\n  }, []);\n\n  const todayTrajectory = snapshot.trajectory.filter((point) => dayKey(new Date(normalizeTimestamp(point.observed_at))) === localDayKey);\n  const todayPlaces = snapshot.places.filter((place) => dayKey(new Date(normalizeTimestamp(place.arrived_at))) === localDayKey);\n  const visibleForecasts = (snapshot.active_forecasts || snapshot.active_forecast || [])\n    .map(normalizeForecast)\n    .filter((forecast) => !forecast.expires_at || normalizeTimestamp(forecast.expires_at) > Date.now());\n\n  const track: IOSCoordinate[] = todayTrajectory.map((point) => ({\n    latitude: point.latitude,\n    longitude: point.longitude,\n    timestamp: normalizeTimestamp(point.observed_at),\n  }));\n  const places: IOSTodayPlace[] = todayPlaces.flatMap((place) => (\n    typeof place.latitude === 'number' && typeof place.longitude === 'number'\n      ? [{\n          arrivedAt: normalizeTimestamp(place.arrived_at),\n          ...(place.departed_at ? { departedAt: normalizeTimestamp(place.departed_at) } : {}),\n          id: place.place_id,\n          latitude: place.latitude,\n          longitude: place.longitude,\n          name: place.name || (locale === 'zh' ? '停留地点' : 'Visited place'),\n        }]\n      : []\n  ));\n  const foreground = tokens.colors.foreground;\n  const secondary = tokens.colors.textSecondary;\n\n  return (\n    <View style={[styles.root, { backgroundColor: tokens.colors.background }]}>\n      <HermesStandardMapView\n        places={places}\n        showsUserLocation\n        style={StyleSheet.absoluteFill}\n        track={track}\n      />\n\n      <View\n        style={[\n          styles.timeline,\n          {\n            backgroundColor: tokens.colors.background,\n            borderColor: tokens.colors.border,\n            paddingBottom: Math.max(insets.bottom, 12),\n          },\n        ]}\n      >\n        {visibleForecasts.map((forecast, index) => (\n          <View\n            key={forecast.id || `${forecast.starts_at || 0}:${index}`}\n            style={[styles.forecast, { borderBottomColor: tokens.colors.border }]}\n          >\n            <Text style={[styles.forecastTitle, { color: foreground }]}>\n              {forecast.title || (locale === 'zh' ? '出行天气' : 'Travel weather')}\n            </Text>\n            <Text numberOfLines={2} style={[styles.forecastBody, { color: secondary }]}>\n              {forecast.summary || ''}\n            </Text>\n          </View>\n        ))}\n        <Text style={[styles.sectionTitle, { color: foreground }]}>\n          {locale === 'zh' ? '今天到过的地方' : 'Places visited today'}\n        </Text>\n        <ScrollView contentContainerStyle={styles.placeList} showsVerticalScrollIndicator={false}>\n          {todayPlaces.length ? todayPlaces.map((place) => (\n            <View key={`${place.place_id}:${place.arrived_at}`} style={styles.placeRow}>\n              <MapPin color={secondary} size={16} />\n              <View style={styles.placeText}>\n                <Text numberOfLines={1} style={[styles.placeName, { color: foreground }]}>\n                  {place.name || (locale === 'zh' ? '停留地点' : 'Visited place')}\n                </Text>\n                <Text style={[styles.placeTime, { color: secondary }]}>\n                  {formatRange(place.arrived_at, place.departed_at, locale)}\n                </Text>\n              </View>\n            </View>\n          )) : (\n            <Text style={[styles.empty, { color: secondary }]}>\n              {locale === 'zh' ? '今天还没有停留地点' : 'No visited places yet today'}\n            </Text>\n          )}\n        </ScrollView>\n      </View>\n    </View>\n  );\n}\n\nfunction normalizeTimestamp(value: number): number {\n  return value < 10_000_000_000 ? value * 1000 : value;\n}\n\nfunction normalizeForecast(forecast: IOSActiveForecast): IOSActiveForecast {\n  const nested = forecast.data || {};\n  return {\n    ...forecast,\n    ...nested,\n    summary: nested.summary ?? nested.body ?? forecast.summary,\n    starts_at: forecast.starts_at ?? forecast.valid_from ?? nested.starts_at,\n    expires_at: forecast.expires_at ?? forecast.valid_until ?? nested.expires_at,\n  };\n}\n\nfunction dayKey(value: Date): string {\n  return `${value.getFullYear()}-${value.getMonth() + 1}-${value.getDate()}`;\n}\n\nfunction formatRange(start: number, end: number | null | undefined, locale: 'en' | 'zh') {\n  const formatter = new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en', {\n    hour: '2-digit',\n    minute: '2-digit',\n  });\n  const left = formatter.format(new Date(normalizeTimestamp(start)));\n  const right = end\n    ? formatter.format(new Date(normalizeTimestamp(end)))\n    : locale === 'zh' ? '现在' : 'Now';\n  const elapsed = Math.max(0, normalizeTimestamp(end ?? Date.now()) - normalizeTimestamp(start));\n  const minutes = Math.round(elapsed / 60_000);\n  const duration = minutes >= 60\n    ? `${Math.floor(minutes / 60)}${locale === 'zh' ? '小时' : 'h'} ${minutes % 60}${locale === 'zh' ? '分钟' : 'm'}`\n    : `${minutes}${locale === 'zh' ? '分钟' : 'm'}`;\n  return `${left} - ${right} · ${locale === 'zh' ? '停留' : 'Stayed'} ${duration}`;\n}\n\nconst styles = StyleSheet.create({\n  root: { flex: 1, overflow: 'hidden' },\n  timeline: {\n    borderTopWidth: StyleSheet.hairlineWidth,\n    bottom: 0,\n    left: 0,\n    maxHeight: '38%',\n    paddingHorizontal: 16,\n    paddingTop: 12,\n    position: 'absolute',\n    right: 0,\n  },\n  forecast: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: 10 },\n  forecastTitle: { fontSize: 16, fontWeight: '600' },\n  forecastBody: { fontSize: 13, lineHeight: 18, marginTop: 3 },\n  sectionTitle: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 10 },\n  placeList: { gap: 9, paddingBottom: 2 },\n  placeRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 38 },\n  placeText: { flex: 1, minWidth: 0 },\n  placeName: { fontSize: 14, fontWeight: '500' },\n  placeTime: { fontSize: 12, marginTop: 2 },\n  empty: { fontSize: 13, paddingBottom: 10 },\n});\n
+import { MapPin } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import { HermesStandardMapView, type IOSCoordinate, type IOSTodayPlace } from '../../modules/hermes-ios-context';
+import type { HermesApiClient } from '../api/HermesApiClient';
+import { useTheme } from '../design/ThemeProvider';
+import {
+  IOSIntelligenceApi,
+  type IOSActiveForecast,
+  type IOSIntelligenceSnapshot,
+} from './IOSIntelligenceApi';
+
+interface SmartWeatherPageProps {
+  client?: HermesApiClient;
+  locale: 'en' | 'zh';
+  notify(message: string): void;
+  onReady?(): void;
+}
+
+const EMPTY: IOSIntelligenceSnapshot = {
+  date: '',
+  timezone: 'Asia/Shanghai',
+  trajectory: [],
+  places: [],
+};
+
+export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeatherPageProps) {
+  const insets = useSafeAreaInsets();
+  const { tokens } = useTheme();
+  const api = useMemo(() => client ? new IOSIntelligenceApi(client) : null, [client]);
+  const [snapshot, setSnapshot] = useState<IOSIntelligenceSnapshot>(EMPTY);
+  const [localDayKey, setLocalDayKey] = useState(() => dayKey(new Date()));
+
+  const reload = useCallback(async () => {
+    if (!api) {
+      onReady?.();
+      return;
+    }
+    try {
+      setSnapshot(await api.snapshot());
+    } catch (error) {
+      notify(error instanceof Error ? error.message : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load'));
+    } finally {
+      onReady?.();
+    }
+  }, [api, locale, notify, onReady]);
+
+  useEffect(() => {
+    void reload();
+    const timer = setInterval(() => { void reload(); }, 30_000);
+    return () => clearInterval(timer);
+  }, [reload]);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const next = dayKey(new Date());
+      setLocalDayKey((current) => {
+        if (current === next) return current;
+        // The cloud keeps the immutable history; the native surface starts a
+        // fresh local-day view as soon as the device crosses midnight.
+        setSnapshot((previous) => ({
+          ...previous,
+          trajectory: [],
+          places: [],
+        }));
+        return next;
+      });
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const todayTrajectory = snapshot.trajectory.filter((point) => dayKey(new Date(normalizeTimestamp(point.observed_at))) === localDayKey);
+  const todayPlaces = snapshot.places.filter((place) => dayKey(new Date(normalizeTimestamp(place.arrived_at))) === localDayKey);
+  const visibleForecasts = (snapshot.active_forecasts || snapshot.active_forecast || [])
+    .map(normalizeForecast)
+    .filter((forecast) => !forecast.expires_at || normalizeTimestamp(forecast.expires_at) > Date.now());
+
+  const track: IOSCoordinate[] = todayTrajectory.map((point) => ({
+    latitude: point.latitude,
+    longitude: point.longitude,
+    timestamp: normalizeTimestamp(point.observed_at),
+  }));
+  const places: IOSTodayPlace[] = todayPlaces.flatMap((place) => (
+    typeof place.latitude === 'number' && typeof place.longitude === 'number'
+      ? [{
+          arrivedAt: normalizeTimestamp(place.arrived_at),
+          ...(place.departed_at ? { departedAt: normalizeTimestamp(place.departed_at) } : {}),
+          id: place.place_id,
+          latitude: place.latitude,
+          longitude: place.longitude,
+          name: place.name || (locale === 'zh' ? '停留地点' : 'Visited place'),
+        }]
+      : []
+  ));
+  const foreground = tokens.colors.foreground;
+  const secondary = tokens.colors.textSecondary;
+
+  return (
+    <View style={[styles.root, { backgroundColor: tokens.colors.background }]}>
+      <HermesStandardMapView
+        places={places}
+        showsUserLocation
+        style={StyleSheet.absoluteFill}
+        track={track}
+      />
+
+      <View
+        style={[
+          styles.timeline,
+          {
+            backgroundColor: tokens.colors.background,
+            borderColor: tokens.colors.border,
+            paddingBottom: Math.max(insets.bottom, 12),
+          },
+        ]}
+      >
+        {visibleForecasts.map((forecast, index) => (
+          <View
+            key={forecast.id || `${forecast.starts_at || 0}:${index}`}
+            style={[styles.forecast, { borderBottomColor: tokens.colors.border }]}
+          >
+            <Text style={[styles.forecastTitle, { color: foreground }]}>
+              {forecast.title || (locale === 'zh' ? '出行天气' : 'Travel weather')}
+            </Text>
+            <Text numberOfLines={2} style={[styles.forecastBody, { color: secondary }]}>
+              {forecast.summary || ''}
+            </Text>
+          </View>
+        ))}
+        <Text style={[styles.sectionTitle, { color: foreground }]}>
+          {locale === 'zh' ? '今天到过的地方' : 'Places visited today'}
+        </Text>
+        <ScrollView contentContainerStyle={styles.placeList} showsVerticalScrollIndicator={false}>
+          {todayPlaces.length ? todayPlaces.map((place) => (
+            <View key={`${place.place_id}:${place.arrived_at}`} style={styles.placeRow}>
+              <MapPin color={secondary} size={16} />
+              <View style={styles.placeText}>
+                <Text numberOfLines={1} style={[styles.placeName, { color: foreground }]}>
+                  {place.name || (locale === 'zh' ? '停留地点' : 'Visited place')}
+                </Text>
+                <Text style={[styles.placeTime, { color: secondary }]}>
+                  {formatRange(place.arrived_at, place.departed_at, locale)}
+                </Text>
+              </View>
+            </View>
+          )) : (
+            <Text style={[styles.empty, { color: secondary }]}>
+              {locale === 'zh' ? '今天还没有停留地点' : 'No visited places yet today'}
+            </Text>
+          )}
+        </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+function normalizeTimestamp(value: number): number {
+  return value < 10_000_000_000 ? value * 1000 : value;
+}
+
+function normalizeForecast(forecast: IOSActiveForecast): IOSActiveForecast {
+  const nested = forecast.data || {};
+  return {
+    ...forecast,
+    ...nested,
+    summary: nested.summary ?? nested.body ?? forecast.summary,
+    starts_at: forecast.starts_at ?? forecast.valid_from ?? nested.starts_at,
+    expires_at: forecast.expires_at ?? forecast.valid_until ?? nested.expires_at,
+  };
+}
+
+function dayKey(value: Date): string {
+  return `${value.getFullYear()}-${value.getMonth() + 1}-${value.getDate()}`;
+}
+
+function formatRange(start: number, end: number | null | undefined, locale: 'en' | 'zh') {
+  const formatter = new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  const left = formatter.format(new Date(normalizeTimestamp(start)));
+  const right = end
+    ? formatter.format(new Date(normalizeTimestamp(end)))
+    : locale === 'zh' ? '现在' : 'Now';
+  const elapsed = Math.max(0, normalizeTimestamp(end ?? Date.now()) - normalizeTimestamp(start));
+  const minutes = Math.round(elapsed / 60_000);
+  const duration = minutes >= 60
+    ? `${Math.floor(minutes / 60)}${locale === 'zh' ? '小时' : 'h'} ${minutes % 60}${locale === 'zh' ? '分钟' : 'm'}`
+    : `${minutes}${locale === 'zh' ? '分钟' : 'm'}`;
+  return `${left} - ${right} · ${locale === 'zh' ? '停留' : 'Stayed'} ${duration}`;
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, overflow: 'hidden' },
+  timeline: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    bottom: 0,
+    left: 0,
+    maxHeight: '38%',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    position: 'absolute',
+    right: 0,
+  },
+  forecast: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: 10 },
+  forecastTitle: { fontSize: 16, fontWeight: '600' },
+  forecastBody: { fontSize: 13, lineHeight: 18, marginTop: 3 },
+  sectionTitle: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 10 },
+  placeList: { gap: 9, paddingBottom: 2 },
+  placeRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 38 },
+  placeText: { flex: 1, minWidth: 0 },
+  placeName: { fontSize: 14, fontWeight: '500' },
+  placeTime: { fontSize: 12, marginTop: 2 },
+  empty: { fontSize: 13, paddingBottom: 10 },
+});

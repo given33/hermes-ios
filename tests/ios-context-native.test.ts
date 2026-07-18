@@ -155,7 +155,8 @@ test('context startup upgrades an existing When-In-Use grant to Always', () => {
   assert.match(provider, /getLocationAuthorizationDetails\(\)/);
   assert.match(provider, /locationDetails\['always'\] !== true/);
   assert.match(provider, /requestLocationAuthorization\(\)/);
-  assert.match(provider, /activateOwnerScope\(ownerScope\)/);
+  assert.match(provider, /setOwnerScope\(ownerScope\)/);
+  assert.doesNotMatch(provider, /activateOwnerScope\(ownerScope\)/);
 });
 
 test('location authorization resolves when an Always upgrade remains While In Use', () => {

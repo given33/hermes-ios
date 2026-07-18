@@ -210,7 +210,6 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
       }
     };
     const startCollectors = async () => {
-      await HermesIOSContext.activateOwnerScope(ownerScope);
       await HermesIOSContext.setOwnerScope(ownerScope);
       commandCursorRef.current = await HermesIOSContext.getCommandCursor();
       const locationState = await HermesIOSContext.getLocationAuthorization();

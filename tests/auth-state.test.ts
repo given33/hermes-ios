@@ -500,6 +500,7 @@ test('native auth integrates owner endpoints, refresh, Face ID, and the complete
   assert.match(providerSource, /bootstrapSavedConnection/);
   assert.match(providerSource, /AccessTokenController/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
+  assert.match(providerSource, /HermesIOSContext\.activateOwnerScope\(/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/status/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/registration-code/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/register/);
