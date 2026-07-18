@@ -1,4 +1,6 @@
-const { withXcodeProject } = require('expo/config-plugins');
+const { cpSync, rmSync } = require('node:fs');
+const { resolve } = require('node:path');
+const { withDangerousMod, withXcodeProject } = require('expo/config-plugins');
 
 const BUILD_NUMBER = '25';
 const VERSION = '2.0.0-beta.1';
@@ -102,7 +104,7 @@ function configureTarget(project, definition) {
       definition.bundleIdentifier,
     );
     const sourcePaths = definition.source
-      ? [`../native-extensions/${directory}/${definition.source}`]
+      ? [`native-extensions/${directory}/${definition.source}`]
       : [];
     project.addBuildPhase(sourcePaths, 'PBXSourcesBuildPhase', 'Sources', target.uuid);
     project.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', target.uuid);
@@ -112,7 +114,7 @@ function configureTarget(project, definition) {
 
   for (const configuration of targetConfigurations(project, target)) {
     const settings = configuration.buildSettings;
-    const root = `$(SRCROOT)/../native-extensions/${directory}`;
+    const root = `$(SRCROOT)/native-extensions/${directory}`;
     settings.CLANG_ENABLE_MODULES = 'YES';
     settings.CODE_SIGN_ENTITLEMENTS = `"${root}/${definition.entitlements ?? `${definition.name}.entitlements`}"`;
     settings.CURRENT_PROJECT_VERSION = BUILD_NUMBER;
@@ -142,7 +144,14 @@ function configureTarget(project, definition) {
 }
 
 module.exports = function withHermesNativeExtensions(config) {
-  return withXcodeProject(config, (modConfig) => {
+  const withSources = withDangerousMod(config, ['ios', async (modConfig) => {
+    const source = resolve(modConfig.modRequest.projectRoot, 'native-extensions');
+    const destination = resolve(modConfig.modRequest.platformProjectRoot, 'native-extensions');
+    rmSync(destination, { force: true, recursive: true });
+    cpSync(source, destination, { recursive: true });
+    return modConfig;
+  }]);
+  return withXcodeProject(withSources, (modConfig) => {
     const project = modConfig.modResults;
     ensureDependencySections(project);
     const targets = new Map(

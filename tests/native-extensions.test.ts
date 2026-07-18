@@ -21,6 +21,10 @@ test('native extension config declares every V4 companion target', () => {
   assert.match(plugin, /objects\.PBXContainerItemProxy \?\?= \{\}/);
   assert.match(plugin, /objects\.PBXTargetDependency \?\?= \{\}/);
   assert.match(plugin, /ensureTargetDependency/);
+  assert.match(plugin, /withDangerousMod/);
+  assert.match(plugin, /cpSync\(source, destination, \{ recursive: true \}\)/);
+  assert.match(plugin, /\$\(SRCROOT\)\/native-extensions/);
+  assert.doesNotMatch(plugin, /\$\(SRCROOT\)\/\.\.\/native-extensions/);
   const workflow = read('.github/workflows/ios-unsigned.yml');
   assert.match(workflow, /Verify native extension targets/);
   assert.match(workflow, /isa = PBXTargetDependency/);
