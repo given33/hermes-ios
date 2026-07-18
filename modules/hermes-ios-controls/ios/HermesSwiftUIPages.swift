@@ -1080,6 +1080,7 @@ private struct HermesFilesPage: View {
         }
       }
     }
+    }
     .hermesListStyle()
     .background(appearance.palette.background)
     .searchable(text: $search, prompt: chinese ? "搜索文件" : "Search files")
