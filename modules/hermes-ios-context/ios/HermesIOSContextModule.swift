@@ -118,12 +118,12 @@ public final class HermesIOSContextModule: Module {
       HermesAuthorization.location(CLLocationManager().authorizationStatus)
     }.runOnQueue(.main)
 
-    AsyncFunction("requestLocationAuthorization") { () async throws -> String in
-      await self.location.requestAlwaysAuthorization()
+    AsyncFunction("requestLocationAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.location.requestAlwaysAuthorization() }
     }
 
-    AsyncFunction("requestPreciseLocation") { () async -> Bool in
-      await self.location.requestPreciseAuthorization()
+    AsyncFunction("requestPreciseLocation") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.location.requestPreciseAuthorization() }
     }
 
     AsyncFunction("getLocationAuthorizationDetails") { () -> [String: Any] in
@@ -138,8 +138,8 @@ public final class HermesIOSContextModule: Module {
       self.location.stop()
     }.runOnQueue(.main)
 
-    AsyncFunction("requestCurrentLocation") { () async -> [String: Any]? in
-      await self.location.requestCurrent()
+    AsyncFunction("requestCurrentLocation") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.location.requestCurrent() }
     }.runOnQueue(.main)
 
     AsyncFunction("setPredictedDeparture") { (timestamp: Double?) -> Bool in
@@ -249,28 +249,30 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func healthDefinitions() -> ModuleDefinition {
-    AsyncFunction("requestHealthAuthorization") { () async -> String in
-      await self.health.requestAuthorization()
+    AsyncFunction("requestHealthAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.health.requestAuthorization() }
     }
 
-    AsyncFunction("getHealthSummary") { (start: Double, end: Double) async throws -> [String: Any] in
-      let payload = try await self.health.summary(
-        start: Date(timeIntervalSince1970: start / 1000),
-        end: Date(timeIntervalSince1970: end / 1000)
-      )
-      self.eventQueue.enqueue(type: "health", payload: payload)
-      return payload
+    AsyncFunction("getHealthSummary") { (start: Double, end: Double, promise: Promise) in
+      self.resolveAsync(promise) {
+        let payload = try await self.health.summary(
+          start: Date(timeIntervalSince1970: start / 1000),
+          end: Date(timeIntervalSince1970: end / 1000)
+        )
+        self.eventQueue.enqueue(type: "health", payload: payload)
+        return payload
+      }
     }
   }
 
   @ModuleDefinitionBuilder
   private func calendarDefinitions() -> ModuleDefinition {
-    AsyncFunction("requestCalendarAuthorization") { () async -> String in
-      await self.events.requestCalendarAuthorization()
+    AsyncFunction("requestCalendarAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.events.requestCalendarAuthorization() }
     }
 
-    AsyncFunction("requestReminderAuthorization") { () async -> String in
-      await self.events.requestReminderAuthorization()
+    AsyncFunction("requestReminderAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.events.requestReminderAuthorization() }
     }
 
     AsyncFunction("listCalendarEvents") { (start: Double, end: Double) -> [[String: Any]] in
@@ -284,8 +286,8 @@ public final class HermesIOSContextModule: Module {
       try self.events.createCalendarEvent(input)
     }
 
-    AsyncFunction("listReminders") { (completed: Bool?) async -> [[String: Any]] in
-      await self.events.reminders(completed: completed)
+    AsyncFunction("listReminders") { (completed: Bool?, promise: Promise) in
+      self.resolveAsync(promise) { await self.events.reminders(completed: completed) }
     }
 
     AsyncFunction("createReminder") { (input: HermesReminderInput) throws -> String in
@@ -315,18 +317,20 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func notificationDefinitions() -> ModuleDefinition {
-    AsyncFunction("requestNotificationAuthorization") { () async throws -> String in
-      await withCheckedContinuation { continuation in
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
-          DispatchQueue.main.async {
-            if granted { UIApplication.shared.registerForRemoteNotifications() }
-            continuation.resume(returning: granted ? "authorized" : "denied")
+    AsyncFunction("requestNotificationAuthorization") { (promise: Promise) in
+      UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
+        DispatchQueue.main.async {
+          if let error {
+            promise.reject(error)
+            return
           }
+          if granted { UIApplication.shared.registerForRemoteNotifications() }
+          promise.resolve(granted ? "authorized" : "denied")
         }
       }
     }
 
-    AsyncFunction("scheduleLocalNotification") { (title: String, body: String, fireAt: Double?, data: [String: Any]?) async throws -> String in
+    AsyncFunction("scheduleLocalNotification") { (title: String, body: String, fireAt: Double?, data: [String: Any]?, promise: Promise) in
       let content = UNMutableNotificationContent()
       content.title = title
       content.body = body
@@ -344,13 +348,11 @@ public final class HermesIOSContextModule: Module {
       } else {
         trigger = nil
       }
-      try await withCheckedThrowingContinuation { continuation in
-        UNUserNotificationCenter.current().add(
-          UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
-        ) { error in
-          if let error { continuation.resume(throwing: error) }
-          else { continuation.resume(returning: identifier) }
-        }
+      UNUserNotificationCenter.current().add(
+        UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+      ) { error in
+        if let error { promise.reject(error) }
+        else { promise.resolve(identifier) }
       }
     }
 
@@ -370,8 +372,8 @@ public final class HermesIOSContextModule: Module {
       self.watch.contextSnapshot()
     }
 
-    AsyncFunction("sendWatchMessage") { (payload: [String: Any]) async -> Bool in
-      await self.watch.send(payload: payload)
+    AsyncFunction("sendWatchMessage") { (payload: [String: Any], promise: Promise) in
+      self.resolveAsync(promise) { await self.watch.send(payload: payload) }
     }
   }
 
@@ -385,10 +387,12 @@ public final class HermesIOSContextModule: Module {
       self.screenTime.snapshot(hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls"))
     }
 
-    AsyncFunction("requestScreenTimeAuthorization") { () async -> String in
-      await self.screenTime.requestAuthorization(
-        hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls")
-      )
+    AsyncFunction("requestScreenTimeAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) {
+        await self.screenTime.requestAuthorization(
+          hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls")
+        )
+      }
     }
 
     AsyncFunction("startScreenTimeMonitoring") { (identifier: String, startHour: Int, endHour: Int) throws -> String in
@@ -407,8 +411,8 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func liveActivityDefinitions() -> ModuleDefinition {
-    AsyncFunction("updateLiveActivity") { (payload: [String: Any]) async throws -> [String: Any] in
-      try await self.liveActivity.update(payload: payload)
+    AsyncFunction("updateLiveActivity") { (payload: [String: Any], promise: Promise) in
+      self.resolveAsync(promise) { try await self.liveActivity.update(payload: payload) }
     }
 
     AsyncFunction("scheduleBackgroundTasks") {
@@ -446,6 +450,19 @@ public final class HermesIOSContextModule: Module {
     View(HermesScreenTimeReportView.self) {
       Prop("refreshToken") { (view, value: Int) in
         view.refreshToken = value
+      }
+    }
+  }
+
+  private func resolveAsync<R>(
+    _ promise: Promise,
+    operation: @escaping () async throws -> R
+  ) {
+    Task {
+      do {
+        promise.resolve(try await operation())
+      } catch {
+        promise.reject(error)
       }
     }
   }
