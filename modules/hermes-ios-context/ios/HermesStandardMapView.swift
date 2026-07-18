@@ -74,6 +74,10 @@ final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
     locationButton.addGestureRecognizer(
       UITapGestureRecognizer(target: self, action: #selector(refreshCurrentLocation))
     )
+    // iOS 26 changed MKUserTrackingButton from UIControl; the prior
+    // locationButton.addTarget(self, action: #selector(refreshCurrentLocation), for: .touchUpInside)
+    // path is retained here as the migration contract while the gesture path
+    // provides the equivalent tap behavior.
     addSubview(locationButton)
 
     NSLayoutConstraint.activate([

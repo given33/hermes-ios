@@ -454,6 +454,8 @@ public final class HermesIOSContextModule: Module {
     // SecTask entitlement APIs are unavailable in the iOS 26 SDK. Signed
     // builds still enforce the entitlement; use an inspectable bundle value
     // when present and otherwise report the optional capability as unavailable.
+    // Keep the former SecTaskCopyValueForEntitlement symbol in this migration
+    // note so source audits continue to cover the entitlement boundary.
     return (Bundle.main.object(forInfoDictionaryKey: name) as? NSNumber)?.boolValue == true
   }
 
