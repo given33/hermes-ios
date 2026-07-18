@@ -81,7 +81,6 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     locationManager.allowsBackgroundLocationUpdates = true
     locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     locationManager.distanceFilter = 50
-    locationManager.pausesLocationUpdatesAutomatically = true
   }
 
   func start() {
@@ -194,7 +193,6 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       activeRelay = true
       locationManager.desiredAccuracy = kCLLocationAccuracyBest
       locationManager.distanceFilter = 5
-      locationManager.pausesLocationUpdatesAutomatically = false
       locationManager.startUpdatingLocation()
       let startedAt = Date()
       nextSession.startActivity(with: startedAt)
@@ -229,7 +227,6 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     locationManager.stopUpdatingLocation()
     locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     locationManager.distanceFilter = 50
-    locationManager.pausesLocationUpdatesAutomatically = true
     send([
       "kind": "watch-workout",
       "observedAt": Date().timeIntervalSince1970 * 1000,
@@ -360,7 +357,6 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       self.locationManager.stopUpdatingLocation()
       self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
       self.locationManager.distanceFilter = 50
-      self.locationManager.pausesLocationUpdatesAutomatically = true
       self.send([
         "kind": "watch-workout",
         "observedAt": date.timeIntervalSince1970 * 1000,
@@ -378,7 +374,6 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       self.locationManager.stopUpdatingLocation()
       self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
       self.locationManager.distanceFilter = 50
-      self.locationManager.pausesLocationUpdatesAutomatically = true
       self.send([
         "error": error.localizedDescription,
         "kind": "watch-workout",
@@ -394,15 +389,16 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   ) {
     var metrics: [String: Any] = [:]
     for type in collectedTypes {
-      guard let statistics = workoutBuilder.statistics(for: type) else { continue }
-      switch type.identifier {
+      guard let quantityType = type as? HKQuantityType,
+            let statistics = workoutBuilder.statistics(for: quantityType) else { continue }
+      switch quantityType.identifier {
       case HKQuantityTypeIdentifier.heartRate.rawValue:
         let unit = HKUnit.count().unitDivided(by: .minute())
         metrics["heartRateBpm"] = statistics.mostRecentQuantity()?.doubleValue(for: unit)
       case HKQuantityTypeIdentifier.activeEnergyBurned.rawValue:
-        metrics["activeEnergyKcal"] = statistics.sumQuantity()?.doubleValue(for: .kilocalorie())
+        metrics["activeEnergyKcal"] = statistics.sumQuantity()?.doubleValue(for: HKUnit.kilocalorie())
       case HKQuantityTypeIdentifier.stepCount.rawValue:
-        metrics["steps"] = statistics.sumQuantity()?.doubleValue(for: .count())
+        metrics["steps"] = statistics.sumQuantity()?.doubleValue(for: HKUnit.count())
       default:
         continue
       }

@@ -67,6 +67,8 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(watch, /HKWorkoutSession/);
   assert.match(watch, /replyHandler\(\["accepted": true\]\)/);
   assert.match(watch, /HKLiveWorkoutBuilder/);
+  assert.match(watch, /type as\? HKQuantityType/);
+  assert.doesNotMatch(watch, /pausesLocationUpdatesAutomatically/);
   assert.match(watch, /CMMotionActivityManager/);
   assert.match(watch, /allowsBackgroundLocationUpdates = true/);
   assert.match(watch, /didReceiveUserInfo/);
