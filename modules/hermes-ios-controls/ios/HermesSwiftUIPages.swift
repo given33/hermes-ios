@@ -457,6 +457,7 @@ private struct HermesRemoteRoutePage: View {
           }
         }
       }
+      }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(appearance.palette.background)
     case .profiles:
