@@ -87,7 +87,10 @@ function targetConfigurations(project, target) {
 
 function addSourceGroup(project, name, sourcePaths) {
   if (project.pbxGroupByName(name)) return;
-  const group = project.addPbxGroup(sourcePaths, name);
+  // xcode's addPbxGroup serializes an omitted path as the literal `undefined`.
+  // Keep the group rooted at the generated ios project so staged sources under
+  // ios/native-extensions resolve from both Xcode and xcodebuild.
+  const group = project.addPbxGroup(sourcePaths, name, '.');
   const firstProject = project.getFirstProject().firstProject;
   const mainGroup = project.hash.project.objects.PBXGroup[firstProject.mainGroup];
   mainGroup.children.push({ value: group.uuid, comment: name });
