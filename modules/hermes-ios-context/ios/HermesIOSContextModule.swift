@@ -120,11 +120,11 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("requestLocationAuthorization") { () async throws -> String in
       await self.location.requestAlwaysAuthorization()
-    }.runOnQueue(.main)
+    }
 
     AsyncFunction("requestPreciseLocation") { () async -> Bool in
       await self.location.requestPreciseAuthorization()
-    }.runOnQueue(.main)
+    }
 
     AsyncFunction("getLocationAuthorizationDetails") { () -> [String: Any] in
       self.location.authorizationSnapshot()
@@ -324,7 +324,7 @@ public final class HermesIOSContextModule: Module {
           }
         }
       }
-    }.runOnQueue(.main)
+    }
 
     AsyncFunction("scheduleLocalNotification") { (title: String, body: String, fireAt: Double?, data: [String: Any]?) async throws -> String in
       let content = UNMutableNotificationContent()
