@@ -191,19 +191,23 @@ final class HermesHealthService {
           continuation.resume(throwing: error)
           return
         }
-        let values = (samples as? [HKWorkout] ?? []).map { workout -> [String: Any] in
-          [
-            "activity": workout.workoutActivityType.rawValue,
-            "durationMinutes": workout.duration / 60,
-            "energyKcal": hermesNullable(workout.totalEnergyBurned?.doubleValue(for: .kilocalorie())),
-            "end": workout.endDate.timeIntervalSince1970 * 1000,
-            "id": workout.uuid.uuidString,
-            "start": workout.startDate.timeIntervalSince1970 * 1000,
-          ]
-        }
+        let workouts = samples as? [HKWorkout] ?? []
+        let values = workouts.map { self.workoutPayload($0) }
         continuation.resume(returning: values)
       }
       store.execute(query)
     }
+  }
+
+  private func workoutPayload(_ workout: HKWorkout) -> [String: Any] {
+    let energy = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie())
+    return [
+      "activity": workout.workoutActivityType.rawValue,
+      "durationMinutes": workout.duration / 60,
+      "energyKcal": hermesNullable(energy),
+      "end": workout.endDate.timeIntervalSince1970 * 1000,
+      "id": workout.uuid.uuidString,
+      "start": workout.startDate.timeIntervalSince1970 * 1000,
+    ]
   }
 }

@@ -38,7 +38,21 @@ public final class HermesIOSContextModule: Module {
     Name("HermesIOSContext")
     Events("onLocation", "onMotion", "onVisit")
     Events("onBackgroundWake", "onWatchMessage")
+    lifecycleDefinitions()
+    locationDefinitions()
+    deviceDefinitions()
+    eventQueueDefinitions()
+    healthDefinitions()
+    calendarDefinitions()
+    notificationDefinitions()
+    watchDefinitions()
+    screenTimeDefinitions()
+    liveActivityDefinitions()
+    viewDefinitions()
+  }
 
+  @ModuleDefinitionBuilder
+  private func lifecycleDefinitions() -> ModuleDefinition {
     OnCreate {
       HermesBackgroundService.shared.register()
       self.relayWakeObserver = NotificationCenter.default.addObserver(
@@ -76,7 +90,10 @@ public final class HermesIOSContextModule: Module {
       self.location.onVisit = nil
       self.watch.onMessage = nil
     }
+  }
 
+  @ModuleDefinitionBuilder
+  private func locationDefinitions() -> ModuleDefinition {
     AsyncFunction("getCapabilities") { () -> [String: Bool] in
       let locationManager = CLLocationManager()
       let hasFamilyControls = Self.hasEntitlement("com.apple.developer.family-controls")
@@ -133,7 +150,10 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("getLocationMode") { () -> String in
       self.location.mode.rawValue
     }.runOnQueue(.main)
+  }
 
+  @ModuleDefinitionBuilder
+  private func deviceDefinitions() -> ModuleDefinition {
     AsyncFunction("getMotionAuthorization") { () -> String in
       HermesAuthorization.motion(CMMotionActivityManager.authorizationStatus())
     }
@@ -163,7 +183,10 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("openDeviceSettings") { () -> Bool in
       self.device.openAppSettings()
     }.runOnQueue(.main)
+  }
 
+  @ModuleDefinitionBuilder
+  private func eventQueueDefinitions() -> ModuleDefinition {
     AsyncFunction("getInstallationIdentifier") { () -> String in
       self.eventQueue.installationIdentifier
     }
@@ -222,7 +245,10 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("removePendingCommand") { (id: String) in
       self.eventQueue.removePendingCommand(id)
     }
+  }
 
+  @ModuleDefinitionBuilder
+  private func healthDefinitions() -> ModuleDefinition {
     AsyncFunction("requestHealthAuthorization") { () async -> String in
       await self.health.requestAuthorization()
     }
@@ -235,7 +261,10 @@ public final class HermesIOSContextModule: Module {
       self.eventQueue.enqueue(type: "health", payload: payload)
       return payload
     }
+  }
 
+  @ModuleDefinitionBuilder
+  private func calendarDefinitions() -> ModuleDefinition {
     AsyncFunction("requestCalendarAuthorization") { () async -> String in
       await self.events.requestCalendarAuthorization()
     }
@@ -282,7 +311,10 @@ public final class HermesIOSContextModule: Module {
       presenter.present(controller, animated: true)
       return true
     }.runOnQueue(.main)
+  }
 
+  @ModuleDefinitionBuilder
+  private func notificationDefinitions() -> ModuleDefinition {
     AsyncFunction("requestNotificationAuthorization") { () async -> String in
       await withCheckedContinuation { continuation in
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
@@ -326,7 +358,10 @@ public final class HermesIOSContextModule: Module {
       UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [identifier])
       UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
     }
+  }
 
+  @ModuleDefinitionBuilder
+  private func watchDefinitions() -> ModuleDefinition {
     AsyncFunction("getWatchCapabilities") { () -> [String: Any] in
       self.watch.capabilities
     }
@@ -338,7 +373,10 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("sendWatchMessage") { (payload: [String: Any]) async -> Bool in
       await self.watch.send(payload: payload)
     }
+  }
 
+  @ModuleDefinitionBuilder
+  private func screenTimeDefinitions() -> ModuleDefinition {
     AsyncFunction("getScreenTimeCapabilities") { () -> [String: Any] in
       self.screenTime.capabilities(hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls"))
     }
@@ -365,7 +403,10 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("stopScreenTimeMonitoring") { (identifier: String) in
       self.screenTime.stopMonitoring(identifier: identifier)
     }
+  }
 
+  @ModuleDefinitionBuilder
+  private func liveActivityDefinitions() -> ModuleDefinition {
     AsyncFunction("updateLiveActivity") { (payload: [String: Any]) async throws -> [String: Any] in
       try await self.liveActivity.update(payload: payload)
     }
@@ -381,7 +422,10 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("completeBackgroundRelay") { (wakeID: String, success: Bool) in
       HermesBackgroundService.shared.completeRelayWake(id: wakeID, success: success)
     }
+  }
 
+  @ModuleDefinitionBuilder
+  private func viewDefinitions() -> ModuleDefinition {
     View(HermesStandardMapView.self) {
       Events("onLocationPress")
 
