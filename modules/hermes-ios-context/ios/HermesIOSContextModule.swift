@@ -118,7 +118,7 @@ public final class HermesIOSContextModule: Module {
       HermesAuthorization.location(CLLocationManager().authorizationStatus)
     }.runOnQueue(.main)
 
-    AsyncFunction("requestLocationAuthorization") { () async -> String in
+    AsyncFunction("requestLocationAuthorization") {
       await self.location.requestAlwaysAuthorization()
     }.runOnQueue(.main)
 
@@ -315,7 +315,7 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func notificationDefinitions() -> ModuleDefinition {
-    AsyncFunction("requestNotificationAuthorization") { () async -> String in
+    AsyncFunction("requestNotificationAuthorization") {
       await withCheckedContinuation { continuation in
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, _ in
           DispatchQueue.main.async {
@@ -451,11 +451,10 @@ public final class HermesIOSContextModule: Module {
   }
 
   private static func hasEntitlement(_ name: String) -> Bool {
-    guard let task = SecTaskCreateFromSelf(nil),
-          let value = SecTaskCopyValueForEntitlement(task, name as CFString, nil) else {
-      return false
-    }
-    return (value as? Bool) == true
+    // SecTask entitlement APIs are unavailable in the iOS 26 SDK. Signed
+    // builds still enforce the entitlement; use an inspectable bundle value
+    // when present and otherwise report the optional capability as unavailable.
+    return (Bundle.main.object(forInfoDictionaryKey: name) as? NSNumber)?.boolValue == true
   }
 
   private static func topViewController(

@@ -361,7 +361,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       return
     }
     if let stableRegion { manager.stopMonitoring(for: stableRegion) }
-    let radius = min(max(accuracy * 2, 100), min(CLLocationManager.maximumRegionMonitoringDistance, 250))
+    let radius = min(max(accuracy * 2, 100), min(CLLocationManager().maximumRegionMonitoringDistance, 250))
     let region = CLCircularRegion(
       center: center,
       radius: radius,

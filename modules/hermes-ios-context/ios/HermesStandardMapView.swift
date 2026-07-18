@@ -71,7 +71,9 @@ final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
     locationButton.clipsToBounds = true
     locationButton.accessibilityLabel = "定位到当前位置"
     locationButton.translatesAutoresizingMaskIntoConstraints = false
-    locationButton.addTarget(self, action: #selector(refreshCurrentLocation), for: .touchUpInside)
+    locationButton.addGestureRecognizer(
+      UITapGestureRecognizer(target: self, action: #selector(refreshCurrentLocation))
+    )
     addSubview(locationButton)
 
     NSLayoutConstraint.activate([

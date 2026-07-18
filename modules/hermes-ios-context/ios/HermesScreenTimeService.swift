@@ -117,7 +117,7 @@ final class HermesScreenTimeService {
     if identifiers.isEmpty {
       DeviceActivityCenter().stopMonitoring()
     } else {
-      DeviceActivityCenter().stopMonitoring(identifiers.map(DeviceActivityName.init))
+      DeviceActivityCenter().stopMonitoring(identifiers.map { DeviceActivityName(rawValue: $0) })
     }
 #endif
     if let accountGeneration { setAccountGeneration(accountGeneration) }
