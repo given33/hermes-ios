@@ -140,7 +140,7 @@ final class HermesHealthService {
     start: Date,
     end: Date
   ) async throws -> HKStatistics? {
-    try await withCheckedThrowingContinuation { continuation in
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<HKStatistics?, Error>) in
       let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
       let query = HKStatisticsQuery(
         quantityType: type,
@@ -156,7 +156,7 @@ final class HermesHealthService {
 
   private func sleepMinutes(start: Date, end: Date) async throws -> Double? {
     guard let type = HKObjectType.categoryType(forIdentifier: .sleepAnalysis) else { return nil }
-    let samples: [HKCategorySample] = try await withCheckedThrowingContinuation { continuation in
+    let samples: [HKCategorySample] = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[HKCategorySample], Error>) in
       let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
       let query = HKSampleQuery(
         sampleType: type,
@@ -179,7 +179,7 @@ final class HermesHealthService {
 
   private func workoutSummary(start: Date, end: Date) async throws -> [[String: Any]] {
     let type = HKObjectType.workoutType()
-    return try await withCheckedThrowingContinuation { continuation in
+    return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[[String: Any]], Error>) in
       let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
       let query = HKSampleQuery(
         sampleType: type,

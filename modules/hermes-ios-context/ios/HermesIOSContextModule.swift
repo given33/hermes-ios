@@ -45,7 +45,7 @@ public final class HermesIOSContextModule: Module {
         forName: HermesBackgroundService.relayWakeNotification,
         object: nil,
         queue: .main
-      ) { [weak self] notification in
+      ) { [weak self] (notification: Notification) in
         self?.sendEvent("onBackgroundWake", [
           "reason": notification.userInfo?["reason"] as? String ?? "background",
           "timestamp": Date().timeIntervalSince1970 * 1000,
