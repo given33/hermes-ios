@@ -192,7 +192,11 @@ final class HermesHealthService {
           return
         }
         let workouts = samples as? [HKWorkout] ?? []
-        let values = workouts.map { self.workoutPayload($0) }
+        var values: [[String: Any]] = []
+        values.reserveCapacity(workouts.count)
+        for workout in workouts {
+          values.append(self.workoutPayload(workout))
+        }
         continuation.resume(returning: values)
       }
       store.execute(query)
@@ -200,7 +204,7 @@ final class HermesHealthService {
   }
 
   private func workoutPayload(_ workout: HKWorkout) -> [String: Any] {
-    let energy = workout.totalEnergyBurned?.doubleValue(for: .kilocalorie())
+    let energy = workout.totalEnergyBurned?.doubleValue(for: HKUnit.kilocalorie())
     return [
       "activity": workout.workoutActivityType.rawValue,
       "durationMinutes": workout.duration / 60,
