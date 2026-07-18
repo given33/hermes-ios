@@ -79,7 +79,7 @@ test('native context exposes independently callable collectors and event streams
     background,
     /HermesContextEventQueue\.shared\.pendingRelayWakes\(\)/,
   );
-  assert.match(module, /SecTaskCopyValueForEntitlement/);
+  assert.match(module, /object\(forInfoDictionaryKey: name\)/);
 });
 
 test('native callbacks persist before JS delivery and launch resumes Always location', () => {
@@ -196,7 +196,7 @@ test('weather map stays a flat standard vector map with native gestures and user
   assert.match(source, /isScrollEnabled = true/);
   assert.match(source, /isZoomEnabled = true/);
   assert.match(source, /isRotateEnabled = true/);
-  assert.match(source, /locationButton\.addTarget/);
+  assert.match(source, /locationButton\.addGestureRecognizer/);
   assert.match(source, /requestPreciseAuthorization\(\)/);
   assert.match(source, /requestCurrent\(\)/);
   assert.match(source, /centerOnUser\(animated: true\)/);
