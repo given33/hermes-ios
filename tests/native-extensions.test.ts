@@ -27,6 +27,8 @@ test('native extension config declares every V4 companion target', () => {
   assert.match(workflow, /EXTENSION_PATH="\$APP_PATH\/PlugIns\/\$extension\.appex"/);
   assert.match(workflow, /Watch\/HermesWatchApp\.app/);
   assert.match(workflow, /PlugIns\/HermesWatchExtension\.appex/);
+  assert.match(workflow, /-destination 'generic\/platform=iOS'/);
+  assert.doesNotMatch(workflow, /-sdk iphoneos/);
   assert.match(workflow, /expo export --platform ios --output-dir/);
   assert.match(workflow, /verify-native-font-export\.mjs/);
 });
