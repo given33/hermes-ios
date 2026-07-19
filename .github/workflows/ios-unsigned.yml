@@ -90,10 +90,21 @@ jobs:
             echo 'The unsigned .app bundle was not produced.' >&2
             exit 1
           fi
+          APP_BUILD_NUMBER="$(plutil -extract CFBundleVersion raw "$APP_PATH/Info.plist")"
+          verify_bundle_version() {
+            local bundle="$1"
+            local actual
+            actual="$(plutil -extract CFBundleVersion raw "$bundle/Info.plist")"
+            if [ "$actual" != "$APP_BUILD_NUMBER" ]; then
+              echo "Bundle version mismatch: $bundle has $actual, app has $APP_BUILD_NUMBER" >&2
+              exit 1
+            fi
+          }
           for extension in HermesWeatherWidget HermesDeviceActivityMonitor HermesDeviceActivityReport; do
             EXTENSION_PATH="$APP_PATH/PlugIns/$extension.appex"
             test -d "$EXTENSION_PATH"
             plutil -extract CFBundleIdentifier raw "$EXTENSION_PATH/Info.plist" >/dev/null
+            verify_bundle_version "$EXTENSION_PATH"
           done
           WATCH_APP="$APP_PATH/Watch/HermesWatchApp.app"
           WATCH_EXTENSION="$WATCH_APP/PlugIns/HermesWatchExtension.appex"
@@ -101,6 +112,8 @@ jobs:
           test -d "$WATCH_EXTENSION"
           plutil -extract CFBundleIdentifier raw "$WATCH_APP/Info.plist" >/dev/null
           plutil -extract CFBundleIdentifier raw "$WATCH_EXTENSION/Info.plist" >/dev/null
+          verify_bundle_version "$WATCH_APP"
+          verify_bundle_version "$WATCH_EXTENSION"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"

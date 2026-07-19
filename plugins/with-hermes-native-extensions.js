@@ -2,9 +2,6 @@ const { cpSync, rmSync } = require('node:fs');
 const { resolve } = require('node:path');
 const { withDangerousMod, withXcodeProject } = require('expo/config-plugins');
 
-const BUILD_NUMBER = '25';
-const VERSION = '2.0.0-beta.1';
-
 const TARGETS = [
   {
     name: 'HermesWeatherWidget',
@@ -96,7 +93,7 @@ function addSourceGroup(project, name, sourcePaths) {
   mainGroup.children.push({ value: group.uuid, comment: name });
 }
 
-function configureTarget(project, definition) {
+function configureTarget(project, definition, buildNumber, version) {
   const directory = definition.directory ?? definition.name;
   let target = findTarget(project, definition.name);
   if (!target) {
@@ -120,10 +117,10 @@ function configureTarget(project, definition) {
     const root = `$(SRCROOT)/native-extensions/${directory}`;
     settings.CLANG_ENABLE_MODULES = 'YES';
     settings.CODE_SIGN_ENTITLEMENTS = `"${root}/${definition.entitlements ?? `${definition.name}.entitlements`}"`;
-    settings.CURRENT_PROJECT_VERSION = BUILD_NUMBER;
+    settings.CURRENT_PROJECT_VERSION = buildNumber;
     settings.GENERATE_INFOPLIST_FILE = 'NO';
     settings.INFOPLIST_FILE = `"${root}/${definition.infoPlist ?? 'Info.plist'}"`;
-    settings.MARKETING_VERSION = VERSION;
+    settings.MARKETING_VERSION = version;
     settings.PRODUCT_BUNDLE_IDENTIFIER = `"${definition.bundleIdentifier}"`;
     settings.PRODUCT_NAME = '"$(TARGET_NAME)"';
     settings.SKIP_INSTALL = 'YES';
@@ -147,6 +144,14 @@ function configureTarget(project, definition) {
 }
 
 module.exports = function withHermesNativeExtensions(config) {
+  const buildNumber = String(config.ios?.buildNumber ?? '').trim();
+  const version = String(config.version ?? '').trim();
+  if (!/^\d+$/.test(buildNumber) || Number(buildNumber) < 1) {
+    throw new Error('Hermes native extensions require a positive iOS buildNumber');
+  }
+  if (!version) {
+    throw new Error('Hermes native extensions require an Expo version');
+  }
   const withSources = withDangerousMod(config, ['ios', async (modConfig) => {
     const source = resolve(modConfig.modRequest.projectRoot, 'native-extensions');
     const destination = resolve(modConfig.modRequest.platformProjectRoot, 'native-extensions');
@@ -158,7 +163,10 @@ module.exports = function withHermesNativeExtensions(config) {
     const project = modConfig.modResults;
     ensureDependencySections(project);
     const targets = new Map(
-      TARGETS.map((definition) => [definition.name, configureTarget(project, definition)]),
+      TARGETS.map((definition) => [
+        definition.name,
+        configureTarget(project, definition, buildNumber, version),
+      ]),
     );
     const appTarget = project.getFirstTarget();
     for (const name of [

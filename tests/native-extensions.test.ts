@@ -26,6 +26,10 @@ test('native extension config declares every V4 companion target', () => {
   assert.match(plugin, /addPbxGroup\(sourcePaths, name, '\.'\)/);
   assert.match(plugin, /\$\(SRCROOT\)\/native-extensions/);
   assert.doesNotMatch(plugin, /\$\(SRCROOT\)\/\.\.\/native-extensions/);
+  assert.match(plugin, /config\.ios\?\.buildNumber/);
+  assert.match(plugin, /settings\.CURRENT_PROJECT_VERSION = buildNumber/);
+  assert.match(plugin, /settings\.MARKETING_VERSION = version/);
+  assert.doesNotMatch(plugin, /const BUILD_NUMBER/);
   const workflow = read('.github/workflows/ios-unsigned.yml');
   assert.match(workflow, /Verify native extension targets/);
   assert.match(workflow, /isa = PBXTargetDependency/);
@@ -36,6 +40,10 @@ test('native extension config declares every V4 companion target', () => {
   assert.doesNotMatch(workflow, /-sdk iphoneos/);
   assert.match(workflow, /expo export --platform ios --output-dir/);
   assert.match(workflow, /verify-native-font-export\.mjs/);
+  assert.match(workflow, /APP_BUILD_NUMBER=/);
+  assert.match(workflow, /verify_bundle_version "\$EXTENSION_PATH"/);
+  assert.match(workflow, /verify_bundle_version "\$WATCH_APP"/);
+  assert.match(workflow, /verify_bundle_version "\$WATCH_EXTENSION"/);
 });
 
 test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inputs', () => {
