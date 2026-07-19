@@ -387,6 +387,17 @@ function partitionSidebarNav(
   return { coreItems, pluginItems };
 }
 
+/** Map bundled plugin package names to the SwiftUI / HermesCloudApi route ids. */
+const PLUGIN_ROUTE_IDS: Readonly<Record<string, NativeRouteId>> = {
+  collaboration: 'collaboration',
+  'hermes-achievements': 'achievements',
+  kanban: 'kanban',
+};
+
+function pluginRouteId(name: string): NativeRouteId | undefined {
+  return PLUGIN_ROUTE_IDS[name];
+}
+
 function buildRoutes(
   builtinRoutes: readonly NativeRouteDefinition[],
   manifests: readonly PluginManifest[],
@@ -412,6 +423,8 @@ function buildRoutes(
         key: `override:${override.name}`,
         path: route.path,
         source: 'plugin',
+        // Preserve the builtin data route so SwiftUI/API loaders still resolve.
+        routeId: route.id,
         pluginName: override.name,
       });
     } else {
@@ -429,11 +442,13 @@ function buildRoutes(
     if (manifest.tab.hidden) continue;
     if (manifest.tab.path === '/plugins') continue;
     if (builtinPaths.has(manifest.tab.path)) continue;
+    const routeId = pluginRouteId(manifest.name);
     routes.push({
       key: `plugin:${manifest.name}`,
       path: manifest.tab.path,
       source: 'plugin',
       pluginName: manifest.name,
+      ...(routeId ? { routeId } : {}),
     });
   }
 
@@ -441,11 +456,13 @@ function buildRoutes(
     if (!manifest.tab.hidden) continue;
     if (manifest.tab.path === '/plugins') continue;
     if (builtinPaths.has(manifest.tab.path) || manifest.tab.override) continue;
+    const routeId = pluginRouteId(manifest.name);
     routes.push({
       key: `plugin:hidden:${manifest.name}`,
       path: manifest.tab.path,
       source: 'plugin',
       pluginName: manifest.name,
+      ...(routeId ? { routeId } : {}),
     });
   }
 

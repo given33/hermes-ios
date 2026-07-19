@@ -22,7 +22,12 @@ import {
   type IOSHealthSummary,
 } from '../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../api/HermesApiClient';
-import { IOSIntelligenceApi, type IOSContextEvent, type IOSDeviceCommand } from './IOSIntelligenceApi';
+import {
+  IOSIntelligenceApi,
+  type IOSContextEvent,
+  type IOSDeviceCommand,
+  type IOSIntelligenceSnapshot,
+} from './IOSIntelligenceApi';
 import { predictedDepartureTimestamp } from './ios-command-contract';
 import { buildCollectionSnapshotEvents, snapshotEvent } from './ios-snapshot-events';
 import {
@@ -202,7 +207,7 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
         .filter((command, index, all) => all.findIndex((candidate) => candidate.id === command.id) === index);
       for (let command of commands) {
         if (await HermesIOSContext.hasCompletedCommand(command.id)) {
-          commandCursorRef.current = command.id;
+          // Do not treat command ids as the server pull cursor.
           await HermesIOSContext.removePendingCommand(command.id);
           continue;
         }
@@ -226,6 +231,7 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
               flushPendingEvents,
               ownerScope,
               permissionSnapshotRef.current,
+              () => apiRef.current.snapshot(),
             );
             command = { ...command, _relay_execution_status: 'completed', _relay_result: result };
           } catch (error) {
@@ -241,8 +247,11 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
         await apiRef.current.acknowledgeCommand(deviceId, command.id, command._relay_execution_status === 'completed'
           ? { result: command._relay_result || {}, status: 'completed' }
           : { error: command._relay_error || 'native command failed', status: 'failed' });
-        commandCursorRef.current = command.id;
-        await HermesIOSContext.recordCommandCompletion(command.id, command.id);
+        // Persist completion for dedupe only; pull cursor is server-owned.
+        await HermesIOSContext.recordCommandCompletion(
+          command.id,
+          commandCursorRef.current || command.id,
+        );
         await HermesIOSContext.removePendingCommand(command.id);
       }
       if (response.cursor) {
@@ -499,6 +508,7 @@ async function executeDeviceCommand(
   flushPendingEvents: () => Promise<void>,
   ownerScope: string,
   permissionSnapshot: IOSPermissionSnapshot,
+  loadSnapshot?: () => Promise<IOSIntelligenceSnapshot>,
 ): Promise<Record<string, unknown>> {
   const payload = command.payload || {};
   const key = `${command.capability}:${command.action}`;
@@ -533,12 +543,34 @@ async function executeDeviceCommand(
     }
     case 'ios-trajectory:today':
     case 'ios-trajectory:read': {
-      const events = await HermesIOSContext.readPendingEventsByKind(
+      // Pending queue is for upload only. Flush first, then serve today's
+      // trajectory from the durable server snapshot (post-sync truth).
+      await flushPendingEvents();
+      const pending = await HermesIOSContext.readPendingEventsByKind(
         EVENT_BATCH_SIZE,
         ['location'],
         ownerScope,
       );
-      return { events };
+      let snapshot: IOSIntelligenceSnapshot | null = null;
+      let snapshotError = '';
+      if (loadSnapshot) {
+        try {
+          snapshot = await loadSnapshot();
+        } catch (error) {
+          snapshotError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      return {
+        events: pending,
+        pending_count: pending.length,
+        flushed: true,
+        source: snapshot ? 'server_snapshot' : 'local_pending_after_flush',
+        date: snapshot?.date || '',
+        timezone: snapshot?.timezone || '',
+        trajectory: snapshot?.trajectory || [],
+        server_time: snapshot?.server_time,
+        snapshot_error: snapshotError || undefined,
+      };
     }
     case 'ios-trajectory:flush': {
       await flushPendingEvents();
@@ -546,12 +578,32 @@ async function executeDeviceCommand(
     }
     case 'ios-places:today':
     case 'ios-places:read': {
-      const events = await HermesIOSContext.readPendingEventsByKind(
+      await flushPendingEvents();
+      const pending = await HermesIOSContext.readPendingEventsByKind(
         EVENT_BATCH_SIZE,
         ['place-visit'],
         ownerScope,
       );
-      return { events };
+      let snapshot: IOSIntelligenceSnapshot | null = null;
+      let snapshotError = '';
+      if (loadSnapshot) {
+        try {
+          snapshot = await loadSnapshot();
+        } catch (error) {
+          snapshotError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      return {
+        events: pending,
+        pending_count: pending.length,
+        flushed: true,
+        source: snapshot ? 'server_snapshot' : 'local_pending_after_flush',
+        date: snapshot?.date || '',
+        timezone: snapshot?.timezone || '',
+        places: snapshot?.places || [],
+        server_time: snapshot?.server_time,
+        snapshot_error: snapshotError || undefined,
+      };
     }
     case 'ios-motion:snapshot':
     case 'ios-motion:get': {

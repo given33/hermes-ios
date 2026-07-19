@@ -294,8 +294,10 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
             self.manager.authorizationStatus == .authorizedWhenInUse else { return }
       self.authorizationGate = nil
       // iOS may defer the Always sheet without another authorization callback.
-      // Keep the permission run paused so other system sheets are not stacked.
-      gate.resolve("notDetermined")
+      // Resolve as limited While-In-Use (never invent "notDetermined") so the
+      // permission coordinator can continue the remaining chain and surface a
+      // limited-location state instead of freezing until a foreground cycle.
+      gate.resolve(HermesAuthorization.location(.authorizedWhenInUse))
     }
   }
 

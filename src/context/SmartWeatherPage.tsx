@@ -55,6 +55,7 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   const [currentDayKey, setCurrentDayKey] = useState(() => dayKey(new Date()));
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [snapshotStale, setSnapshotStale] = useState(false);
   const [mapError, setMapError] = useState('');
   const [mapAttempt, setMapAttempt] = useState(0);
   const permissions = useIOSPermissionCoordinator();
@@ -70,11 +71,22 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
     try {
       setSnapshot(await api.snapshot());
       setLoadError('');
+      setSnapshotStale(false);
     } catch (error) {
       const message = error instanceof Error
         ? error.message
         : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load');
       setLoadError(message);
+      // Keep last-good data only when we already had a successful snapshot;
+      // mark it stale so the UI never presents failed reloads as live weather.
+      setSnapshot((previous) => {
+        if (previous.date !== '') {
+          setSnapshotStale(true);
+          return previous;
+        }
+        setSnapshotStale(false);
+        return EMPTY;
+      });
       notify(message);
     } finally {
       setLoading(false);
@@ -94,29 +106,40 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
       setCurrentDayKey((current) => {
         if (current === next) return current;
         // The cloud keeps the immutable history; the native surface starts a
-        // fresh local-day view as soon as the device crosses midnight.
-        setSnapshot((previous) => ({
-          ...previous,
-          trajectory: [],
-          places: [],
-        }));
+        // fresh local-day view as soon as the device crosses midnight and
+        // immediately reloads so yesterday's forecasts do not linger.
+        setSnapshot(EMPTY);
+        setSnapshotStale(false);
+        void reload();
         return next;
       });
     }, 30_000);
     return () => clearInterval(timer);
-  }, []);
+  }, [reload]);
 
+  const effectiveDayKey = snapshot.date && /^\d{4}-\d{2}-\d{2}$/.test(snapshot.date)
+    ? snapshot.date
+    : currentDayKey;
   const todayTrajectory = snapshot.trajectory.filter((point) => (
-    dayKey(new Date(normalizeTimestamp(point.observed_at))) === currentDayKey
+    dayKey(new Date(normalizeTimestamp(point.observed_at))) === effectiveDayKey
   ));
   const todayPlaces = snapshot.places.filter((place) => timestampOverlapsLocalDay(
     place.arrived_at,
     place.departed_at,
-    currentDayKey,
+    effectiveDayKey,
   ));
+  const now = Date.now();
   const visibleForecasts = (snapshot.active_forecasts || snapshot.active_forecast || [])
     .map(normalizeForecast)
-    .filter((forecast) => !forecast.expires_at || normalizeTimestamp(forecast.expires_at) > Date.now());
+    .filter((forecast) => {
+      const expires = forecast.expires_at ? normalizeTimestamp(forecast.expires_at) : null;
+      const starts = forecast.starts_at ? normalizeTimestamp(forecast.starts_at) : null;
+      // Incomplete validity windows are not treated as live travel weather.
+      if (expires === null && starts === null) return false;
+      if (expires !== null && expires <= now) return false;
+      if (starts !== null && starts > now + 6 * 60 * 60 * 1000) return false;
+      return true;
+    });
 
   const track: IOSCoordinate[] = todayTrajectory.map((point) => ({
     latitude: point.latitude,
@@ -201,7 +224,7 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
           </View>
         ) : null}
 
-        {!loading && loadError ? (
+        {!loading && loadError && !snapshotStale ? (
           <View style={[styles.statusOverlay, { backgroundColor: tokens.colors.background }]}>
             <ScreenState
               kind="error"
@@ -210,6 +233,31 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
               retryLabel={locale === 'zh' ? '重新加载' : 'Reload'}
               testID="smart-weather-load-error"
             />
+          </View>
+        ) : null}
+
+        {snapshotStale && loadError ? (
+          <View
+            style={[
+              styles.permissionBanner,
+              { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, top: locationMessage ? 72 : 12 },
+            ]}
+            testID="smart-weather-stale-banner"
+          >
+            <Text style={[styles.permissionText, { color: secondary }]}>
+              {locale === 'zh'
+                ? `数据可能已过期：${loadError}`
+                : `Showing last-known data (stale): ${loadError}`}
+            </Text>
+            <NativeButton
+              accessibilityLabel={locale === 'zh' ? '重新加载' : 'Reload'}
+              onPress={() => { void reload(); }}
+              outlined
+              prefix={<RefreshCw color={foreground} size={15} />}
+              size="sm"
+            >
+              {locale === 'zh' ? '重试' : 'Retry'}
+            </NativeButton>
           </View>
         ) : null}
 

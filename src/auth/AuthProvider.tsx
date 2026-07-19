@@ -534,6 +534,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (authLifecycle.current.isCurrent(operationGeneration)) {
         dispatch({ type: 'LOGOUT_FAILED', error: LOGOUT_ERROR });
       }
+      // Surface the failure to AccountPage / callers — authenticated LOGOUT_FAILED
+      // intentionally keeps session identity for token-controller rebuild and
+      // does not carry an error field on that state branch.
+      throw new Error(LOGOUT_ERROR);
     } finally {
       authLifecycle.current.finishOperation(operationGeneration);
     }
@@ -563,9 +567,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
           .catch(() => undefined);
         setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         dispatch({ type: 'LOGGED_OUT' });
-      } else if (authLifecycle.current.isCurrent(operationGeneration)) {
+        return;
+      }
+      if (authLifecycle.current.isCurrent(operationGeneration)) {
         dispatch({ type: 'LOGOUT_FAILED', error: LOGOUT_ERROR });
       }
+      throw new Error(LOGOUT_ERROR);
     } finally {
       authLifecycle.current.finishOperation(operationGeneration);
     }

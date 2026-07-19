@@ -354,26 +354,30 @@ test('baseline plugin positions are applied before sidebar partitioning', () => 
     ['/achievements', '/kanban'],
   );
   assert.deepEqual(
-    analyticsVisible.routes.slice(-3).map(({ key, path, pluginName }) => ({
+    analyticsVisible.routes.slice(-3).map(({ key, path, pluginName, routeId }) => ({
       key,
       path,
       pluginName,
+      routeId,
     })),
     [
       {
         key: 'plugin:hermes-achievements',
         path: '/achievements',
         pluginName: 'hermes-achievements',
+        routeId: 'achievements',
       },
       {
         key: 'plugin:kanban',
         path: '/kanban',
         pluginName: 'kanban',
+        routeId: 'kanban',
       },
       {
         key: 'plugin:hidden:collaboration',
         path: '/collaboration',
         pluginName: 'collaboration',
+        routeId: 'collaboration',
       },
     ],
   );
@@ -482,6 +486,8 @@ test('routes preserve reachability independently from sidebar visibility', () =>
       key: 'override:hidden-override',
       path: '/models',
       source: 'plugin',
+      // Overrides keep the builtin data route id so SwiftUI/API loaders resolve.
+      routeId: 'models',
       pluginName: 'hidden-override',
     },
   );

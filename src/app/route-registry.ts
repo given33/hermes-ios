@@ -20,7 +20,10 @@ export type NativeRouteId =
   | 'account'
   | 'env'
   | 'docs'
-  | 'chat';
+  | 'chat'
+  | 'achievements'
+  | 'kanban'
+  | 'collaboration';
 
 export interface NativeRouteDefinition {
   id: NativeRouteId;

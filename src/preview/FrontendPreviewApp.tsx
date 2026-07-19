@@ -29,6 +29,7 @@ import {
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
+import { ScreenState } from '../components/ui/ScreenState';
 import { multiplyAlpha } from '../design/control-contracts';
 import { THEME_DEFAULT_FONT_ID } from '../design/font-catalog';
 import { resolveNativeFontStack } from '../design/native-font-faces';
@@ -464,6 +465,20 @@ function PreviewRoute({
       />
     );
   }
+  // Production/authenticated builds must never present fixture pages as live
+  // product data. Fixture *PreviewPage surfaces are restricted to the explicit
+  // frontend-preview packaging flag (manual Expo Go / design previews only).
+  const allowFixturePages = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1' && !client;
+  if (!allowFixturePages && route.routeId !== 'chat' && route.routeId !== 'account') {
+    const message = locale === 'zh'
+      ? '此页面需要原生 SwiftUI 界面。请使用完整签名安装包。'
+      : 'This page requires the native SwiftUI shell. Install a full signed build.';
+    return (
+      <View style={styles.nativeRoute}>
+        <ScreenState kind="error" message={message} testID="production-route-unavailable" />
+      </View>
+    );
+  }
   if (route.source === 'plugin') {
     if (route.pluginName === 'hermes-achievements') return <AchievementsPreviewPage {...props} />;
     if (route.pluginName === 'kanban') return <KanbanPreviewPage {...props} />;
@@ -511,7 +526,17 @@ function PreviewRoute({
     );
     case 'env': return <EnvPreviewPage {...props} />;
     case 'docs': return <DocsPreviewPage />;
-    default: return <SessionsPreviewPage {...props} />;
+    default: return allowFixturePages
+      ? <SessionsPreviewPage {...props} />
+      : (
+        <View style={styles.nativeRoute}>
+          <ScreenState
+            kind="error"
+            message={locale === 'zh' ? '未知页面' : 'Unknown page'}
+            testID="production-route-unknown"
+          />
+        </View>
+      );
   }
 }
 

@@ -200,7 +200,9 @@ test('location authorization resolves when an Always upgrade remains While In Us
     /status == \.authorizedWhenInUse && !requestedAlwaysUpgrade[\s\S]*manager\.requestAlwaysAuthorization\(\)[\s\S]*scheduleAlwaysUpgradeFallback/,
   );
   assert.match(source, /authorizationGate === gate/);
-  assert.match(source, /gate\.resolve\("notDetermined"\)/);
+  // Always-upgrade timeout must resolve as limited While-In-Use, never invent notDetermined.
+  assert.match(source, /gate\.resolve\(HermesAuthorization\.location\(\.authorizedWhenInUse\)\)/);
+  assert.doesNotMatch(source, /gate\.resolve\("notDetermined"\)/);
   assert.match(source, /final class HermesLocationAuthorizationGate/);
 });
 
@@ -320,9 +322,20 @@ test('native relay covers durable cursors, background services, health, watch, n
     'snapshots are encrypted locally before upload',
   );
   assert.doesNotMatch(provider, /apiRef\.current\.uploadEvents\(\{\s*cursor: `snapshot:/);
+  // Trajectory/places device commands flush pending then load the durable server snapshot.
   assert.match(
     provider,
-    /executeDeviceCommand\(\s*command,\s*flushPendingEvents,\s*ownerScope,\s*permissionSnapshotRef\.current,\s*\)/,
+    /executeDeviceCommand\(\s*command,\s*flushPendingEvents,\s*ownerScope,\s*permissionSnapshotRef\.current,\s*\(\)\s*=>\s*apiRef\.current\.snapshot\(\),\s*\)/,
+  );
+  assert.match(provider, /source: snapshot \? 'server_snapshot' : 'local_pending_after_flush'/);
+  assert.match(provider, /trajectory: snapshot\?\.trajectory \|\| \[\]/);
+  assert.match(provider, /places: snapshot\?\.places \|\| \[\]/);
+  // Pull cursor is server-owned; command ids only dedupe completions.
+  assert.match(provider, /Do not treat command ids as the server pull cursor/);
+  assert.match(provider, /if \(response\.cursor\) \{\s*commandCursorRef\.current = response\.cursor;/);
+  assert.doesNotMatch(
+    provider,
+    /await apiRef\.current\.acknowledgeCommand[\s\S]*commandCursorRef\.current = command\.id;/,
   );
   assert.match(read('ios/HermesContextEventQueue.swift'), /commandCursorsByScope/);
   assert.match(read('ios/HermesContextEventQueue.swift'), /completedCommandIDsByScope/);
@@ -353,8 +366,10 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /dayKey\(new Date\(\)\)/);
   assert.match(source, /todayTrajectory = snapshot\.trajectory\.filter/);
   assert.match(source, /todayPlaces = snapshot\.places\.filter/);
-  assert.match(source, /expires_at\) > Date\.now\(\)/);
-  assert.doesNotMatch(source, /normalizeTimestamp\(forecast\.starts_at\) <= Date\.now\(\)/);
+  // Incomplete validity windows are rejected; stale reloads are labeled, not hidden as live.
+  assert.match(source, /expires === null && starts === null/);
+  assert.match(source, /smart-weather-stale-banner/);
+  assert.match(source, /setSnapshot\(EMPTY\)/);
   assert.doesNotMatch(source, /LocateFixed|IOSPressable/);
   assert.match(source, /NativeMapErrorBoundary/);
   assert.match(source, /smart-weather-map-error/);

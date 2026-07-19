@@ -484,7 +484,9 @@ export function ChatPreviewPage({
       const placeholder = conversationIndexRef.current.find(({ id }) => id === conversationId);
       const result = await cloudApi.adoptOfficialConversation(
         conversationId,
-        placeholder?.profile || 'default',
+        // Prefer the cache entry's profile, otherwise the active shell profile —
+        // never silently fall back to "default" while managing another profile.
+        placeholder?.profile || profile,
         placeholder?.title || '',
       );
       if (

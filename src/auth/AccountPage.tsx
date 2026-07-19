@@ -65,10 +65,16 @@ export function AccountPage({
     setBusy('logout');
     try {
       await onLogout();
+    } catch (error) {
+      if (mounted.current) {
+        notify(error instanceof Error
+          ? error.message
+          : (chinese ? '退出登录失败，请重试。' : 'Sign out failed. Please retry.'));
+      }
     } finally {
       if (mounted.current) setBusy(null);
     }
-  }, [busy, onLogout]);
+  }, [busy, chinese, notify, onLogout]);
 
   const runDelete = useCallback(async () => {
     if (!onDeleteAccount || busy) return;
@@ -76,10 +82,16 @@ export function AccountPage({
     setBusy('delete');
     try {
       await onDeleteAccount();
+    } catch (error) {
+      if (mounted.current) {
+        notify(error instanceof Error
+          ? error.message
+          : (chinese ? '删除账户失败，请重试。' : 'Account deletion failed. Please retry.'));
+      }
     } finally {
       if (mounted.current) setBusy(null);
     }
-  }, [busy, onDeleteAccount]);
+  }, [busy, chinese, notify, onDeleteAccount]);
 
   return (
     <PreviewPage title={chinese ? '账户' : 'Account'}>
