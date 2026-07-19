@@ -209,32 +209,127 @@ test('top-level sender_role wins over canonical transport role and phase suffixe
 });
 
 test('running state is derived from durable server runs, not client timers', () => {
+  const now = 1_800_000_000_000;
   assert.equal(conversationHasRunningWork(conversation({
-    hosted_turns: { turn: { status: 'running' } },
-  })), true);
+    hosted_turns: { turn: { status: 'running', updated_at: now - 30_000 } },
+  }), now), true);
   assert.equal(conversationHasRunningWork(conversation({
     hosted_turns: { turn: { status: 'completed' } },
     runtime_runs: { default: { status: 'completed' } },
-  })), false);
+  }), now), false);
   assert.equal(conversationRunningHostedTurnId(conversation({
     hosted_turns: {
-      completed: { status: 'completed', updated_at: 300 },
-      older: { status: 'running', turn_id: 'turn-older', updated_at: 100 },
-      newest: { status: 'queued', turn_id: 'turn-newest', updated_at: 200 },
+      completed: { status: 'completed', updated_at: now - 10_000 },
+      older: { status: 'running', turn_id: 'turn-older', updated_at: now - 30_000 },
+      newest: { status: 'queued', turn_id: 'turn-newest', updated_at: now - 5_000 },
     },
-  })), 'turn-newest');
+  }), now), 'turn-newest');
   assert.equal(conversationRunningHostedTurnId(conversation({
     hosted_turns: { completed: { status: 'cancelled' } },
-  })), '');
+  }), now), '');
   const optimistic = conversation({
     hosted_turns: {
-      active: { status: 'running', turn_id: 'turn-active' },
+      active: { status: 'running', turn_id: 'turn-active', updated_at: now - 1_000 },
       done: { status: 'completed', turn_id: 'turn-done' },
     },
   });
-  assert.equal(conversationHostedTurnState(optimistic, 'turn-active'), 'running');
-  assert.equal(conversationHostedTurnState(optimistic, 'turn-done'), 'terminal');
-  assert.equal(conversationHostedTurnState(optimistic, 'turn-not-visible-yet'), 'missing');
+  assert.equal(conversationHostedTurnState(optimistic, 'turn-active', now), 'running');
+  assert.equal(conversationHostedTurnState(optimistic, 'turn-done', now), 'terminal');
+  assert.equal(conversationHostedTurnState(optimistic, 'turn-not-visible-yet', now), 'missing');
+});
+
+test('abandoned durable runs never keep fresh installs spinning indefinitely', () => {
+  const now = 1_800_000_000_000;
+  const stale = conversation({
+    hosted_turns: {
+      old: {
+        status: 'running',
+        turn_id: 'turn-old',
+        updated_at: now - 61 * 60 * 60 * 1_000,
+      },
+      timestampMissing: { status: 'running', turn_id: 'turn-unknown' },
+    },
+    runtime_runs: {
+      reviewer: { status: 'running', updated_at: now - 31 * 60 * 1_000 },
+    },
+  });
+
+  assert.equal(conversationHasRunningWork(stale, now), false);
+  assert.equal(conversationRunningHostedTurnId(stale, now), '');
+  assert.equal(conversationHostedTurnState(stale, 'turn-old', now), 'terminal');
+  assert.equal(conversationHostedTurnState(stale, 'turn-unknown', now), 'terminal');
+});
+
+test('runtime and hosted freshness follow their distinct server recovery windows', () => {
+  const now = 1_800_000_000_000;
+  assert.equal(conversationHasRunningWork(conversation({
+    runtime_runs: {
+      worker: { status: 'running', updated_at: now - 29 * 60 * 1_000 },
+    },
+  }), now), true);
+  assert.equal(conversationHasRunningWork(conversation({
+    runtime_runs: {
+      worker: { status: 'running', updated_at: now - 31 * 60 * 1_000 },
+    },
+  }), now), false);
+  assert.equal(conversationHasRunningWork(conversation({
+    hosted_turns: {
+      worker: { status: 'running', updated_at: now - 35 * 60 * 60 * 1_000 },
+    },
+  }), now), true);
+  assert.equal(conversationHasRunningWork(conversation({
+    hosted_turns: {
+      worker: { status: 'running', updated_at: now - 37 * 60 * 60 * 1_000 },
+    },
+  }), now), false);
+});
+
+test('a quiet 35-hour hosted worker message remains active', () => {
+  const now = 1_800_000_000_000;
+  const updatedAt = now - 35 * 60 * 60 * 1_000;
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      content: 'long hosted task',
+      created_at: updatedAt,
+      id: 'hosted-long',
+      meta: { runtime_turn_id: 'turn-long' },
+      name: 'pc-worker',
+      role: 'assistant',
+      sender_role: 'worker',
+      status: 'running',
+      updated_at: updatedAt,
+    }],
+  }), true, now);
+
+  assert.equal(message.status, 'running');
+});
+
+test('abandoned worker and reviewer messages stop their duration animations', () => {
+  const now = 1_800_000_000_000;
+  const startedAt = now - 61 * 60 * 60 * 1_000;
+  const messages = conversationMessagesToView(conversation({
+    messages: [{
+      activities: [{
+        id: 'remote-worker',
+        kind: 'status',
+        started_at: startedAt,
+        status: 'running',
+      }],
+      content: 'Connected to remote worker',
+      created_at: startedAt,
+      id: 'worker-stale',
+      name: 'pc-worker',
+      role: 'assistant',
+      sender_role: 'worker',
+      started_at: startedAt,
+      status: 'running',
+      updated_at: startedAt + 30_000,
+    }],
+  }), true, now);
+
+  assert.equal(messages[0].status, 'failed');
+  assert.equal(messages[0].activities?.[0].status, 'failed');
+  assert.doesNotMatch(formatActivitySummary(messages[0], true, now), /3663m/);
 });
 
 test('attachments and stream events remain structured for the native chat UI', () => {

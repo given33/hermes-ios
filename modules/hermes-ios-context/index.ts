@@ -6,6 +6,10 @@ import {
   type NativeSyntheticEvent,
   type ViewProps,
 } from 'react-native';
+import {
+  discoverNativeContextView,
+  readNativeViewContract,
+} from './native-view-loader';
 
 export type IOSAuthorizationState =
   | 'authorized'
@@ -367,18 +371,18 @@ export interface HermesScreenTimeReportProps extends ViewProps {
   refreshToken: number;
 }
 
+// Expo's native view registry is authoritative. The native contract is
+// diagnostic metadata and must not gate discovery: during module bootstrap it
+// can be unavailable or stale even though Expo has registered the view.
+const NativeMap = optionalNativeView<HermesStandardMapProps>('HermesStandardMapView');
+const NativeScreenTimeReport = optionalNativeView<HermesScreenTimeReportProps>(
+  'HermesScreenTimeReportView',
+);
 const nativeViewContract = readNativeViewContract(nativeModule);
 export const nativeIOSContextViewContractVersion = nativeViewContract.version;
 
-const NativeMap = nativeViewContract.views.includes('HermesStandardMapView')
-  ? optionalNativeView<HermesStandardMapProps>('HermesStandardMapView')
-  : null;
-const NativeScreenTimeReport = nativeViewContract.views.includes('HermesScreenTimeReportView')
-  ? optionalNativeView<HermesScreenTimeReportProps>('HermesScreenTimeReportView')
-  : null;
-
-// The native contract is necessary but not sufficient: stale autolinking can
-// advertise a view whose registration still fails at runtime.
+// A successful registry lookup proves the component is renderable; contract
+// metadata alone cannot make an absent view manager available.
 export const hasNativeStandardMapView = NativeMap !== null;
 export const hasNativeScreenTimeReportView = NativeScreenTimeReport !== null;
 
@@ -392,32 +396,8 @@ export const HermesStandardMapView = forwardRef<View, HermesStandardMapProps>(
 );
 
 function optionalNativeView<P extends ViewProps>(viewName: string): ComponentType<P> | null {
-  try {
-    return requireNativeView<P>('HermesIOSContext', viewName) as ComponentType<P>;
-  } catch {
-    return null;
-  }
-}
-
-function readNativeViewContract(module: IOSContextNativeModule | null): {
-  version: number;
-  views: string[];
-} {
-  if (!module || typeof module.getNativeViewContract !== 'function') {
-    return { version: 0, views: [] };
-  }
-  try {
-    const contract = module.getNativeViewContract();
-    if (!contract || !Number.isInteger(contract.version) || !Array.isArray(contract.views)) {
-      return { version: 0, views: [] };
-    }
-    return {
-      version: contract.version,
-      views: contract.views.filter((value): value is string => typeof value === 'string'),
-    };
-  } catch {
-    return { version: 0, views: [] };
-  }
+  return discoverNativeContextView(nativeModule, viewName, (viewName) =>
+    requireNativeView<P>('HermesIOSContext', viewName) as ComponentType<P>);
 }
 
 export const HermesScreenTimeReportView = forwardRef<View, HermesScreenTimeReportProps>(

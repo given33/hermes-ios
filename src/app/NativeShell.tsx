@@ -239,7 +239,6 @@ type CompactStackParamList = Record<
   string,
   { path?: string; sidebarSelection?: boolean } | undefined
 >;
-const STABLE_SWIFTUI_ROUTE_NAME = '__hermes-swiftui-sidebar-root';
 const CompactStack = createNativeStackNavigator<CompactStackParamList>();
 
 export interface NativeShellSlotContext {
@@ -416,9 +415,7 @@ export function NativeShell({
       Keyboard.dismiss();
       const resolved = resolveNativeShellPath(composition.routes, path);
       const currentRoute = compactNavigationRef.getCurrentRoute();
-      const currentPath = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
-        ? currentRoute.params?.path
-        : currentRoute?.name;
+      const currentPath = currentRoute?.name;
       if (
         state.mode === 'compact'
         && compactNavigationRef.isReady()
@@ -439,32 +436,18 @@ export function NativeShell({
         && compactNavigationRef.isReady()
       ) {
         const currentRoute = compactNavigationRef.getCurrentRoute();
-        const currentPath = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
-          ? currentRoute.params?.path
-          : currentRoute?.name;
+        const currentPath = currentRoute?.name;
         if (currentPath === resolved) {
           closeMobile();
           return;
         }
-        const resolvedRoute = composition.routes.find(
-          (route) => route.path === resolved,
-        );
-        const reuseSwiftUIHost =
-          nativeRouteChrome
-          && resolvedRoute?.routeId !== 'chat'
-          && resolvedRoute?.routeId !== 'smart-weather'
-          && resolvedRoute?.routeId !== 'account';
         clearPendingSidebarSelection();
         pendingSidebarPath.current = resolved;
-        const targetName = reuseSwiftUIHost ? STABLE_SWIFTUI_ROUTE_NAME : resolved;
         const rootRoute = compactNavigationRef.getRootState()?.routes?.[0];
-        const rootPath = rootRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
-          ? (rootRoute.params as { path?: string } | undefined)?.path
-          : rootRoute?.name;
+        const rootPath = rootRoute?.name;
         compactNavigationRef.dispatch(StackActions.popToTop());
         if (rootPath !== resolved) {
-          compactNavigationRef.dispatch(StackActions.push(targetName, {
-            path: reuseSwiftUIHost ? resolved : undefined,
+          compactNavigationRef.dispatch(StackActions.push(resolved, {
             sidebarSelection: true,
           }));
         }
@@ -481,17 +464,13 @@ export function NativeShell({
       closeMobile,
       compactNavigationRef,
       composition.routes,
-      nativeRouteChrome,
-      reportRouteReady,
       state.mode,
     ],
   );
   const syncCompactNavigation = useCallback(() => {
     Keyboard.dismiss();
     const currentRoute = compactNavigationRef.getCurrentRoute();
-    const current = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
-      ? currentRoute.params?.path
-      : currentRoute?.name;
+    const current = currentRoute?.name;
     if (!current) return;
     const resolved = resolveNativeShellPath(composition.routes, current);
     if (resolved !== state.activePath) {
@@ -702,49 +681,6 @@ export function NativeShell({
                     </CompactStack.Screen>
                   );
                 })}
-                {nativeRouteChrome ? (
-                  <CompactStack.Screen
-                    name={STABLE_SWIFTUI_ROUTE_NAME}
-                    options={({ route: navigationRoute }) => ({
-                      animation: navigationRoute.params?.sidebarSelection
-                        ? 'none'
-                        : 'default',
-                      headerShown: false,
-                    })}
-                  >
-                    {({ route: navigationRoute }) => {
-                      const resolved = resolveNativeShellPath(
-                        composition.routes,
-                        navigationRoute.params?.path ?? state.activePath,
-                      );
-                      const route = composition.routes.find(
-                        (candidate) => candidate.path === resolved,
-                      );
-                      if (!route) return null;
-                      const label = allNavigationItems.find(
-                        (item) => item.path === route.path,
-                      )?.label ?? route.path;
-                      const compactContext: NativeShellSlotContext = {
-                        ...slotContext,
-                        activePath: route.path,
-                      };
-                      return (
-                        <View
-                          style={[
-                            styles.routeStage,
-                            {
-                              paddingLeft: insets.left,
-                              paddingRight: insets.right,
-                            },
-                          ]}
-                        >
-                          {renderRoute?.(route, label, compactContext)
-                            ?? <RoutePreview label={label} />}
-                        </View>
-                      );
-                    }}
-                  </CompactStack.Screen>
-                ) : null}
               </CompactStack.Navigator>
             </NavigationContainer>
           ) : activeRoute ? (
@@ -1072,18 +1008,6 @@ function ExpoReferenceSidebar({
         },
       ]}
     >
-      <View style={styles.referenceSidebarHeader}>
-        <Text
-          numberOfLines={1}
-          style={[
-            styles.referenceSidebarTitle,
-            { color: tokens.colors.foreground },
-          ]}
-        >
-          Hermes Agent
-        </Text>
-      </View>
-
       <ScrollView
         contentContainerStyle={styles.referenceSidebarContent}
         decelerationRate="normal"
@@ -1091,6 +1015,18 @@ function ExpoReferenceSidebar({
         showsVerticalScrollIndicator={false}
         style={styles.referenceSidebarScroll}
       >
+        <View style={styles.referenceSidebarHeader}>
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.referenceSidebarTitle,
+              { color: tokens.colors.foreground },
+            ]}
+          >
+            Hermes Agent
+          </Text>
+        </View>
+
         {REFERENCE_SIDEBAR_GROUPS.map((group) => (
           <View key={group.labels.en} style={styles.referenceSidebarSection}>
             <Text
@@ -1102,7 +1038,7 @@ function ExpoReferenceSidebar({
               {group.labels[locale]}
             </Text>
             <View style={styles.referenceSidebarGroup}>
-              {group.routes.map((route, index) => {
+              {group.routes.map((route) => {
                 const FallbackIcon = NAV_ICONS[
                   REFERENCE_SIDEBAR_FALLBACK_ICONS[route.path]
                 ];
@@ -1117,12 +1053,6 @@ function ExpoReferenceSidebar({
                     scaleTo={0.99}
                     style={[
                       styles.referenceSidebarRow,
-                      index < group.routes.length - 1
-                        ? {
-                            borderBottomColor: tokens.colors.border,
-                            borderBottomWidth: StyleSheet.hairlineWidth,
-                          }
-                        : null,
                       active
                         ? { backgroundColor: multiplyAlpha(tokens.colors.primary, 0.10) }
                         : null,
@@ -1171,42 +1101,41 @@ function ExpoReferenceSidebar({
             </View>
           </View>
         ))}
-      </ScrollView>
-
-      <View style={styles.referenceSidebarFooter}>
-        <View style={styles.referenceSidebarGatewayList}>
-          {gatewayStatuses.map((gateway) => (
-            <View key={gateway.id} style={styles.referenceSidebarGatewayRow}>
-              <View
-                style={[
-                  styles.referenceSidebarStatusDot,
-                  { backgroundColor: gatewayStateColor(gateway.state, tokens) },
-                ]}
-              />
-              <View style={styles.referenceSidebarStatusCopy}>
-                <Text
-                  numberOfLines={1}
+        <View style={styles.referenceSidebarFooter}>
+          <View style={styles.referenceSidebarGatewayList}>
+            {gatewayStatuses.map((gateway) => (
+              <View key={gateway.id} style={styles.referenceSidebarGatewayRow}>
+                <View
                   style={[
-                    styles.referenceSidebarStatusTitle,
-                    { color: tokens.colors.foreground },
+                    styles.referenceSidebarStatusDot,
+                    { backgroundColor: gatewayStateColor(gateway.state, tokens) },
                   ]}
-                >
-                  {gateway.label}
-                </Text>
-                <Text
-                  numberOfLines={1}
-                  style={[
-                    styles.referenceSidebarStatusMeta,
-                    { color: tokens.colors.textSecondary },
-                  ]}
-                >
-                  {gatewayStatusMeta(gateway, locale)}
-                </Text>
+                />
+                <View style={styles.referenceSidebarStatusCopy}>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.referenceSidebarStatusTitle,
+                      { color: tokens.colors.foreground },
+                    ]}
+                  >
+                    {gateway.label}
+                  </Text>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      styles.referenceSidebarStatusMeta,
+                      { color: tokens.colors.textSecondary },
+                    ]}
+                  >
+                    {gatewayStatusMeta(gateway, locale)}
+                  </Text>
+                </View>
               </View>
-            </View>
-          ))}
+            ))}
+          </View>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -1517,7 +1446,6 @@ const styles = StyleSheet.create({
   },
   referenceSidebarContent: {
     paddingBottom: 18,
-    paddingHorizontal: 16,
   },
   referenceSidebarSection: {
     marginBottom: 24,
@@ -1551,8 +1479,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     minHeight: 58,
-    paddingHorizontal: 18,
-    paddingVertical: 9,
+    paddingBottom: 9,
+    paddingHorizontal: 20,
+    paddingTop: 3,
   },
   referenceSidebarGatewayList: {
     flex: 1,

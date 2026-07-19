@@ -162,17 +162,27 @@ test('sidebar selections keep a root page so the native edge swipe can return', 
 
   assert.match(source, /const selectSidebarRoute = useCallback/);
   assert.match(source, /compactNavigationRef\.dispatch\(StackActions\.popToTop\(\)\)/);
-  assert.match(source, /compactNavigationRef\.dispatch\(StackActions\.push\(targetName, \{/);
+  assert.match(source, /compactNavigationRef\.dispatch\(StackActions\.push\(resolved, \{/);
   assert.match(source, /animation: navigationRoute\.params\?\.sidebarSelection\s*\? 'none'\s*: 'default'/);
-  assert.match(source, /const targetName = reuseSwiftUIHost \? STABLE_SWIFTUI_ROUTE_NAME : resolved/);
-  assert.match(source, /route\.routeId !== 'smart-weather'/);
+  assert.doesNotMatch(source, /STABLE_SWIFTUI_ROUTE_NAME/);
+  assert.doesNotMatch(source, /reuseSwiftUIHost/);
+  assert.match(source, /name=\{route\.path\}/);
   assert.match(source, /headerShown: !chatRoute && !swiftUIRoute/);
-  assert.match(source, /<CompactStack\.Screen\s*name=\{STABLE_SWIFTUI_ROUTE_NAME\}/);
-  assert.match(source, /navigationRoute\.params\?\.path \?\? state\.activePath/);
   assert.match(source, /pendingSidebarPath\.current = resolved/);
   assert.match(source, /dispatch\(\{ type: 'select-route', path: resolved \}\)/);
   assert.match(source, /const reportRouteReady = useCallback/);
   assert.match(source, /pendingSidebarPath\.current !== resolved/);
   assert.match(source, /onNavigate=\{\(event\) => selectSidebarRoute\(event\.nativeEvent\.path\)\}/);
   assert.match(source, /navigate=\{selectSidebarRoute\}/);
+});
+
+test('the compact fallback sidebar is one continuous panel without row dividers', () => {
+  const source = read('src/app/NativeShell.tsx');
+  const sidebar = source.slice(
+    source.indexOf('function ExpoReferenceSidebar'),
+    source.indexOf('function ShellNavigationItem'),
+  );
+
+  assert.match(sidebar, /<ScrollView[\s\S]*referenceSidebarHeader[\s\S]*REFERENCE_SIDEBAR_GROUPS[\s\S]*referenceSidebarFooter[\s\S]*<\/ScrollView>/);
+  assert.doesNotMatch(sidebar, /borderBottomWidth/);
 });

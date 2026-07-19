@@ -3,6 +3,9 @@ import { normalizeOfficialSessionMessages } from './official-session-adoption';
 
 export type JsonRecord = Record<string, unknown>;
 
+export const RUNTIME_RUN_FRESHNESS_MS = 30 * 60 * 1_000;
+export const HOSTED_TURN_FRESHNESS_MS = 36 * 60 * 60 * 1_000;
+
 export interface SessionSummary {
   id: string;
   source: string | null;
@@ -1296,7 +1299,10 @@ export function createCollaborationRoomRequestId(): string {
   return newClientRequestId('room-request');
 }
 
-export function conversationSessionSummary(conversation: SingleConversation): SessionSummary {
+export function conversationSessionSummary(
+  conversation: SingleConversation,
+  now = Date.now(),
+): SessionSummary {
   const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
   const latestVisible = [...messages].reverse().find((message) => (
     message.role === 'assistant' || message.role === 'user'
@@ -1312,8 +1318,15 @@ export function conversationSessionSummary(conversation: SingleConversation): Se
     || stringValue(meta.actual_model);
   const createdAt = numberValue(conversation.created_at);
   const updatedAt = numberValue(conversation.updated_at) || createdAt;
-  const running = hasRunningConversationRecord(conversation.runtime_runs)
-    || hasRunningConversationRecord(conversation.hosted_turns);
+  const running = hasRunningConversationRecord(
+    conversation.runtime_runs,
+    RUNTIME_RUN_FRESHNESS_MS,
+    now,
+  ) || hasRunningConversationRecord(
+    conversation.hosted_turns,
+    HOSTED_TURN_FRESHNESS_MS,
+    now,
+  );
   return {
     id: conversation.id,
     profile: conversation.official_profile || conversation.profile,
@@ -1350,11 +1363,35 @@ export function conversationSessionSummary(conversation: SingleConversation): Se
   };
 }
 
-function hasRunningConversationRecord(value?: Record<string, JsonRecord>): boolean {
-  return Object.values(value || {}).some((entry) => {
-    const status = stringValue(entry.status).toLowerCase();
-    return ['pending', 'queued', 'running', 'starting'].includes(status);
-  });
+function hasRunningConversationRecord(
+  value?: Record<string, JsonRecord>,
+  freshnessMs = RUNTIME_RUN_FRESHNESS_MS,
+  now = Date.now(),
+): boolean {
+  return Object.values(value || {}).some(
+    (entry) => runningConversationRecordIsFresh(entry, freshnessMs, now),
+  );
+}
+
+export function runningConversationRecordIsFresh(
+  entry: JsonRecord,
+  freshnessMs: number,
+  now = Date.now(),
+): boolean {
+  const status = stringValue(entry.status).toLowerCase();
+  if (!['pending', 'queued', 'running', 'starting', 'streaming'].includes(status)) {
+    return false;
+  }
+  const leaseExpiresAt = recordTimestamp(entry.lease_expires_at);
+  if (leaseExpiresAt > 0) return leaseExpiresAt > now;
+  const latestActivity = Math.max(
+    recordTimestamp(entry.heartbeat_at),
+    recordTimestamp(entry.updated_at),
+    recordTimestamp(entry.started_at),
+    recordTimestamp(entry.created_at),
+  );
+  return latestActivity > 0
+    && now - latestActivity < freshnessMs;
 }
 
 function customApiMode(value: unknown): CustomModelConfiguration['apiMode'] {
@@ -1522,4 +1559,12 @@ function secondsToMilliseconds(value: unknown): number {
   const number = numberValue(value);
   if (!number) return 0;
   return number < 10_000_000_000 ? number * 1000 : number;
+}
+
+function recordTimestamp(value: unknown): number {
+  const numeric = numberValue(value);
+  if (numeric > 0) return numeric < 10_000_000_000 ? numeric * 1_000 : numeric;
+  if (typeof value !== 'string' || !value.trim()) return 0;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }

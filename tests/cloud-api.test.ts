@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApiClient';
 import {
+  conversationSessionSummary,
   HermesCloudApi,
   mergeUnifiedConversationIndex,
   officialConversationPlaceholderId,
@@ -13,6 +14,38 @@ interface Call {
   options: HermesRequestOptions;
   path: string;
 }
+
+test('conversation summaries require fresh durable run heartbeats', () => {
+  const now = 1_800_000_000_000;
+  const base = {
+    created_at: now - 120_000,
+    id: 'conversation-running-freshness',
+    messages: [],
+    profile: 'default',
+    title: 'status',
+    updated_at: now,
+  };
+  assert.equal(conversationSessionSummary({
+    ...base,
+    runtime_runs: { worker: { status: 'running', updated_at: now - 29 * 60 * 1_000 } },
+  }, now).is_active, true);
+  assert.equal(conversationSessionSummary({
+    ...base,
+    runtime_runs: { worker: { status: 'running', updated_at: now - 31 * 60 * 1_000 } },
+  }, now).is_active, false);
+  assert.equal(conversationSessionSummary({
+    ...base,
+    hosted_turns: { turn: { status: 'running', updated_at: now - 35 * 60 * 60 * 1_000 } },
+  }, now).is_active, true);
+  assert.equal(conversationSessionSummary({
+    ...base,
+    hosted_turns: { turn: { status: 'running', updated_at: now - 37 * 60 * 60 * 1_000 } },
+  }, now).is_active, false);
+  assert.equal(conversationSessionSummary({
+    ...base,
+    hosted_turns: { turn: { status: 'running' } },
+  }, now).is_active, false);
+});
 
 function createApi() {
   const calls: Call[] = [];

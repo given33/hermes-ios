@@ -2,6 +2,11 @@ import type {
   CollaborationMessage,
   SingleConversation,
 } from './HermesCloudApi';
+import {
+  HOSTED_TURN_FRESHNESS_MS,
+  RUNTIME_RUN_FRESHNESS_MS,
+  runningConversationRecordIsFresh,
+} from './HermesCloudApi';
 
 export type HermesChatActivityStatus =
   | 'cancelled'
@@ -119,9 +124,10 @@ const TERMINAL_TURN_STATES = new Set([
 export function conversationMessagesToView(
   conversation: SingleConversation,
   chinese = true,
+  now = Date.now(),
 ): HermesChatViewMessage[] {
   const converted = (conversation.messages ?? []).flatMap((message) => {
-    const converted = collaborationMessageToView(message, chinese);
+    const converted = collaborationMessageToView(message, chinese, now);
     return converted ? [converted] : [];
   });
   return deduplicateMessages(converted);
@@ -180,6 +186,7 @@ export function upsertChatMessage(
 export function collaborationMessageToView(
   message: CollaborationMessage,
   chinese = true,
+  now = Date.now(),
 ): HermesChatViewMessage | null {
   const kind = message.kind ?? '';
   if (kind === 'route') return null;
@@ -234,22 +241,50 @@ export function collaborationMessageToView(
   const model = stringValue(message.model)
     || stringValue(meta.actual_model)
     || stringValue(meta.model);
-  const activities = mapActivities(message, meta);
+  const mappedActivities = mapActivities(message, meta);
   const createdAt = timestampValue(message.created_at)
     || timestampValue(message.timestamp)
     || timestampValue(meta.created_at);
   const startedAt = timestampValue(message.started_at)
     || timestampValue(meta.started_at)
     || createdAt
-    || firstActivityTimestamp(activities);
-  const status = normalizeMessageStatus(
+    || firstActivityTimestamp(mappedActivities);
+  const rawStatus = normalizeMessageStatus(
     message.status
       || meta.status
-      || (activities?.some(({ status }) => status === 'running') ? 'running' : 'completed'),
+      || (mappedActivities?.some(({ status }) => status === 'running') ? 'running' : 'completed'),
   );
+  const statusIsRunning = ['queued', 'running'].includes(rawStatus);
+  const messageFreshnessMs = (
+    stringValue(meta.runtime_turn_id)
+    || stringValue(meta.message_key).includes(':')
+  )
+    ? HOSTED_TURN_FRESHNESS_MS
+    : RUNTIME_RUN_FRESHNESS_MS;
+  const staleRunning = statusIsRunning && !runningConversationRecordIsFresh(
+    { ...meta, ...message, status: rawStatus },
+    messageFreshnessMs,
+    now,
+  );
+  const status = staleRunning ? 'failed' : rawStatus;
   const terminal = isTerminalStatus(status);
   const serverUpdatedAt = timestampValue(message.updated_at)
     || timestampValue(meta.updated_at);
+  const activities = staleRunning
+    ? mappedActivities?.map((activity) => (
+        activity.status === 'running' || activity.status === 'queued'
+          ? {
+              ...activity,
+              completedAt: activity.completedAt
+                || serverUpdatedAt
+                || activity.startedAt
+                || createdAt
+                || undefined,
+              status: 'failed' as const,
+            }
+          : activity
+      ))
+    : mappedActivities;
   const completedAt = timestampValue(message.completed_at)
     || timestampValue(meta.completed_at)
     || (terminal ? serverUpdatedAt : 0)
@@ -319,16 +354,28 @@ function mapMessageAttachments(value: unknown): HermesChatAttachment[] {
   return [...new Map(attachments.map((attachment) => [attachment.id, attachment])).values()];
 }
 
-export function conversationHasRunningWork(conversation: SingleConversation): boolean {
-  return hasRunningRecord(conversation.hosted_turns)
-    || hasRunningRecord(conversation.runtime_runs);
+export function conversationHasRunningWork(
+  conversation: SingleConversation,
+  now = Date.now(),
+): boolean {
+  return hasRunningRecord(
+    conversation.hosted_turns,
+    HOSTED_TURN_FRESHNESS_MS,
+    now,
+  ) || hasRunningRecord(
+    conversation.runtime_runs,
+    RUNTIME_RUN_FRESHNESS_MS,
+    now,
+  );
 }
 
-export function conversationRunningHostedTurnId(conversation: SingleConversation): string {
+export function conversationRunningHostedTurnId(
+  conversation: SingleConversation,
+  now = Date.now(),
+): string {
   const running = Object.entries(conversation.hosted_turns || {}).flatMap(([key, record]) => {
     if (!isRecord(record)) return [];
-    const status = stringValue(record.status).toLowerCase();
-    if (status && TERMINAL_TURN_STATES.has(status)) return [];
+    if (!runningConversationRecordIsFresh(record, HOSTED_TURN_FRESHNESS_MS, now)) return [];
     const id = stringValue(record.turn_id) || stringValue(record.id) || key;
     if (!id) return [];
     return [{
@@ -345,6 +392,7 @@ export function conversationRunningHostedTurnId(conversation: SingleConversation
 export function conversationHostedTurnState(
   conversation: SingleConversation,
   turnId: string,
+  now = Date.now(),
 ): 'missing' | 'running' | 'terminal' {
   const normalizedTurnId = turnId.trim();
   if (!normalizedTurnId) return 'missing';
@@ -352,8 +400,11 @@ export function conversationHostedTurnState(
     if (!isRecord(record)) continue;
     const id = stringValue(record.turn_id) || stringValue(record.id) || key;
     if (id !== normalizedTurnId) continue;
-    const status = stringValue(record.status).toLowerCase();
-    return status && TERMINAL_TURN_STATES.has(status) ? 'terminal' : 'running';
+    return runningConversationRecordIsFresh(
+      record,
+      HOSTED_TURN_FRESHNESS_MS,
+      now,
+    ) ? 'running' : 'terminal';
   }
   return 'missing';
 }
@@ -591,12 +642,15 @@ function deduplicateMessages(messages: HermesChatViewMessage[]): HermesChatViewM
   return result;
 }
 
-function hasRunningRecord(records: SingleConversation['hosted_turns'] | undefined): boolean {
+function hasRunningRecord(
+  records: SingleConversation['hosted_turns'] | undefined,
+  freshnessMs: number,
+  now: number,
+): boolean {
   if (!records) return false;
   return Object.values(records).some((record) => {
     if (!isRecord(record)) return false;
-    const status = stringValue(record.status).toLowerCase();
-    return !status || !TERMINAL_TURN_STATES.has(status);
+    return runningConversationRecordIsFresh(record, freshnessMs, now);
   });
 }
 
