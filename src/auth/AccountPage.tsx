@@ -1,5 +1,5 @@
 import { Download, LogOut, Trash2, UserRound } from 'lucide-react-native';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
@@ -32,19 +32,31 @@ export function AccountPage({
   const [busy, setBusy] = useState<'delete' | 'export' | 'logout' | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [exportPassphrase, setExportPassphrase] = useState('');
+  const mounted = useRef(true);
   const chinese = locale === 'zh';
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 600);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   const runExport = useCallback(async () => {
     if (!client || busy) return;
     setBusy('export');
     try {
       await shareAccountExport(client, exportPassphrase);
-      notify(chinese ? '账户数据已准备完成' : 'Account export is ready');
+      if (mounted.current) {
+        notify(chinese ? '账户数据已准备完成' : 'Account export is ready');
+      }
     } catch (error) {
-      notify(error instanceof Error ? error.message : (chinese ? '账户数据导出失败' : 'Account export failed'));
+      if (mounted.current) {
+        notify(error instanceof Error ? error.message : (chinese ? '账户数据导出失败' : 'Account export failed'));
+      }
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }, [busy, chinese, client, exportPassphrase, notify]);
 
@@ -54,7 +66,7 @@ export function AccountPage({
     try {
       await onLogout();
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }, [busy, onLogout]);
 
@@ -65,7 +77,7 @@ export function AccountPage({
     try {
       await onDeleteAccount();
     } finally {
-      setBusy(null);
+      if (mounted.current) setBusy(null);
     }
   }, [busy, onDeleteAccount]);
 

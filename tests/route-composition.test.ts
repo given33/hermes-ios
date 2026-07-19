@@ -41,7 +41,6 @@ const CORE_NAV_PATHS = [
   '/logs',
   '/cron',
   '/skills',
-  '/plugins',
   '/mcp',
   '/channels',
   '/webhooks',
@@ -62,7 +61,6 @@ const CORE_NAV_ICONS = [
   'FileText',
   'Clock',
   'Package',
-  'Puzzle',
   'Plug',
   'Radio',
   'Webhook',
@@ -83,7 +81,6 @@ const ENGLISH_NAV_LABELS = [
   'Logs',
   'Cron',
   'Skills',
-  'Plugins',
   'MCP',
   'Channels',
   'Webhooks',
@@ -104,7 +101,6 @@ const CHINESE_NAV_LABELS = [
   '\u65e5\u5fd7',
   '\u5b9a\u65f6\u4efb\u52a1',
   '\u6280\u80fd',
-  '\u63d2\u4ef6\u7ba1\u7406',
   'MCP',
   '\u6d88\u606f\u6e20\u9053',
   '\u7f51\u7edc\u94a9\u5b50',
@@ -168,6 +164,11 @@ test('freezes the customized WebUI built-in route map without bundled plugins', 
   );
   assert.equal(
     HERMES_NATIVE_ROUTES.find((route) => route.path === '/profiles/new')
+      ?.visibleInSidebar,
+    false,
+  );
+  assert.equal(
+    HERMES_NATIVE_ROUTES.find((route) => route.path === '/plugins')
       ?.visibleInSidebar,
     false,
   );
@@ -506,6 +507,12 @@ test('routes preserve reachability independently from sidebar visibility', () =>
   assert.equal(
     [...composition.coreItems, ...composition.pluginItems].some(
       (item) => item.path === '/hidden-addon',
+    ),
+    false,
+  );
+  assert.equal(
+    [...composition.coreItems, ...composition.pluginItems].some(
+      (item) => item.path === '/plugins',
     ),
     false,
   );

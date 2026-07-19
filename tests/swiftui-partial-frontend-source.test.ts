@@ -86,6 +86,12 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routes, /\.kanbanMove/);
   assert.match(routes, /\.modelSave/);
   assert.match(routes, /\.modelTest/);
+  assert.match(routes, /\.modelSelect/);
+  assert.match(routes, /\.modelDiscover/);
+  assert.match(routes, /ForEach\(models\)/);
+  assert.match(routes, /ForEach\(detectedModels, id: \\.self\)/);
+  assert.match(routes, /hermes-detect-models/);
+  assert.match(routes, /HermesRouteActionPayload\(route: "models", id: model\.id\)/);
   assert.match(routes, /API key \(optional\)/);
   assert.doesNotMatch(
     routes,
@@ -96,6 +102,15 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routes, /updateConfigValue\("stream_output"/);
   assert.match(routes, /updateConfigValue\("auto_compact"/);
   assert.match(routes, /\.fileImporter\(/);
+  assert.match(routes, /startAccessingSecurityScopedResource\(\)/);
+  assert.match(routes, /stopAccessingSecurityScopedResource\(\)/);
+  assert.match(routes, /NSFileCoordinator\(\)\.coordinate\(/);
+  assert.match(routes, /FileManager\.default\.copyItem\(at: readableURL, to: destination\)/);
+  assert.match(routes, /HermesFileImports/);
+  assert.match(routes, /cleanupExpiredBatches/);
+  assert.match(routes, /fields: \["stagedImport": "true"\]/);
+  assert.match(routeData, /payload\.fields\?\.stagedImport === 'true'/);
+  assert.match(routeData, /removeStagedFileImport\(uri\)/);
   assert.match(routes, /\.configImport/);
   assert.doesNotMatch(routes, /isOn: \.constant\(data\.config\.(?:streamOutput|autoCompact)\)/);
   assert.match(routeData, /api\.updateSkillContent/);
@@ -104,6 +119,11 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routeData, /api\.updateKanbanTask/);
   assert.match(routeData, /api\.saveCustomModel/);
   assert.match(routeData, /api\.testCustomModel/);
+  assert.match(routeData, /api\.discoverCustomModels/);
+  assert.match(routeData, /api\.deleteModelCredential/);
+  assert.doesNotMatch(routes, /case \.env: return \.environment/);
+  assert.doesNotMatch(routes, /\.environmentUpsert/);
+  assert.doesNotMatch(routeData, /HERMES_SWIFTUI_ROUTE_ACTIONS\.environmentUpsert/);
   assert.match(routeData, /api\.updateChannel/);
 });
 
@@ -115,6 +135,7 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
     'modules/hermes-ios-controls/ios/HermesFrameRateModule.swift',
   );
   const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const admin = read('modules/hermes-ios-controls/ios/HermesSwiftUIAdminPages.swift');
   const bridge = read('modules/hermes-ios-controls/index.ts');
   const app = read('src/app/HermesNativeApp.tsx');
   const config = JSON.parse(
@@ -123,6 +144,10 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
     apple?: { modules?: string[]; appDelegateSubscribers?: string[] };
   };
   const shell = read('src/app/NativeShell.tsx');
+  const nativeSidebar = native.slice(
+    native.indexOf('struct HermesSwiftUISidebarView'),
+    native.indexOf('final class HermesSwiftUIRouteProps'),
+  );
 
   assert.match(native, /private let hermesDrawerAnimation = Animation\.interactiveSpring/);
   assert.doesNotMatch(native, /HermesProMotionDriver|CADisplayLink/);
@@ -157,17 +182,27 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(bridge, /getNativeFrameRateDiagnostics/);
   assert.match(app, /startNativeFrameRateController\(\)/);
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = true \}/);
-  assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = false \}/);
+  assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = next \}/);
   assert.match(native, /NavigationStack \{/);
   assert.doesNotMatch(native, /navigationTitle\("Hermes Agent"\)/);
   assert.match(native, /Text\("Hermes Agent"\)\s*\.font\(\.largeTitle\.bold\(\)\)/);
-  assert.match(native, /\.listRowSeparator\(\.hidden\)/);
+  assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
+  assert.match(native, /\.frame\(maxWidth: \.infinity, minHeight: 52, alignment: \.leading\)/);
   assert.match(
     native,
-    /private func select\(_ route: HermesRoute\) \{\s*feedbackTrigger \+= 1\s*props\.onNavigate\(\["path": route\.path\]\)\s*\}/,
+    /private func select\(_ route: HermesRoute\) \{\s*dismissHermesKeyboard\(\)\s*feedbackTrigger \+= 1\s*props\.onNavigate\(\["path": route\.path\]\)\s*\}/,
   );
   assert.doesNotMatch(native, /props\.onNavigate\(\["path": route\.path\]\)\s*if isDrawer/);
-  assert.match(native, /DragGesture\(minimumDistance: 8/);
+  assert.doesNotMatch(nativeSidebar, /DragGesture\(minimumDistance: 8/);
+  assert.match(admin, /HermesProfileEditor\([\s\S]*\.onDisappear \{ dismissHermesKeyboard\(\) \}/);
+  // Offline admin system catalog must never invent CPU/memory/online metrics.
+  assert.match(admin, /struct HermesSystemPage: View/);
+  assert.doesNotMatch(admin, /HermesMetric\(title: "CPU", value: "18%"/);
+  assert.doesNotMatch(admin, /ProgressView\(value: 0\.18\)/);
+  assert.doesNotMatch(admin, /value: "3\.4 GB"/);
+  assert.match(admin, /managed-node live snapshots|托管节点实时快照/);
+  assert.match(routes, /data\.system\.nodes/);
+  assert.match(routes, /\.refreshable \{ onAction\(\.refresh, HermesRouteActionPayload\(route: "system"\)/);
   assert.match(native, /var onReady = EventDispatcher\(\)/);
   assert.match(native, /HermesRouteReadinessProbe/);
   assert.match(native, /override func layoutSubviews\(\)/);
@@ -240,19 +275,19 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
   );
   assert.doesNotMatch(routeView, /\.onAppear \{ props\.applyTheme/);
   assert.doesNotMatch(routeView, /\.onChange\(of: props\.themeSignature\)/);
-  assert.match(native, /\.listStyle\(\.plain\)/);
+  assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
   assert.doesNotMatch(native, /\.listStyle\(\.insetGrouped\)/);
   assert.match(native, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
   assert.match(native, /\.font\(HermesFonts\.body\(15\)\)/);
   assert.doesNotMatch(native, /\.background\(\.ultraThinMaterial\)/);
-  assert.doesNotMatch(native, /\.frame\(minHeight: 58\)/);
+  assert.match(native, /minHeight: 52/);
   assert.match(shell, /\.\.\.swiftUIThemeProps/);
   assert.match(shell, /<SymbolView[\s\S]*name=\{route\.symbol\}[\s\S]*size=\{18\}/);
-  assert.match(shell, /referenceSidebarRow:[\s\S]*minHeight: 44/);
+  assert.match(shell, /referenceSidebarRow:[\s\S]*minHeight: 52/);
   assert.match(preview, /\.\.\.resolveSwiftUIThemeProps\(tokens\)/);
 });
 
-test('chat header exposes live dual-gateway status while SwiftUI keeps themes and back semantics', () => {
+test('chat header exposes live dual-gateway status while SwiftUI keeps back semantics without a theme shortcut', () => {
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
@@ -261,22 +296,27 @@ test('chat header exposes live dual-gateway status while SwiftUI keeps themes an
   const shell = read('src/app/NativeShell.tsx');
 
   assert.match(bridge, /gatewayStatusesJson: string/);
-  assert.match(bridge, /onThemeChange\?\(event: NativeSyntheticEvent<\{ name: string \}>\)/);
+  assert.doesNotMatch(bridge, /onThemeChange\?\(event: NativeSyntheticEvent<\{ name: string \}>\)/);
   assert.match(native, /decodeGateways\(props\.gatewayStatusesJson\)/);
   assert.match(chat, /gatewayStatuses\.map\(\(gateway\)/);
   assert.match(chat, /gateway\.state === 'online'[\s\S]*tokens\.colors\.success/);
   assert.match(chat, /gateway\.state === 'degraded'[\s\S]*tokens\.colors\.warning/);
   assert.match(chat, /tokens\.colors\.destructive/);
   assert.doesNotMatch(native, /v0\.9\.3|2 sessions|2 个会话/);
-  assert.match(native, /Menu \{\s*ForEach\(themes\)/);
-  assert.match(native, /props\.onThemeChange\(\["name": name\]\)/);
+  assert.doesNotMatch(native, /Menu \{\s*ForEach\(themes\)|paintpalette|decodeThemes/);
   assert.match(native, /Image\(systemName: "chevron\.backward"\)/);
   assert.match(native, /返回侧边栏/);
+  assert.match(native, /if route == \.system \{[\s\S]*ToolbarItem\(placement: \.navigationBarTrailing\)/);
+  assert.match(native, /HermesRouteAction\.refresh\.rawValue[\s\S]*HermesRouteActionPayload\(route: "system"\)/);
+  assert.match(native, /刷新系统状态/);
+  assert.match(native, /navigationBar\.shadowImage = UIImage\(\)/);
+  assert.match(native, /standard\.shadowColor = \.clear/);
+  assert.match(native, /scrollEdge\.shadowColor = \.clear/);
   assert.match(native, /\.toolbarBackground\(appearance\.palette\.background, for: \.navigationBar\)/);
   assert.match(native, /\.toolbarBackground\(\.visible, for: \.navigationBar\)/);
   assert.match(shell, /gatewayStatusesJson=\{gatewayStatusesJson\}/);
-  assert.match(shell, /themeName=\{themeName\}/);
-  assert.match(shell, /themesJson=\{sidebarThemesJson\}/);
+  assert.match(shell, /headerShadowVisible: false/);
+  assert.doesNotMatch(shell, /themeName=\{themeName\}|themesJson=\{sidebarThemesJson\}/);
   assert.match(shell, /id: 'dbb3', label: 'DBB3', state: 'unknown'/);
   assert.match(shell, /id: 'wsl', label: 'WSL', state: 'unknown'/);
 });
@@ -310,6 +350,22 @@ test('SwiftUI collaboration keeps its draft and stable request until durable ack
   assert.match(routes, /collaborationPendingRequestId/);
   assert.match(routes, /collaborationPendingRoomId == roomId/);
   assert.match(routes, /collaborationPendingRoomId = roomId/);
+  assert.match(routes, /\.submitLabel\(\.send\)/);
+  assert.match(routes, /dismissHermesKeyboard\(\)[\s\S]*collaborationPendingRequestId/);
+  assert.match(routes, /Button\(chinese \? "取消" : "Cancel"\)[\s\S]*dismissHermesKeyboard\(\)[\s\S]*onCancel\(\)/);
+  assert.match(routes, /Button\(chinese \? "保存" : "Save"\)[\s\S]*dismissHermesKeyboard\(\)[\s\S]*onSave\(\)/);
+  assert.match(
+    routes,
+    /TextField\(chinese \? "会话名称" : "Session name", text: \$renameText\)[\s\S]*\.onSubmit \{ dismissHermesKeyboard\(\) \}/,
+  );
+  assert.match(
+    routes,
+    /Button\(chinese \? "取消" : "Cancel"\) \{\s*dismissHermesKeyboard\(\)\s*renameTarget = nil/,
+  );
+  assert.match(
+    routes,
+    /Button\(chinese \? "保存" : "Save"\) \{\s*dismissHermesKeyboard\(\)[\s\S]*\.sessionRename/,
+  );
   assert.match(routes, /requestId: requestId/);
   assert.match(routes, /onChange\(of: data\.collaboration\.acknowledgedRequestId\)/);
   assert.doesNotMatch(

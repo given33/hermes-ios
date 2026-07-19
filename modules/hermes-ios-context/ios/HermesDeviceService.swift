@@ -4,6 +4,40 @@ import UIKit
 final class HermesDeviceService {
   static let shared = HermesDeviceService()
 
+  private var powerObservers: [NSObjectProtocol] = []
+
+  func startMonitoringPowerChanges() {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in self?.startMonitoringPowerChanges() }
+      return
+    }
+    guard powerObservers.isEmpty else { return }
+
+    UIDevice.current.isBatteryMonitoringEnabled = true
+    let center = NotificationCenter.default
+    let notifications: [(Notification.Name, String)] = [
+      (UIDevice.batteryStateDidChangeNotification, "battery-state"),
+      (UIDevice.batteryLevelDidChangeNotification, "battery-level"),
+      (Notification.Name.NSProcessInfoPowerStateDidChange, "low-power-mode"),
+    ]
+    powerObservers = notifications.map { name, reason in
+      center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+        self?.recordPowerChange(reason: reason)
+      }
+    }
+  }
+
+  func stopMonitoringPowerChanges() {
+    guard Thread.isMainThread else {
+      DispatchQueue.main.async { [weak self] in self?.stopMonitoringPowerChanges() }
+      return
+    }
+    let center = NotificationCenter.default
+    powerObservers.forEach { center.removeObserver($0) }
+    powerObservers.removeAll()
+    UIDevice.current.isBatteryMonitoringEnabled = false
+  }
+
   func snapshot() -> [String: Any] {
     let device = UIDevice.current
     device.isBatteryMonitoringEnabled = true
@@ -40,6 +74,16 @@ final class HermesDeviceService {
 
   func recordSnapshot() -> [String: Any] {
     let payload = snapshot()
+    HermesContextEventQueue.shared.enqueue(type: "device", payload: payload)
+    return payload
+  }
+
+  @discardableResult
+  func recordPowerChange(reason: String) -> [String: Any] {
+    var payload = snapshot()
+    payload["changeReason"] = reason
+    payload["observedAt"] = Date().timeIntervalSince1970 * 1000
+    HermesContextEventQueue.shared.enqueue(type: "power", payload: payload)
     HermesContextEventQueue.shared.enqueue(type: "device", payload: payload)
     return payload
   }

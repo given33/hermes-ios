@@ -18,8 +18,6 @@ import {
   Download,
   Edit3,
   ExternalLink,
-  Eye,
-  EyeOff,
   FileJson,
   Gauge,
   HardDrive,
@@ -56,7 +54,6 @@ import { useTheme } from '../design/ThemeProvider';
 import type { PreviewPageProps } from './PreviewCorePages';
 import {
   PREVIEW_CONFIG_SECTIONS,
-  PREVIEW_ENV_GROUPS,
   PREVIEW_PROFILES,
 } from './preview-fixtures';
 import {
@@ -694,54 +691,53 @@ function configFieldZh(field: string): string {
   } as Record<string, string>)[field] ?? field.replaceAll('_', ' ');
 }
 
+const PREVIEW_MODEL_CREDENTIALS = [{
+  id: 'custom-main',
+  key: 'custom · model-a',
+  maskedValue: 'sk-••••••••',
+}] as const;
+
 export function EnvPreviewPage({ notify }: PreviewPageProps) {
   const { tokens } = useTheme();
-  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
-  const [editing, setEditing] = useState<string | null>(null);
+  const [credentials, setCredentials] = useState<ReadonlyArray<{
+    id: string;
+    key: string;
+    maskedValue: string;
+  }>>(PREVIEW_MODEL_CREDENTIALS);
   const [clearTarget, setClearTarget] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const visibleCredentials = credentials.filter(({ key }) => (
+    key.toLowerCase().includes(query.toLowerCase())
+  ));
   return (
     <PreviewPage
       actions={<PreviewBadge tone="warning">SENSITIVE</PreviewBadge>}
-      subtitle="Manage API keys and credentials stored in ~/.hermes/.env."
+      subtitle="Credentials saved by the custom model editor."
       title="Keys"
     >
       <PreviewCard>
         <PreviewSearch onChangeText={setQuery} placeholder="Search keys..." value={query} />
       </PreviewCard>
-      {PREVIEW_ENV_GROUPS.map((group) => {
-        const entries = group.entries.filter(([key]) => key.toLowerCase().includes(query.toLowerCase()));
-        if (!entries.length) return null;
-        return (
-          <PreviewCard
-            action={<PreviewBadge tone="outline">{entries.filter((entry) => entry[1]).length} SET</PreviewBadge>}
-            key={group.name}
-            title={group.name}
+      <PreviewCard
+        action={<PreviewBadge tone="outline">{visibleCredentials.length} SET</PreviewBadge>}
+        title="Model credentials"
+      >
+        {visibleCredentials.map((credential) => (
+          <IOSSwipeActions
+            actions={[{
+              destructive: true,
+              icon: 'trash',
+              id: 'clear',
+              label: 'Clear',
+              onPress: () => setClearTarget(credential.id),
+            }]}
+            key={credential.id}
           >
-            {entries.map(([key, isSet, preview]) => (
-              <IOSSwipeActions
-                actions={[
-                  {
-                    icon: 'pencil',
-                    id: 'edit',
-                    label: isSet ? 'Replace' : 'Set',
-                    onPress: () => setEditing(key),
-                  },
-                  ...(isSet ? [{
-                    destructive: true,
-                    icon: 'trash',
-                    id: 'clear',
-                    label: 'Clear',
-                    onPress: () => setClearTarget(key),
-                  }] : []),
-                ]}
-                key={key}
-              >
               <View>
                 <View style={styles.envRow}>
                   <View style={styles.envKeyHeader}>
-                    <PreviewText style={styles.flexCopy} variant="mono">{key}</PreviewText>
-                    <PreviewBadge tone={isSet ? 'success' : 'outline'}>{isSet ? 'SET' : 'EMPTY'}</PreviewBadge>
+                    <PreviewText style={styles.flexCopy} variant="mono">{credential.key}</PreviewText>
+                    <PreviewBadge tone="success">SET</PreviewBadge>
                   </View>
                   <View style={styles.envValueRow}>
                     <View
@@ -751,59 +747,32 @@ export function EnvPreviewPage({ notify }: PreviewPageProps) {
                       ]}
                     >
                       <PreviewText numberOfLines={1} variant="tiny">
-                        {isSet ? (revealed[key] ? preview : preview.replace(/./g, '•')) : 'Not set'}
+                        {credential.maskedValue}
                       </PreviewText>
                     </View>
-                    {isSet ? (
-                      <NativeButton accessibilityLabel={revealed[key] ? `Hide ${key}` : `Reveal ${key}`} ghost onPress={() => setRevealed((current) => ({ ...current, [key]: !current[key] }))} size="icon">
-                        {revealed[key] ? <EyeOff /> : <Eye />}
-                      </NativeButton>
-                    ) : null}
                     <NativeButton
-                      onPress={() => setEditing(key)}
+                      destructive
+                      onPress={() => setClearTarget(credential.id)}
                       outlined
-                      prefix={<Edit3 />}
+                      prefix={<Trash2 />}
                       size="sm"
                     >
-                      {isSet ? 'Replace' : 'Set'}
+                      Clear
                     </NativeButton>
-                    {isSet ? (
-                      <NativeButton
-                        destructive
-                        onPress={() => setClearTarget(key)}
-                        outlined
-                        prefix={<Trash2 />}
-                        size="sm"
-                      >
-                        Clear
-                      </NativeButton>
-                    ) : null}
                   </View>
                 </View>
                 <PreviewDivider />
               </View>
-              </IOSSwipeActions>
-            ))}
-          </PreviewCard>
-        );
-      })}
-      <PreviewCard title="Custom keys" subtitle="Inject environment variables for skills, MCP servers, or custom tools.">
-        <NativeButton onPress={() => setEditing('CUSTOM_KEY')} outlined prefix={<Plus />}>Add custom key</NativeButton>
+          </IOSSwipeActions>
+        ))}
       </PreviewCard>
-      <PreviewModal onClose={() => setEditing(null)} open={editing !== null} title={`${editing?.startsWith('CUSTOM') ? 'Add custom key' : 'Set key'}`}>
-        {editing?.startsWith('CUSTOM') ? <NativeInput placeholder="MY_SERVICE_API_KEY" /> : <PreviewText variant="mono">{editing}</PreviewText>}
-        <NativeInput placeholder="Enter value..." secureTextEntry />
-        <NativeButton onPress={() => {
-          notify(`${editing} saved`);
-          setEditing(null);
-        }}>Save</NativeButton>
-      </PreviewModal>
       <ConfirmDialog
-        description="The stored value will be removed from the .env file. This cannot be undone from the interface."
+        description="The stored model credential will be removed."
         destructive
         onCancel={() => setClearTarget(null)}
         onConfirm={() => {
-          notify(`Removed key: ${clearTarget}`);
+          setCredentials((current) => current.filter(({ id }) => id !== clearTarget));
+          notify(`Removed model credential: ${clearTarget}`);
           setClearTarget(null);
         }}
         open={clearTarget !== null}

@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 import {
   authReducer,
   bootstrapSavedConnection,
+  classifyProtectedCredentialError,
+  inspectSavedConnection,
   initialAuthState,
   MAX_FACE_ID_ATTEMPTS,
 } from '../src/auth/auth-state';
@@ -147,6 +149,20 @@ test('auth reducer preserves retryable Face ID unlock behavior', () => {
   );
 });
 
+test('failed authenticated logout rebuilds the current client generation', () => {
+  const authenticated = authReducer(initialAuthState, {
+    type: 'AUTHENTICATED',
+    connection: session,
+  });
+  const recovered = authReducer(authenticated, {
+    type: 'LOGOUT_FAILED',
+    error: 'offline',
+  });
+
+  assert.deepEqual(recovered, authenticated);
+  assert.notEqual(recovered, authenticated);
+});
+
 test('Face ID stays retryable through four failures and falls back on the fifth', () => {
   let state = authReducer(initialAuthState, {
     type: 'BOOTSTRAP_LOCKED',
@@ -210,6 +226,19 @@ test('cold start reads base URL, protected refresh token, then session metadata'
   assert.deepEqual(result, { status: 'authenticated', connection: session });
 });
 
+test('cold start inspection never opens protected storage before the user requests Face ID', async () => {
+  const calls: string[] = [];
+  const result = await inspectSavedConnection({
+    async readBaseUrl() {
+      calls.push('baseUrl');
+      return session.baseUrl;
+    },
+  });
+
+  assert.deepEqual(result, { status: 'locked', baseUrl: session.baseUrl });
+  assert.deepEqual(calls, ['baseUrl']);
+});
+
 test('first run avoids biometric access and Face ID cancellation remains retryable', async () => {
   const firstRunCalls: string[] = [];
   const firstRun = await bootstrapSavedConnection({
@@ -251,10 +280,71 @@ test('first run avoids biometric access and Face ID cancellation remains retryab
       return session.expiresAt;
     },
   });
-  assert.deepEqual(canceled, { status: 'locked', baseUrl: session.baseUrl });
+  assert.deepEqual(canceled, {
+    status: 'locked',
+    baseUrl: session.baseUrl,
+    cancelled: true,
+    failure: 'cancelled',
+  });
 });
 
-test('SecureStore protects only refresh-token reads and writes with Face ID', async () => {
+test('SecureStore authentication errors distinguish retry, cancellation, and fallback', () => {
+  assert.equal(
+    classifyProtectedCredentialError(new Error('LAErrorAuthenticationFailed')),
+    'authentication_failed',
+  );
+  assert.equal(
+    classifyProtectedCredentialError(new Error('errSecUserCanceled (-128)')),
+    'cancelled',
+  );
+  assert.equal(
+    classifyProtectedCredentialError(new Error('Biometry is not enrolled')),
+    'unavailable',
+  );
+
+  const locked = authReducer(initialAuthState, {
+    type: 'BOOTSTRAP_LOCKED',
+    baseUrl: session.baseUrl,
+  });
+  const unavailable = authReducer(
+    authReducer(locked, { type: 'UNLOCK_STARTED' }),
+    {
+      type: 'UNLOCK_FAILED',
+      error: 'Face ID unavailable',
+      fallbackError: 'Use password',
+      countAttempt: false,
+      fallbackImmediately: true,
+    },
+  );
+  assert.deepEqual(unavailable, {
+    status: 'provisioning',
+    mode: 'login',
+    setupTokenRequired: false,
+    busy: false,
+    error: 'Use password',
+  });
+});
+
+test('Face ID cancellation remains retryable without consuming an attempt', () => {
+  const locked = authReducer(initialAuthState, {
+    type: 'BOOTSTRAP_LOCKED',
+    baseUrl: session.baseUrl,
+  });
+  const busy = authReducer(locked, { type: 'UNLOCK_STARTED' });
+  const cancelled = authReducer(busy, {
+    type: 'UNLOCK_FAILED',
+    error: 'Face ID 已取消，请重试。',
+    countAttempt: false,
+  });
+
+  assert.equal(cancelled.status, 'locked');
+  if (cancelled.status === 'locked') {
+    assert.equal(cancelled.failedAttempts, 0);
+    assert.equal(cancelled.busy, false);
+  }
+});
+
+test('SecureStore protects access token, refresh token, and remembered password with Face ID', async () => {
   const values = new Map<string, string>([
     [BASE_URL_STORAGE_KEY, session.baseUrl],
     [USERNAME_STORAGE_KEY, session.username],
@@ -283,6 +373,10 @@ test('SecureStore protects only refresh-token reads and writes with Face ID', as
     },
   };
   const store = new CredentialStore(secureStore);
+  const protectedOptions = {
+    requireAuthentication: true,
+    authenticationPrompt: FACE_ID_PROMPT,
+  };
 
   assert.deepEqual(CREDENTIAL_STORAGE_KEYS, [
     'hermes.native.baseUrl',
@@ -300,12 +394,22 @@ test('SecureStore protects only refresh-token reads and writes with Face ID', as
   assert.equal(await store.readUsername(), session.username);
   assert.equal(await store.readAccessToken(), session.accessToken);
   assert.equal(await store.readAccessExpiresAt(), session.expiresAt);
+  assert.deepEqual(await store.readRememberedLoginPreference(), {
+    enabled: false,
+    password: '',
+    username: session.username,
+  });
   assert.deepEqual(await store.readRememberedLogin(), {
     enabled: false,
     password: '',
     username: session.username,
   });
   await store.saveRememberedLogin(session.username, 'account-password', true);
+  assert.deepEqual(await store.readRememberedLoginPreference(), {
+    enabled: true,
+    password: '',
+    username: session.username,
+  });
   assert.deepEqual(await store.readRememberedLogin(), {
     enabled: true,
     password: 'account-password',
@@ -330,34 +434,46 @@ test('SecureStore protects only refresh-token reads and writes with Face ID', as
   assert.ok(
     [...operationKeys].some((key) => key.startsWith(REFRESH_TOKEN_KEY_PREFIX)),
   );
+  const isProtectedSecretKey = (key: string) => (
+    key === ACCESS_TOKEN_STORAGE_KEY
+    || key === REFRESH_TOKEN_STORAGE_KEY
+    || key === REMEMBERED_PASSWORD_STORAGE_KEY
+    || key.startsWith(REFRESH_TOKEN_KEY_PREFIX)
+  );
   const protectedOperations = operations.filter(
     ({ operation, key }) =>
-      (key === REFRESH_TOKEN_STORAGE_KEY || key.startsWith(REFRESH_TOKEN_KEY_PREFIX))
-      && (operation === 'get' || operation === 'set'),
+      isProtectedSecretKey(key) && (operation === 'get' || operation === 'set'),
   );
-  assert.ok(protectedOperations.length >= 2);
+  assert.ok(protectedOperations.length >= 4);
   for (const operation of protectedOperations) {
-    assert.deepEqual(operation.options, {
-      requireAuthentication: true,
-      authenticationPrompt: FACE_ID_PROMPT,
-    });
+    assert.deepEqual(operation.options, protectedOptions);
   }
   const accessTokenOperations = operations.filter(
     ({ operation, key }) =>
       key === ACCESS_TOKEN_STORAGE_KEY && (operation === 'get' || operation === 'set'),
   );
   assert.ok(accessTokenOperations.length >= 2);
-  assert.ok(accessTokenOperations.every(({ options }) => options === undefined));
+  assert.ok(accessTokenOperations.every(
+    ({ options }) => JSON.stringify(options) === JSON.stringify(protectedOptions),
+  ));
   const pointerOperations = operations.filter(
     ({ key }) => key === REFRESH_TOKEN_POINTER_STORAGE_KEY,
   );
   assert.ok(pointerOperations.length >= 2);
   assert.ok(pointerOperations.every(({ options }) => options === undefined));
   const rememberedPasswordOperations = operations.filter(
-    ({ key }) => key === REMEMBERED_PASSWORD_STORAGE_KEY,
+    ({ key, operation }) =>
+      key === REMEMBERED_PASSWORD_STORAGE_KEY && (operation === 'get' || operation === 'set'),
   );
-  assert.ok(rememberedPasswordOperations.length >= 3);
-  assert.ok(rememberedPasswordOperations.every(({ options }) => options === undefined));
+  assert.ok(rememberedPasswordOperations.length >= 1);
+  assert.ok(rememberedPasswordOperations.every(
+    ({ options }) => JSON.stringify(options) === JSON.stringify(protectedOptions),
+  ));
+  const preferenceReads = operations.filter(
+    ({ key, operation }) =>
+      key === REMEMBER_LOGIN_STORAGE_KEY && operation === 'get',
+  );
+  assert.ok(preferenceReads.every(({ options }) => options === undefined));
   assert.ok(operations.some(
     ({ key, operation, value }) =>
       key === REMEMBER_LOGIN_STORAGE_KEY && operation === 'set' && value === '1',
@@ -498,7 +614,18 @@ test('native auth integrates owner endpoints, refresh, Face ID, and the complete
 
   assert.doesNotMatch(providerSource, /\bAppState\b/);
   assert.match(providerSource, /bootstrapSavedConnection/);
+  assert.match(providerSource, /inspectSavedConnection/);
   assert.match(providerSource, /AccessTokenController/);
+  assert.match(providerSource, /clientSession\?\.accessTokens\.dispose\(\)/);
+  assert.match(providerSource, /new AbortController\(\)/);
+  assert.match(providerSource, /APNS_LOGOUT_DEADLINE_MS/);
+  assert.match(providerSource, /FACE_ID_UNLOCK_DEADLINE_MS\s*=\s*45_000/);
+  assert.match(
+    providerSource,
+    /withDeadline\(\s*bootstrapSavedConnection\(credentialStore\),\s*FACE_ID_UNLOCK_DEADLINE_MS/,
+  );
+  assert.match(providerSource, /readRememberedLoginPreference\(\)/);
+  assert.match(providerSource, /AsyncDeadlineError/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(providerSource, /HermesIOSContext\.activateOwnerScope\(/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/status/);

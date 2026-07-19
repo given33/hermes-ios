@@ -35,7 +35,13 @@ export type AuthAction =
       setupTokenRequired?: boolean;
     }
   | { type: 'UNLOCK_STARTED' }
-  | { type: 'UNLOCK_FAILED'; error: string; fallbackError?: string }
+  | {
+      type: 'UNLOCK_FAILED';
+      error: string;
+      fallbackError?: string;
+      countAttempt?: boolean;
+      fallbackImmediately?: boolean;
+    }
   | { type: 'PROVISION_STARTED' }
   | { type: 'PROVISION_FAILED'; error: string }
   | { type: 'AUTHENTICATED'; connection: SavedConnection }
@@ -118,7 +124,13 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
         : state;
     case 'UNLOCK_FAILED':
       if (state.status !== 'locked') return state;
-      if (state.failedAttempts + 1 >= MAX_FACE_ID_ATTEMPTS) {
+      if (
+        action.fallbackImmediately === true
+        || (
+          action.countAttempt !== false
+          && state.failedAttempts + 1 >= MAX_FACE_ID_ATTEMPTS
+        )
+      ) {
         return {
           status: 'provisioning',
           mode: 'login',
@@ -130,7 +142,7 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
       return {
         ...state,
         busy: false,
-        failedAttempts: state.failedAttempts + 1,
+        failedAttempts: state.failedAttempts + (action.countAttempt === false ? 0 : 1),
         error: action.error,
       };
     case 'PROVISION_STARTED':
@@ -156,7 +168,11 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
       if (state.status === 'locked' || state.status === 'provisioning') {
         return { ...state, busy: false, error: action.error };
       }
-      return state;
+      // Logout and account deletion invalidate the active client generation
+      // before remote cleanup starts. A failed cleanup must still produce a
+      // fresh authenticated state so React rebuilds the token controller for
+      // the current generation instead of retaining the invalidated client.
+      return state.status === 'authenticated' ? { ...state } : state;
     case 'AUTHENTICATED':
       return { status: 'authenticated', connection: action.connection };
     case 'DEVICE_IDENTIFIED':
@@ -180,8 +196,25 @@ export interface CredentialReader {
 
 export type BootstrapResult =
   | { status: 'provisioning' }
-  | { status: 'locked'; baseUrl: string }
+  | {
+      status: 'locked';
+      baseUrl: string;
+      cancelled?: boolean;
+      failure?: ProtectedCredentialFailure;
+    }
   | { status: 'authenticated'; connection: SavedConnection };
+
+export type ProtectedCredentialFailure =
+  | 'authentication_failed'
+  | 'cancelled'
+  | 'unavailable';
+
+export async function inspectSavedConnection(
+  store: Pick<CredentialReader, 'readBaseUrl'>,
+): Promise<Extract<BootstrapResult, { status: 'provisioning' | 'locked' }>> {
+  const baseUrl = await store.readBaseUrl();
+  return baseUrl ? { status: 'locked', baseUrl } : { status: 'provisioning' };
+}
 
 export async function bootstrapSavedConnection(
   store: CredentialReader,
@@ -191,7 +224,9 @@ export async function bootstrapSavedConnection(
 
   try {
     const refreshToken = await store.readRefreshToken();
-    if (!refreshToken) return { status: 'locked', baseUrl };
+    if (!refreshToken) {
+      return { status: 'locked', baseUrl, failure: 'unavailable' };
+    }
 
     const [username, accessToken, expiresAt, deviceId] = await Promise.all([
       store.readUsername(),
@@ -200,7 +235,7 @@ export async function bootstrapSavedConnection(
       store.readDeviceId?.() ?? Promise.resolve(null),
     ]);
     if (!username || !accessToken || expiresAt === null) {
-      return { status: 'locked', baseUrl };
+      return { status: 'locked', baseUrl, failure: 'unavailable' };
     }
     return {
       status: 'authenticated',
@@ -213,7 +248,34 @@ export async function bootstrapSavedConnection(
         ...(deviceId ? { deviceId } : {}),
       },
     };
-  } catch {
-    return { status: 'locked', baseUrl };
+  } catch (error) {
+    const failure = classifyProtectedCredentialError(error);
+    return {
+      status: 'locked',
+      baseUrl,
+      failure,
+      ...(failure === 'cancelled' ? { cancelled: true } : {}),
+    };
   }
+}
+
+export function classifyProtectedCredentialError(
+  error: unknown,
+): ProtectedCredentialFailure {
+  const message = error instanceof Error
+    ? `${error.name} ${error.message}`
+    : String(error || '');
+  if (
+    /cancel|canceled|cancelled|user.?fallback|errsecusercanceled|app.?cancel|system.?cancel|-128/i
+      .test(message)
+  ) {
+    return 'cancelled';
+  }
+  if (
+    /authentication.?failed|biometr(?:y|ic).?failed|errsecauthfailed|laerrorauthenticationfailed/i
+      .test(message)
+  ) {
+    return 'authentication_failed';
+  }
+  return 'unavailable';
 }

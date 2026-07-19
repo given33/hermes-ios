@@ -160,6 +160,10 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(chat, /Hermes Agent/);
   assert.match(chat, /当前窗口持续使用同一个会话/);
+  assert.match(chat, /styles\.gatewayStatusLabel/);
+  assert.match(chat, /styles\.gatewayStatusVersion/);
+  assert.match(chat, /gatewayStatusLabel: \{[\s\S]*width: 34/);
+  assert.match(chat, /gatewayStatusVersion: \{[\s\S]*textAlign: 'right'/);
   assert.match(chat, /直接告诉 Hermes 你想做什么/);
   assert.match(chat, /function UnifiedMessage/);
   assert.match(app, /clearPreferredConversationId/);
@@ -269,11 +273,13 @@ test('application surfaces use the shared iOS press, swipe, and haptic controls'
 
 test('mobile shell remains full bleed and keeps the WebUI sidebar readable without blur', () => {
   const shell = read('src/app/NativeShell.tsx');
+  const app = read('src/preview/FrontendPreviewApp.tsx');
   const chat = read('src/preview/PreviewChatPage.tsx');
 
-  assert.match(shell, /const sidebarBackground = multiplyAlpha\([\s\S]*state\.mode === 'compact' \? 0\.96 : 1/);
+  assert.match(shell, /const sidebarBackground = rootBackground/);
   assert.match(shell, /backgroundColor: sidebarBackground/);
-  assert.doesNotMatch(shell, /backgroundColor: 'transparent'/);
+  assert.match(shell, /backgroundColor: state\.mobileOpen[\s\S]*\? rootBackground[\s\S]*: 'transparent'/);
+  assert.doesNotMatch(app, /accessibilityLabel="Theme and font"|onTheme=/);
   assert.doesNotMatch(shell, /HermesLiveBlurView/);
   assert.match(shell, /left: drawerExtent/);
   assert.match(chat, /backgroundColor: 'transparent'/);
@@ -421,7 +427,9 @@ test('narrow admin rows use mobile-safe action layouts instead of scattered icon
   assert.match(settings, /function ProfileActionsSheet/);
   assert.match(settings, /styles\.envValueRow/);
   assert.match(settings, /styles\.envValue/);
-  assert.match(settings, /prefix=\{<Edit3 \/>\}/);
+  assert.match(settings, /PREVIEW_MODEL_CREDENTIALS/);
+  assert.match(settings, /Removed model credential/);
+  assert.doesNotMatch(settings, /PREVIEW_ENV_GROUPS|CUSTOM_KEY|setEditing\(/);
   assert.match(settings, /prefix=\{<Trash2 \/>\}/);
   assert.doesNotMatch(settings, /accessibilityLabel=\{`Clear \$\{key\}`\} destructive ghost/);
 });
@@ -457,6 +465,15 @@ test('skills preview uses the current WebUI filter and compact row structure', (
   assert.match(skillsPage, /styles\.skillRow/);
   assert.match(skillsPage, /<Pencil \/>/);
   assert.match(skillsPage, /activeBackgroundColor=\{multiplyAlpha\(tokens\.colors\.foreground, 0\.9\)\}/);
+  // Skills filter strip must share the card surface — no gray/muted automation bar.
+  assert.match(
+    skillsPage,
+    /styles\.skillsFilters,\s*\{\s*backgroundColor:\s*tokens\.colors\.card/,
+  );
+  assert.doesNotMatch(
+    skillsPage,
+    /styles\.skillsFilters[\s\S]{0,120}tokens\.colors\.muted/,
+  );
   assert.doesNotMatch(skillsPage, /<PreviewGrid minItemWidth=\{290\}>/);
   assert.doesNotMatch(skillsPage, /prefix=\{<Code2 \/>\}/);
   assert.match(listItem, /activeBackgroundColor\?: string/);

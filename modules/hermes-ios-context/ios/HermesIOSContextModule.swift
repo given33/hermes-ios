@@ -53,6 +53,13 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func lifecycleDefinitions() -> ModuleDefinition {
+    Function("getNativeViewContract") { () -> [String: Any] in
+      [
+        "version": 2,
+        "views": ["HermesStandardMapView", "HermesScreenTimeReportView"],
+      ]
+    }
+
     OnCreate {
       HermesBackgroundService.shared.register()
       self.relayWakeObserver = NotificationCenter.default.addObserver(
@@ -96,7 +103,6 @@ public final class HermesIOSContextModule: Module {
   private func locationDefinitions() -> ModuleDefinition {
     AsyncFunction("getCapabilities") { () -> [String: Bool] in
       let locationManager = CLLocationManager()
-      let hasFamilyControls = Self.hasEntitlement("com.apple.developer.family-controls")
       return [
         "calendar": true,
         "health": HKHealthStore.isHealthDataAvailable(),
@@ -106,7 +112,10 @@ public final class HermesIOSContextModule: Module {
         "motion": CMMotionActivityManager.isActivityAvailable(),
         "notesShare": true,
         "reminders": true,
-        "screenTime": hasFamilyControls && HermesScreenTimeService.frameworkAvailable,
+        // The signed entitlement is enforced by FamilyControls itself. A
+        // bundle Info.plist lookup is not an entitlement check and caused
+        // valid production builds to report a false unavailable state.
+        "screenTime": HermesScreenTimeService.frameworkAvailable,
         "watch": WCSession.isSupported(),
         "liveActivity": HermesLiveActivityService.isAvailable,
         "backgroundTasks": true,
@@ -158,6 +167,10 @@ public final class HermesIOSContextModule: Module {
       HermesAuthorization.motion(CMMotionActivityManager.authorizationStatus())
     }
 
+    AsyncFunction("requestMotionAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.motion.requestAuthorization() }
+    }
+
     AsyncFunction("startMotionUpdates") { () -> Bool in
       self.motion.start()
     }
@@ -205,8 +218,13 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("setOwnerScope") { (scope: String) in
       self.eventQueue.setOwnerScope(scope)
+      HermesPermissionCollectionGate.shared.prepare(ownerScope: scope)
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
     }.runOnQueue(.main)
+
+    AsyncFunction("setPermissionCollectionReady") { (scope: String, ready: Bool) in
+      HermesPermissionCollectionGate.shared.setReady(ready, ownerScope: scope)
+    }
 
     AsyncFunction("activateOwnerScope") { (scope: String) -> Int in
       let generation = HermesAccountLifecycle.activateOwnerScope(scope)
@@ -249,6 +267,10 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func healthDefinitions() -> ModuleDefinition {
+    AsyncFunction("getHealthAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.health.authorizationStatus() }
+    }
+
     AsyncFunction("requestHealthAuthorization") { (promise: Promise) in
       self.resolveAsync(promise) { await self.health.requestAuthorization() }
     }
@@ -267,8 +289,16 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func calendarDefinitions() -> ModuleDefinition {
+    AsyncFunction("getCalendarAuthorization") { () -> String in
+      self.events.calendarAuthorizationStatus()
+    }
+
     AsyncFunction("requestCalendarAuthorization") { (promise: Promise) in
       self.resolveAsync(promise) { await self.events.requestCalendarAuthorization() }
+    }
+
+    AsyncFunction("getReminderAuthorization") { () -> String in
+      self.events.reminderAuthorizationStatus()
     }
 
     AsyncFunction("requestReminderAuthorization") { (promise: Promise) in
@@ -317,6 +347,20 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func notificationDefinitions() -> ModuleDefinition {
+    AsyncFunction("getNotificationAuthorization") { (promise: Promise) in
+      UNUserNotificationCenter.current().getNotificationSettings { settings in
+        let status: String
+        switch settings.authorizationStatus {
+        case .authorized: status = "authorized"
+        case .provisional, .ephemeral: status = "limited"
+        case .denied: status = "denied"
+        case .notDetermined: status = "notDetermined"
+        @unknown default: status = "unavailable"
+        }
+        promise.resolve(status)
+      }
+    }
+
     AsyncFunction("requestNotificationAuthorization") { (promise: Promise) in
       UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound]) { granted, error in
         DispatchQueue.main.async {
@@ -380,24 +424,24 @@ public final class HermesIOSContextModule: Module {
   @ModuleDefinitionBuilder
   private func screenTimeDefinitions() -> ModuleDefinition {
     AsyncFunction("getScreenTimeCapabilities") { () -> [String: Any] in
-      self.screenTime.capabilities(hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls"))
+      self.screenTime.capabilities(hasEntitlement: HermesScreenTimeService.frameworkAvailable)
     }
 
     AsyncFunction("getScreenTimeSnapshot") { () -> [String: Any] in
-      self.screenTime.snapshot(hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls"))
+      self.screenTime.snapshot(hasEntitlement: HermesScreenTimeService.frameworkAvailable)
     }
 
     AsyncFunction("requestScreenTimeAuthorization") { (promise: Promise) in
       self.resolveAsync(promise) {
         await self.screenTime.requestAuthorization(
-          hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls")
+          hasEntitlement: HermesScreenTimeService.frameworkAvailable
         )
       }
     }
 
     AsyncFunction("startScreenTimeMonitoring") { (identifier: String, startHour: Int, endHour: Int) throws -> String in
       try self.screenTime.startMonitoring(
-        hasEntitlement: Self.hasEntitlement("com.apple.developer.family-controls"),
+        hasEntitlement: HermesScreenTimeService.frameworkAvailable,
         identifier: identifier,
         startHour: startHour,
         endHour: endHour

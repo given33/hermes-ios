@@ -150,26 +150,58 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   ]);
 });
 
+test('native power changes are durably collected across the account lifecycle', () => {
+  const device = read('ios/HermesDeviceService.swift');
+  const subscriber = read('ios/HermesIOSContextAppDelegateSubscriber.swift');
+  const lifecycle = read('ios/HermesAccountLifecycle.swift');
+
+  assert.match(device, /UIDevice\.batteryStateDidChangeNotification/);
+  assert.match(device, /UIDevice\.batteryLevelDidChangeNotification/);
+  assert.match(device, /NSProcessInfoPowerStateDidChange/);
+  assert.match(device, /guard powerObservers\.isEmpty else \{ return \}/);
+  assert.match(device, /powerObservers\.forEach \{ center\.removeObserver\(\$0\) \}/);
+  assert.match(device, /enqueue\(type: "power", payload: payload\)/);
+  assert.match(device, /enqueue\(type: "device", payload: payload\)/);
+  assert.match(subscriber, /resumePowerMonitoringIfEligible\(\)/);
+  assert.match(subscriber, /HermesDeviceService\.shared\.stopMonitoringPowerChanges\(\)/);
+  assert.match(lifecycle, /HermesDeviceService\.shared\.startMonitoringPowerChanges\(\)/);
+  assert.match(lifecycle, /HermesDeviceService\.shared\.stopMonitoringPowerChanges\(\)/);
+});
+
+test('EventKit authorization mapping remains exhaustive across legacy and full access', () => {
+  const source = read('ios/HermesEventStore.swift');
+  assert.match(source, /case \.authorized, \.fullAccess: return "authorized"/);
+  assert.match(source, /case \.writeOnly: return "limited"/);
+});
+
 test('context startup upgrades an existing When-In-Use grant to Always', () => {
   const provider = readFileSync(resolve(root, 'src/context/IOSContextProvider.tsx'), 'utf8');
-  assert.match(provider, /getLocationAuthorizationDetails\(\)/);
-  assert.match(provider, /locationDetails\['always'\] !== true/);
-  assert.match(provider, /requestLocationAuthorization\(\)/);
+  const coordinator = readFileSync(resolve(root, 'src/context/ios-permission-coordinator.ts'), 'utf8');
+  assert.match(coordinator, /getLocationAuthorizationDetails\(\)/);
+  assert.match(coordinator, /!alwaysBefore/);
+  assert.match(coordinator, /requestLocationAuthorization\(\)/);
   assert.match(provider, /setOwnerScope\(ownerScope\)/);
   assert.doesNotMatch(provider, /activateOwnerScope\(ownerScope\)/);
+  assert.match(
+    provider,
+    /state === 'active'[\s\S]*permissionSnapshotRef\.current\.phase === 'paused'[\s\S]*setPermissionAttempt/,
+  );
 });
 
 test('location authorization resolves when an Always upgrade remains While In Use', () => {
   const source = read('ios/HermesLocationService.swift');
   assert.match(
     source,
-    /status == \.authorizedAlways \|\| status == \.authorizedWhenInUse[\s\S]*authorizationContinuation\?\.resume/,
+    /status == \.authorizedAlways \|\| status == \.authorizedWhenInUse[\s\S]*authorizationGate\?\.resolve/,
   );
   assert.match(source, /requestedAlwaysUpgrade = false/);
   assert.match(
     source,
-    /status == \.authorizedWhenInUse && !requestedAlwaysUpgrade[\s\S]*manager\.requestAlwaysAuthorization\(\)[\s\S]*authorizationContinuation\?\.resume\(returning: HermesAuthorization\.location\(status\)\)/,
+    /status == \.authorizedWhenInUse && !requestedAlwaysUpgrade[\s\S]*manager\.requestAlwaysAuthorization\(\)[\s\S]*scheduleAlwaysUpgradeFallback/,
   );
+  assert.match(source, /authorizationGate === gate/);
+  assert.match(source, /gate\.resolve\("notDetermined"\)/);
+  assert.match(source, /final class HermesLocationAuthorizationGate/);
 });
 
 test('location collector is adaptive, resumable, and eligible for background delivery', () => {
@@ -188,6 +220,14 @@ test('location collector is adaptive, resumable, and eligible for background del
   assert.match(source, /startMonitoring\(for: region\)/);
   assert.match(source, /startMonitoring\(for: region\)[\s\S]*manager\.stopUpdatingLocation\(\)/);
   assert.match(source, /applyMotionActivity/);
+  assert.match(source, /HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner/);
+  assert.match(
+    read('ios/HermesIOSContextAppDelegateSubscriber.swift'),
+    /guard HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner else \{ return \}/,
+  );
+  const gate = read('ios/HermesPermissionCollectionGate.swift');
+  assert.match(gate, /accountGeneration/);
+  assert.match(gate, /isCurrentOwnerScope/);
 });
 
 test('weather map stays a flat standard vector map with native gestures and user location', () => {
@@ -224,6 +264,11 @@ test('native relay covers durable cursors, background services, health, watch, n
     'activateOwnerScope',
     'deleteOwnerScope',
     'requestPreciseLocation',
+    'requestMotionAuthorization',
+    'getHealthAuthorization',
+    'getCalendarAuthorization',
+    'getReminderAuthorization',
+    'getNotificationAuthorization',
     'setPredictedDeparture',
     'getDeviceSnapshot',
     'requestNotificationAuthorization',
@@ -260,7 +305,13 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /_relay_device_id: deviceId/);
   assert.match(provider, /_relay_owner_scope: ownerScope/);
   assert.match(provider, /setOwnerScope\(ownerScope\)/);
-  assert.match(provider, /requestScreenTimeAuthorization/);
+  assert.match(provider, /setPermissionCollectionReady\(ownerScope, false\)/);
+  assert.match(provider, /authorization\.phase === 'ready'/);
+  assert.match(provider, /permissionSnapshotRef\.current\.phase !== 'ready'/);
+  assert.match(provider, /permissionSettingsOpenedRef\.current = true/);
+  assert.match(provider, /permissionSettingsOpenedRef\.current = false/);
+  assert.match(provider, /clearIOSPermissionRun\(ownerScope\)/);
+  assert.match(readFileSync(resolve(root, 'src/context/ios-permission-coordinator.ts'), 'utf8'), /requestScreenTimeAuthorization/);
   assert.match(provider, /startScreenTimeMonitoring\('hermes-daily-context', 0, 24\)/);
   assert.match(provider, /readPendingEvents\(EVENT_BATCH_SIZE, ownerScope\)/);
   assert.match(provider, /enqueueContextEvents\(events/);
@@ -269,7 +320,10 @@ test('native relay covers durable cursors, background services, health, watch, n
     'snapshots are encrypted locally before upload',
   );
   assert.doesNotMatch(provider, /apiRef\.current\.uploadEvents\(\{\s*cursor: `snapshot:/);
-  assert.match(provider, /executeDeviceCommand\(command, flushPendingEvents, ownerScope\)/);
+  assert.match(
+    provider,
+    /executeDeviceCommand\(\s*command,\s*flushPendingEvents,\s*ownerScope,\s*permissionSnapshotRef\.current,\s*\)/,
+  );
   assert.match(read('ios/HermesContextEventQueue.swift'), /commandCursorsByScope/);
   assert.match(read('ios/HermesContextEventQueue.swift'), /completedCommandIDsByScope/);
   assert.match(read('ios/HermesContextEventQueue.swift'), /pendingRelayWakes/);
@@ -302,4 +356,27 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /expires_at\) > Date\.now\(\)/);
   assert.doesNotMatch(source, /normalizeTimestamp\(forecast\.starts_at\) <= Date\.now\(\)/);
   assert.doesNotMatch(source, /LocateFixed|IOSPressable/);
+  assert.match(source, /NativeMapErrorBoundary/);
+  assert.match(source, /smart-weather-map-error/);
+  assert.match(source, /smart-weather-permission-status/);
+});
+
+test('native map registration is verified after pods and after Xcode compilation', () => {
+  const module = read('ios/HermesIOSContextModule.swift');
+  const bridge = readFileSync(resolve(root, 'modules/hermes-ios-context/index.ts'), 'utf8');
+  const workflow = readFileSync(resolve(root, '.github/workflows/ios-unsigned.yml'), 'utf8');
+  const verifier = readFileSync(resolve(root, 'scripts/verify-ios-native-context.mjs'), 'utf8');
+  assert.match(module, /Function\("getNativeViewContract"\)/);
+  assert.match(bridge, /getNativeViewContract/);
+  assert.match(bridge, /requireNativeView<P>\('HermesIOSContext', viewName\)/);
+  assert.match(bridge, /export const hasNativeStandardMapView = NativeMap !== null;/);
+  assert.doesNotMatch(
+    bridge,
+    /export const hasNativeStandardMapView = nativeViewContract\.views\.includes/,
+  );
+  assert.match(workflow, /Verify native context autolinking/);
+  assert.equal((workflow.match(/verify-ios-native-context\.mjs/g) || []).length, 2);
+  assert.match(workflow, /--derived-data "\$RUNNER_TEMP\/hermes-build"/);
+  assert.match(verifier, /ExpoModulesProvider\.swift/);
+  assert.match(verifier, /HermesStandardMapView\\\.swift/);
 });

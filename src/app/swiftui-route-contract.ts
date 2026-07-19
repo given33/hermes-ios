@@ -212,6 +212,7 @@ export interface HermesSwiftUIRouteSnapshot {
   files?: readonly HermesSwiftUIFileSnapshot[];
   analytics?: HermesSwiftUIAnalyticsSnapshot;
   models?: readonly HermesSwiftUIModelSnapshot[];
+  detectedModels?: readonly string[];
   logs?: readonly HermesSwiftUILogSnapshot[];
   cron?: readonly HermesSwiftUICronJobSnapshot[];
   skills?: readonly HermesSwiftUISkillSnapshot[];
@@ -239,6 +240,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   fileImport: 'file.import',
   folderCreate: 'folder.create',
   modelSelect: 'model.select',
+  modelDiscover: 'model.discover',
   modelSave: 'model.save',
   modelTest: 'model.test',
   logsFilter: 'logs.filter',
@@ -264,7 +266,6 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   profileDelete: 'profile.delete',
   configUpdate: 'config.update',
   configImport: 'config.import',
-  environmentUpsert: 'environment.upsert',
   environmentDelete: 'environment.delete',
   systemRestart: 'system.restart',
   systemUpdate: 'system.update',

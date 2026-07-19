@@ -96,11 +96,12 @@ export async function synchronizeApnsRegistration(
   runtime: ApnsRegistrationRuntime,
   config: ApnsRegistrationConfig,
   suppliedToken?: NativePushToken,
+  options: { requestUndeterminedPermission?: boolean } = {},
 ): Promise<ApnsSynchronizationResult> {
   if (!runtime.available) return { status: 'unavailable' };
   const deviceId = await api.resolveCurrentDeviceId(preferredDeviceId);
   let permission = await runtime.getPermission();
-  if (permission === 'undetermined') {
+  if (permission === 'undetermined' && options.requestUndeterminedPermission !== false) {
     permission = await runtime.requestPermission();
   }
   if (permission !== 'granted') {

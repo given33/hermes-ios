@@ -61,8 +61,12 @@ export class MobileAuthApiClient {
   constructor(
     baseUrl: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly requestTimeoutMs = 20_000,
   ) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
+    if (!Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+      throw new Error('Hermes authentication timeout must be positive');
+    }
   }
 
   async getStatus(): Promise<MobileAuthStatus> {
@@ -208,7 +212,32 @@ export class MobileAuthApiClient {
     headers.set('Accept', 'application/json');
     if (init.body !== undefined) headers.set('Content-Type', 'application/json');
 
-    const response = await this.fetchImpl(url.toString(), { ...init, headers });
+    const abortController = new AbortController();
+    const callerSignal = init.signal;
+    const abortFromCaller = () => abortController.abort(callerSignal?.reason);
+    if (callerSignal?.aborted) abortFromCaller();
+    else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        abortController.abort();
+        reject(new Error('Hermes authentication request timed out'));
+      }, this.requestTimeoutMs);
+    });
+    let response: Response;
+    try {
+      response = await Promise.race([
+        this.fetchImpl(url.toString(), {
+          ...init,
+          headers,
+          signal: abortController.signal,
+        }),
+        deadline,
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      callerSignal?.removeEventListener('abort', abortFromCaller);
+    }
     assertSameOriginResponse(response, this.baseUrl);
     const text = await response.text();
     if (!response.ok) {

@@ -291,6 +291,7 @@ struct HermesProfilesPage: View {
               chinese: chinese,
               onChange: updateProfile
             )
+            .onDisappear { dismissHermesKeyboard() }
           } label: {
             HStack(spacing: 12) {
               Image(systemName: profile.active ? "person.crop.circle.fill.badge.checkmark" : "person.crop.circle")
@@ -692,85 +693,41 @@ struct HermesEnvironmentPage: View {
   }
 }
 
+/// Standalone admin catalog entry. Production system health is owned by
+/// `HermesRemoteRoutePage` + managed-node snapshots (fail-closed). Never invent
+/// CPU/memory/uptime numbers here.
 struct HermesSystemPage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let chinese: Bool
-  @State private var confirmation: String?
-  @State private var uptime = 14
-  @State private var operationMessage: String?
 
   var body: some View {
     HermesPage(subtitle: chinese ? "Hermes 网关、任务和资源状态" : "Hermes gateway, task, and resource status") {
-      Grid(horizontalSpacing: 12, verticalSpacing: 12) {
-        GridRow {
-          HermesMetric(title: "CPU", value: "18%", symbol: "cpu", tint: appearance.palette.primary)
-          HermesMetric(title: chinese ? "内存" : "Memory", value: "3.4 GB", symbol: "memorychip", tint: appearance.palette.warning)
-        }
-        GridRow {
-          HermesMetric(title: chinese ? "运行时间" : "Uptime", value: "\(uptime)d", symbol: "clock", tint: appearance.palette.success)
-          HermesMetric(title: chinese ? "活动任务" : "Active Tasks", value: "2", symbol: "waveform", tint: appearance.palette.accent)
-        }
-      }
-
       HermesPanel {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
           HStack {
             Text(chinese ? "网关状态" : "Gateway Status")
               .font(HermesFonts.display(15))
             Spacer()
-            HermesStatusPill(text: chinese ? "在线" : "Online")
+            HermesStatusPill(
+              text: chinese ? "不可用" : "Unavailable",
+              color: appearance.palette.tertiary
+            )
           }
-          ProgressView(value: 0.18) { Text("CPU") }
-          ProgressView(value: 0.53) { Text(chinese ? "内存" : "Memory") }
-          ProgressView(value: 0.31) { Text(chinese ? "磁盘" : "Disk") }
-        }
-      }
-
-      HStack(spacing: 10) {
-        Button {
-          confirmation = "restart"
-        } label: {
-          Label(chinese ? "重启网关" : "Restart Gateway", systemImage: "arrow.clockwise")
-        }
-        .buttonStyle(HermesPrimaryButtonStyle())
-
-        Button {
-          confirmation = "update"
-        } label: {
-          Label(chinese ? "更新 Hermes" : "Update Hermes", systemImage: "arrow.down.circle")
-        }
-        .buttonStyle(.bordered)
-        .font(HermesFonts.bodyBold(14))
-      }
-
-      if let operationMessage {
-        Label(operationMessage, systemImage: "checkmark.circle.fill")
+          Text(
+            chinese
+              ? "系统指标仅来自托管节点实时快照。离线目录不展示虚构的 CPU、内存或在线状态。"
+              : "System metrics come only from managed-node live snapshots. This offline catalog never shows invented CPU, memory, or online state."
+          )
           .font(HermesFonts.body(13))
-          .foregroundStyle(appearance.palette.success)
-          .transition(.move(edge: .bottom).combined(with: .opacity))
-      }
-    }
-    .confirmationDialog(
-      confirmation == "restart"
-        ? (chinese ? "重启 Hermes 网关？" : "Restart Hermes gateway?")
-        : (chinese ? "更新 Hermes？" : "Update Hermes?"),
-      isPresented: Binding(
-        get: { confirmation != nil },
-        set: { if !$0 { confirmation = nil } }
-      ),
-      titleVisibility: .visible
-    ) {
-      Button(confirmation == "restart" ? (chinese ? "重启" : "Restart") : (chinese ? "更新" : "Update"), role: .destructive) {
-        let action = confirmation ?? ""
-        if action == "restart" {
-          uptime = 0
-          operationMessage = chinese ? "网关重启前端流程已开始" : "Gateway restart frontend flow started"
-        } else {
-          operationMessage = chinese ? "Hermes 更新前端流程已开始" : "Hermes update frontend flow started"
+          .foregroundStyle(appearance.palette.secondary)
+          Label(
+            chinese ? "请打开已连接的系统监控路由查看 dbb3 / WSL。" : "Open the connected System route for dbb3 / WSL.",
+            systemImage: "gauge.with.dots.needle.67percent"
+          )
+          .font(HermesFonts.body(12))
+          .foregroundStyle(appearance.palette.tertiary)
         }
-        confirmation = nil
       }
-      Button(chinese ? "取消" : "Cancel", role: .cancel) {}
     }
   }
 }

@@ -64,6 +64,7 @@ import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import type { HermesApiClient } from '../api/HermesApiClient';
+import { withDeadline } from '../api/async-deadline';
 import type { SidebarGatewayStatus } from '../app/NativeShell';
 import {
   HermesCloudApi,
@@ -86,16 +87,20 @@ import {
   attachmentContext,
   chatModelConfigurationError,
   conversationHasRunningWork,
+  conversationHostedTurnState,
   conversationMessagesToView,
   conversationRunningHostedTurnId,
   formatActivitySummary,
   formatMessageLocalTime,
+  hostedTurnVisibilityFailure,
   messageStatusLabel,
+  reconcileHostedTurnVisibilityFailures,
   shouldRenderPendingMessage,
   upsertChatMessage,
   type HermesChatActivity as ChatActivity,
   type HermesChatAttachment as StoredChatAttachment,
   type HermesChatViewMessage as ChatMessage,
+  type HostedTurnVisibilityFailure,
 } from '../api/chat-view-model';
 import { NativeButton } from '../components/ui/NativeButton';
 import { IOSContextMenu } from '../components/ios/IOSContextMenu';
@@ -120,6 +125,8 @@ const DISPLAY_BOLD = 'SpaceGrotesk_700Bold';
 const MONO_REGULAR = 'HermesTerminal-JetBrainsMono-400-Normal';
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
+const MODEL_CONFIGURATION_TIMEOUT_MS = 12_000;
+const HOSTED_TURN_VISIBILITY_GRACE_MS = 20_000;
 
 interface ChatAttachment {
   id: string;
@@ -129,48 +136,6 @@ interface ChatAttachment {
   size?: number | null;
   uri: string;
 }
-
-const INITIAL_MESSAGES: ChatMessage[] = [
-  {
-    avatarRole: 'user',
-    content: '帮我检查当前项目的状态。',
-    createdAt: Date.now() - 132_000,
-    durationMs: 0,
-    id: 'user-1',
-    name: '你',
-    role: 'user',
-    status: 'completed',
-  },
-  {
-    activities: [
-      {
-        category: 'command',
-        duration: '0.4 s',
-        durationMs: 420,
-        id: 'activity-1',
-        input: 'git status --short',
-        name: 'git status --short',
-        output: 'M src/preview/PreviewChatPage.tsx',
-        preview: '检查工作区状态',
-        status: 'completed',
-      },
-    ],
-    avatarRole: 'hermes',
-    completedAt: Date.now(),
-    content: '当前项目有未提交的前端修改，我会保留这些改动并继续处理单聊界面。',
-    createdAt: Date.now() - 132_000,
-    durationMs: 132_000,
-    id: 'assistant-1',
-    model: 'anthropic · claude-sonnet-4',
-    name: 'Hermes Agent',
-    role: 'assistant',
-    roleLabel: 'Hermes Agent',
-    roleStage: 'chat',
-    startedAt: Date.now() - 132_000,
-    status: 'completed',
-    updatedAt: Date.now(),
-  },
-];
 
 interface ChatPreviewPageProps {
   cacheOwner?: string;
@@ -206,7 +171,7 @@ export function ChatPreviewPage({
     [cacheOwner],
   );
   const [content, setContent] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>(() => client ? [] : INITIAL_MESSAGES);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversations, setConversations] = useState<SingleConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState('');
   const [activeHostedTurnId, setActiveHostedTurnId] = useState('');
@@ -219,9 +184,14 @@ export function ChatPreviewPage({
   const streamRef = useRef<ScrollView>(null);
   const composerInputRef = useRef<TextInput>(null);
   const contentRef = useRef('');
-  const replyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const activeConversationIdRef = useRef('');
   const activeHostedTurnIdRef = useRef('');
+  const optimisticHostedTurnIdRef = useRef('');
+  const optimisticHostedTurnDeadlineRef = useRef(0);
+  const optimisticHostedTurnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hostedTurnVisibilityFailuresRef = useRef(
+    new Map<string, HostedTurnVisibilityFailure[]>(),
+  );
   const cancelHostedTurnInFlightRef = useRef(false);
   const conversationIndexRef = useRef<SingleConversation[]>([]);
   const conversationSyncGenerationRef = useRef(0);
@@ -244,7 +214,7 @@ export function ChatPreviewPage({
   const safeAreaTop = shellSplit ? 0 : insets.top;
   const attachmentCount = attachments.length;
   const canSend = !sending && Boolean(content.trim() || attachmentCount > 0);
-  const canCancelHostedTurn = hostedRunning && Boolean(activeHostedTurnId);
+  const canCancelHostedTurn = hostedRunning && Boolean(activeConversationId);
   const inputFontSize = resolveComposerFontSize(content);
   const keepLatestVisible = useCallback((animated = false) => {
     if (pendingScrollFrame.current !== null) return;
@@ -264,6 +234,44 @@ export function ChatPreviewPage({
       Extrapolation.CLAMP,
     ),
   }));
+
+  const clearOptimisticHostedTurn = useCallback(() => {
+    optimisticHostedTurnIdRef.current = '';
+    optimisticHostedTurnDeadlineRef.current = 0;
+    if (optimisticHostedTurnTimeoutRef.current) {
+      clearTimeout(optimisticHostedTurnTimeoutRef.current);
+      optimisticHostedTurnTimeoutRef.current = null;
+    }
+  }, []);
+
+  const beginOptimisticHostedTurn = useCallback((conversationId: string, turnId: string) => {
+    clearOptimisticHostedTurn();
+    optimisticHostedTurnIdRef.current = turnId;
+    optimisticHostedTurnDeadlineRef.current = Date.now() + HOSTED_TURN_VISIBILITY_GRACE_MS;
+    optimisticHostedTurnTimeoutRef.current = setTimeout(() => {
+      optimisticHostedTurnTimeoutRef.current = null;
+      if (
+        optimisticHostedTurnIdRef.current !== turnId
+        || activeConversationIdRef.current !== conversationId
+      ) return;
+      optimisticHostedTurnIdRef.current = '';
+      optimisticHostedTurnDeadlineRef.current = 0;
+      const failure = hostedTurnVisibilityFailure(turnId, isChinese);
+      hostedTurnVisibilityFailuresRef.current.set(
+        conversationId,
+        [
+          ...(hostedTurnVisibilityFailuresRef.current.get(conversationId) || [])
+            .filter((current) => current.turnId !== turnId),
+          failure,
+        ],
+      );
+      activeHostedTurnIdRef.current = '';
+      setActiveHostedTurnId('');
+      setMessages((current) => upsertChatMessage(current, failure.message));
+      setHostedRunning(false);
+      setSending(false);
+    }, HOSTED_TURN_VISIBILITY_GRACE_MS);
+  }, [clearOptimisticHostedTurn, isChinese]);
   useAnimatedReaction(
     () => keyboard.height.value * keyboardAvoidanceEnabled.value,
     (height, previousHeight) => {
@@ -300,9 +308,49 @@ export function ChatPreviewPage({
   const applyConversation = useCallback((conversation: SingleConversation) => {
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
-    setMessages(conversationMessagesToView(conversation, isChinese));
-    const running = conversationHasRunningWork(conversation);
-    const runningHostedTurnId = conversationRunningHostedTurnId(conversation);
+    let nextMessages = conversationMessagesToView(conversation, isChinese);
+    let running = conversationHasRunningWork(conversation);
+    let runningHostedTurnId = conversationRunningHostedTurnId(conversation);
+    const optimisticTurnId = optimisticHostedTurnIdRef.current;
+    if (optimisticTurnId) {
+      const optimisticState = conversationHostedTurnState(conversation, optimisticTurnId);
+      if (optimisticState === 'terminal') {
+        clearOptimisticHostedTurn();
+      } else if (optimisticState === 'running') {
+        clearOptimisticHostedTurn();
+        running = true;
+        runningHostedTurnId ||= optimisticTurnId;
+      } else if (Date.now() <= optimisticHostedTurnDeadlineRef.current) {
+        running = true;
+        runningHostedTurnId ||= optimisticTurnId;
+      } else {
+        clearOptimisticHostedTurn();
+        const failure = hostedTurnVisibilityFailure(optimisticTurnId, isChinese);
+        hostedTurnVisibilityFailuresRef.current.set(
+          conversation.id,
+          [
+            ...(hostedTurnVisibilityFailuresRef.current.get(conversation.id) || [])
+              .filter(({ turnId }) => turnId !== optimisticTurnId),
+            failure,
+          ],
+        );
+      }
+    }
+    const visibilityFailures = reconcileHostedTurnVisibilityFailures(
+      conversation,
+      nextMessages,
+      hostedTurnVisibilityFailuresRef.current.get(conversation.id) || [],
+    );
+    nextMessages = visibilityFailures.messages;
+    if (visibilityFailures.failures.length) {
+      hostedTurnVisibilityFailuresRef.current.set(
+        conversation.id,
+        visibilityFailures.failures,
+      );
+    } else {
+      hostedTurnVisibilityFailuresRef.current.delete(conversation.id);
+    }
+    setMessages(nextMessages);
     activeHostedTurnIdRef.current = runningHostedTurnId;
     setActiveHostedTurnId(runningHostedTurnId);
     setHostedRunning(running);
@@ -311,7 +359,7 @@ export function ChatPreviewPage({
       upsertCachedConversation(conversationIndexRef.current, conversation),
       conversation.id,
     );
-  }, [commitConversationIndex, isChinese]);
+  }, [clearOptimisticHostedTurn, commitConversationIndex, isChinese]);
 
   const loadConversation = useCallback(async (
     conversationId: string,
@@ -406,6 +454,7 @@ export function ChatPreviewPage({
           }
           if (activeConversationIdRef.current === item.conversationId) {
             activeHostedTurnIdRef.current = item.input.turnId;
+            beginOptimisticHostedTurn(item.conversationId, item.input.turnId);
             setActiveHostedTurnId(item.input.turnId);
             setHostedRunning(true);
             setSending(true);
@@ -424,7 +473,7 @@ export function ChatPreviewPage({
     } finally {
       if (outboxReplayRef.current === replay) outboxReplayRef.current = null;
     }
-  }, [cacheOwner, cloudApi, deliverPendingEnqueue, loadConversation, localStore]);
+  }, [beginOptimisticHostedTurn, cacheOwner, cloudApi, deliverPendingEnqueue, loadConversation, localStore]);
 
   const openConversation = useCallback(async (
     conversationId: string,
@@ -517,6 +566,7 @@ export function ChatPreviewPage({
     if (!activeId) {
       activeConversationIdRef.current = '';
       activeHostedTurnIdRef.current = '';
+      clearOptimisticHostedTurn();
       setActiveConversationId('');
       setActiveHostedTurnId('');
       setMessages([]);
@@ -528,6 +578,7 @@ export function ChatPreviewPage({
   }, [
     applyConversation,
     cacheOwner,
+    clearOptimisticHostedTurn,
     cloudApi,
     commitConversationIndex,
     localStore,
@@ -596,7 +647,7 @@ export function ChatPreviewPage({
   }, [activeConversationId, cloudApi, hostedRunning, loadConversation]);
 
   useEffect(() => () => {
-    if (replyTimer.current) clearTimeout(replyTimer.current);
+    clearOptimisticHostedTurn();
     if (pendingScrollFrame.current !== null) {
       cancelAnimationFrame(pendingScrollFrame.current);
     }
@@ -605,9 +656,10 @@ export function ChatPreviewPage({
     }
     pendingAttachmentCleanup.current?.();
     pendingNavigationCleanup.current?.();
-  }, []);
+  }, [clearOptimisticHostedTurn]);
 
   const createConversation = async () => {
+    clearOptimisticHostedTurn();
     if (cloudApi) {
       try {
         const result = await cloudApi.createConversation(profile, isChinese ? '新对话' : 'New conversation');
@@ -629,6 +681,13 @@ export function ChatPreviewPage({
     const trimmed = currentContent.trim();
     if ((!trimmed && attachmentCount === 0) || sending) return;
     const pendingAttachments = [...attachments];
+    const sendingConversationId = activeConversationIdRef.current;
+    if (sendingConversationId) {
+      hostedTurnVisibilityFailuresRef.current.delete(sendingConversationId);
+      setMessages((current) => current.filter(
+        ({ id }) => !id.startsWith('hosted-sync-failed-'),
+      ));
+    }
     const conversationProfile = (
       conversationIndexRef.current.find(
         ({ id }) => id === activeConversationIdRef.current,
@@ -639,7 +698,13 @@ export function ChatPreviewPage({
     if (cloudApi && client) {
       setSending(true);
       try {
-        const modelConfiguration = await cloudApi.getModels(conversationProfile);
+        const modelConfiguration = await withDeadline(
+          cloudApi.getModels(conversationProfile),
+          MODEL_CONFIGURATION_TIMEOUT_MS,
+          isChinese
+            ? '模型配置检查超时，请检查网络后重试。'
+            : 'The model configuration check timed out. Check the network and try again.',
+        );
         const configurationError = chatModelConfigurationError(
           modelConfiguration,
           isChinese,
@@ -710,32 +775,24 @@ export function ChatPreviewPage({
     setSending(true);
     if (!cloudApi || !client) {
       clearQueuedComposer();
-      replyTimer.current = setTimeout(() => {
-        const repliedAt = Date.now();
-        setMessages((current) => [
-          ...current,
-          {
-            avatarRole: 'hermes',
-            content: isChinese
-              ? '这是前端预览回复；正式登录构建会连接 Hermes 服务器。'
-              : 'This is a frontend preview response; authenticated builds connect to Hermes.',
-            completedAt: repliedAt,
-            createdAt: userMessageCreatedAt,
-            durationMs: Math.max(0, repliedAt - userMessageCreatedAt),
-            id: `assistant-${Date.now()}`,
-            model: 'preview',
-            name: 'Hermes Agent',
-            role: 'assistant',
-            roleLabel: 'Hermes Agent',
-            roleStage: 'chat',
-            startedAt: userMessageCreatedAt,
-            status: 'completed',
-            updatedAt: repliedAt,
-          },
-        ]);
-        setSending(false);
-        replyTimer.current = null;
-      }, 650);
+      const failedAt = Date.now();
+      setMessages((current) => upsertChatMessage(current, {
+        avatarRole: 'hermes',
+        completedAt: failedAt,
+        content: isChinese
+          ? '当前没有可用的 Hermes 服务器连接，请重新登录后重试。'
+          : 'No Hermes server connection is available. Sign in again and try again.',
+        createdAt: failedAt,
+        durationMs: 0,
+        id: `connection-unavailable-${userMessageId}`,
+        name: 'Hermes Agent',
+        role: 'assistant',
+        roleLabel: isChinese ? '连接错误' : 'Connection error',
+        roleStage: 'chat',
+        status: 'failed',
+        updatedAt: failedAt,
+      }));
+      setSending(false);
       return;
     }
 
@@ -844,6 +901,7 @@ export function ChatPreviewPage({
       setActiveConversationId(conversationId);
       if (activeConversationIdRef.current === conversationId) {
         activeHostedTurnIdRef.current = hostedTurnId;
+        beginOptimisticHostedTurn(conversationId, hostedTurnId);
         setActiveHostedTurnId(hostedTurnId);
         setHostedRunning(true);
         const generation = ++conversationSyncGenerationRef.current;
@@ -899,6 +957,9 @@ export function ChatPreviewPage({
       if (!turnId) {
         notify(isChinese ? '当前任务已经结束。' : 'The current task has already ended.');
         if (activeConversationIdRef.current === conversationId) {
+          activeHostedTurnIdRef.current = '';
+          clearOptimisticHostedTurn();
+          setActiveHostedTurnId('');
           setHostedRunning(false);
           setSending(false);
         }
@@ -911,6 +972,7 @@ export function ChatPreviewPage({
       );
       if (activeConversationIdRef.current === conversationId) {
         activeHostedTurnIdRef.current = '';
+        clearOptimisticHostedTurn();
         setActiveHostedTurnId('');
         setHostedRunning(false);
         setSending(false);
@@ -941,6 +1003,7 @@ export function ChatPreviewPage({
   const selectConversation = async (conversationId: string) => {
     if (!conversationId || conversationId === activeConversationIdRef.current) return;
     activeHostedTurnIdRef.current = '';
+    clearOptimisticHostedTurn();
     setActiveHostedTurnId('');
     setCancellingHostedTurn(false);
     setSending(false);
@@ -1225,9 +1288,15 @@ export function ChatPreviewPage({
                     />
                     <Text
                       numberOfLines={1}
-                      style={[styles.gatewayStatusText, { color: tokens.colors.textSecondary }]}
+                      style={[styles.gatewayStatusLabel, { color: tokens.colors.textSecondary }]}
                     >
-                      {`${gateway.label}${gateway.version ? ` · ${gateway.version.split(' ')[0]}` : ''}`}
+                      {gateway.label}
+                    </Text>
+                    <Text
+                      numberOfLines={1}
+                      style={[styles.gatewayStatusVersion, { color: tokens.colors.textTertiary }]}
+                    >
+                      {gateway.version?.split(' ')[0] || '—'}
                     </Text>
                   </View>
                 ))}
@@ -1396,7 +1465,7 @@ export function ChatPreviewPage({
                 accessibilityLabel={canCancelHostedTurn
                   ? isChinese ? '取消当前任务' : 'Cancel current task'
                   : isChinese ? '发送消息' : 'Send message'}
-                disabled={canCancelHostedTurn ? cancellingHostedTurn : sending}
+                disabled={canCancelHostedTurn ? cancellingHostedTurn : !canSend}
                 haptic={canCancelHostedTurn ? 'medium' : canSend ? 'light' : 'none'}
                 hitSlop={8}
                 onPress={canCancelHostedTurn ? () => void cancelActiveHostedTurn() : requestSend}
@@ -1870,11 +1939,16 @@ function UnifiedMessage({
 }) {
   const { tokens } = useTheme();
   const isUser = message.role === 'user';
+  const metadataTimestamp = isUser
+    ? message.createdAt
+    : message.completedAt || message.updatedAt || message.createdAt;
   const timestamp = formatMessageLocalTime(
-    message.createdAt || message.updatedAt,
+    metadataTimestamp,
     isChinese,
   );
-  const status = messageStatusLabel(message.status, isChinese);
+  const status = !isUser || message.status === 'failed'
+    ? messageStatusLabel(message.status, isChinese)
+    : '';
   const metadata = [timestamp, status].filter(Boolean).join(' · ');
   const runtime = [
     message.model,
@@ -1884,12 +1958,12 @@ function UnifiedMessage({
         : `Handoff to ${message.handoffTarget}`
       : '',
   ].filter(Boolean).join(' · ');
-  const messageForeground = isUser ? '#102014' : tokens.colors.foreground;
+  const messageForeground = tokens.colors.foreground;
   const markdownStyles = createMessageMarkdownStyles(
     messageForeground,
     tokens.colors.primary,
-    isUser ? 'rgba(16,32,20,0.08)' : multiplyAlpha(tokens.colors.foreground, 0.055),
-    isUser ? 'rgba(16,32,20,0.22)' : tokens.colors.border,
+    multiplyAlpha(tokens.colors.foreground, 0.055),
+    tokens.colors.border,
   );
   return (
     <Reanimated.View
@@ -1934,8 +2008,8 @@ function UnifiedMessage({
             styles.messageBody,
             isUser ? styles.userMessageBody : styles.agentMessageBody,
             {
-              backgroundColor: isUser ? '#95EC69' : tokens.colors.card,
-              borderColor: isUser ? '#80D15D' : multiplyAlpha('#192320', 0.11),
+              backgroundColor: tokens.colors.card,
+              borderColor: multiplyAlpha('#192320', 0.11),
             },
           ]}
         >
@@ -1963,7 +2037,7 @@ function UnifiedMessage({
                   onPress={() => onOpenAttachment(attachment)}
                   style={styles.storedAttachment}
                 >
-                  <File color={isUser ? '#0D5E3F' : tokens.colors.primary} size={18} strokeWidth={1.7} />
+                  <File color={tokens.colors.primary} size={18} strokeWidth={1.7} />
                   <View style={styles.storedAttachmentCopy}>
                     <Text
                       numberOfLines={1}
@@ -1971,7 +2045,7 @@ function UnifiedMessage({
                     >
                       {attachment.name}
                     </Text>
-                    <Text style={[styles.storedAttachmentSize, { color: isUser ? 'rgba(16,32,20,0.68)' : tokens.colors.textSecondary }]}>
+                    <Text style={[styles.storedAttachmentSize, { color: tokens.colors.textSecondary }]}>
                       {formatAttachmentSize(attachment.size)}
                     </Text>
                   </View>
@@ -2605,10 +2679,11 @@ const styles = StyleSheet.create({
   headingTitleCompact: { fontSize: 12, lineHeight: 16 },
   headingSubtitle: { fontFamily: BODY_REGULAR, fontSize: 10, lineHeight: 14 },
   headerControls: { alignItems: 'center', flexDirection: 'row', gap: 4, justifyContent: 'flex-end' },
-  gatewayStatuses: { gap: 2, justifyContent: 'center', maxWidth: 94 },
-  gatewayStatusRow: { alignItems: 'center', flexDirection: 'row', gap: 4, height: 13 },
+  gatewayStatuses: { gap: 2, justifyContent: 'center', width: 122 },
+  gatewayStatusRow: { alignItems: 'center', flexDirection: 'row', gap: 4, height: 13, width: '100%' },
   gatewayStatusDot: { borderRadius: 3, height: 6, width: 6 },
-  gatewayStatusText: { flexShrink: 1, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10 },
+  gatewayStatusLabel: { flexShrink: 0, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10, width: 34 },
+  gatewayStatusVersion: { flex: 1, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10, textAlign: 'right' },
   modelTools: { alignItems: 'center', borderRadius: 8, borderWidth: 1, height: 32, justifyContent: 'center', paddingHorizontal: 7 },
   modelToolsText: { fontFamily: BODY_BOLD, fontSize: 9, lineHeight: 12 },
   liveDot: { backgroundColor: '#20a879', borderRadius: 4, height: 8, marginHorizontal: 5, width: 8 },

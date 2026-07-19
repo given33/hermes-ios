@@ -7,6 +7,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   public func subscriberDidRegister() {
     HermesBackgroundService.shared.register()
+    resumePowerMonitoringIfEligible()
     resumeLocationIfEligible()
   }
 
@@ -14,6 +15,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     Self.recordScreenState("active")
     HermesScreenTimeService.shared.consumeExtensionEvents()
     HermesBackgroundService.shared.schedule()
+    resumePowerMonitoringIfEligible()
     resumeLocationIfEligible()
   }
 
@@ -26,6 +28,10 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   public func applicationWillResignActive(_ application: UIApplication) {
     Self.recordScreenState("inactive")
+  }
+
+  public func applicationWillTerminate(_ application: UIApplication) {
+    HermesDeviceService.shared.stopMonitoringPowerChanges()
   }
 
   public func application(
@@ -74,10 +80,16 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   private func resumeLocationIfEligible() {
     guard !HermesContextEventQueue.shared.isCollectionSuspended else { return }
+    guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return }
     guard CLLocationManager().authorizationStatus == .authorizedAlways else { return }
     DispatchQueue.main.async {
       HermesLocationService.shared.start()
     }
+  }
+
+  private func resumePowerMonitoringIfEligible() {
+    guard !HermesContextEventQueue.shared.isCollectionSuspended else { return }
+    HermesDeviceService.shared.startMonitoringPowerChanges()
   }
 
   private static func recordScreenState(_ state: String) {

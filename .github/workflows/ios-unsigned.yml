@@ -57,6 +57,8 @@ jobs:
           test "$DEPENDENCY_COUNT" -ge 5
       - name: Install CocoaPods
         run: pod install --project-directory=ios
+      - name: Verify native context autolinking
+        run: node scripts/verify-ios-native-context.mjs --ios ios
       - name: Compile without code signing
         shell: bash
         run: |
@@ -77,6 +79,9 @@ jobs:
             CODE_SIGN_IDENTITY='' \
             DEVELOPMENT_TEAM='' \
             COMPILER_INDEX_STORE_ENABLE=NO
+          node scripts/verify-ios-native-context.mjs \
+            --ios ios \
+            --derived-data "$RUNNER_TEMP/hermes-build"
       - name: Package the IPA
         shell: bash
         run: |

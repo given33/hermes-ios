@@ -1,4 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type PropsWithChildren } from 'react';
+import {
+  createContext,
+  Component,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PropsWithChildren,
+  type ReactNode,
+} from 'react';
 import { AppState, Platform, StyleSheet } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 
@@ -6,6 +17,7 @@ import {
   HermesIOSContext,
   HermesScreenTimeReportView,
   hasNativeIOSContext,
+  hasNativeScreenTimeReportView,
   type IOSContextEvent as NativeIOSContextEvent,
   type IOSHealthSummary,
 } from '../../modules/hermes-ios-context';
@@ -13,6 +25,14 @@ import type { HermesApiClient } from '../api/HermesApiClient';
 import { IOSIntelligenceApi, type IOSContextEvent, type IOSDeviceCommand } from './IOSIntelligenceApi';
 import { predictedDepartureTimestamp } from './ios-command-contract';
 import { buildCollectionSnapshotEvents, snapshotEvent } from './ios-snapshot-events';
+import {
+  canCollectIOSPermission,
+  clearIOSPermissionRun,
+  ensureIOSPermissions,
+  initialIOSPermissionSnapshot,
+  type IOSPermissionKey,
+  type IOSPermissionSnapshot,
+} from './ios-permission-coordinator';
 
 interface IOSContextProviderProps extends PropsWithChildren {
   client: HermesApiClient;
@@ -32,12 +52,48 @@ const EVENT_BATCH_SIZE = 200;
 const FOREGROUND_SYNC_MS = 20_000;
 const SNAPSHOT_SYNC_MS = 30 * 60_000;
 
+interface IOSPermissionContextValue {
+  openSettings(): Promise<void>;
+  retry(): void;
+  snapshot: IOSPermissionSnapshot;
+}
+
+const IOSPermissionContext = createContext<IOSPermissionContextValue>({
+  openSettings: async () => undefined,
+  retry: () => undefined,
+  snapshot: initialIOSPermissionSnapshot(),
+});
+
+export function useIOSPermissionCoordinator(): IOSPermissionContextValue {
+  return useContext(IOSPermissionContext);
+}
+
 export function IOSContextProvider({ children, client, deviceId, ownerScope }: IOSContextProviderProps) {
   const apiRef = useRef(new IOSIntelligenceApi(client));
   const commandCursorRef = useRef('');
   const runningRef = useRef(false);
   const commandsRunningRef = useRef(false);
+  const permissionSnapshotRef = useRef(initialIOSPermissionSnapshot());
+  const permissionSettingsOpenedRef = useRef(false);
+  const [permissionSnapshot, setPermissionSnapshot] = useState(initialIOSPermissionSnapshot);
+  const [permissionAttempt, setPermissionAttempt] = useState(0);
   const [screenTimeReportRefresh, setScreenTimeReportRefresh] = useState(() => Date.now());
+
+  const updatePermissionSnapshot = useCallback((snapshot: IOSPermissionSnapshot) => {
+    permissionSnapshotRef.current = snapshot;
+    setPermissionSnapshot(snapshot);
+  }, []);
+
+  const permissionContext = useMemo<IOSPermissionContextValue>(() => ({
+    openSettings: async () => {
+      if (hasNativeIOSContext) {
+        permissionSettingsOpenedRef.current = true;
+        await HermesIOSContext.openDeviceSettings();
+      }
+    },
+    retry: () => setPermissionAttempt((value) => value + 1),
+    snapshot: permissionSnapshot,
+  }), [permissionSnapshot]);
 
   useEffect(() => {
     apiRef.current = new IOSIntelligenceApi(client);
@@ -71,14 +127,23 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     const now = Date.now();
     const dayAgo = now - 24 * 60 * 60_000;
     const monthAhead = now + 31 * 24 * 60 * 60_000;
+    const permission = permissionSnapshotRef.current;
     const [capabilities, power, health, calendar, reminders, device, screenTime, watch] = await Promise.all([
       HermesIOSContext.getCapabilities(),
       HermesIOSContext.getPowerSnapshot(),
-      HermesIOSContext.getHealthSummary(dayAgo, now).catch(() => null),
-      HermesIOSContext.listCalendarEvents(now - 24 * 60 * 60_000, monthAhead).catch(() => []),
-      HermesIOSContext.listReminders(false).catch(() => []),
+      canCollectIOSPermission(permission, 'health')
+        ? HermesIOSContext.getHealthSummary(dayAgo, now).catch(() => null)
+        : Promise.resolve(null),
+      canCollectIOSPermission(permission, 'calendar')
+        ? HermesIOSContext.listCalendarEvents(now - 24 * 60 * 60_000, monthAhead).catch(() => [])
+        : Promise.resolve([]),
+      canCollectIOSPermission(permission, 'reminders')
+        ? HermesIOSContext.listReminders(false).catch(() => [])
+        : Promise.resolve([]),
       HermesIOSContext.getDeviceSnapshot().catch(() => null),
-      HermesIOSContext.getScreenTimeSnapshot().catch(() => null),
+      canCollectIOSPermission(permission, 'screenTime')
+        ? HermesIOSContext.getScreenTimeSnapshot().catch(() => null)
+        : Promise.resolve(null),
       HermesIOSContext.getWatchSnapshot().catch(() => null),
     ]);
     const events: IOSContextEvent[] = [
@@ -86,6 +151,12 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
       snapshotEvent('device', now, {
         ...(device || {}),
         capabilities: { ...capabilities },
+        permissions: {
+          ...permission.permissions,
+          locationAlways: permission.locationAlways,
+          locationPrecise: permission.locationPrecise,
+          phase: permission.phase,
+        },
       }, '', deviceId),
       ...(screenTime ? [snapshotEvent('screen-time', now, { ...screenTime }, '', deviceId)] : []),
       ...(watch ? [snapshotEvent('watch', now, { ...watch }, '', deviceId)] : []),
@@ -105,7 +176,9 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
   }, [deviceId, flushPendingEvents]);
 
   const executeCommands = useCallback(async () => {
-    if (!hasNativeIOSContext || commandsRunningRef.current) return;
+    if (!hasNativeIOSContext
+      || permissionSnapshotRef.current.phase !== 'ready'
+      || commandsRunningRef.current) return;
     commandsRunningRef.current = true;
     try {
       if (!await hasUsableNetwork()) return;
@@ -148,7 +221,12 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
           command = { ...command, _relay_execution_status: 'executing' };
           await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
           try {
-            const result = await executeDeviceCommand(command, flushPendingEvents, ownerScope);
+            const result = await executeDeviceCommand(
+              command,
+              flushPendingEvents,
+              ownerScope,
+              permissionSnapshotRef.current,
+            );
             command = { ...command, _relay_execution_status: 'completed', _relay_result: result };
           } catch (error) {
             command = {
@@ -211,33 +289,40 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     };
     const startCollectors = async () => {
       await HermesIOSContext.setOwnerScope(ownerScope);
+      await HermesIOSContext.setPermissionCollectionReady(ownerScope, false);
       commandCursorRef.current = await HermesIOSContext.getCommandCursor();
-      const locationState = await HermesIOSContext.getLocationAuthorization();
-      const locationDetails: Record<string, unknown> = await HermesIOSContext
-        .getLocationAuthorizationDetails()
-        .catch(() => ({} as Record<string, unknown>));
-      // An existing When-In-Use grant is reported as "authorized" too, but it
-      // cannot sustain the background collector. Ask the native manager to
-      // perform its Always-upgrade flow whenever the detailed status says it
-      // has not been granted yet.
-      if (locationState === 'notDetermined' || locationDetails['always'] !== true) {
-        await HermesIOSContext.requestLocationAuthorization();
-      }
-      await HermesIOSContext.requestPreciseLocation().catch(() => false);
-      await HermesIOSContext.requestHealthAuthorization().catch(() => 'denied' as const);
-      await HermesIOSContext.requestCalendarAuthorization().catch(() => 'denied' as const);
-      await HermesIOSContext.requestReminderAuthorization().catch(() => 'denied' as const);
-      const screenTimeAuthorization = await HermesIOSContext
-        .requestScreenTimeAuthorization()
-        .catch(() => 'denied' as const);
-      if (screenTimeAuthorization === 'authorized') {
+      const authorization = await ensureIOSPermissions(
+        ownerScope,
+        HermesIOSContext,
+        (snapshot) => { if (active) updatePermissionSnapshot(snapshot); },
+        permissionAttempt > 0,
+      );
+      if (!active) return;
+      updatePermissionSnapshot(authorization);
+      await HermesIOSContext.setPermissionCollectionReady(
+        ownerScope,
+        authorization.phase === 'ready',
+      );
+      if (canCollectIOSPermission(authorization, 'screenTime')) {
         await HermesIOSContext
           .startScreenTimeMonitoring('hermes-daily-context', 0, 24)
           .catch(() => undefined);
         setScreenTimeReportRefresh(Date.now());
+      } else {
+        await HermesIOSContext
+          .stopScreenTimeMonitoring('hermes-daily-context')
+          .catch(() => undefined);
       }
-      await HermesIOSContext.startAdaptiveLocation();
-      await HermesIOSContext.startMotionUpdates();
+      if (canCollectIOSPermission(authorization, 'location')) {
+        await HermesIOSContext.startAdaptiveLocation();
+      } else {
+        await HermesIOSContext.stopAdaptiveLocation().catch(() => undefined);
+      }
+      if (canCollectIOSPermission(authorization, 'motion')) {
+        await HermesIOSContext.startMotionUpdates();
+      } else {
+        await HermesIOSContext.stopMotionUpdates().catch(() => undefined);
+      }
       await HermesIOSContext.scheduleBackgroundTasks().catch(() => undefined);
       synchronize();
       void syncSnapshots().catch(() => undefined);
@@ -267,6 +352,11 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     }, SNAPSHOT_SYNC_MS);
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
+        if (permissionSnapshotRef.current.phase === 'paused'
+          || permissionSettingsOpenedRef.current) {
+          permissionSettingsOpenedRef.current = false;
+          setPermissionAttempt((value) => value + 1);
+        }
         setScreenTimeReportRefresh(Date.now());
         synchronize();
         void syncSnapshots().catch(() => undefined);
@@ -280,23 +370,52 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
       if (eventFlushTimer) clearTimeout(eventFlushTimer);
       appStateSubscription.remove();
       eventSubscriptions.forEach((subscription) => subscription.remove());
+      clearIOSPermissionRun(ownerScope);
       void HermesIOSContext.stopMotionUpdates().catch(() => undefined);
       // Location monitoring intentionally remains active for background collection.
     };
-  }, [deviceId, executeCommands, flushPendingEvents, ownerScope, syncSnapshots]);
+  }, [
+    deviceId,
+    executeCommands,
+    flushPendingEvents,
+    ownerScope,
+    permissionAttempt,
+    syncSnapshots,
+    updatePermissionSnapshot,
+  ]);
 
   return (
-    <>
+    <IOSPermissionContext.Provider value={permissionContext}>
       {children}
-      {Platform.OS === 'ios' && hasNativeIOSContext ? (
-        <HermesScreenTimeReportView
-          pointerEvents="none"
-          refreshToken={screenTimeReportRefresh}
-          style={styles.screenTimeReportTrigger}
-        />
+      {Platform.OS === 'ios'
+        && hasNativeIOSContext
+        && hasNativeScreenTimeReportView
+        && canCollectIOSPermission(permissionSnapshot, 'screenTime') ? (
+        <OptionalNativeViewBoundary>
+          <HermesScreenTimeReportView
+            pointerEvents="none"
+            refreshToken={screenTimeReportRefresh}
+            style={styles.screenTimeReportTrigger}
+          />
+        </OptionalNativeViewBoundary>
       ) : null}
-    </>
+    </IOSPermissionContext.Provider>
   );
+}
+
+class OptionalNativeViewBoundary extends Component<
+  PropsWithChildren,
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? null : this.props.children;
+  }
 }
 
 const styles = StyleSheet.create({
@@ -379,11 +498,16 @@ async function executeDeviceCommand(
   command: IOSDeviceCommand,
   flushPendingEvents: () => Promise<void>,
   ownerScope: string,
+  permissionSnapshot: IOSPermissionSnapshot,
 ): Promise<Record<string, unknown>> {
   const payload = command.payload || {};
   const key = `${command.capability}:${command.action}`;
   if (command.capability === 'qweather' || command.capability === 'amap-route') {
     return { capability: command.capability, execution: 'server', payload };
+  }
+  const requiredPermission = permissionForCommand(key);
+  if (requiredPermission && !canCollectIOSPermission(permissionSnapshot, requiredPermission)) {
+    throw new Error(`${requiredPermission} permission is not authorized`);
   }
   switch (key) {
     case 'ios-location:refresh': {
@@ -571,8 +695,10 @@ async function executeDeviceCommand(
       return { sent };
     }
     case 'ios-notification:send': {
-      const authorization = await HermesIOSContext.requestNotificationAuthorization();
-      if (authorization !== 'authorized') throw new Error('notification permission is required');
+      const authorization = await HermesIOSContext.getNotificationAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') {
+        throw new Error('notification permission is required');
+      }
       const id = await HermesIOSContext.scheduleLocalNotification(
         typeof payload.title === 'string' ? payload.title : 'Hermes Agent',
         requiredString(payload.body, 'body'),
@@ -582,8 +708,10 @@ async function executeDeviceCommand(
       return { id };
     }
     case 'ios-notification:schedule': {
-      const authorization = await HermesIOSContext.requestNotificationAuthorization();
-      if (authorization !== 'authorized') throw new Error('notification permission is required');
+      const authorization = await HermesIOSContext.getNotificationAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') {
+        throw new Error('notification permission is required');
+      }
       const id = await HermesIOSContext.scheduleLocalNotification(
         requiredString(payload.title, 'title'),
         requiredString(payload.body, 'body'),
@@ -617,6 +745,20 @@ async function executeDeviceCommand(
     default:
       throw new Error(`Unsupported native command: ${command.capability}:${command.action}`);
   }
+}
+
+function permissionForCommand(key: string): IOSPermissionKey | null {
+  if (/^ios-location:(refresh|get|current|precise|prepare|set-predicted-departure)$/.test(key)) {
+    return 'location';
+  }
+  if (/^ios-map:(today|refresh)$/.test(key)) return 'location';
+  if (/^ios-motion:(snapshot|get|start)$/.test(key)) return 'motion';
+  if (/^ios-health-/.test(key)) return 'health';
+  if (/^ios-calendar:(create|list)$/.test(key)) return 'calendar';
+  if (/^ios-reminders:(create|list)$/.test(key)) return 'reminders';
+  if (/^ios-screen-time:(get|start)$/.test(key)) return 'screenTime';
+  if (/^ios-notification:(send|schedule)$/.test(key)) return 'notification';
+  return null;
 }
 
 function requiredString(value: unknown, name: string): string {

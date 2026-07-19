@@ -10,6 +10,7 @@ enum HermesAccountLifecycle {
     let generation = HermesContextEventQueue.shared.activateOwnerScope(ownerScope)
     HermesScreenTimeService.shared.setAccountGeneration(generation)
     HermesWatchService.shared.activateAccountGeneration(generation)
+    HermesDeviceService.shared.startMonitoringPowerChanges()
     return generation
   }
 
@@ -23,6 +24,7 @@ enum HermesAccountLifecycle {
 
     HermesLocationService.shared.resetAccountState()
     HermesMotionService.shared.resetAccountState()
+    HermesDeviceService.shared.stopMonitoringPowerChanges()
     HermesScreenTimeService.shared.stopAllMonitoring(
       accountGeneration: deletion.accountGeneration
     )

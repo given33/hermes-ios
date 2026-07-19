@@ -39,7 +39,7 @@ export interface SessionTokenWriter {
   ): Promise<void>;
 }
 
-const PROTECTED_REFRESH_TOKEN_OPTIONS = Object.freeze({
+const PROTECTED_CREDENTIAL_OPTIONS = Object.freeze({
   requireAuthentication: true,
   authenticationPrompt: FACE_ID_PROMPT,
 });
@@ -58,12 +58,12 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     if (isRefreshTokenKey(currentKey)) {
       return this.secureStore.getItemAsync(
         currentKey,
-        PROTECTED_REFRESH_TOKEN_OPTIONS,
+        PROTECTED_CREDENTIAL_OPTIONS,
       );
     }
     return this.secureStore.getItemAsync(
       REFRESH_TOKEN_STORAGE_KEY,
-      PROTECTED_REFRESH_TOKEN_OPTIONS,
+      PROTECTED_CREDENTIAL_OPTIONS,
     );
   }
 
@@ -71,17 +71,41 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     return this.secureStore.getItemAsync(USERNAME_STORAGE_KEY);
   }
 
-  async readRememberedLogin(): Promise<RememberedLogin> {
-    const [username, preference, password] = await Promise.all([
+  /**
+   * Preference + username only — never touches the biometric-protected
+   * password item, so the Face ID lock screen can show username without
+   * unlocking secrets.
+   */
+  async readRememberedLoginPreference(): Promise<RememberedLogin> {
+    const [username, preference] = await Promise.all([
       this.readUsername(),
       this.secureStore.getItemAsync(REMEMBER_LOGIN_STORAGE_KEY),
-      this.secureStore.getItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY),
     ]);
-    const enabled = preference === '1' && Boolean(password);
+    return {
+      enabled: preference === '1',
+      password: '',
+      username: username ?? '',
+    };
+  }
+
+  async readRememberedLogin(): Promise<RememberedLogin> {
+    const preference = await this.readRememberedLoginPreference();
+    if (!preference.enabled) {
+      return {
+        enabled: false,
+        password: '',
+        username: preference.username,
+      };
+    }
+    const password = await this.secureStore.getItemAsync(
+      REMEMBERED_PASSWORD_STORAGE_KEY,
+      PROTECTED_CREDENTIAL_OPTIONS,
+    );
+    const enabled = Boolean(password);
     return {
       enabled,
       password: enabled ? password ?? '' : '',
-      username: username ?? '',
+      username: preference.username,
     };
   }
 
@@ -104,12 +128,19 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     await Promise.all([
       this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, normalizedUsername),
       this.secureStore.setItemAsync(REMEMBER_LOGIN_STORAGE_KEY, '1'),
-      this.secureStore.setItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY, password),
+      this.secureStore.setItemAsync(
+        REMEMBERED_PASSWORD_STORAGE_KEY,
+        password,
+        PROTECTED_CREDENTIAL_OPTIONS,
+      ),
     ]);
   }
 
   readAccessToken(): Promise<string | null> {
-    return this.secureStore.getItemAsync(ACCESS_TOKEN_STORAGE_KEY);
+    return this.secureStore.getItemAsync(
+      ACCESS_TOKEN_STORAGE_KEY,
+      PROTECTED_CREDENTIAL_OPTIONS,
+    );
   }
 
   readDeviceId(): Promise<string | null> {
@@ -128,7 +159,11 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     try {
       await this.secureStore.setItemAsync(BASE_URL_STORAGE_KEY, connection.baseUrl);
       await this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, connection.username);
-      await this.secureStore.setItemAsync(ACCESS_TOKEN_STORAGE_KEY, connection.accessToken);
+      await this.secureStore.setItemAsync(
+        ACCESS_TOKEN_STORAGE_KEY,
+        connection.accessToken,
+        PROTECTED_CREDENTIAL_OPTIONS,
+      );
       await this.secureStore.setItemAsync(
         ACCESS_EXPIRES_AT_STORAGE_KEY,
         String(connection.expiresAt),
@@ -142,7 +177,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       await this.secureStore.setItemAsync(
         refreshTokenKey,
         connection.refreshToken,
-        PROTECTED_REFRESH_TOKEN_OPTIONS,
+        PROTECTED_CREDENTIAL_OPTIONS,
       );
       await this.secureStore.setItemAsync(
         REFRESH_TOKEN_POINTER_STORAGE_KEY,
@@ -181,13 +216,17 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       await this.secureStore.setItemAsync(
         nextKey,
         normalizedRefreshToken,
-        PROTECTED_REFRESH_TOKEN_OPTIONS,
+        PROTECTED_CREDENTIAL_OPTIONS,
       );
       await this.secureStore.setItemAsync(
         REFRESH_TOKEN_POINTER_STORAGE_KEY,
         nextKey,
       );
-      await this.secureStore.setItemAsync(ACCESS_TOKEN_STORAGE_KEY, normalizedToken);
+      await this.secureStore.setItemAsync(
+        ACCESS_TOKEN_STORAGE_KEY,
+        normalizedToken,
+        PROTECTED_CREDENTIAL_OPTIONS,
+      );
       await this.secureStore.setItemAsync(
         ACCESS_EXPIRES_AT_STORAGE_KEY,
         String(expiresAt),
@@ -220,14 +259,12 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
   }
 
   async clearSession(): Promise<void> {
-    const [currentKey, rememberedLogin] = await Promise.all([
+    const [currentKey, rememberPreference] = await Promise.all([
       this.secureStore.getItemAsync(REFRESH_TOKEN_POINTER_STORAGE_KEY).catch(() => null),
-      this.readRememberedLogin().catch(() => ({
-        enabled: false,
-        password: '',
-        username: '',
-      })),
+      // Preference flag only — never prompt for the protected password on logout.
+      this.secureStore.getItemAsync(REMEMBER_LOGIN_STORAGE_KEY).catch(() => null),
     ]);
+    const rememberEnabled = rememberPreference === '1';
     const keys = [
       BASE_URL_STORAGE_KEY,
       ACCESS_TOKEN_STORAGE_KEY,
@@ -235,7 +272,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       REFRESH_TOKEN_POINTER_STORAGE_KEY,
       ACCESS_EXPIRES_AT_STORAGE_KEY,
       DEVICE_ID_STORAGE_KEY,
-      ...(rememberedLogin.enabled
+      ...(rememberEnabled
         ? []
         : [
             USERNAME_STORAGE_KEY,

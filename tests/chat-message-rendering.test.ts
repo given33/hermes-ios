@@ -58,3 +58,10 @@ test('a running hosted turn exposes the real server cancellation control', () =>
   assert.match(source, /取消当前任务/);
   assert.match(source, /name=\{cancellingHostedTurn[\s\S]*'stop\.fill'/);
 });
+
+test('an accepted hosted turn reaches a terminal state even when every poll fails', () => {
+  assert.match(source, /optimisticHostedTurnTimeoutRef/);
+  assert.match(source, /setTimeout\(\(\) => \{[\s\S]*hostedTurnVisibilityFailure/);
+  assert.match(source, /optimisticState === 'running'[\s\S]*clearOptimisticHostedTurn\(\)/);
+  assert.match(source, /setHostedRunning\(false\)[\s\S]*setSending\(false\)/);
+});

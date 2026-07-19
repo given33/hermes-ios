@@ -6,6 +6,14 @@ final class HermesEventStore {
 
   private let store = EKEventStore()
 
+  func calendarAuthorizationStatus() -> String {
+    Self.authorization(EKEventStore.authorizationStatus(for: .event))
+  }
+
+  func reminderAuthorizationStatus() -> String {
+    Self.authorization(EKEventStore.authorizationStatus(for: .reminder))
+  }
+
   func requestCalendarAuthorization() async -> String {
     do {
       let granted = try await store.requestFullAccessToEvents()
@@ -111,6 +119,17 @@ final class HermesEventStore {
   private static func date(from components: DateComponents?) -> Date? {
     guard let components else { return nil }
     return components.calendar?.date(from: components) ?? Calendar.current.date(from: components)
+  }
+
+  private static func authorization(_ status: EKAuthorizationStatus) -> String {
+    switch status {
+    case .authorized, .fullAccess: return "authorized"
+    case .writeOnly: return "limited"
+    case .notDetermined: return "notDetermined"
+    case .restricted: return "restricted"
+    case .denied: return "denied"
+    @unknown default: return "unavailable"
+    }
   }
 }
 

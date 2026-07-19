@@ -238,7 +238,7 @@ export function SkillsPreviewPage({ locale = 'zh', navigate, notify }: PreviewPa
         value={query}
       />
       <View style={[styles.skillsLayout, isWide && styles.skillsLayoutWide]}>
-        <View style={[styles.skillsFilters, { backgroundColor: tokens.colors.muted, borderColor: tokens.colors.border }, isWide && styles.skillsFiltersWide]}>
+        <View style={[styles.skillsFilters, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }, isWide && styles.skillsFiltersWide]}>
           {isWide ? (
             <View style={[styles.skillsFilterHeading, { borderBottomColor: tokens.colors.border }]}>
               <Filter color={tokens.colors.textTertiary} size={13} />

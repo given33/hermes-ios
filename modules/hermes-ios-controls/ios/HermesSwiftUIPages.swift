@@ -43,6 +43,7 @@ struct HermesRouteContent: View {
     case .models:
       HermesModelsPage(
         chinese: chinese,
+        detectedModels: data.detectedModels,
         models: data.models,
         onAction: onAction
       )
@@ -99,7 +100,6 @@ private enum HermesRemoteEditor: String, Identifiable {
   case skill
   case kanban
   case channel
-  case environment
   case config
 
   var id: String { rawValue }
@@ -361,10 +361,13 @@ private struct HermesRemoteRoutePage: View {
           HStack {
             TextField(chinese ? "发送消息" : "Message", text: $collaborationDraft)
               .textFieldStyle(.roundedBorder)
+              .submitLabel(.send)
+              .onSubmit { dismissHermesKeyboard() }
             Button {
               let text = collaborationDraft.trimmingCharacters(in: .whitespacesAndNewlines)
               let roomId = data.collaboration.selectedRoomId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
               guard !text.isEmpty, !roomId.isEmpty else { return }
+              dismissHermesKeyboard()
               let requestId: String
               if collaborationPendingRoomId == roomId,
                  collaborationPendingText == text,
@@ -594,7 +597,6 @@ private struct HermesRemoteRoutePage: View {
     case .profiles: return .profiles
     case .kanban: return .kanban
     case .collaboration: return .collaboration
-    case .env: return .environment
     case .config: return .config
     default: return nil
     }
@@ -614,6 +616,7 @@ private struct HermesRemoteRoutePage: View {
   }
 
   private func saveEditor(_ kind: HermesRemoteEditor) {
+    dismissHermesKeyboard()
     let name = editorName.trimmingCharacters(in: .whitespacesAndNewlines)
     let value = editorValue.trimmingCharacters(in: .whitespacesAndNewlines)
     let detail = editorDetail.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -655,9 +658,6 @@ private struct HermesRemoteRoutePage: View {
     case .channel:
       guard !editorID.isEmpty, !detail.isEmpty else { return }
       onAction(.integrationUpdate, HermesRouteActionPayload(route: "channels", id: editorID, value: detail))
-    case .environment:
-      guard !name.isEmpty else { return }
-      onAction(.environmentUpsert, HermesRouteActionPayload(route: "env", id: name, value: editorValue))
     case .config:
       guard !detail.isEmpty else { return }
       onAction(.configUpdate, HermesRouteActionPayload(route: "config", value: detail))
@@ -699,13 +699,11 @@ private struct HermesRemoteEditorSheet: View {
           }
         } else {
           TextField(nameLabel, text: $name)
-            .textInputAutocapitalization(kind == .environment ? .characters : .never)
+            .textInputAutocapitalization(.never)
             .autocorrectionDisabled()
-          if kind == .collaboration || kind == .cron || kind == .mcp || kind == .pairing || kind == .profiles || kind == .environment || kind == .kanban {
+          if kind == .collaboration || kind == .cron || kind == .mcp || kind == .pairing || kind == .profiles || kind == .kanban {
             Group {
-              if kind == .environment {
-                SecureField(valueLabel, text: $value)
-              } else if kind == .kanban {
+              if kind == .kanban {
                 Picker(chinese ? "状态" : "Status", selection: $value) {
                   ForEach(kanbanColumns) { column in
                     Text(column.title).tag(column.id)
@@ -730,10 +728,16 @@ private struct HermesRemoteEditorSheet: View {
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) {
-          Button(chinese ? "取消" : "Cancel", action: onCancel)
+          Button(chinese ? "取消" : "Cancel") {
+            dismissHermesKeyboard()
+            onCancel()
+          }
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button(chinese ? "保存" : "Save", action: onSave)
+          Button(chinese ? "保存" : "Save") {
+            dismissHermesKeyboard()
+            onSave()
+          }
         }
       }
     }
@@ -761,7 +765,6 @@ private struct HermesRemoteEditorSheet: View {
     case .skill: return "编辑 SKILL.md"
     case .kanban: return name.isEmpty ? "新建任务" : "编辑任务"
     case .channel: return "编辑渠道配置"
-    case .environment: return "添加或替换密钥"
     case .config: return "编辑配置"
     }
   }
@@ -914,14 +917,20 @@ private struct HermesSessionsPage: View {
       NavigationStack {
         Form {
           TextField(chinese ? "会话名称" : "Session name", text: $renameText)
+            .submitLabel(.done)
+            .onSubmit { dismissHermesKeyboard() }
         }
         .navigationTitle(chinese ? "重命名会话" : "Rename Session")
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
-            Button(chinese ? "取消" : "Cancel") { renameTarget = nil }
+            Button(chinese ? "取消" : "Cancel") {
+              dismissHermesKeyboard()
+              renameTarget = nil
+            }
           }
           ToolbarItem(placement: .confirmationAction) {
             Button(chinese ? "保存" : "Save") {
+              dismissHermesKeyboard()
               onAction(
                 .sessionRename,
                 HermesRouteActionPayload(
@@ -953,6 +962,115 @@ private struct HermesFileSection: Identifiable {
   let id: String
   let files: [HermesFileSnapshot]
   let timestamp: Double
+}
+
+private enum HermesFileImportStaging {
+  private static let directoryName = "HermesFileImports"
+  private static let maximumAge: TimeInterval = 24 * 60 * 60
+
+  static func stage(_ sourceURLs: [URL]) -> [URL] {
+    cleanupExpiredBatches()
+    guard !sourceURLs.isEmpty, let root = stagingRoot() else { return [] }
+
+    let batch = root.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(
+        at: batch,
+        withIntermediateDirectories: true,
+        attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+      )
+    } catch {
+      return []
+    }
+
+    let staged = sourceURLs.compactMap { stage($0, in: batch) }
+    if staged.isEmpty { try? FileManager.default.removeItem(at: batch) }
+    scheduleCleanup()
+    return staged
+  }
+
+  private static func stage(_ sourceURL: URL, in batch: URL) -> URL? {
+    let hasSecurityScope = sourceURL.startAccessingSecurityScopedResource()
+    defer {
+      if hasSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
+    }
+
+    let requestedName = sourceURL.lastPathComponent
+    let fileName = requestedName.isEmpty || requestedName == "." || requestedName == ".."
+      ? "attachment"
+      : requestedName
+    let destination = uniqueDestination(named: fileName, in: batch)
+    var coordinationError: NSError?
+    var copyError: Error?
+    var copied = false
+    NSFileCoordinator().coordinate(
+      readingItemAt: sourceURL,
+      options: [],
+      error: &coordinationError
+    ) { readableURL in
+      do {
+        try FileManager.default.copyItem(at: readableURL, to: destination)
+        copied = true
+      } catch {
+        copyError = error
+      }
+    }
+    guard coordinationError == nil, copyError == nil, copied else {
+      try? FileManager.default.removeItem(at: destination)
+      return nil
+    }
+    return destination
+  }
+
+  private static func stagingRoot() -> URL? {
+    guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+      return nil
+    }
+    let root = caches.appendingPathComponent(directoryName, isDirectory: true)
+    do {
+      try FileManager.default.createDirectory(
+        at: root,
+        withIntermediateDirectories: true,
+        attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
+      )
+      return root
+    } catch {
+      return nil
+    }
+  }
+
+  private static func uniqueDestination(named name: String, in batch: URL) -> URL {
+    let initial = batch.appendingPathComponent(name, isDirectory: false)
+    guard FileManager.default.fileExists(atPath: initial.path) else { return initial }
+    let source = initial.deletingPathExtension().lastPathComponent
+    let extensionName = initial.pathExtension
+    let uniqueName = extensionName.isEmpty
+      ? "\(source)-\(UUID().uuidString.lowercased())"
+      : "\(source)-\(UUID().uuidString.lowercased()).\(extensionName)"
+    return batch.appendingPathComponent(uniqueName, isDirectory: false)
+  }
+
+  private static func cleanupExpiredBatches(now: Date = Date()) {
+    guard let root = stagingRoot(),
+          let batches = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey, .creationDateKey],
+            options: [.skipsHiddenFiles]
+          ) else { return }
+    for batch in batches {
+      let values = try? batch.resourceValues(forKeys: [.contentModificationDateKey, .creationDateKey])
+      let timestamp = values?.contentModificationDate ?? values?.creationDate ?? .distantPast
+      if now.timeIntervalSince(timestamp) >= maximumAge {
+        try? FileManager.default.removeItem(at: batch)
+      }
+    }
+  }
+
+  private static func scheduleCleanup() {
+    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + maximumAge) {
+      cleanupExpiredBatches()
+    }
+  }
 }
 
 private struct HermesFilesPage: View {
@@ -1115,11 +1233,14 @@ private struct HermesFilesPage: View {
     }
     .fileImporter(isPresented: $importerOpen, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
       if case let .success(urls) = result {
+        let stagedURLs = HermesFileImportStaging.stage(urls)
+        guard !stagedURLs.isEmpty else { return }
         onAction(
           .fileImport,
           HermesRouteActionPayload(
             route: "files",
-            uris: urls.map(\.absoluteString)
+            fields: ["stagedImport": "true"],
+            uris: stagedURLs.map(\.absoluteString)
           )
         )
       }
@@ -1196,16 +1317,19 @@ private struct HermesAnalyticsPage: View {
 private struct HermesModelsPage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let chinese: Bool
+  let detectedModels: [String]
   let models: [HermesModelSnapshot]
   let onAction: HermesRouteActionSink
   @State private var apiKey = ""
   @State private var apiMode = "chat_completions"
   @State private var baseUrl = ""
-  @State private var contextLength = ""
+  @State private var contextLength = "131072"
   @State private var modelName = ""
   @State private var reasoningEffort = "none"
 
-  private var configuration: HermesModelSnapshot? { models.first }
+  private var configuration: HermesModelSnapshot? {
+    models.first { $0.provider == "custom" && !$0.baseUrl.isEmpty }
+  }
   private var fields: [String: String] {
     [
       "apiKey": apiKey,
@@ -1221,6 +1345,66 @@ private struct HermesModelsPage: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         HermesPanel {
+          VStack(alignment: .leading, spacing: 12) {
+            Label(chinese ? "可用模型" : "Available models", systemImage: "square.stack.3d.up")
+              .font(HermesFonts.display(17))
+
+            if models.isEmpty {
+              Text(chinese ? "当前没有可选择的模型" : "No models are available")
+                .font(HermesFonts.body(13))
+                .foregroundStyle(appearance.palette.secondary)
+            } else {
+              LazyVStack(spacing: 0) {
+                ForEach(models) { model in
+                  Button {
+                    if !model.active {
+                      onAction(
+                        .modelSelect,
+                        HermesRouteActionPayload(route: "models", id: model.id)
+                      )
+                    }
+                  } label: {
+                    HStack(spacing: 12) {
+                      Image(systemName: model.active ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(
+                          model.active ? appearance.palette.success : appearance.palette.secondary
+                        )
+                        .frame(width: 24, height: 24)
+
+                      VStack(alignment: .leading, spacing: 3) {
+                        Text(model.model)
+                          .font(HermesFonts.bodyBold(14))
+                          .foregroundStyle(appearance.palette.text)
+                          .lineLimit(2)
+                        HStack(spacing: 8) {
+                          Text(model.provider)
+                          if !model.context.isEmpty {
+                            Text(model.context)
+                          }
+                        }
+                        .font(HermesFonts.body(11))
+                        .foregroundStyle(appearance.palette.secondary)
+                      }
+
+                      Spacer(minLength: 8)
+                    }
+                    .contentShape(Rectangle())
+                    .padding(.vertical, 11)
+                  }
+                  .buttonStyle(.plain)
+                  .accessibilityIdentifier("hermes-model-\(model.provider)-\(model.model)")
+
+                  if model.id != models.last?.id {
+                    Divider()
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        HermesPanel {
           VStack(alignment: .leading, spacing: 14) {
             Label(chinese ? "自定义模型" : "Custom model", systemImage: "cpu")
               .font(HermesFonts.display(17))
@@ -1234,7 +1418,44 @@ private struct HermesModelsPage: View {
                 .font(HermesFonts.body(11))
                 .foregroundStyle(appearance.palette.secondary)
             }
-            modelField(chinese ? "模型名称" : "Model", text: $modelName)
+            Button {
+              onAction(
+                .modelDiscover,
+                HermesRouteActionPayload(
+                  route: "models",
+                  fields: ["apiKey": apiKey, "baseUrl": baseUrl]
+                )
+              )
+            } label: {
+              Label(chinese ? "检测可用模型" : "Detect models", systemImage: "magnifyingglass")
+            }
+            .buttonStyle(.bordered)
+            .disabled(baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .accessibilityIdentifier("hermes-detect-models")
+
+            if detectedModels.isEmpty {
+              modelField(chinese ? "模型名称" : "Model", text: $modelName)
+            } else {
+              VStack(alignment: .leading, spacing: 6) {
+                Text(chinese ? "可用模型" : "Available model")
+                  .font(HermesFonts.bodyBold(12))
+                  .foregroundStyle(appearance.palette.secondary)
+                Picker(chinese ? "可用模型" : "Available model", selection: $modelName) {
+                  ForEach(detectedModels, id: \.self) { model in
+                    Text(model).tag(model)
+                  }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 8)
+                .background(appearance.palette.surface)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay {
+                  RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(appearance.palette.border, lineWidth: 1)
+                }
+              }
+            }
 
             VStack(alignment: .leading, spacing: 6) {
               Text(chinese ? "接口协议" : "API protocol")
@@ -1308,6 +1529,9 @@ private struct HermesModelsPage: View {
     }
     .onAppear { apply(configuration) }
     .onChange(of: configuration) { _, next in apply(next) }
+    .onChange(of: detectedModels) { _, next in
+      if let first = next.first, !next.contains(modelName) { modelName = first }
+    }
   }
 
   private var isValid: Bool {
@@ -1353,7 +1577,7 @@ private struct HermesModelsPage: View {
     apiKey = ""
     apiMode = value.apiMode
     baseUrl = value.baseUrl
-    contextLength = String(value.contextLength)
+    contextLength = String(value.contextLength > 0 ? value.contextLength : 131072)
     modelName = value.model
     reasoningEffort = value.reasoningEffort
   }

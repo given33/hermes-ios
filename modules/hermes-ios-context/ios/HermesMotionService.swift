@@ -16,6 +16,26 @@ final class HermesMotionService {
   private(set) var snapshot: [String: Any]?
   var onMotion: (([String: Any]) -> Void)?
 
+  func requestAuthorization() async -> String {
+    guard CMMotionActivityManager.isActivityAvailable() else { return "unavailable" }
+    let current = CMMotionActivityManager.authorizationStatus()
+    guard current == .notDetermined else { return HermesAuthorization.motion(current) }
+
+    return await withCheckedContinuation { continuation in
+      let gate = HermesMotionAuthorizationGate(continuation)
+      manager.queryActivityStarting(
+        from: Date().addingTimeInterval(-60),
+        to: Date(),
+        to: queue
+      ) { _, _ in
+        gate.resolve(HermesAuthorization.motion(CMMotionActivityManager.authorizationStatus()))
+      }
+      DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60) {
+        gate.resolve(HermesAuthorization.motion(CMMotionActivityManager.authorizationStatus()))
+      }
+    }
+  }
+
   @discardableResult
   func start() -> Bool {
     guard CMMotionActivityManager.isActivityAvailable() else { return false }
@@ -66,5 +86,22 @@ final class HermesMotionService {
     case .low: return "low"
     @unknown default: return "unknown"
     }
+  }
+}
+
+private final class HermesMotionAuthorizationGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<String, Never>?
+
+  init(_ continuation: CheckedContinuation<String, Never>) {
+    self.continuation = continuation
+  }
+
+  func resolve(_ status: String) {
+    lock.lock()
+    let pending = continuation
+    continuation = nil
+    lock.unlock()
+    pending?.resume(returning: status)
   }
 }

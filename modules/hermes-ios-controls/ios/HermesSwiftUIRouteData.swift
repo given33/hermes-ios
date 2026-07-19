@@ -10,6 +10,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let files: [HermesFileSnapshot]
   let analytics: HermesAnalyticsSnapshot
   let models: [HermesModelSnapshot]
+  let detectedModels: [String]
   let logs: [HermesLogSnapshot]
   let cron: [HermesCronJobSnapshot]
   let skills: [HermesSkillSnapshot]
@@ -30,6 +31,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     case files
     case analytics
     case models
+    case detectedModels
     case logs
     case cron
     case skills
@@ -51,6 +53,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     files: [HermesFileSnapshot] = [],
     analytics: HermesAnalyticsSnapshot = .empty,
     models: [HermesModelSnapshot] = [],
+    detectedModels: [String] = [],
     logs: [HermesLogSnapshot] = [],
     cron: [HermesCronJobSnapshot] = [],
     skills: [HermesSkillSnapshot] = [],
@@ -70,6 +73,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.files = files
     self.analytics = analytics
     self.models = models
+    self.detectedModels = detectedModels
     self.logs = logs
     self.cron = cron
     self.skills = skills
@@ -104,6 +108,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     models = try container.decodeIfPresent(
       [HermesModelSnapshot].self,
       forKey: .models
+    ) ?? []
+    detectedModels = try container.decodeIfPresent(
+      [String].self,
+      forKey: .detectedModels
     ) ?? []
     logs = try container.decodeIfPresent(
       [HermesLogSnapshot].self,
@@ -477,6 +485,7 @@ enum HermesRouteAction: String, CaseIterable {
   case fileImport = "file.import"
   case folderCreate = "folder.create"
   case modelSelect = "model.select"
+  case modelDiscover = "model.discover"
   case modelSave = "model.save"
   case modelTest = "model.test"
   case logsFilter = "logs.filter"
@@ -502,7 +511,6 @@ enum HermesRouteAction: String, CaseIterable {
   case profileDelete = "profile.delete"
   case configUpdate = "config.update"
   case configImport = "config.import"
-  case environmentUpsert = "environment.upsert"
   case environmentDelete = "environment.delete"
   case systemRestart = "system.restart"
   case systemUpdate = "system.update"

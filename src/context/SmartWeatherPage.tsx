@@ -1,16 +1,37 @@
-import { MapPin } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { MapPin, RefreshCw, Settings } from 'lucide-react-native';
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ErrorInfo,
+  type ReactNode,
+} from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { HermesStandardMapView, type IOSCoordinate, type IOSTodayPlace } from '../../modules/hermes-ios-context';
+import {
+  HermesStandardMapView,
+  hasNativeStandardMapView,
+  type IOSCoordinate,
+  type IOSTodayPlace,
+} from '../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../api/HermesApiClient';
+import { NativeButton } from '../components/ui/NativeButton';
+import { ScreenState } from '../components/ui/ScreenState';
 import { useTheme } from '../design/ThemeProvider';
 import {
   IOSIntelligenceApi,
   type IOSActiveForecast,
   type IOSIntelligenceSnapshot,
 } from './IOSIntelligenceApi';
+import {
+  dayKey,
+  normalizeTimestamp,
+  timestampOverlapsLocalDay,
+} from './smart-weather-day';
+import { useIOSPermissionCoordinator } from './IOSContextProvider';
 
 interface SmartWeatherPageProps {
   client?: HermesApiClient;
@@ -31,18 +52,32 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   const { tokens } = useTheme();
   const api = useMemo(() => client ? new IOSIntelligenceApi(client) : null, [client]);
   const [snapshot, setSnapshot] = useState<IOSIntelligenceSnapshot>(EMPTY);
-  const [localDayKey, setLocalDayKey] = useState(() => dayKey(new Date()));
+  const [currentDayKey, setCurrentDayKey] = useState(() => dayKey(new Date()));
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [mapError, setMapError] = useState('');
+  const [mapAttempt, setMapAttempt] = useState(0);
+  const permissions = useIOSPermissionCoordinator();
 
   const reload = useCallback(async () => {
     if (!api) {
+      setLoading(false);
+      setLoadError(locale === 'zh' ? '尚未连接 Hermes 服务' : 'Hermes is not connected');
       onReady?.();
       return;
     }
+    setLoading(true);
     try {
       setSnapshot(await api.snapshot());
+      setLoadError('');
     } catch (error) {
-      notify(error instanceof Error ? error.message : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load'));
+      const message = error instanceof Error
+        ? error.message
+        : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load');
+      setLoadError(message);
+      notify(message);
     } finally {
+      setLoading(false);
       onReady?.();
     }
   }, [api, locale, notify, onReady]);
@@ -56,7 +91,7 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   useEffect(() => {
     const timer = setInterval(() => {
       const next = dayKey(new Date());
-      setLocalDayKey((current) => {
+      setCurrentDayKey((current) => {
         if (current === next) return current;
         // The cloud keeps the immutable history; the native surface starts a
         // fresh local-day view as soon as the device crosses midnight.
@@ -71,8 +106,14 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
     return () => clearInterval(timer);
   }, []);
 
-  const todayTrajectory = snapshot.trajectory.filter((point) => dayKey(new Date(normalizeTimestamp(point.observed_at))) === localDayKey);
-  const todayPlaces = snapshot.places.filter((place) => dayKey(new Date(normalizeTimestamp(place.arrived_at))) === localDayKey);
+  const todayTrajectory = snapshot.trajectory.filter((point) => (
+    dayKey(new Date(normalizeTimestamp(point.observed_at))) === currentDayKey
+  ));
+  const todayPlaces = snapshot.places.filter((place) => timestampOverlapsLocalDay(
+    place.arrived_at,
+    place.departed_at,
+    currentDayKey,
+  ));
   const visibleForecasts = (snapshot.active_forecasts || snapshot.active_forecast || [])
     .map(normalizeForecast)
     .filter((forecast) => !forecast.expires_at || normalizeTimestamp(forecast.expires_at) > Date.now());
@@ -96,15 +137,116 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   ));
   const foreground = tokens.colors.foreground;
   const secondary = tokens.colors.textSecondary;
+  const locationState = permissions.snapshot.permissions.location;
+  const locationMessage = permissionMessage(
+    permissions.snapshot.phase,
+    locationState,
+    permissions.snapshot.locationAlways,
+    permissions.snapshot.locationPrecise,
+    locale,
+  );
+  const retry = useCallback(() => {
+    setMapError('');
+    setMapAttempt((value) => value + 1);
+    permissions.retry();
+    void reload();
+  }, [permissions, reload]);
+  const mapUnavailableMessage = mapError || (!hasNativeStandardMapView
+    ? (locale === 'zh'
+      ? '当前安装包缺少智能天气原生地图组件，请安装最新构建后重试。'
+      : 'This build is missing the native Smart Weather map. Install the latest build and retry.')
+    : '');
 
   return (
     <View style={[styles.root, { backgroundColor: tokens.colors.background }]}>
-      <HermesStandardMapView
-        places={places}
-        showsUserLocation
-        style={StyleSheet.absoluteFill}
-        track={track}
-      />
+      <View style={StyleSheet.absoluteFill}>
+        {mapUnavailableMessage ? (
+          <ScreenState
+            kind="error"
+            message={mapUnavailableMessage}
+            onRetry={retry}
+            retryLabel={locale === 'zh' ? '重试' : 'Retry'}
+            testID="smart-weather-map-error"
+          />
+        ) : (
+          <NativeMapErrorBoundary
+            fallback={(
+              <ScreenState
+                kind="error"
+                message={locale === 'zh' ? '原生地图加载失败' : 'The native map failed to load'}
+                onRetry={retry}
+                retryLabel={locale === 'zh' ? '重试' : 'Retry'}
+              />
+            )}
+            onError={(error) => setMapError(error.message)}
+            resetKey={mapAttempt}
+          >
+            <HermesStandardMapView
+              onLocationPress={() => permissions.retry()}
+              places={places}
+              showsUserLocation={locationState === 'authorized' || locationState === 'limited'}
+              style={StyleSheet.absoluteFill}
+              track={track}
+            />
+          </NativeMapErrorBoundary>
+        )}
+
+        {loading && snapshot.date === '' ? (
+          <View style={[styles.statusOverlay, { backgroundColor: tokens.colors.background }]}>
+            <ScreenState
+              kind="loading"
+              message={locale === 'zh' ? '正在加载智能天气' : 'Loading Smart Weather'}
+              testID="smart-weather-loading"
+            />
+          </View>
+        ) : null}
+
+        {!loading && loadError ? (
+          <View style={[styles.statusOverlay, { backgroundColor: tokens.colors.background }]}>
+            <ScreenState
+              kind="error"
+              message={loadError}
+              onRetry={reload}
+              retryLabel={locale === 'zh' ? '重新加载' : 'Reload'}
+              testID="smart-weather-load-error"
+            />
+          </View>
+        ) : null}
+
+        {locationMessage ? (
+          <View
+            style={[
+              styles.permissionBanner,
+              { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border },
+            ]}
+            testID="smart-weather-permission-status"
+          >
+            <Text style={[styles.permissionText, { color: secondary }]}>{locationMessage}</Text>
+            <View style={styles.permissionActions}>
+              <NativeButton
+                accessibilityLabel={locale === 'zh' ? '重试位置权限' : 'Retry location permission'}
+                onPress={retry}
+                outlined
+                prefix={<RefreshCw color={foreground} size={15} />}
+                size="sm"
+              >
+                {locale === 'zh' ? '重试' : 'Retry'}
+              </NativeButton>
+              {(locationState === 'denied' || locationState === 'restricted') ? (
+                <NativeButton
+                  accessibilityLabel={locale === 'zh' ? '打开系统设置' : 'Open system settings'}
+                  onPress={() => { void permissions.openSettings(); }}
+                  outlined
+                  prefix={<Settings color={foreground} size={15} />}
+                  size="sm"
+                >
+                  {locale === 'zh' ? '设置' : 'Settings'}
+                </NativeButton>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+      </View>
 
       <View
         style={[
@@ -156,8 +298,66 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   );
 }
 
-function normalizeTimestamp(value: number): number {
-  return value < 10_000_000_000 ? value * 1000 : value;
+interface NativeMapErrorBoundaryProps {
+  children: ReactNode;
+  fallback: ReactNode;
+  onError(error: Error): void;
+  resetKey: number;
+}
+
+class NativeMapErrorBoundary extends Component<NativeMapErrorBoundaryProps, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, _info: ErrorInfo): void {
+    this.props.onError(error);
+  }
+
+  componentDidUpdate(previous: NativeMapErrorBoundaryProps): void {
+    if (previous.resetKey !== this.props.resetKey && this.state.failed) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+function permissionMessage(
+  phase: string,
+  state: string,
+  always: boolean,
+  precise: boolean,
+  locale: 'en' | 'zh',
+): string {
+  if (phase === 'requesting' || phase === 'idle') {
+    return locale === 'zh' ? '正在依次确认定位与数据权限' : 'Checking location and data permissions';
+  }
+  if (state === 'denied' || state === 'restricted') {
+    return locale === 'zh'
+      ? '定位权限未开启，当前位置和新轨迹暂不可用。'
+      : 'Location permission is off. Current location and new tracks are unavailable.';
+  }
+  if (state === 'unavailable') {
+    return locale === 'zh'
+      ? '此设备或安装包不支持定位能力。'
+      : 'Location is unavailable on this device or build.';
+  }
+  if (state === 'notDetermined' || phase === 'paused') {
+    return locale === 'zh'
+      ? '定位授权尚未完成，完成系统提示后可重试。'
+      : 'Location authorization is unfinished. Complete the system prompt, then retry.';
+  }
+  if (!always || !precise || state === 'limited') {
+    return locale === 'zh'
+      ? '定位权限受限；请开启“始终”和“精确位置”以恢复完整轨迹。'
+      : 'Location is limited. Enable Always and Precise Location for complete tracks.';
+  }
+  return '';
 }
 
 function normalizeForecast(forecast: IOSActiveForecast): IOSActiveForecast {
@@ -169,10 +369,6 @@ function normalizeForecast(forecast: IOSActiveForecast): IOSActiveForecast {
     starts_at: forecast.starts_at ?? forecast.valid_from ?? nested.starts_at,
     expires_at: forecast.expires_at ?? forecast.valid_until ?? nested.expires_at,
   };
-}
-
-function dayKey(value: Date): string {
-  return `${value.getFullYear()}-${value.getMonth() + 1}-${value.getDate()}`;
 }
 
 function formatRange(start: number, end: number | null | undefined, locale: 'en' | 'zh') {
@@ -194,6 +390,30 @@ function formatRange(start: number, end: number | null | undefined, locale: 'en'
 
 const styles = StyleSheet.create({
   root: { flex: 1, overflow: 'hidden' },
+  statusOverlay: {
+    alignItems: 'center',
+    bottom: '38%',
+    justifyContent: 'center',
+    left: 0,
+    opacity: 0.96,
+    position: 'absolute',
+    right: 0,
+    top: 0,
+  },
+  permissionBanner: {
+    alignItems: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 10,
+    left: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    position: 'absolute',
+    right: 12,
+    top: 12,
+  },
+  permissionText: { flex: 1, fontSize: 12, lineHeight: 17 },
+  permissionActions: { flexDirection: 'row', gap: 7 },
   timeline: {
     borderTopWidth: StyleSheet.hairlineWidth,
     bottom: 0,

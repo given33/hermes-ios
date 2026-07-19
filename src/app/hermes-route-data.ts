@@ -29,6 +29,7 @@ import {
   type CustomModelConfiguration,
   type SessionSummary,
 } from '../api/HermesCloudApi';
+import { isFreshObservation } from '../api/managed-node-status';
 import {
   localizeHermesIntegrationDescription,
   localizeHermesIntegrationName,
@@ -96,7 +97,11 @@ export async function performHermesSwiftUIRouteAction(
   api: HermesCloudApi,
   event: HermesSwiftUIRouteActionEvent,
   profile: string,
-): Promise<'reload' | 'none' | { message: string; reload?: boolean }> {
+): Promise<'reload' | 'none' | {
+  detectedModels?: readonly string[];
+  message: string;
+  reload?: boolean;
+}> {
   const { action, payload } = event;
   const value = payload.value?.trim() || payload.name?.trim() || '';
   switch (action) {
@@ -134,7 +139,13 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileImport:
       for (const uri of payload.uris || []) {
         const name = fileNameFromUri(uri);
-        await api.uploadAccountFile({ name, uri });
+        try {
+          await api.uploadAccountFile({ name, uri });
+        } finally {
+          if (payload.fields?.stagedImport === 'true') {
+            await removeStagedFileImport(uri);
+          }
+        }
       }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileDownload:
@@ -166,6 +177,17 @@ export async function performHermesSwiftUIRouteAction(
       if (!selection) return 'none';
       await api.setModel(selection.provider, selection.model, profile);
       return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.modelDiscover: {
+      const fields = payload.fields || {};
+      const result = await api.discoverCustomModels(
+        fields.baseUrl || '',
+        fields.apiKey || '',
+      );
+      return {
+        detectedModels: result.models,
+        message: `检测到 ${result.models.length} 个可用模型`,
+      };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.modelSave:
       await api.saveCustomModel(customModelConfiguration(payload.fields), profile);
@@ -282,13 +304,9 @@ export async function performHermesSwiftUIRouteAction(
       await api.saveConfig({ ...config }, profile);
       return 'reload';
     }
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.environmentUpsert:
-      if (!payload.id && !payload.name) return 'none';
-      await api.setEnvironmentVariable(payload.id || payload.name || '', payload.value || '', profile);
-      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.environmentDelete:
       if (!payload.id) return 'none';
-      await api.deleteEnvironmentVariable(payload.id, profile);
+      await api.deleteModelCredential(payload.id, profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRestart:
       await api.restartGateway();
@@ -445,24 +463,92 @@ function analyticsSnapshot(source: unknown) {
 function modelsSnapshot(source: unknown): HermesSwiftUIModelSnapshot[] {
   if (!isRecord(source)) return [];
   const info = isRecord(source.info) ? source.info : {};
+  const options = isRecord(source.options) ? source.options : {};
   const custom = isRecord(source.custom) ? source.custom : {};
-  const currentModel = stringValue(custom.model) || stringValue(info.model);
-  if (!currentModel) return [];
-  return [{
-    id: encodeModelSelection('custom', currentModel),
-    model: currentModel,
-    provider: 'custom',
-    context: formatContextLength(
-      numberValue(custom.contextLength) || numberValue(info.effective_context_length),
-    ),
-    baseUrl: stringValue(custom.baseUrl),
-    apiKeyConfigured: custom.apiKeyConfigured === true,
-    apiKeyPreview: stringValue(custom.apiKeyPreview),
-    apiMode: customApiMode(stringValue(custom.apiMode)),
-    contextLength: numberValue(custom.contextLength) || numberValue(info.effective_context_length),
-    reasoningEffort: customReasoningEffort(stringValue(custom.reasoningEffort)),
-    active: true,
-  }];
+  const currentProvider = stringValue(info.provider) || stringValue(options.provider);
+  const currentModel = stringValue(info.model) || stringValue(options.model);
+  const currentContextLength = numberValue(info.effective_context_length);
+  const snapshots: HermesSwiftUIModelSnapshot[] = [];
+  const indexes = new Map<string, number>();
+
+  const add = (snapshot: HermesSwiftUIModelSnapshot) => {
+    const existing = indexes.get(snapshot.id);
+    if (existing === undefined) {
+      indexes.set(snapshot.id, snapshots.length);
+      snapshots.push(snapshot);
+    } else {
+      snapshots[existing] = snapshot;
+    }
+  };
+
+  const providers = Array.isArray(options.providers) ? options.providers : [];
+  for (const providerEntry of providers) {
+    if (!isRecord(providerEntry)) continue;
+    const provider = stringValue(providerEntry.slug);
+    if (!provider || !Array.isArray(providerEntry.models)) continue;
+    for (const modelEntry of providerEntry.models) {
+      const model = typeof modelEntry === 'string'
+        ? modelEntry
+        : isRecord(modelEntry)
+          ? stringValue(modelEntry.id) || stringValue(modelEntry.model) || stringValue(modelEntry.name)
+          : '';
+      if (!model) continue;
+      const active = provider === currentProvider && model === currentModel;
+      const contextLength = active
+        ? currentContextLength
+        : isRecord(modelEntry) ? numberValue(modelEntry.context_length) : 0;
+      add({
+        active,
+        apiKeyConfigured: false,
+        apiKeyPreview: '',
+        apiMode: 'chat_completions',
+        baseUrl: '',
+        context: formatContextLength(contextLength),
+        contextLength,
+        id: encodeModelSelection(provider, model),
+        model,
+        provider,
+        reasoningEffort: 'none',
+      });
+    }
+  }
+
+  if (currentProvider && currentModel) {
+    add({
+      active: true,
+      apiKeyConfigured: false,
+      apiKeyPreview: '',
+      apiMode: 'chat_completions',
+      baseUrl: '',
+      context: formatContextLength(currentContextLength),
+      contextLength: currentContextLength,
+      id: encodeModelSelection(currentProvider, currentModel),
+      model: currentModel,
+      provider: currentProvider,
+      reasoningEffort: 'none',
+    });
+  }
+
+  const customModel = stringValue(custom.model);
+  if (customModel) {
+    const contextLength = numberValue(custom.contextLength)
+      || (currentProvider === 'custom' && customModel === currentModel ? currentContextLength : 0);
+    add({
+      active: currentProvider === 'custom' && customModel === currentModel,
+      apiKeyConfigured: custom.apiKeyConfigured === true,
+      apiKeyPreview: stringValue(custom.apiKeyPreview),
+      apiMode: customApiMode(stringValue(custom.apiMode)),
+      baseUrl: stringValue(custom.baseUrl),
+      context: formatContextLength(contextLength),
+      contextLength,
+      id: encodeModelSelection('custom', customModel),
+      model: customModel,
+      provider: 'custom',
+      reasoningEffort: customReasoningEffort(stringValue(custom.reasoningEffort)),
+    });
+  }
+
+  return snapshots;
 }
 
 function customModelConfiguration(
@@ -753,20 +839,17 @@ function configSnapshot(source: unknown): HermesSwiftUIConfigSnapshot {
 
 function environmentSnapshot(source: unknown): HermesSwiftUIEnvironmentSecretSnapshot[] {
   const root = isRecord(source) ? source : {};
-  return Object.entries(root).flatMap(([key, value]) => {
-    if (isRecord(value)) {
-      return [{
-        id: key,
-        key,
-        maskedValue: value.is_set === true
-          ? stringValue(value.redacted_value) || '••••••••'
-          : '未设置',
-      }];
-    }
+  if (!Array.isArray(root.credentials)) return [];
+  return root.credentials.flatMap((value): HermesSwiftUIEnvironmentSecretSnapshot[] => {
+    if (!isRecord(value)) return [];
+    const id = stringValue(value.id);
+    if (!id) return [];
+    const provider = stringValue(value.provider) || 'custom';
+    const model = stringValue(value.model);
     return [{
-      id: key,
-      key,
-      maskedValue: typeof value === 'string' ? maskSecret(value) : '••••••••',
+      id,
+      key: model ? `${provider} · ${model}` : provider,
+      maskedValue: stringValue(value.masked_value) || '••••••••',
     }];
   });
 }
@@ -776,13 +859,15 @@ function systemSnapshot(source: unknown): HermesSwiftUISystemSnapshot {
   const status = isRecord(root.status) ? root.status : {};
   const stats = isRecord(root.stats) ? root.stats : {};
   const managed = isRecord(root.managedNodes) ? root.managedNodes : {};
+  const managedConfigured = managed.configured === true;
   const managedNodes = Array.isArray(managed.nodes) ? managed.nodes.filter(isRecord) : [];
   const nodeSnapshots = managedNodes.map((node) => {
     const metrics = isRecord(node.metrics) ? node.metrics : {};
     const memoryTotal = numberValue(metrics.memory_total_bytes);
     const memoryAvailable = numberValue(metrics.memory_available_bytes);
     const gatewayState = stringValue(node.gateway_state);
-    const gatewayOnline = node.online === true
+    const gatewayOnline = isFreshObservation(node)
+      && node.online === true
       && ['active', 'online', 'ready', 'running'].includes(gatewayState.toLowerCase());
     return {
       id: stringValue(node.id),
@@ -818,22 +903,19 @@ function systemSnapshot(source: unknown): HermesSwiftUISystemSnapshot {
         ?? status.active_sessions
         ?? '-',
     ),
-    gatewayOnline: primaryNode?.gatewayOnline ?? Boolean(
+    // Once managed-node monitoring is configured, an empty/stale node list is
+    // an unavailable observation. Never let the older aggregate status flag
+    // turn a missing DBB3/WSL heartbeat back into "online".
+    gatewayOnline: primaryNode?.gatewayOnline ?? (managedConfigured ? false : Boolean(
       status.online
         ?? status.gateway_online
         ?? status.gateway_running
         ?? gateway.running
         ?? status.running,
-    ),
+    )),
     nodes: nodeSnapshots,
     operationMessage: stringValue(root.operation_message) || undefined,
   };
-}
-
-function maskSecret(value: string): string {
-  if (!value) return '';
-  if (value.length <= 8) return '••••••••';
-  return `${value.slice(0, 3)}${'•'.repeat(Math.min(12, value.length - 6))}${value.slice(-3)}`;
 }
 
 async function presentAccountFile(
@@ -884,6 +966,16 @@ function fileNameFromUri(value: string): string {
     return decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || 'attachment');
   } catch {
     return value.split(/[\\/]/).filter(Boolean).pop() || 'attachment';
+  }
+}
+
+async function removeStagedFileImport(uri: string): Promise<void> {
+  try {
+    const { File } = await import('expo-file-system');
+    const file = new File(uri);
+    if (file.exists) file.delete();
+  } catch {
+    // Native stale-batch cleanup remains the fallback after interrupted uploads.
   }
 }
 

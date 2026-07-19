@@ -147,6 +147,35 @@ test('notification API resolves the current auth device and uses only device del
   assert.equal(requests[2].init.method, 'DELETE');
 });
 
+test('unified permission coordination prevents APNs from presenting a second system sheet', async () => {
+  let requested = 0;
+  let unregistered = 0;
+  const result = await synchronizeApnsRegistration(
+    {
+      async resolveCurrentDeviceId() { return 'ios-device'; },
+      async registerApns() { assert.fail('an undetermined permission cannot register'); },
+      async unregisterApns() { unregistered += 1; },
+    },
+    'ios-device',
+    {
+      available: true,
+      async getPermission() { return 'undetermined'; },
+      async requestPermission() {
+        requested += 1;
+        return 'granted';
+      },
+      async getDevicePushToken() { assert.fail('token must not be read'); },
+    },
+    { bundleId: 'com.test.hermes', environment: 'production' },
+    undefined,
+    { requestUndeterminedPermission: false },
+  );
+
+  assert.deepEqual(result, { status: 'denied', deviceId: 'ios-device' });
+  assert.equal(requested, 0);
+  assert.equal(unregistered, 1);
+});
+
 test('Hermes notification taps accept conversation and smart-weather deep links', () => {
   const target = parseHermesNotificationPayload({
     hermes: {

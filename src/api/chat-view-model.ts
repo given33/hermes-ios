@@ -78,6 +78,37 @@ export interface HermesChatAttachment {
   size?: number;
 }
 
+export interface HostedTurnVisibilityFailure {
+  message: HermesChatViewMessage;
+  turnId: string;
+}
+
+export function hostedTurnVisibilityFailure(
+  turnId: string,
+  chinese = true,
+  failedAt = Date.now(),
+): HostedTurnVisibilityFailure {
+  return {
+    turnId,
+    message: {
+      avatarRole: 'hermes',
+      content: chinese
+        ? '服务器没有确认任务已启动，请检查模型配置或网络后重试。'
+        : 'The server did not confirm that the task started. Check the model configuration or network and try again.',
+      completedAt: failedAt,
+      createdAt: failedAt,
+      durationMs: 0,
+      id: `hosted-sync-failed-${turnId}`,
+      name: 'Hermes Agent',
+      role: 'assistant',
+      roleLabel: chinese ? '任务未启动' : 'Task not started',
+      roleStage: 'chat',
+      status: 'failed',
+      updatedAt: failedAt,
+    },
+  };
+}
+
 const TERMINAL_TURN_STATES = new Set([
   'cancelled',
   'completed',
@@ -103,11 +134,13 @@ export function chatModelConfigurationError(
   const info = isRecord(source.info) ? source.info : {};
   const options = isRecord(source.options) ? source.options : {};
   const custom = isRecord(source.custom) ? source.custom : {};
-  const model = stringValue(custom.model) || stringValue(info.model) || stringValue(options.model);
-  const provider = stringValue(info.provider) || stringValue(options.provider);
+  const model = stringValue(info.model) || stringValue(options.model) || stringValue(custom.model);
   const customBaseUrl = stringValue(custom.baseUrl);
-  const customKeyConfigured = custom.apiKeyConfigured === true;
-  if (!model || (Object.keys(custom).length > 0 && (!customBaseUrl || !customKeyConfigured))) {
+  const provider = stringValue(info.provider)
+    || stringValue(options.provider)
+    || (customBaseUrl ? 'custom' : '');
+  const customActive = provider.toLowerCase() === 'custom';
+  if (!model || !provider || (customActive && !customBaseUrl)) {
     return chinese
       ? '尚未配置可用模型。请先在“模型与工具”中填写 Base URL、API 密钥并选择模型。'
       : 'No usable model is configured. Add a Base URL and API key, then select a model in Model & tools.';
@@ -120,8 +153,8 @@ export function chatModelConfigurationError(
   });
   if (isRecord(currentProvider) && currentProvider.authenticated === false) {
     return chinese
-      ? '当前模型没有可用的连接凭据。请在“模型与工具”中检查 Base URL 和 API 密钥后重试。'
-      : 'The current model has no usable credentials. Check its Base URL and API key in Model & tools.';
+      ? '当前模型没有可用的连接凭据。请在“模型与工具”中检查提供商登录或密钥配置后重试。'
+      : 'The current model has no usable credentials. Check the provider sign-in or key in Model & tools.';
   }
   return null;
 }
@@ -307,6 +340,37 @@ export function conversationRunningHostedTurnId(conversation: SingleConversation
   });
   running.sort((left, right) => right.timestamp - left.timestamp);
   return running[0]?.id || '';
+}
+
+export function conversationHostedTurnState(
+  conversation: SingleConversation,
+  turnId: string,
+): 'missing' | 'running' | 'terminal' {
+  const normalizedTurnId = turnId.trim();
+  if (!normalizedTurnId) return 'missing';
+  for (const [key, record] of Object.entries(conversation.hosted_turns || {})) {
+    if (!isRecord(record)) continue;
+    const id = stringValue(record.turn_id) || stringValue(record.id) || key;
+    if (id !== normalizedTurnId) continue;
+    const status = stringValue(record.status).toLowerCase();
+    return status && TERMINAL_TURN_STATES.has(status) ? 'terminal' : 'running';
+  }
+  return 'missing';
+}
+
+export function reconcileHostedTurnVisibilityFailures(
+  conversation: SingleConversation,
+  messages: HermesChatViewMessage[],
+  failures: readonly HostedTurnVisibilityFailure[],
+): { failures: HostedTurnVisibilityFailure[]; messages: HermesChatViewMessage[] } {
+  let nextMessages = messages;
+  const remaining: HostedTurnVisibilityFailure[] = [];
+  for (const failure of failures) {
+    if (conversationHostedTurnState(conversation, failure.turnId) !== 'missing') continue;
+    remaining.push(failure);
+    nextMessages = upsertChatMessage(nextMessages, failure.message);
+  }
+  return { failures: remaining, messages: nextMessages };
 }
 
 export function attachmentContext(

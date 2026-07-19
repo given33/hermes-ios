@@ -17,7 +17,6 @@ import {
   Menu,
   MessageSquare,
   Package,
-  Palette,
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
@@ -54,22 +53,18 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Keyboard,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import {
-  Gesture,
-  GestureDetector,
-} from 'react-native-gesture-handler';
 import Reanimated, {
   Easing,
   FadeInRight,
   FadeOutLeft,
   interpolate,
-  runOnJS,
   useAnimatedStyle,
   useSharedValue,
   withSpring,
@@ -161,7 +156,6 @@ const REFERENCE_SIDEBAR_GROUPS = [
     routes: [
       { labels: { en: 'Scheduled tasks', zh: '定时任务' }, path: '/cron', symbol: 'clock.arrow.circlepath' },
       { labels: { en: 'Skills', zh: '技能' }, path: '/skills', symbol: 'shippingbox' },
-      { labels: { en: 'Plugins', zh: '插件管理' }, path: '/plugins', symbol: 'puzzlepiece.extension' },
       { labels: { en: 'MCP', zh: 'MCP' }, path: '/mcp', symbol: 'network' },
       { labels: { en: 'Device pairing', zh: '设备配对' }, path: '/pairing', symbol: 'lock.shield' },
       { labels: { en: 'Channels', zh: '消息渠道' }, path: '/channels', symbol: 'dot.radiowaves.left.and.right' },
@@ -214,7 +208,6 @@ const REFERENCE_SIDEBAR_FALLBACK_ICONS = {
   '/mcp': 'Globe',
   '/models': 'Cpu',
   '/pairing': 'ShieldCheck',
-  '/plugins': 'Puzzle',
   '/profiles': 'Users',
   '/sessions': 'MessageSquare',
   '/skills': 'Package',
@@ -310,12 +303,7 @@ export function NativeShell({
   const layout = useAdaptiveLayout();
   const useSwiftUISidebar =
     Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
-  const {
-    availableThemes,
-    setTheme,
-    themeName,
-    tokens,
-  } = useTheme();
+  const { tokens } = useTheme();
   const compactNavigationRef = useNavigationContainerRef<CompactStackParamList>();
   const composition = useMemo(
     () => composeRouteRegistry({ config, locale, manifests }),
@@ -343,7 +331,6 @@ export function NativeShell({
     : 0;
   const sidebarWidth = useSharedValue(visibleSidebarWidth);
   const drawerTranslation = useSharedValue(initialDrawerTranslation);
-  const [canGoBack, setCanGoBack] = useState(false);
   const pendingSidebarPath = useRef<string | null>(null);
   const pendingSidebarFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSidebarCloseFrame = useRef<number | null>(null);
@@ -357,19 +344,8 @@ export function NativeShell({
     () => JSON.stringify(resolvedGatewayStatuses),
     [resolvedGatewayStatuses],
   );
-  const sidebarThemesJson = useMemo(
-    () => JSON.stringify(availableThemes.map(({ label, name }) => ({ label, name }))),
-    [availableThemes],
-  );
-  const changeSidebarTheme = useCallback((name: string) => {
-    if (!availableThemes.some((theme) => theme.name === name)) return;
-    void setTheme(name);
-  }, [availableThemes, setTheme]);
   const rootBackground = opaque(tokens.colors.background);
-  const sidebarBackground = multiplyAlpha(
-    rootBackground,
-    state.mode === 'compact' ? 0.96 : 1,
-  );
+  const sidebarBackground = rootBackground;
   const borderStrong = multiplyAlpha(tokens.colors.foreground, 0.2);
   const borderSoft = multiplyAlpha(tokens.colors.foreground, 0.1);
 
@@ -413,6 +389,7 @@ export function NativeShell({
     }
   }, []);
   const openMobile = useCallback(() => {
+    Keyboard.dismiss();
     clearPendingSidebarSelection();
     dispatch({ type: 'open-mobile' });
   }, [clearPendingSidebarSelection]);
@@ -436,6 +413,7 @@ export function NativeShell({
   useEffect(() => clearPendingSidebarSelection, [clearPendingSidebarSelection]);
   const navigate = useCallback(
     (path: string) => {
+      Keyboard.dismiss();
       const resolved = resolveNativeShellPath(composition.routes, path);
       const currentRoute = compactNavigationRef.getCurrentRoute();
       const currentPath = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
@@ -454,6 +432,7 @@ export function NativeShell({
   );
   const selectSidebarRoute = useCallback(
     (path: string) => {
+      Keyboard.dismiss();
       const resolved = resolveNativeShellPath(composition.routes, path);
       if (
         state.mode === 'compact'
@@ -504,11 +483,11 @@ export function NativeShell({
     ],
   );
   const syncCompactNavigation = useCallback(() => {
+    Keyboard.dismiss();
     const currentRoute = compactNavigationRef.getCurrentRoute();
     const current = currentRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
       ? currentRoute.params?.path
       : currentRoute?.name;
-    setCanGoBack(compactNavigationRef.canGoBack());
     if (!current) return;
     const resolved = resolveNativeShellPath(composition.routes, current);
     if (resolved !== state.activePath) {
@@ -538,74 +517,6 @@ export function NativeShell({
       'clamp',
     ),
   }));
-  const openGesture = useMemo(
-    () => Gesture.Pan()
-      .activeOffsetX(8)
-      .failOffsetY([-12, 12])
-      .onUpdate((event) => {
-        drawerTranslation.value = Math.max(
-          -drawerExtent,
-          Math.min(0, -drawerExtent + event.translationX),
-        );
-      })
-      .onEnd((event, success) => {
-        if (!success) {
-          drawerTranslation.value = withSpring(-drawerExtent, IOS_DRAWER_SPRING);
-          return;
-        }
-        const projectedTranslation = event.translationX + event.velocityX * 0.12;
-        if (projectedTranslation > drawerExtent * 0.25) {
-          if (useSwiftUISidebar) {
-            runOnJS(openMobile)();
-            return;
-          }
-          drawerTranslation.value = withSpring(0, {
-            ...IOS_DRAWER_SPRING,
-            velocity: event.velocityX,
-          }, (finished) => {
-            if (finished) runOnJS(openMobile)();
-          });
-        } else {
-          drawerTranslation.value = withSpring(-drawerExtent, {
-            ...IOS_DRAWER_SPRING,
-            velocity: event.velocityX,
-          });
-        }
-      }),
-    [drawerExtent, drawerTranslation, openMobile, useSwiftUISidebar],
-  );
-  const closeGesture = useMemo(
-    () => Gesture.Pan()
-      .activeOffsetX(-8)
-      .failOffsetY([-12, 12])
-      .onUpdate((event) => {
-        drawerTranslation.value = Math.max(
-          -drawerExtent,
-          Math.min(0, event.translationX),
-        );
-      })
-      .onEnd((event, success) => {
-        if (!success) {
-          drawerTranslation.value = withSpring(0, IOS_DRAWER_SPRING);
-          return;
-        }
-        const projectedTranslation = event.translationX + event.velocityX * 0.12;
-        if (projectedTranslation < -drawerExtent * 0.25) {
-          drawerTranslation.value = withSpring(-drawerExtent, {
-            ...IOS_DRAWER_SPRING,
-            velocity: event.velocityX,
-          }, (finished) => {
-            if (finished) runOnJS(closeMobile)();
-          });
-        } else {
-          drawerTranslation.value = withSpring(0, {
-            ...IOS_DRAWER_SPRING,
-            velocity: event.velocityX,
-          });
-        }
-      }),
-    [closeMobile, drawerExtent, drawerTranslation],
-  );
   const activeRoute = composition.routes.find(
     (route) => route.path === state.activePath,
   );
@@ -624,7 +535,6 @@ export function NativeShell({
     openNavigation: openMobile,
     reportRouteReady,
   };
-  const unifiedChatActive = activeRoute?.routeId === 'chat';
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
 
   return (
@@ -640,11 +550,9 @@ export function NativeShell({
                 locale={locale}
                 onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
                 onRequestClose={closeMobile}
-                onThemeChange={(event) => changeSidebarTheme(event.nativeEvent.name)}
                 open
                 presentation="split"
-                themeName={themeName}
-                themesJson={sidebarThemesJson}
+                themeBackgroundColor={rootBackground}
                 style={styles.swiftUISidebar}
               />
             ) : (
@@ -657,14 +565,11 @@ export function NativeShell({
                 insets={insets}
                 locale={locale}
                 navigate={selectSidebarRoute}
-                onThemeChange={changeSidebarTheme}
                 onToggleCollapsed={toggleCollapsed}
                 sidebarBackground={sidebarBackground}
                 slotContext={slotContext}
                 slots={slots}
                 state={state}
-                themeName={themeName}
-                themes={availableThemes}
                 typography={typography}
               />
             )}
@@ -712,13 +617,11 @@ export function NativeShell({
                 initialRouteName={state.activePath}
                 screenOptions={{
                   animation: 'default',
-                  animationMatchesGesture: true,
                   contentStyle: { backgroundColor: rootBackground },
-                  gestureDirection: 'horizontal',
-                  gestureEnabled: true,
+                  gestureEnabled: false,
                   headerBackButtonDisplayMode: 'minimal',
                   headerBackButtonMenuEnabled: true,
-                  headerShadowVisible: true,
+                  headerShadowVisible: false,
                   headerStyle: { backgroundColor: rootBackground },
                   headerTintColor: tokens.colors.foreground,
                   headerTitleAlign: 'left',
@@ -859,40 +762,33 @@ export function NativeShell({
 
       {state.mode === 'compact' ? (
         useSwiftUISidebar ? (
-          <Fragment>
-            {!state.mobileOpen && !canGoBack ? (
-              <GestureDetector gesture={openGesture}>
-                <View
-                  style={[
-                    styles.openEdge,
-                    { top: unifiedChatActive ? insets.top : insets.top + SHELL_METRICS.headerHeight },
-                  ]}
-                />
-              </GestureDetector>
-            ) : null}
-            <View
-              accessibilityElementsHidden={!state.mobileOpen}
-              accessibilityViewIsModal={state.mobileOpen}
-              importantForAccessibility={state.mobileOpen ? 'yes' : 'no-hide-descendants'}
-              pointerEvents={state.mobileOpen ? 'auto' : 'none'}
-              style={styles.swiftUIDrawerHost}
-            >
-              <HermesSwiftUISidebarView
-                {...swiftUIThemeProps}
-                activePath={state.activePath}
-                gatewayStatusesJson={gatewayStatusesJson}
-                locale={locale}
-                onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
-                onRequestClose={closeMobile}
-                onThemeChange={(event) => changeSidebarTheme(event.nativeEvent.name)}
-                open={state.mobileOpen}
-                presentation="drawer"
-                themeName={themeName}
-                themesJson={sidebarThemesJson}
-                style={styles.swiftUISidebar}
-              />
-            </View>
-          </Fragment>
+          <View
+            accessibilityElementsHidden={!state.mobileOpen}
+            accessibilityViewIsModal={state.mobileOpen}
+            importantForAccessibility={state.mobileOpen ? 'yes' : 'no-hide-descendants'}
+            pointerEvents={state.mobileOpen ? 'auto' : 'none'}
+            style={[
+              styles.swiftUIDrawerHost,
+              {
+                backgroundColor: state.mobileOpen
+                  ? rootBackground
+                  : 'transparent',
+              },
+            ]}
+          >
+            <HermesSwiftUISidebarView
+              {...swiftUIThemeProps}
+              activePath={state.activePath}
+              gatewayStatusesJson={gatewayStatusesJson}
+              locale={locale}
+              onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
+              onRequestClose={closeMobile}
+              open={state.mobileOpen}
+              presentation="drawer"
+              themeBackgroundColor={rootBackground}
+              style={styles.swiftUISidebar}
+            />
+          </View>
         ) : (
         <Fragment>
           <Reanimated.View
@@ -920,51 +816,36 @@ export function NativeShell({
             />
           </Reanimated.View>
 
-          {!state.mobileOpen && !canGoBack ? (
-            <GestureDetector gesture={openGesture}>
-              <View
-                style={[
-                  styles.openEdge,
-                  { top: unifiedChatActive ? insets.top : insets.top + SHELL_METRICS.headerHeight },
-                ]}
-              />
-            </GestureDetector>
-          ) : null}
-
-          <GestureDetector gesture={closeGesture}>
-            <Reanimated.View
-              accessibilityElementsHidden={!state.mobileOpen}
-              accessibilityViewIsModal={state.mobileOpen}
-              importantForAccessibility={
-                state.mobileOpen ? 'yes' : 'no-hide-descendants'
-              }
-              style={[
-                styles.mobileSidebar,
-                drawerWidthStyle,
-                drawerTranslationStyle,
-              ]}
-            >
-              <Sidebar
-                borderSoft={borderSoft}
-                borderStrong={borderStrong}
-                closeMobile={closeMobile}
-                composition={composition}
-                gatewayStatuses={resolvedGatewayStatuses}
-                insets={insets}
-                locale={locale}
-                navigate={selectSidebarRoute}
-                onThemeChange={changeSidebarTheme}
-                onToggleCollapsed={toggleCollapsed}
-                sidebarBackground={sidebarBackground}
-                slotContext={slotContext}
-                slots={slots}
-                state={state}
-                themeName={themeName}
-                themes={availableThemes}
-                typography={typography}
-              />
-            </Reanimated.View>
-          </GestureDetector>
+          <Reanimated.View
+            accessibilityElementsHidden={!state.mobileOpen}
+            accessibilityViewIsModal={state.mobileOpen}
+            importantForAccessibility={
+              state.mobileOpen ? 'yes' : 'no-hide-descendants'
+            }
+            style={[
+              styles.mobileSidebar,
+              { backgroundColor: sidebarBackground },
+              drawerWidthStyle,
+              drawerTranslationStyle,
+            ]}
+          >
+            <Sidebar
+              borderSoft={borderSoft}
+              borderStrong={borderStrong}
+              closeMobile={closeMobile}
+              composition={composition}
+              gatewayStatuses={resolvedGatewayStatuses}
+              insets={insets}
+              locale={locale}
+              navigate={selectSidebarRoute}
+              onToggleCollapsed={toggleCollapsed}
+              sidebarBackground={sidebarBackground}
+              slotContext={slotContext}
+              slots={slots}
+              state={state}
+              typography={typography}
+            />
+          </Reanimated.View>
         </Fragment>
         )
       ) : null}
@@ -981,14 +862,11 @@ function Sidebar({
   insets,
   locale,
   navigate,
-  onThemeChange,
   onToggleCollapsed,
   sidebarBackground,
   slotContext,
   slots,
   state,
-  themeName,
-  themes,
   typography,
 }: {
   borderSoft: string;
@@ -999,14 +877,11 @@ function Sidebar({
   insets: ReturnType<typeof useSafeAreaInsets>;
   locale: NativeRouteLocale;
   navigate(path: string): void;
-  onThemeChange(name: string): void;
   onToggleCollapsed(): void;
   sidebarBackground: string;
   slotContext: NativeShellSlotContext;
   slots?: NativeShellSlots;
   state: ReturnType<typeof createNativeShellState>;
-  themeName: string;
-  themes: readonly { label: string; name: string }[];
   typography: ReturnType<typeof resolveShellTypography>;
 }) {
   const { tokens } = useTheme();
@@ -1021,9 +896,6 @@ function Sidebar({
         insets={insets}
         locale={locale}
         navigate={navigate}
-        onThemeChange={onThemeChange}
-        themeName={themeName}
-        themes={themes}
       />
     );
   }
@@ -1178,18 +1050,12 @@ function ExpoReferenceSidebar({
   insets,
   locale,
   navigate,
-  onThemeChange,
-  themeName,
-  themes,
 }: {
   activePath: string;
   gatewayStatuses: readonly SidebarGatewayStatus[];
   insets: ReturnType<typeof useSafeAreaInsets>;
   locale: NativeRouteLocale;
   navigate(path: string): void;
-  onThemeChange(name: string): void;
-  themeName: string;
-  themes: readonly { label: string; name: string }[];
 }) {
   const { tokens } = useTheme();
   return (
@@ -1220,7 +1086,7 @@ function ExpoReferenceSidebar({
         contentContainerStyle={styles.referenceSidebarContent}
         decelerationRate="normal"
         scrollEventThrottle={8}
-        showsVerticalScrollIndicator
+        showsVerticalScrollIndicator={false}
         style={styles.referenceSidebarScroll}
       >
         {REFERENCE_SIDEBAR_GROUPS.map((group) => (
@@ -1233,12 +1099,7 @@ function ExpoReferenceSidebar({
             >
               {group.labels[locale]}
             </Text>
-            <View
-              style={[
-                styles.referenceSidebarGroup,
-                { backgroundColor: tokens.colors.card },
-              ]}
-            >
+            <View style={styles.referenceSidebarGroup}>
               {group.routes.map((route, index) => {
                 const FallbackIcon = NAV_ICONS[
                   REFERENCE_SIDEBAR_FALLBACK_ICONS[route.path]
@@ -1343,18 +1204,6 @@ function ExpoReferenceSidebar({
             </View>
           ))}
         </View>
-        <IOSPressable
-          accessibilityLabel={locale === 'zh' ? '\u5207\u6362\u4e3b\u9898' : 'Change theme'}
-          haptic="selection"
-          onPress={() => {
-            const currentIndex = themes.findIndex((theme) => theme.name === themeName);
-            const next = themes[(currentIndex + 1 + themes.length) % themes.length];
-            if (next) onThemeChange(next.name);
-          }}
-          style={styles.referenceSidebarThemeButton}
-        >
-          <Palette color={tokens.colors.foreground} size={19} />
-        </IOSPressable>
       </View>
     </View>
   );
@@ -1425,8 +1274,6 @@ function ShellNavigationItem({
   const hoverStyle = useAnimatedStyle(() => ({
     opacity: hoverOpacity.value,
   }));
-  const visibleHeight = typography.nav.visibleHeight;
-  const hitSlopVertical = Math.max(0, (44 - visibleHeight) / 2);
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 400);
 
   return (
@@ -1434,12 +1281,6 @@ function ShellNavigationItem({
       accessibilityLabel={collapsed ? item.label : undefined}
       accessibilityRole="link"
       accessibilityState={{ selected: active }}
-      hitSlop={{
-        top: hitSlopVertical,
-        right: 0,
-        bottom: hitSlopVertical,
-        left: 0,
-      }}
       onBlur={() => setFocused(false)}
       onFocus={() => setFocused(true)}
       onHoverIn={() => setHovered(true)}
@@ -1689,14 +1530,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   referenceSidebarGroup: {
-    borderRadius: 10,
-    overflow: 'hidden',
+    backgroundColor: 'transparent',
   },
   referenceSidebarRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    minHeight: 44,
+    minHeight: 52,
     paddingHorizontal: 16,
   },
   referenceSidebarRowLabel: {
@@ -1744,12 +1584,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 14,
   },
-  referenceSidebarThemeButton: {
-    alignItems: 'center',
-    height: 40,
-    justifyContent: 'center',
-    width: 40,
-  },
   navigation: {
     borderTopWidth: SHELL_METRICS.borderWidth,
     flex: 1,
@@ -1759,6 +1593,7 @@ const styles = StyleSheet.create({
   navItem: {
     alignItems: 'center',
     flexDirection: 'row',
+    minHeight: 52,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -1787,13 +1622,6 @@ const styles = StyleSheet.create({
   overlay: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 40,
-  },
-  openEdge: {
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-    width: 24,
-    zIndex: 45,
   },
   routePreview: {
     flex: 1,

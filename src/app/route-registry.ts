@@ -44,7 +44,7 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'logs', path: '/logs', visibleInSidebar: true },
   { id: 'cron', path: '/cron', visibleInSidebar: true },
   { id: 'skills', path: '/skills', visibleInSidebar: true },
-  { id: 'plugins', path: '/plugins', visibleInSidebar: true },
+  { id: 'plugins', path: '/plugins', visibleInSidebar: false },
   { id: 'mcp', path: '/mcp', visibleInSidebar: true },
   { id: 'pairing', path: '/pairing', visibleInSidebar: true },
   { id: 'channels', path: '/channels', visibleInSidebar: true },

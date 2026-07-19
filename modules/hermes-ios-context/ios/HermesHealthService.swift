@@ -22,6 +22,27 @@ final class HermesHealthService {
     return types
   }
 
+  func authorizationStatus() async -> String {
+    guard HKHealthStore.isHealthDataAvailable() else { return "unavailable" }
+    do {
+      let requestStatus = try await withCheckedThrowingContinuation {
+        (continuation: CheckedContinuation<HKAuthorizationRequestStatus, Error>) in
+        store.getRequestStatusForAuthorization(toShare: [], read: readTypes) { status, error in
+          if let error { continuation.resume(throwing: error) }
+          else { continuation.resume(returning: status) }
+        }
+      }
+      switch requestStatus {
+      case .shouldRequest: return "notDetermined"
+      case .unnecessary: return "authorized"
+      case .unknown: return "unavailable"
+      @unknown default: return "unavailable"
+      }
+    } catch {
+      return "unavailable"
+    }
+  }
+
   func requestAuthorization() async -> String {
     guard HKHealthStore.isHealthDataAvailable() else { return "unavailable" }
     do {

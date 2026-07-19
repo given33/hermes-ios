@@ -7,6 +7,7 @@ import {
   avatarRoleFor,
   chatModelConfigurationError,
   conversationHasRunningWork,
+  conversationHostedTurnState,
   conversationMessagesToView,
   conversationRunningHostedTurnId,
   formatActivitySummary,
@@ -225,6 +226,15 @@ test('running state is derived from durable server runs, not client timers', () 
   assert.equal(conversationRunningHostedTurnId(conversation({
     hosted_turns: { completed: { status: 'cancelled' } },
   })), '');
+  const optimistic = conversation({
+    hosted_turns: {
+      active: { status: 'running', turn_id: 'turn-active' },
+      done: { status: 'completed', turn_id: 'turn-done' },
+    },
+  });
+  assert.equal(conversationHostedTurnState(optimistic, 'turn-active'), 'running');
+  assert.equal(conversationHostedTurnState(optimistic, 'turn-done'), 'terminal');
+  assert.equal(conversationHostedTurnState(optimistic, 'turn-not-visible-yet'), 'missing');
 });
 
 test('attachments and stream events remain structured for the native chat UI', () => {
@@ -279,6 +289,11 @@ test('missing model credentials produce one terminal error without a second pend
   );
   assert.match(
     chatModelConfigurationError({
+      custom: {
+        apiKeyConfigured: false,
+        baseUrl: 'https://models.example/v1',
+        model: 'glm-5',
+      },
       info: { model: 'glm-5', provider: 'custom' },
       options: {
         model: 'glm-5',
@@ -289,9 +304,45 @@ test('missing model credentials produce one terminal error without a second pend
     /没有可用的连接凭据/,
   );
   assert.equal(chatModelConfigurationError({
+    custom: {
+      apiKeyConfigured: true,
+      baseUrl: 'https://models.example/v1',
+      model: 'glm-5',
+    },
     info: { model: 'glm-5', provider: 'custom' },
     options: {
       providers: [{ authenticated: true, models: ['glm-5'], slug: 'custom' }],
+    },
+  }), null);
+  assert.equal(chatModelConfigurationError({
+    custom: {
+      apiKeyConfigured: false,
+      baseUrl: '',
+      model: 'hermes-4',
+    },
+    info: { model: 'hermes-4', provider: 'nous' },
+    options: {
+      model: 'hermes-4',
+      provider: 'nous',
+      providers: [{ authenticated: true, models: ['hermes-4'], slug: 'nous' }],
+    },
+  }), null);
+  assert.equal(chatModelConfigurationError({
+    custom: {
+      apiKeyConfigured: false,
+      baseUrl: '',
+      model: 'gpt-5.3-codex',
+    },
+    info: { model: 'gpt-5.3-codex', provider: 'openai-codex' },
+    options: {
+      model: 'gpt-5.3-codex',
+      provider: 'openai-codex',
+      providers: [{
+        authenticated: true,
+        auth_type: 'oauth',
+        models: ['gpt-5.3-codex'],
+        slug: 'openai-codex',
+      }],
     },
   }), null);
 

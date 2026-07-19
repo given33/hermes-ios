@@ -135,11 +135,8 @@ export interface HermesSwiftUISidebarProps extends NativeViewProps, HermesSwiftU
   locale: 'en' | 'zh';
   onNavigate?(event: NativeSyntheticEvent<{ path: string }>): void;
   onRequestClose?(event: NativeSyntheticEvent<Record<string, never>>): void;
-  onThemeChange?(event: NativeSyntheticEvent<{ name: string }>): void;
   open: boolean;
   presentation: 'drawer' | 'split';
-  themeName: string;
-  themesJson: string;
 }
 
 export interface HermesSwiftUIRouteProps extends NativeViewProps, HermesSwiftUIThemeProps {

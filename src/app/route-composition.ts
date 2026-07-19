@@ -202,12 +202,6 @@ const BUILTIN_NAV_REST = [
     icon: 'Package',
   },
   {
-    routeId: 'plugins',
-    path: '/plugins',
-    labels: { en: 'Plugins', zh: '\u63d2\u4ef6\u7ba1\u7406' },
-    icon: 'Puzzle',
-  },
-  {
     routeId: 'mcp',
     path: '/mcp',
     labels: { en: 'MCP', zh: 'MCP' },
@@ -347,6 +341,7 @@ function buildNavItems(
   for (const manifest of manifests) {
     if (manifest.tab.override) continue;
     if (manifest.tab.hidden) continue;
+    if (manifest.tab.path === '/plugins') continue;
 
     const pluginItem: ComposedNavigationItem = {
       path: manifest.tab.path,

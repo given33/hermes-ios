@@ -87,23 +87,33 @@ test('analytics and model snapshots do not invent unavailable server values', as
     label: '07/16',
     output: 400,
   });
-  assert.equal(models.models?.find((model) => model.active)?.provider, 'custom');
+  assert.equal(models.models?.length, 3);
+  assert.equal(models.models?.find((model) => model.active)?.provider, 'provider-a');
   assert.deepEqual(models.models?.[0], {
     active: true,
-    apiKeyConfigured: true,
-    apiKeyPreview: 'sk-••••',
+    apiKeyConfigured: false,
+    apiKeyPreview: '',
     apiMode: 'chat_completions',
-    baseUrl: 'https://model.example/v1',
+    baseUrl: '',
     context: '20万 context',
     contextLength: 200000,
-    id: encodeModelSelection('custom', 'model-a'),
+    id: encodeModelSelection('provider-a', 'model-a'),
     model: 'model-a',
-    provider: 'custom',
-    reasoningEffort: 'high',
+    provider: 'provider-a',
+    reasoningEffort: 'none',
   });
   assert.deepEqual(
+    models.models?.slice(0, 2).map((model) => [model.provider, model.model]),
+    [['provider-a', 'model-a'], ['provider-a', 'model-b']],
+  );
+  const custom = models.models?.find((model) => model.provider === 'custom');
+  assert.equal(custom?.active, false);
+  assert.equal(custom?.baseUrl, 'https://model.example/v1');
+  assert.equal(custom?.apiKeyConfigured, true);
+  assert.equal(custom?.reasoningEffort, 'high');
+  assert.deepEqual(
     decodeModelSelection(models.models?.[0].id ?? ''),
-    { model: 'model-a', provider: 'custom' },
+    { model: 'model-a', provider: 'provider-a' },
   );
   assert.equal(decodeModelSelection('provider/model'), null);
 });
@@ -112,6 +122,10 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   const calls: unknown[][] = [];
   const api = {
     deleteConversation: async (...args: unknown[]) => { calls.push(['delete', ...args]); },
+    discoverCustomModels: async (...args: unknown[]) => {
+      calls.push(['model-discover', ...args]);
+      return { baseUrl: 'https://model.example/v1', models: ['model-a', 'model-b'] };
+    },
     saveCustomModel: async (...args: unknown[]) => { calls.push(['model-save', ...args]); },
     setModel: async (...args: unknown[]) => { calls.push(['model', ...args]); },
     testCustomModel: async (...args: unknown[]) => {
@@ -147,11 +161,19 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
     action: 'model.test',
     payload: { fields, route: 'models' },
   }, 'reviewer');
+  const discovered = await performHermesSwiftUIRouteAction(api, {
+    action: 'model.discover',
+    payload: { fields, route: 'models' },
+  }, 'reviewer');
 
   assert.equal(deleted, 'reload');
   assert.equal(selected, 'reload');
   assert.equal(saved, 'reload');
   assert.deepEqual(tested, { message: '连接成功' });
+  assert.deepEqual(discovered, {
+    detectedModels: ['model-a', 'model-b'],
+    message: '检测到 2 个可用模型',
+  });
   const custom = {
     apiKey: 'secret',
     apiMode: 'chat_completions',
@@ -165,6 +187,7 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
     ['model', 'provider-a', 'model-a', 'reviewer'],
     ['model-save', custom, 'reviewer'],
     ['model-test', custom, 'reviewer'],
+    ['model-discover', 'https://model.example/v1', 'secret'],
   ]);
 });
 
@@ -188,7 +211,14 @@ test('all native management routes render the current cloud workspace response',
     kanban: { tasks: [{ id: 'task-1', title: '接入后端', status: 'doing' }] },
     profiles: { active: { active: 'default', current: 'default' }, profiles: [{ name: 'default', model: 'model-a', description: '主 Agent' }] },
     config: { config: { model: { default: 'model-a' }, agent: { max_turns: 42 }, timezone: 'Asia/Shanghai' }, schema: {} },
-    env: { OPENROUTER_API_KEY: { is_set: true, redacted_value: 'sk-••••alue' } },
+    env: {
+      credentials: [{
+        id: 'custom-main',
+        provider: 'custom',
+        model: 'model-a',
+        masked_value: 'sk-••••alue',
+      }],
+    },
     system: { status: { gateway_running: true, active_sessions: 2 }, stats: { cpu_percent: 18, memory: { percent: 53, used: 3_400_000_000 }, disk: { percent: 31 }, uptime_seconds: 1_213_200 } },
   };
   const api = {
@@ -231,8 +261,14 @@ test('all native management routes render the current cloud workspace response',
   assert.equal(kanban.kanban?.[0].cards[0].title, '接入后端');
   assert.equal(profiles.profiles?.[0].active, true);
   assert.equal(config.config?.maxIterations, 42);
-  assert.equal(environment.environment?.[0].key, 'OPENROUTER_API_KEY');
+  assert.equal(environment.environment?.[0].key, 'custom · model-a');
   assert.equal(environment.environment?.[0].maskedValue, 'sk-••••alue');
+  const legacyEnvironment = await loadHermesSwiftUIRouteSnapshot({
+    loadRoute: async () => ({
+      OPENAI_API_KEY: { is_set: true, redacted_value: 'sk-legacy' },
+    }),
+  } as unknown as HermesCloudApi, 'env', 'default');
+  assert.deepEqual(legacyEnvironment.environment, []);
   assert.equal(system.system?.gatewayOnline, true);
   assert.equal(system.system?.activeTasks, '2');
   assert.equal(system.system?.memory, 53);
@@ -241,6 +277,7 @@ test('all native management routes render the current cloud workspace response',
 });
 
 test('system snapshots expose real DBB3 and WSL gateway metrics and versions', async () => {
+  const freshObservedAt = new Date(Date.now() - 1_000).toISOString();
   const api = {
     loadRoute: async () => ({
       managedNodes: {
@@ -252,7 +289,7 @@ test('system snapshots expose real DBB3 and WSL gateway metrics and versions', a
             gateway_state: 'active',
             version: 'v0.18.2 (2026.7.7.2)',
             active_tasks: 2,
-            observed_at: '2026-07-16T10:00:00Z',
+            observed_at: freshObservedAt,
             metrics_source: 'linux_procfs',
             metrics: {
               cpu_percent: 21,
@@ -270,7 +307,7 @@ test('system snapshots expose real DBB3 and WSL gateway metrics and versions', a
             gateway_state: 'active',
             version: 'v0.18.3 (2026.7.8.1)',
             active_tasks: 0,
-            observed_at: '2026-07-16T10:00:00Z',
+            observed_at: freshObservedAt,
             metrics_source: 'windows_psutil_push',
             metrics: { cpu_percent: 12, memory_percent: 54, disk_percent: 42 },
           },
@@ -291,6 +328,46 @@ test('system snapshots expose real DBB3 and WSL gateway metrics and versions', a
   assert.equal(snapshot.system?.nodes[1].metricsSource, 'windows_psutil_push');
 });
 
+test('system snapshots reject stale device heartbeat flags from the server', async () => {
+  const api = {
+    loadRoute: async () => ({
+      managedNodes: {
+        nodes: [{
+          id: 'dbb3',
+          label: 'DBB3',
+          online: true,
+          fresh: true,
+          gateway_state: 'active',
+          observed_at: '2020-01-01T00:00:00Z',
+          metrics: {},
+        }],
+      },
+      status: {},
+      stats: {},
+    }),
+  } as unknown as HermesCloudApi;
+
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'system', 'default');
+
+  assert.equal(snapshot.system?.gatewayOnline, false);
+  assert.equal(snapshot.system?.nodes[0].gatewayOnline, false);
+});
+
+test('configured managed nodes fail closed when the live node list is empty', async () => {
+  const api = {
+    loadRoute: async () => ({
+      managedNodes: { configured: true, nodes: [], sources: [] },
+      status: { online: true, gateway_running: true },
+      stats: {},
+    }),
+  } as unknown as HermesCloudApi;
+
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'system', 'default');
+
+  assert.equal(snapshot.system?.gatewayOnline, false);
+  assert.deepEqual(snapshot.system?.nodes, []);
+});
+
 test('native management actions write through the canonical cloud APIs', async () => {
   const calls: unknown[][] = [];
   const api = {
@@ -304,7 +381,7 @@ test('native management actions write through the canonical cloud APIs', async (
     updateChannel: async (...args: unknown[]) => { calls.push(['channel-update', ...args]); },
     setPluginEnabled: async (...args: unknown[]) => { calls.push(['plugin-toggle', ...args]); },
     setActiveProfile: async (...args: unknown[]) => { calls.push(['profile-active', ...args]); },
-    setEnvironmentVariable: async (...args: unknown[]) => { calls.push(['env-upsert', ...args]); },
+    deleteModelCredential: async (...args: unknown[]) => { calls.push(['model-credential-delete', ...args]); },
     updateKanbanTask: async (...args: unknown[]) => { calls.push(['kanban-update', ...args]); },
     updateSkillContent: async (...args: unknown[]) => { calls.push(['skill-update', ...args]); },
     restartGateway: async (...args: unknown[]) => { calls.push(['restart', ...args]); },
@@ -314,7 +391,7 @@ test('native management actions write through the canonical cloud APIs', async (
   await performHermesSwiftUIRouteAction(api, { action: 'skill.toggle', payload: { route: 'skills', id: 'browser', enabled: true } }, 'reviewer');
   await performHermesSwiftUIRouteAction(api, { action: 'integration.toggle', payload: { route: 'plugins', id: 'kanban', enabled: false } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'profile.activate', payload: { route: 'profiles', id: 'worker' } }, 'default');
-  await performHermesSwiftUIRouteAction(api, { action: 'environment.upsert', payload: { route: 'env', id: 'API_KEY', value: 'secret' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'environment.delete', payload: { route: 'env', id: 'custom-main' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'system.restart', payload: { route: 'system' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'skill.update', payload: { route: 'skills', id: 'browser', detail: '# Browser' } }, 'reviewer');
   await performHermesSwiftUIRouteAction(api, { action: 'achievements.rescan', payload: { route: 'achievements' } }, 'default');
@@ -327,7 +404,7 @@ test('native management actions write through the canonical cloud APIs', async (
     ['skill-toggle', 'browser', true, 'reviewer'],
     ['plugin-toggle', 'kanban', false],
     ['profile-active', 'worker'],
-    ['env-upsert', 'API_KEY', 'secret', 'default'],
+    ['model-credential-delete', 'custom-main', 'default'],
     ['restart'],
     ['skill-update', 'browser', '# Browser', 'reviewer'],
     ['achievement-rescan'],
@@ -336,6 +413,36 @@ test('native management actions write through the canonical cloud APIs', async (
     ['kanban-update', 'task-1', { title: '新标题', body: '新内容', status: 'doing' }],
     ['channel-update', 'telegram', { enabled: true, mode: 'polling' }, 'default'],
   ]);
+});
+
+test('custom model discovery returns bounded picker data without persisting configuration', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    discoverCustomModels: async (...args: unknown[]) => {
+      calls.push(args);
+      return {
+        baseUrl: 'https://models.example/v1',
+        models: ['model-a', 'model-b'],
+      };
+    },
+  } as unknown as HermesCloudApi;
+
+  const result = await performHermesSwiftUIRouteAction(api, {
+    action: 'model.discover',
+    payload: {
+      route: 'models',
+      fields: {
+        apiKey: 'temporary-key',
+        baseUrl: 'https://models.example/v1',
+      },
+    },
+  }, 'default');
+
+  assert.deepEqual(calls, [['https://models.example/v1', 'temporary-key']]);
+  assert.deepEqual(result, {
+    detectedModels: ['model-a', 'model-b'],
+    message: '检测到 2 个可用模型',
+  });
 });
 
 test('selected skills include the current server SKILL.md for native editing', async () => {

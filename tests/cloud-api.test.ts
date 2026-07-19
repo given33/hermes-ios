@@ -167,7 +167,7 @@ test('profile-scoped management routes keep the active Profile on every request'
     '/api/mcp/servers',
     '/api/mcp/catalog',
     '/api/messaging/platforms',
-    '/api/env',
+    '/api/model/credentials',
   ]);
   assert.ok(calls.every(({ options }) => options.query?.profile === 'reviewer'));
 });
@@ -554,6 +554,80 @@ test('custom model configuration carries the full runtime contract', async () =>
     profile: 'reviewer',
     reasoning_effort: 'high',
   });
+});
+
+test('custom model discovery reads a bounded Base URL catalog without saving the key', async () => {
+  const { api, calls: serverCalls } = createApi();
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = async (input, init) => {
+    calls.push({ input: String(input), init });
+    return new Response(JSON.stringify({
+      data: [
+        { id: 'model-b' },
+        { id: 'model-a' },
+        { id: 'model-a' },
+      ],
+    }), {
+      headers: { 'content-type': 'application/json' },
+      status: 200,
+    });
+  };
+  try {
+    const result = await api.discoverCustomModels(
+      'https://models.example/v1/',
+      'private-key',
+    );
+    assert.deepEqual(result, {
+      baseUrl: 'https://models.example/v1',
+      models: ['model-b', 'model-a'],
+    });
+    assert.equal(calls[0].input, 'https://models.example/v1/models');
+    assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, 'Bearer private-key');
+    assert.deepEqual(serverCalls, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('custom model discovery rejects invalid URLs and oversized catalogs', async () => {
+  const { api } = createApi();
+  await assert.rejects(api.discoverCustomModels('file:///tmp/models'), /HTTP\(S\)/);
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 });
+  try {
+    await assert.rejects(
+      api.discoverCustomModels('https://models.example/v1'),
+      /1 MiB/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('custom model discovery rejects a cross-origin final redirect', async () => {
+  const { api } = createApi();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const response = new Response(JSON.stringify({ data: [{ id: 'model-a' }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+    Object.defineProperty(response, 'url', {
+      configurable: true,
+      value: 'https://attacker.example/collect',
+    });
+    return response;
+  };
+  try {
+    await assert.rejects(
+      api.discoverCustomModels('https://models.example/v1', 'temporary-key'),
+      /untrusted|不受信任/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('group collaboration reads and writes the modified Hermes room APIs', async () => {

@@ -14,7 +14,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   static let shared = HermesLocationService()
 
   private let manager = CLLocationManager()
-  private var authorizationContinuation: CheckedContinuation<String, Never>?
+  private var authorizationGate: HermesLocationAuthorizationGate?
   private var locationContinuation: CheckedContinuation<[String: Any]?, Never>?
   private var lastLocation: CLLocation?
   private var stableSamples: [CLLocation] = []
@@ -47,13 +47,15 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       return HermesAuthorization.location(status)
     }
     return await withCheckedContinuation { continuation in
-      authorizationContinuation?.resume(returning: HermesAuthorization.location(status))
-      authorizationContinuation = continuation
+      authorizationGate?.resolve(HermesAuthorization.location(status))
+      let gate = HermesLocationAuthorizationGate(continuation)
+      authorizationGate = gate
       if status == .notDetermined {
         manager.requestWhenInUseAuthorization()
       } else {
         requestedAlwaysUpgrade = true
         manager.requestAlwaysAuthorization()
+        scheduleAlwaysUpgradeFallback(gate)
       }
     }
   }
@@ -67,9 +69,10 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
 
   @discardableResult
   func start() -> Bool {
+    guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return false }
     guard CLLocationManager.locationServicesEnabled() else { return false }
     let status = manager.authorizationStatus
-    guard status == .authorizedAlways || status == .authorizedWhenInUse else { return false }
+    guard status == .authorizedAlways else { return false }
     manager.startMonitoringSignificantLocationChanges()
     manager.startMonitoringVisits()
     apply(mode: currentAdaptiveMode(), force: true)
@@ -172,11 +175,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       requestedAlwaysUpgrade = true
       Task { await requestTemporaryFullAccuracyIfNeeded() }
       manager.requestAlwaysAuthorization()
-      // iOS may defer the Always prompt and emit no second authorization
-      // callback while the status remains When In Use. Let startup continue;
-      // a later upgrade callback still restarts the background collector.
-      authorizationContinuation?.resume(returning: HermesAuthorization.location(status))
-      authorizationContinuation = nil
+      if let authorizationGate { scheduleAlwaysUpgradeFallback(authorizationGate) }
       return
     }
     // A user may keep the While-In-Use grant when the Always upgrade prompt
@@ -184,11 +183,15 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     // continuation suspended prevents the entire sync provider from starting.
     if status == .authorizedAlways || status == .authorizedWhenInUse
       || status == .denied || status == .restricted {
-      authorizationContinuation?.resume(returning: HermesAuthorization.location(status))
-      authorizationContinuation = nil
+      authorizationGate?.resolve(HermesAuthorization.location(status))
+      authorizationGate = nil
       requestedAlwaysUpgrade = false
     }
-    if status == .authorizedAlways || status == .authorizedWhenInUse { _ = start() }
+    // The durable collector requires Always authorization. While-In-Use still
+    // supports explicit foreground map refreshes, but must not silently start
+    // visits/significant-change monitoring in the background.
+    if status == .authorizedAlways,
+       HermesPermissionCollectionGate.shared.isReadyForCurrentOwner { _ = start() }
   }
 
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -282,6 +285,17 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       try await manager.requestTemporaryFullAccuracyAuthorization(withPurposeKey: "HermesTripContext")
     } catch {
       // Reduced precision remains a valid mode and is reported to the behavior model.
+    }
+  }
+
+  private func scheduleAlwaysUpgradeFallback(_ gate: HermesLocationAuthorizationGate) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak gate] in
+      guard let self, let gate, self.authorizationGate === gate,
+            self.manager.authorizationStatus == .authorizedWhenInUse else { return }
+      self.authorizationGate = nil
+      // iOS may defer the Always sheet without another authorization callback.
+      // Keep the permission run paused so other system sheets are not stacked.
+      gate.resolve("notDetermined")
     }
   }
 
@@ -409,6 +423,23 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       payload["isSimulatedBySoftware"] = location.sourceInformation?.isSimulatedBySoftware ?? false
     }
     return payload
+  }
+}
+
+private final class HermesLocationAuthorizationGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var continuation: CheckedContinuation<String, Never>?
+
+  init(_ continuation: CheckedContinuation<String, Never>) {
+    self.continuation = continuation
+  }
+
+  func resolve(_ status: String) {
+    lock.lock()
+    let pending = continuation
+    continuation = nil
+    lock.unlock()
+    pending?.resume(returning: status)
   }
 }
 

@@ -4,7 +4,6 @@ import {
   Download,
   Globe2,
   Languages,
-  Palette,
   RotateCw,
   Server,
   UserRound,
@@ -23,6 +22,10 @@ import {
   hasNativeSwiftUIPartialFrontend,
 } from '../../modules/hermes-ios-controls';
 import { HermesCloudApi, type JsonRecord } from '../api/HermesCloudApi';
+import {
+  MANAGED_NODE_FRESHNESS_MS,
+  managedNodeGatewayStatuses,
+} from '../api/managed-node-status';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
@@ -133,6 +136,9 @@ export function FrontendPreviewApp({
   const [systemAction, setSystemAction] = useState<SystemAction>(null);
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const systemRequestVersion = useRef(0);
+  const lastSystemSuccessAt = useRef(0);
+  const managedNodesSnapshot = useRef<JsonRecord>({});
   const notify = useCallback((message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(message);
@@ -143,14 +149,36 @@ export function FrontendPreviewApp({
   }, []);
 
   useEffect(() => {
+    lastSystemSuccessAt.current = 0;
+    managedNodesSnapshot.current = {};
+    setGatewayStatuses([]);
+    setSystemSummary({ activeSessions: 0, gatewayOnline: false });
     if (!client) return undefined;
     let active = true;
     const api = new HermesCloudApi(client);
-    const applySystem = (system: Awaited<ReturnType<HermesCloudApi['getSystem']>>) => {
-      if (!active) return;
+    const applySystem = (
+      system: Awaited<ReturnType<HermesCloudApi['getSystem']>>,
+      requestVersion: number,
+    ) => {
+      if (!active || requestVersion !== systemRequestVersion.current) return;
+      lastSystemSuccessAt.current = Date.now();
+      managedNodesSnapshot.current = system.managedNodes;
       setSystemSummary(systemSummaryFromStatus(system.status));
-      setGatewayStatuses(gatewayStatusesFromManagedNodes(system.managedNodes));
+      setGatewayStatuses(managedNodeGatewayStatuses(system.managedNodes));
     };
+    const expireStaleSystemStatus = () => {
+      if (!active) return;
+      setGatewayStatuses(managedNodeGatewayStatuses(managedNodesSnapshot.current));
+      if (
+        !lastSystemSuccessAt.current
+        || Date.now() - lastSystemSuccessAt.current > MANAGED_NODE_FRESHNESS_MS
+      ) {
+        setSystemSummary((current) => current.gatewayOnline
+          ? { ...current, gatewayOnline: false }
+          : current);
+      }
+    };
+    const initialRequestVersion = ++systemRequestVersion.current;
     void Promise.all([api.getProfiles(), api.getSystem()])
       .then(([profiles, system]) => {
         if (!active) return;
@@ -164,13 +192,17 @@ export function FrontendPreviewApp({
         if (activeProfile && choices.some((choice) => choice.name === activeProfile)) {
           setProfile(activeProfile);
         }
-        applySystem(system);
+        applySystem(system, initialRequestVersion);
       })
       .catch((error) => {
         if (active) notify(serverActionError(error, locale));
       });
     const interval = setInterval(() => {
-      void api.getSystem().then(applySystem).catch(() => undefined);
+      expireStaleSystemStatus();
+      const requestVersion = ++systemRequestVersion.current;
+      void api.getSystem()
+        .then((system) => applySystem(system, requestVersion))
+        .catch(expireStaleSystemStatus);
     }, 15_000);
     return () => {
       active = false;
@@ -232,7 +264,6 @@ export function FrontendPreviewApp({
         context={context}
         locale={locale}
         onLanguage={() => setPicker('language')}
-        onTheme={() => setPicker('appearance')}
       />
     ),
     footer: () => <FooterSlot />,
@@ -612,25 +643,14 @@ function ControlsSlot({
   context,
   locale,
   onLanguage,
-  onTheme,
 }: {
   context: NativeShellSlotContext;
   locale: NativeRouteLocale;
   onLanguage(): void;
-  onTheme(): void;
 }) {
-  const { availableThemes, themeName, tokens } = useTheme();
-  const themeLabel = availableThemes.find((theme) => theme.name === themeName)?.label
-    ?? themeName;
+  const { tokens } = useTheme();
   return (
     <View style={[styles.controlsSlot, { borderTopColor: tokens.colors.border }]}> 
-      <SidebarControl
-        accessibilityLabel="Theme and font"
-        collapsed={context.collapsed}
-        icon={Palette}
-        label={themeLabel}
-        onPress={onTheme}
-      />
       <SidebarControl
         accessibilityLabel="Language"
         collapsed={context.collapsed}
@@ -651,7 +671,7 @@ function SidebarControl({
 }: {
   accessibilityLabel: string;
   collapsed: boolean;
-  icon: typeof Palette;
+  icon: typeof Languages;
   label: string;
   onPress(): void;
 }) {
@@ -815,42 +835,6 @@ function systemSummaryFromStatus(status: JsonRecord): SidebarSystemSummary {
         ? Math.max(0, Math.round(activeSessionsValue))
         : 0,
   };
-}
-
-function gatewayStatusesFromManagedNodes(source: JsonRecord): SidebarGatewayStatus[] {
-  const nodes = Array.isArray(source.nodes) ? source.nodes : [];
-  const sources = Array.isArray(source.sources) ? source.sources.filter(isRecord) : [];
-  return ['dbb3', 'wsl'].map((id): SidebarGatewayStatus => {
-    const value = nodes.find((entry) => (
-      isRecord(entry) && stringField(entry, 'id').toLowerCase() === id
-    ));
-    if (!isRecord(value)) {
-      const directSource = sources.find((entry) => stringField(entry, 'id').toLowerCase() === id);
-      const sourceState = directSource || sources[0];
-      return {
-        id,
-        label: id.toUpperCase(),
-        state: sourceState?.online === false ? 'offline' : 'unknown',
-      };
-    }
-    const gatewayState = stringField(value, 'gateway_state').toLowerCase();
-    const observed = Boolean(stringField(value, 'observed_at'));
-    const nodeOnline = value.online === true;
-    const gatewayOnline = ['active', 'online', 'ready', 'running'].includes(gatewayState);
-    const state: SidebarGatewayStatus['state'] = nodeOnline && gatewayOnline
-      ? 'online'
-      : nodeOnline
-        ? 'degraded'
-        : observed
-          ? 'offline'
-          : 'unknown';
-    return {
-      id,
-      label: id.toUpperCase(),
-      state,
-      version: stringField(value, 'version') || stringField(value, 'gateway_version') || undefined,
-    };
-  });
 }
 
 function serverActionError(error: unknown, locale: NativeRouteLocale): string {

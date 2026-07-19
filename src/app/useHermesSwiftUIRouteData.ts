@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
+import { expireSystemRouteData } from '../api/managed-node-status';
 import {
   conversationSessionSummary,
   createCollaborationRoomRequestId,
@@ -54,6 +55,7 @@ export function useHermesSwiftUIRouteData({
     [cacheOwner],
   );
   const requestVersion = useRef(0);
+  const lastSuccessfulReloadAt = useRef(0);
   const selectedItemId = useRef('');
   const acknowledgedRoomRequestId = useRef('');
   const collaborationReplay = useRef<Promise<string> | null>(null);
@@ -134,9 +136,16 @@ export function useHermesSwiftUIRouteData({
         };
       }
       if (version !== requestVersion.current) return;
+      if (routeId === 'system') lastSuccessfulReloadAt.current = Date.now();
       setDataJson(encodeHermesSwiftUIRouteSnapshot(snapshot));
     } catch (error) {
       if (version !== requestVersion.current) return;
+      if (routeId === 'system') {
+        setDataJson((current) => expireSystemRouteData(
+          current,
+          lastSuccessfulReloadAt.current,
+        ));
+      }
       notify(serverErrorMessage(error));
     }
   }, [
@@ -152,6 +161,7 @@ export function useHermesSwiftUIRouteData({
 
   useEffect(() => {
     const lifecycleVersion = ++requestVersion.current;
+    lastSuccessfulReloadAt.current = 0;
     selectedItemId.current = '';
     setDataJson(encodeHermesSwiftUIRouteSnapshot({
       version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
@@ -173,10 +183,24 @@ export function useHermesSwiftUIRouteData({
     if (!api || routeId === 'models') return undefined;
 
     const interval = setInterval(() => {
-      if (AppState.currentState === 'active') void reload();
+      if (AppState.currentState !== 'active') return;
+      if (routeId === 'system') {
+        setDataJson((current) => expireSystemRouteData(
+          current,
+          lastSuccessfulReloadAt.current,
+        ));
+      }
+      void reload();
     }, FOREGROUND_REFRESH_MS);
     const appState = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void reload();
+      if (state !== 'active') return;
+      if (routeId === 'system') {
+        setDataJson((current) => expireSystemRouteData(
+          current,
+          lastSuccessfulReloadAt.current,
+        ));
+      }
+      void reload();
     });
     return () => {
       requestVersion.current += 1;
@@ -262,6 +286,9 @@ export function useHermesSwiftUIRouteData({
           await localStore.write(cacheOwner, conversations, activeId);
         }
       }
+      if (typeof result === 'object' && result.detectedModels) {
+        setDataJson((current) => mergeDetectedModels(current, result.detectedModels || []));
+      }
       if (result === 'reload' || (typeof result === 'object' && result.reload)) {
         await reload();
       }
@@ -272,6 +299,17 @@ export function useHermesSwiftUIRouteData({
   }, [api, cacheOwner, localStore, notify, profile, reload]);
 
   return { dataJson, onAction, reload };
+}
+
+function mergeDetectedModels(dataJson: string, models: readonly string[]): string {
+  try {
+    const source: unknown = JSON.parse(dataJson);
+    if (typeof source !== 'object' || source === null || Array.isArray(source)) return dataJson;
+    const detectedModels = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
+    return JSON.stringify({ ...source, detectedModels });
+  } catch {
+    return dataJson;
+  }
 }
 
 function serverErrorMessage(error: unknown): string {

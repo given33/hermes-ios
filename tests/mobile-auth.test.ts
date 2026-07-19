@@ -108,6 +108,21 @@ test('owner status exposes registration and QQ verification capability', async (
   });
 });
 
+test('authentication requests terminate even when the transport ignores abort', async () => {
+  const captured: { signal?: AbortSignal } = {};
+  const client = new MobileAuthApiClient(
+    'https://hermes.test',
+    (_input, init) => {
+      if (init?.signal) captured.signal = init.signal;
+      return new Promise<Response>(() => undefined);
+    },
+    10,
+  );
+
+  await assert.rejects(client.getStatus(), /timed out/i);
+  assert.equal(captured.signal?.aborted, true);
+});
+
 test('first-owner registration sends QQ email and verification code only in the body', async () => {
   const calls: FetchCall[] = [];
   const client = new MobileAuthApiClient('https://hermes.test', async (input, init) => {
@@ -302,6 +317,33 @@ test('token pairs rotate once across concurrent requests near expiry', async () 
   }]);
   assert.equal(controller.getCurrentAccessToken(), 'access-two');
   assert.deepEqual(refreshedSessions, [session('access-two', 'refresh-two', 2_000)]);
+});
+
+test('disposing a token controller drains refresh before logout cleanup and blocks stale writes', async () => {
+  let releaseRefresh: ((value: MobileAuthSession) => void) | undefined;
+  const writes: string[] = [];
+  const controller = new AccessTokenController(
+    { ...initialConnection, expiresAt: 1 },
+    {
+      now: () => 100,
+      store: {
+        async saveSessionTokens(accessToken) {
+          writes.push(accessToken);
+        },
+      },
+      refresh: () => new Promise((resolve) => {
+        releaseRefresh = resolve;
+      }),
+    },
+  );
+  const refresh = controller.getAccessToken();
+  const disposal = controller.dispose();
+  releaseRefresh?.(session('stale-access', 'stale-refresh', 2_000));
+
+  await assert.rejects(refresh, /no longer active/);
+  await disposal;
+  assert.deepEqual(writes, []);
+  await assert.rejects(controller.getAccessToken(), /no longer active/);
 });
 
 test('a 401 refresh is single-flight and stale 401 responses reuse the rotated token', async () => {

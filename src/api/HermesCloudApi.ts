@@ -197,6 +197,11 @@ export interface CustomModelConfiguration {
   reasoningEffort: 'high' | 'low' | 'max' | 'medium' | 'minimal' | 'none' | 'ultra' | 'xhigh';
 }
 
+export interface CustomModelDiscoveryResult {
+  baseUrl: string;
+  models: string[];
+}
+
 export interface CustomModelConnectionResult {
   latency_ms: number;
   message: string;
@@ -208,6 +213,7 @@ export interface CustomModelConnectionResult {
 const COLLABORATION = '/api/plugins/collaboration';
 const KANBAN = '/api/plugins/kanban';
 const ACHIEVEMENTS = '/api/plugins/hermes-achievements';
+const MODEL_CATALOG_MAX_BYTES = 1024 * 1024;
 
 /**
  * Native facade over the canonical Dashboard and modified Collaboration APIs.
@@ -400,6 +406,72 @@ export class HermesCloudApi {
       model: configuration.model,
       profile,
     });
+  }
+
+  async discoverCustomModels(
+    baseUrl: string,
+    apiKey = '',
+  ): Promise<CustomModelDiscoveryResult> {
+    const normalizedBaseUrl = normalizeModelCatalogBaseUrl(baseUrl);
+    const endpoint = normalizedBaseUrl.endsWith('/models')
+      ? normalizedBaseUrl
+      : `${normalizedBaseUrl}/models`;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      if (apiKey.trim()) {
+        headers.Authorization = `Bearer ${apiKey.trim()}`;
+        headers['x-api-key'] = apiKey.trim();
+      }
+      const response = await fetchModelCatalog(endpoint, {
+        headers,
+        method: 'GET',
+        redirect: 'error',
+        signal: controller.signal,
+      });
+      // Some React Native transports have historically ignored the Fetch
+      // redirect mode. Do not trust a successful response until its final URL
+      // is checked: a temporary model key must never be accepted after a
+      // cross-origin redirect.
+      assertModelCatalogResponseOrigin(response, endpoint);
+      if (!response.ok) {
+        throw new Error(
+          response.status === 401 || response.status === 403
+            ? '模型服务拒绝了 API 密钥'
+            : `模型列表请求返回 HTTP ${response.status}`,
+        );
+      }
+      const declaredLength = Number(response.headers.get('content-length') || 0);
+      if (Number.isFinite(declaredLength) && declaredLength > MODEL_CATALOG_MAX_BYTES) {
+        throw new Error('模型列表响应超过 1 MiB');
+      }
+      const text = await readBoundedResponseText(response, MODEL_CATALOG_MAX_BYTES);
+      const payload: unknown = JSON.parse(text);
+      const root = isRecord(payload) ? payload : {};
+      const rows = Array.isArray(root.data)
+        ? root.data
+        : Array.isArray(root.models)
+          ? root.models
+          : [];
+      const models = [...new Set(rows.flatMap((entry): string[] => {
+        const model = typeof entry === 'string'
+          ? entry.trim()
+          : isRecord(entry)
+            ? stringValue(entry.id) || stringValue(entry.name)
+            : '';
+        return model && model.length <= 256 ? [model] : [];
+      }))].slice(0, 500);
+      if (!models.length) throw new Error('模型服务没有返回可用模型');
+      return { baseUrl: normalizedBaseUrl, models };
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('模型列表请求超时');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   setModel(provider: string, model: string, profile = 'default') {
@@ -645,6 +717,19 @@ export class HermesCloudApi {
 
   deleteEnvironmentVariable(key: string, profile = 'default') {
     return this.json<{ ok: boolean }>('/api/env', 'DELETE', { key, profile });
+  }
+
+  getModelCredentials(profile = 'default') {
+    return this.request<{ credentials: JsonRecord[] }>('/api/model/credentials', {
+      query: { profile },
+    });
+  }
+
+  deleteModelCredential(id: string, profile = 'default') {
+    return this.request<{ ok: boolean; removed: boolean }>(
+      `/api/model/credentials/${encodeURIComponent(id)}`,
+      { method: 'DELETE', query: { profile } },
+    );
   }
 
   getSystem() {
@@ -1051,7 +1136,7 @@ export class HermesCloudApi {
       case 'profiles':
       case 'profile-new': return this.getProfiles();
       case 'config': return this.getConfig(profile);
-      case 'env': return this.getEnvironment(profile);
+      case 'env': return this.getModelCredentials(profile);
       case 'system': return this.getSystem();
       case 'achievements': return this.getAchievements();
       case 'kanban': return this.getKanbanBoard();
@@ -1278,6 +1363,131 @@ function customReasoningEffort(value: unknown): CustomModelConfiguration['reason
   return ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'].includes(normalized)
     ? normalized as CustomModelConfiguration['reasoningEffort']
     : 'medium';
+}
+
+function normalizeModelCatalogBaseUrl(value: string): string {
+  const normalized = value.trim().replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(normalized);
+  } catch {
+    throw new Error('Base URL 格式无效');
+  }
+  if (
+    !['http:', 'https:'].includes(parsed.protocol)
+    || !parsed.hostname
+    || parsed.username
+    || parsed.password
+  ) {
+    throw new Error('Base URL 必须是不含账号信息的 HTTP(S) 地址');
+  }
+  parsed.hash = '';
+  parsed.search = '';
+  return parsed.toString().replace(/\/$/, '');
+}
+
+function assertModelCatalogResponseOrigin(response: Response, endpoint: string): void {
+  // A mocked/native Response may omit `url`; in that case the transport did
+  // not expose redirect information and the request's redirect:error policy
+  // remains the only available guard. When present, reject any final origin
+  // change, including scheme/port changes and URLs carrying userinfo.
+  const finalUrl = response.url?.trim();
+  if (!finalUrl) return;
+  let requested: URL;
+  let received: URL;
+  try {
+    requested = new URL(endpoint);
+    received = new URL(finalUrl);
+  } catch {
+    throw new Error('模型列表响应地址无效');
+  }
+  if (
+    requested.origin !== received.origin
+    || received.username
+    || received.password
+  ) {
+    throw new Error('模型列表请求重定向到不受信任的地址');
+  }
+}
+
+async function fetchModelCatalog(endpoint: string, init: RequestInit): Promise<Response> {
+  // Expo's native fetch is backed by URLSession and exposes a real streaming
+  // body. It also enforces redirect:error in the native delegate, which closes
+  // the credential-forwarding gap in React Native's legacy global fetch. Keep
+  // the global implementation on web/tests where standard Fetch already has
+  // these semantics and remains easy to substitute.
+  if (typeof navigator !== 'undefined' && navigator.product === 'ReactNative') {
+    const { fetch: expoFetch } = await import('expo/fetch');
+    return expoFetch(
+      endpoint,
+      init as Parameters<typeof expoFetch>[1],
+    ) as unknown as Response;
+  }
+  return fetch(endpoint, init);
+}
+
+async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
+  const body = response.body;
+  const reader = body && typeof body.getReader === 'function'
+    ? body.getReader()
+    : null;
+  if (!reader) {
+    // Older React Native releases do not expose a ReadableStream. The
+    // content-length guard above still rejects honest oversized responses;
+    // this fallback preserves compatibility for transports that only expose
+    // Response.text().
+    const text = await response.text();
+    if (utf8ByteLength(text) > maxBytes) {
+      throw new Error('模型列表响应超过 1 MiB');
+    }
+    return text;
+  }
+
+  const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const part = await reader.read();
+      if (part.done) break;
+      const value = part.value instanceof Uint8Array
+        ? part.value
+        : new Uint8Array(part.value);
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('模型列表响应超过 1 MiB');
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    try { await reader.cancel(); } catch { /* transport already closed */ }
+    throw error;
+  }
+
+  if (decoder) {
+    let text = '';
+    for (const chunk of chunks) text += decoder.decode(chunk, { stream: true });
+    return text + decoder.decode();
+  }
+
+  // TextDecoder is absent on a few older Hermes runtimes. Preserve bytes and
+  // decode through a bounded Blob when available; otherwise use the portable
+  // byte-to-string fallback (JSON model ids are overwhelmingly UTF-8 ASCII).
+  const blob = typeof Blob !== 'undefined'
+    ? new Blob(chunks as unknown as BlobPart[], { type: 'application/json' })
+    : null;
+  if (blob) return blob.text();
+  return String.fromCharCode(...chunks.flatMap((chunk) => Array.from(chunk)));
+}
+
+function utf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) || 0;
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return bytes;
 }
 
 function isRecord(value: unknown): value is JsonRecord {

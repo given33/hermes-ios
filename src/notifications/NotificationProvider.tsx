@@ -27,6 +27,10 @@ import {
 } from './notification-target';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
 import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
+import {
+  canCollectIOSPermission,
+  ensureIOSPermissions,
+} from '../context/ios-permission-coordinator';
 
 const TaskNotificationContext = createContext<HermesNotificationTarget | null>(null);
 
@@ -107,13 +111,36 @@ export function NotificationProvider({ children }: PropsWithChildren) {
     const config = currentApnsRegistrationConfig();
     const enqueueSynchronization = (token?: NativePushToken) => {
       queue = queue.then(async () => {
+        const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
+        if (hasNativeIOSContext) {
+          await HermesIOSContext.setOwnerScope(ownerScope);
+          await HermesIOSContext.setPermissionCollectionReady(ownerScope, false);
+        }
+        const coordinated = hasNativeIOSContext
+          ? await ensureIOSPermissions(ownerScope, HermesIOSContext)
+          : null;
+        if (coordinated) {
+          await HermesIOSContext.setPermissionCollectionReady(
+            ownerScope,
+            coordinated.phase === 'ready',
+          );
+        }
         const result = await synchronizeApnsRegistration(
           api,
           state.connection.deviceId,
           runtime,
           config,
           token,
+          {
+            // The unified iOS coordinator owns the system sheet. Expo only
+            // reads the resulting APNs status so parent/child effects cannot
+            // race two notification permission requests after login.
+            requestUndeterminedPermission: !coordinated,
+          },
         );
+        if (coordinated && !canCollectIOSPermission(coordinated, 'notification')) {
+          return;
+        }
         if (
           active
           && 'deviceId' in result

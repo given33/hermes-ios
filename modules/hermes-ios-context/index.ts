@@ -123,6 +123,10 @@ export interface IOSContextNativeModule {
     listener: (event: { reason?: string; timestamp?: number; wakeId?: string }) => void,
   ): { remove(): void };
   getCapabilities(): Promise<IOSContextCapabilities>;
+  getNativeViewContract?(): {
+    version: number;
+    views: string[];
+  };
   getLocationAuthorization(): Promise<IOSAuthorizationState>;
   requestLocationAuthorization(): Promise<IOSAuthorizationState>;
   requestPreciseLocation(): Promise<boolean>;
@@ -133,6 +137,7 @@ export interface IOSContextNativeModule {
   setPredictedDeparture(timestamp?: number | null): Promise<boolean>;
   getLocationMode(): Promise<string>;
   getMotionAuthorization(): Promise<IOSAuthorizationState>;
+  requestMotionAuthorization(): Promise<IOSAuthorizationState>;
   startMotionUpdates(): Promise<boolean>;
   stopMotionUpdates(): Promise<void>;
   getMotionSnapshot(): Promise<IOSMotionSnapshot | null>;
@@ -149,6 +154,7 @@ export interface IOSContextNativeModule {
   ): Promise<IOSContextEvent[]>;
   acknowledgeEvents(ids: readonly string[], cursor?: number, scope?: string): Promise<number>;
   setOwnerScope(scope: string): Promise<void>;
+  setPermissionCollectionReady?(scope: string, ready: boolean): Promise<void>;
   activateOwnerScope(scope: string): Promise<number>;
   deleteOwnerScope(scope: string): Promise<number>;
   getCommandCursor(): Promise<string>;
@@ -158,9 +164,12 @@ export interface IOSContextNativeModule {
   readPendingCommands(): Promise<Array<Record<string, unknown>>>;
   removePendingCommand(id: string): Promise<void>;
   requestHealthAuthorization(): Promise<IOSAuthorizationState>;
+  getHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthSummary(start: number, end: number): Promise<IOSHealthSummary>;
   requestCalendarAuthorization(): Promise<IOSAuthorizationState>;
+  getCalendarAuthorization(): Promise<IOSAuthorizationState>;
   requestReminderAuthorization(): Promise<IOSAuthorizationState>;
+  getReminderAuthorization(): Promise<IOSAuthorizationState>;
   listCalendarEvents(start: number, end: number): Promise<IOSCalendarItem[]>;
   createCalendarEvent(input: {
     end: number;
@@ -177,6 +186,7 @@ export interface IOSContextNativeModule {
   }): Promise<string>;
   shareTextToNotes(text: string, title?: string): Promise<boolean>;
   requestNotificationAuthorization(): Promise<IOSAuthorizationState>;
+  getNotificationAuthorization(): Promise<IOSAuthorizationState>;
   scheduleLocalNotification(
     title: string,
     body: string,
@@ -222,6 +232,7 @@ export const HermesIOSContext = {
     requireContextModule().setPredictedDeparture(timestamp),
   getLocationMode: () => requireContextModule().getLocationMode(),
   getMotionAuthorization: () => requireContextModule().getMotionAuthorization(),
+  requestMotionAuthorization: () => requireContextModule().requestMotionAuthorization(),
   startMotionUpdates: () => requireContextModule().startMotionUpdates(),
   stopMotionUpdates: () => requireContextModule().stopMotionUpdates(),
   getMotionSnapshot: () => requireContextModule().getMotionSnapshot(),
@@ -237,6 +248,12 @@ export const HermesIOSContext = {
   acknowledgeEvents: (ids: readonly string[], cursor?: number, scope?: string) =>
     requireContextModule().acknowledgeEvents(ids, cursor, scope),
   setOwnerScope: (scope: string) => requireContextModule().setOwnerScope(scope),
+  setPermissionCollectionReady: (scope: string, ready: boolean) => {
+    const module = requireContextModule();
+    return typeof module.setPermissionCollectionReady === 'function'
+      ? module.setPermissionCollectionReady(scope, ready)
+      : Promise.resolve();
+  },
   activateOwnerScope: (scope: string) => requireContextModule().activateOwnerScope(scope),
   deleteOwnerScope: (scope: string) => requireContextModule().deleteOwnerScope(scope),
   getCommandCursor: () => requireContextModule().getCommandCursor(),
@@ -248,10 +265,13 @@ export const HermesIOSContext = {
   readPendingCommands: () => requireContextModule().readPendingCommands(),
   removePendingCommand: (id: string) => requireContextModule().removePendingCommand(id),
   requestHealthAuthorization: () => requireContextModule().requestHealthAuthorization(),
+  getHealthAuthorization: () => requireContextModule().getHealthAuthorization(),
   getHealthSummary: (start: number, end: number) =>
     requireContextModule().getHealthSummary(start, end),
   requestCalendarAuthorization: () => requireContextModule().requestCalendarAuthorization(),
+  getCalendarAuthorization: () => requireContextModule().getCalendarAuthorization(),
   requestReminderAuthorization: () => requireContextModule().requestReminderAuthorization(),
+  getReminderAuthorization: () => requireContextModule().getReminderAuthorization(),
   listCalendarEvents: (start: number, end: number) =>
     requireContextModule().listCalendarEvents(start, end),
   createCalendarEvent: (input: Parameters<IOSContextNativeModule['createCalendarEvent']>[0]) =>
@@ -262,6 +282,7 @@ export const HermesIOSContext = {
   shareTextToNotes: (text: string, title?: string) =>
     requireContextModule().shareTextToNotes(text, title),
   requestNotificationAuthorization: () => requireContextModule().requestNotificationAuthorization(),
+  getNotificationAuthorization: () => requireContextModule().getNotificationAuthorization(),
   scheduleLocalNotification: (
     title: string,
     body: string,
@@ -316,16 +337,20 @@ export interface HermesScreenTimeReportProps extends ViewProps {
   refreshToken: number;
 }
 
-const mapModuleAvailable = requireOptionalNativeModule('HermesIOSContext') !== null;
-const NativeMap = mapModuleAvailable
-  ? requireNativeView<HermesStandardMapProps>('HermesIOSContext', 'HermesStandardMapView')
+const nativeViewContract = readNativeViewContract(nativeModule);
+export const nativeIOSContextViewContractVersion = nativeViewContract.version;
+
+const NativeMap = nativeViewContract.views.includes('HermesStandardMapView')
+  ? optionalNativeView<HermesStandardMapProps>('HermesStandardMapView')
   : null;
-const NativeScreenTimeReport = mapModuleAvailable
-  ? requireNativeView<HermesScreenTimeReportProps>(
-      'HermesIOSContext',
-      'HermesScreenTimeReportView',
-    )
+const NativeScreenTimeReport = nativeViewContract.views.includes('HermesScreenTimeReportView')
+  ? optionalNativeView<HermesScreenTimeReportProps>('HermesScreenTimeReportView')
   : null;
+
+// The native contract is necessary but not sufficient: stale autolinking can
+// advertise a view whose registration still fails at runtime.
+export const hasNativeStandardMapView = NativeMap !== null;
+export const hasNativeScreenTimeReportView = NativeScreenTimeReport !== null;
 
 export const HermesStandardMapView = forwardRef<View, HermesStandardMapProps>(
   function HermesStandardMapView({ places, track, ...props }, ref) {
@@ -335,6 +360,35 @@ export const HermesStandardMapView = forwardRef<View, HermesStandardMapProps>(
       : createElement(View, nativeProps);
   },
 );
+
+function optionalNativeView<P extends ViewProps>(viewName: string): ComponentType<P> | null {
+  try {
+    return requireNativeView<P>('HermesIOSContext', viewName) as ComponentType<P>;
+  } catch {
+    return null;
+  }
+}
+
+function readNativeViewContract(module: IOSContextNativeModule | null): {
+  version: number;
+  views: string[];
+} {
+  if (!module || typeof module.getNativeViewContract !== 'function') {
+    return { version: 0, views: [] };
+  }
+  try {
+    const contract = module.getNativeViewContract();
+    if (!contract || !Number.isInteger(contract.version) || !Array.isArray(contract.views)) {
+      return { version: 0, views: [] };
+    }
+    return {
+      version: contract.version,
+      views: contract.views.filter((value): value is string => typeof value === 'string'),
+    };
+  } catch {
+    return { version: 0, views: [] };
+  }
+}
 
 export const HermesScreenTimeReportView = forwardRef<View, HermesScreenTimeReportProps>(
   function HermesScreenTimeReportView(props, ref) {

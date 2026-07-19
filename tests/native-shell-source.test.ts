@@ -11,31 +11,21 @@ test('native shell uses only native surfaces and the canonical route composer', 
   const source = read('src/app/NativeShell.tsx');
   assert.match(source, /composeRouteRegistry/);
   assert.match(source, /from 'react-native'/);
-  assert.match(source, /from 'react-native-gesture-handler'/);
+  assert.doesNotMatch(source, /from 'react-native-gesture-handler'/);
   assert.match(source, /from 'react-native-reanimated'/);
   assert.doesNotMatch(source, /WebView|WKWebView|document\.|window\.|localStorage/);
 });
 
-test('phone drawer and iPad rail use iOS spring and timing motion', () => {
+test('phone drawer is button-driven while the iPad rail keeps native motion', () => {
   const source = read('src/app/NativeShell.tsx');
   assert.match(source, /IOS_MOTION\.duration\.rail/);
   assert.match(source, /IOS_MOTION\.curve\.navigation/);
   assert.match(source, /IOS_DRAWER_SPRING/);
   assert.match(source, /resolveVisibleSidebarWidth/);
   assert.match(source, /resolveMobileDrawerTranslation/);
-  assert.match(source, /Gesture\.Pan\(\)/);
-  assert.match(source, /styles\.openEdge/);
-  assert.match(source, /unifiedChatActive \? insets\.top : insets\.top \+ SHELL_METRICS\.headerHeight/);
-  assert.doesNotMatch(
-    source.slice(source.indexOf('openEdge: {')),
-    /openEdge:\s*\{[^}]*top:\s*0/s,
-  );
-  assert.match(source, /\.onEnd\(\(event, success\) =>/);
-  assert.match(source, /if \(!success\)/);
-  assert.match(source, /event\.translationX \+ event\.velocityX \* 0\.12/);
-  assert.match(source, /withSpring\(0,[\s\S]*runOnJS\(openMobile\)/);
-  assert.match(source, /withSpring\(-drawerExtent,[\s\S]*runOnJS\(closeMobile\)/);
-  assert.match(source, /velocity: event\.velocityX/);
+  assert.doesNotMatch(source, /Gesture\.Pan\(\)|GestureDetector|styles\.openEdge/);
+  assert.match(source, /onPress=\{openMobile\}/);
+  assert.match(source, /onPress=\{closeMobile\}/);
   assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
 });
 
@@ -122,18 +112,41 @@ test('every requested path is resolved before route, selection, and slot state',
   assert.doesNotMatch(source, /activeRoute[\s\S]*\?\? composition\.routes/);
 });
 
-test('compact navigation is owned by UIKit native-stack instead of a simulated back gesture', () => {
+test('compact navigation is owned by UIKit native-stack with swipe navigation disabled', () => {
   const source = read('src/app/NativeShell.tsx');
 
   assert.match(source, /createNativeStackNavigator<CompactStackParamList>\(\)/);
   assert.match(source, /<NavigationContainer/);
   assert.match(source, /<CompactStack\.Navigator/);
   assert.match(source, /animation: 'default'/);
-  assert.match(source, /gestureEnabled: true/);
+  assert.match(source, /gestureEnabled: false/);
   assert.match(source, /headerBackButtonMenuEnabled: true/);
-  assert.match(source, /compactNavigationRef\.canGoBack\(\)/);
+  assert.match(source, /navigation\.canGoBack\(\)/);
   assert.match(source, /onStateChange=\{syncCompactNavigation\}/);
   assert.doesNotMatch(source, /routeHistory|backTranslation|backGesture/);
+});
+
+test('sidebar uses one opaque safe-area surface, full-width hit targets, and no theme shortcut', () => {
+  const source = read('src/app/NativeShell.tsx');
+  const routes = read('src/app/route-registry.ts');
+
+  assert.match(source, /const sidebarBackground = rootBackground/);
+  assert.match(source, /swiftUIDrawerHost,[\s\S]*backgroundColor: state\.mobileOpen[\s\S]*\? rootBackground[\s\S]*: 'transparent'/);
+  assert.match(source, /showsVerticalScrollIndicator=\{false\}/);
+  assert.match(source, /referenceSidebarRow:[\s\S]*minHeight: 52/);
+  assert.match(source, /navItem:[\s\S]*minHeight: 52/);
+  assert.match(source, /referenceSidebarGroup:[\s\S]*backgroundColor: 'transparent'/);
+  assert.doesNotMatch(source, /referenceSidebarThemeButton|Change theme|Palette/);
+  assert.match(routes, /id: 'plugins', path: '\/plugins', visibleInSidebar: false/);
+});
+
+test('navigation actions dismiss the keyboard before changing routes or opening the sidebar', () => {
+  const source = read('src/app/NativeShell.tsx');
+
+  assert.match(source, /const openMobile = useCallback\(\(\) => \{\s*Keyboard\.dismiss\(\)/);
+  assert.match(source, /const navigate = useCallback\([\s\S]*\(path: string\) => \{\s*Keyboard\.dismiss\(\)/);
+  assert.match(source, /const selectSidebarRoute = useCallback\([\s\S]*\(path: string\) => \{\s*Keyboard\.dismiss\(\)/);
+  assert.match(source, /const syncCompactNavigation = useCallback\(\(\) => \{\s*Keyboard\.dismiss\(\)/);
 });
 
 test('secondary root pages return to the sidebar while chat retains the menu button', () => {
