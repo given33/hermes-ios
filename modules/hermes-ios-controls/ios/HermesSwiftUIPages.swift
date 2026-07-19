@@ -1404,7 +1404,7 @@ private struct HermesModelsPage: View {
         VStack(alignment: .leading, spacing: 3) {
           Text(model.model)
             .font(HermesFonts.bodyBold(14))
-            .foregroundStyle(appearance.palette.text)
+            .foregroundStyle(appearance.palette.foreground)
             .lineLimit(2)
           HStack(spacing: 8) {
             Text(model.provider)
