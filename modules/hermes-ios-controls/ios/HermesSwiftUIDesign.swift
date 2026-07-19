@@ -15,7 +15,7 @@ struct HermesPalette {
   let destructive: Color
 
   static let nous = HermesPalette(
-    background: Color.hermes("#170d02"),
+    background: Color.hermes("#0e0e0e"),
     surface: Color.hermes("#1d1207"),
     elevated: Color.hermes("#28190b"),
     foreground: .white,

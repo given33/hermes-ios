@@ -7,8 +7,9 @@ import type {
   SingleConversation,
 } from './HermesCloudApi';
 
-const CACHE_VERSION = 1 as const;
-const CACHE_PREFIX = 'hermes.native.conversations.v1';
+const CACHE_VERSION = 2 as const;
+const CACHE_PREFIX = 'hermes.native.conversations.v2';
+const LEGACY_CACHE_PREFIX = 'hermes.native.conversations.v1';
 const OUTBOX_VERSION = 1 as const;
 const OUTBOX_PREFIX = 'hermes.native.hosted-turn-outbox.v1';
 const ROOM_OUTBOX_VERSION = 1 as const;
@@ -69,11 +70,10 @@ export class ConversationLocalStore {
   async read(owner: string): Promise<ConversationCacheSnapshot | null> {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return null;
-    const raw = await readCurrentOrLegacy(
-      this.storage,
-      cacheKey(normalizedOwner),
-      legacyCacheKey(normalizedOwner),
-    );
+    // Do not hydrate the v1 cache. It predates the account-scoped history
+    // contract and can contain process-wide test or Profile sessions. The
+    // cloud account index is the source of truth while the v2 cache rebuilds.
+    const raw = await this.storage.getItem(cacheKey(normalizedOwner));
     if (!raw) return null;
     try {
       const value = JSON.parse(raw) as unknown;
@@ -281,7 +281,8 @@ export class ConversationLocalStore {
       await beforeRemove?.(pendingAttachments);
       await Promise.all([
         cacheKey(normalizedOwner),
-        legacyCacheKey(normalizedOwner),
+        legacyEncodedCacheKey(normalizedOwner),
+        legacyHashedCacheKey(normalizedOwner),
         outboxKey(normalizedOwner),
         legacyOutboxKey(normalizedOwner),
         roomOutboxKey(normalizedOwner),
@@ -368,14 +369,27 @@ export async function synchronizeConversationCache(
     cached?.conversations || [],
     remote.conversations,
   );
+  const missingIds = new Set<string>();
   const downloaded = await mapWithConcurrency(
     reconciliation.downloadIds,
     4,
-    async (id) => (await api.getConversation(id)).conversation,
+    async (id) => {
+      try {
+        return (await api.getConversation(id)).conversation;
+      } catch (error) {
+        // A summary can disappear between the index and detail requests.
+        // Drop only that stale row and keep the rest of the account history.
+        if (isNotFoundError(error)) {
+          missingIds.add(id);
+          return null;
+        }
+        throw error;
+      }
+    },
   );
   const conversations = mergeDownloadedConversations(
-    reconciliation.conversations,
-    downloaded,
+    reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
+    downloaded.filter((conversation): conversation is SingleConversation => conversation !== null),
   );
   const activeConversationId = conversations.some(
     ({ id }) => id === cached?.activeConversationId,
@@ -406,6 +420,11 @@ function sameRevision(left: SingleConversation, right: SingleConversation): bool
     && numberValue(left.message_count) === numberValue(right.message_count)
     && left.title === right.title
     && JSON.stringify(left.runtime_sessions || {}) === JSON.stringify(right.runtime_sessions || {});
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return isRecord(error)
+    && (error.status === 404 || error.statusCode === 404);
 }
 
 function isOfficialPlaceholder(conversation: SingleConversation): boolean {
@@ -464,8 +483,12 @@ function roomOutboxKey(owner: string): string {
   return `${ROOM_OUTBOX_PREFIX}.${ownerStorageKey(owner)}`;
 }
 
-function legacyCacheKey(owner: string): string {
-  return `${CACHE_PREFIX}.${legacyOwnerHash(owner)}`;
+function legacyEncodedCacheKey(owner: string): string {
+  return `${LEGACY_CACHE_PREFIX}.${ownerStorageKey(owner)}`;
+}
+
+function legacyHashedCacheKey(owner: string): string {
+  return `${LEGACY_CACHE_PREFIX}.${legacyOwnerHash(owner)}`;
 }
 
 function legacyOutboxKey(owner: string): string {

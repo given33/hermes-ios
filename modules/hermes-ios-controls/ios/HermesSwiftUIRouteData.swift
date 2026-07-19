@@ -145,6 +145,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   static let empty = HermesRouteSnapshot()
 }
 
+// The snapshot is immutable after decoding and is transferred from the
+// background JSON worker to the main actor as one value.
+extension HermesRouteSnapshot: @unchecked Sendable {}
+
 struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {
   let id: String
   let title: String
@@ -451,27 +455,41 @@ final class HermesRouteDataStore: ObservableObject {
   @Published private(set) var decodingError: String?
 
   private var sourceJson: String
+  private var decodeGeneration = 0
 
   init(dataJson: String) {
-    sourceJson = dataJson
-    do {
-      snapshot = try HermesRouteSnapshotDecoder.decode(dataJson)
-      decodingError = nil
-    } catch {
-      snapshot = .empty
-      decodingError = String(describing: error)
-    }
+    sourceJson = ""
+    snapshot = .empty
+    decodingError = nil
+    update(dataJson: dataJson)
   }
 
   func update(dataJson: String) {
     guard sourceJson != dataJson else { return }
     sourceJson = dataJson
-    do {
-      snapshot = try HermesRouteSnapshotDecoder.decode(dataJson)
-      decodingError = nil
-    } catch {
-      // Keep the last valid server snapshot visible while RN retries the update.
-      decodingError = String(describing: error)
+    decodeGeneration += 1
+    let generation = decodeGeneration
+    let payload = dataJson
+    DispatchQueue.global(qos: .userInitiated).async {
+      let decoded: HermesRouteSnapshot?
+      let failure: String?
+      do {
+        decoded = try HermesRouteSnapshotDecoder.decode(payload)
+        failure = nil
+      } catch {
+        decoded = nil
+        failure = String(describing: error)
+      }
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.decodeGeneration == generation else { return }
+        if let decoded {
+          self.snapshot = decoded
+          self.decodingError = nil
+        } else {
+          // Keep the last valid server snapshot visible while RN retries.
+          self.decodingError = failure
+        }
+      }
     }
   }
 }

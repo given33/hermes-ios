@@ -52,7 +52,7 @@ test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () =>
   assert.match(source, /IOS_NAVIGATION_EASING = Easing\.bezier\(\.\.\.IOS_MOTION\.curve\.navigation\)/);
   assert.match(source, /entering=\{PAGE_ENTERING\}/);
   assert.match(source, /exiting=\{PAGE_EXITING\}/);
-  assert.match(source, /animation: 'default'/);
+  assert.match(source, /animation: 'slide_from_right'/);
   for (const scrollSource of scrollSources) {
     const scrollViews = scrollSource.match(/<ScrollView\s/g)?.length ?? 0;
     const promotionCadence = scrollSource.match(/scrollEventThrottle=\{8\}/g)?.length ?? 0;
@@ -112,14 +112,14 @@ test('every requested path is resolved before route, selection, and slot state',
   assert.doesNotMatch(source, /activeRoute[\s\S]*\?\? composition\.routes/);
 });
 
-test('compact navigation is owned by UIKit native-stack with swipe navigation disabled', () => {
+test('compact navigation keeps UIKit native-stack edge-swipe navigation enabled', () => {
   const source = read('src/app/NativeShell.tsx');
 
   assert.match(source, /createNativeStackNavigator<CompactStackParamList>\(\)/);
   assert.match(source, /<NavigationContainer/);
   assert.match(source, /<CompactStack\.Navigator/);
-  assert.match(source, /animation: 'default'/);
-  assert.match(source, /gestureEnabled: false/);
+  assert.match(source, /animation: 'slide_from_right'/);
+  assert.match(source, /gestureEnabled: true/);
   assert.match(source, /headerBackButtonMenuEnabled: true/);
   assert.match(source, /navigation\.canGoBack\(\)/);
   assert.match(source, /onStateChange=\{syncCompactNavigation\}/);
@@ -157,15 +157,16 @@ test('secondary root pages return to the sidebar while chat retains the menu but
   assert.match(source, /onPress=\{openMobile\}/);
 });
 
-test('sidebar selections reset the top-level stack instead of accumulating pages', () => {
+test('sidebar selections keep a root page so the native edge swipe can return', () => {
   const source = read('src/app/NativeShell.tsx');
 
   assert.match(source, /const selectSidebarRoute = useCallback/);
-  assert.match(source, /compactNavigationRef\.resetRoot\(\{[\s\S]*index: 0,[\s\S]*sidebarSelection: true/);
+  assert.match(source, /compactNavigationRef\.dispatch\(StackActions\.popToTop\(\)\)/);
+  assert.match(source, /compactNavigationRef\.dispatch\(StackActions\.push\(targetName, \{/);
   assert.match(source, /animation: navigationRoute\.params\?\.sidebarSelection\s*\? 'none'\s*: 'default'/);
-  assert.match(source, /const STABLE_SWIFTUI_ROUTE_KEY = 'hermes-swiftui-sidebar-root'/);
-  assert.match(source, /key: reuseSwiftUIHost \? STABLE_SWIFTUI_ROUTE_KEY : undefined/);
-  assert.match(source, /name: reuseSwiftUIHost \? STABLE_SWIFTUI_ROUTE_NAME : resolved/);
+  assert.match(source, /const targetName = reuseSwiftUIHost \? STABLE_SWIFTUI_ROUTE_NAME : resolved/);
+  assert.match(source, /route\.routeId !== 'smart-weather'/);
+  assert.match(source, /headerShown: !chatRoute && !swiftUIRoute/);
   assert.match(source, /<CompactStack\.Screen\s*name=\{STABLE_SWIFTUI_ROUTE_NAME\}/);
   assert.match(source, /navigationRoute\.params\?\.path \?\? state\.activePath/);
   assert.match(source, /pendingSidebarPath\.current = resolved/);

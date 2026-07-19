@@ -59,6 +59,7 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   const [snapshotStale, setSnapshotStale] = useState(false);
   const [mapError, setMapError] = useState('');
   const [mapAttempt, setMapAttempt] = useState(0);
+  const [centerRequest, setCenterRequest] = useState(0);
   // Toast only on the first continuous failure (or when the message changes)
   // so the 30s poll does not spam the commercial surface.
   const lastNotifiedErrorRef = useRef('');
@@ -229,7 +230,11 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
             resetKey={mapAttempt}
           >
             <HermesStandardMapView
-              onLocationPress={() => permissions.retry()}
+              centerOnUserRequest={centerRequest}
+              onLocationPress={() => {
+                setCenterRequest((value) => value + 1);
+                permissions.retry();
+              }}
               places={places}
               showsUserLocation={locationState === 'authorized' || locationState === 'limited'}
               style={StyleSheet.absoluteFill}
@@ -264,7 +269,11 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
           <View
             style={[
               styles.permissionBanner,
-              { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, top: locationMessage ? 72 : 12 },
+              {
+                backgroundColor: tokens.colors.background,
+                borderColor: tokens.colors.border,
+                top: insets.top + (locationMessage ? 112 : 12),
+              },
             ]}
             testID="smart-weather-stale-banner"
           >
@@ -285,11 +294,15 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
           </View>
         ) : null}
 
-        {locationMessage ? (
+        {locationMessage && !mapUnavailableMessage ? (
           <View
             style={[
               styles.permissionBanner,
-              { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border },
+              {
+                backgroundColor: tokens.colors.background,
+                borderColor: tokens.colors.border,
+                top: insets.top + 12,
+              },
             ]}
             testID="smart-weather-permission-status"
           >
@@ -473,9 +486,8 @@ const styles = StyleSheet.create({
     top: 0,
   },
   permissionBanner: {
-    alignItems: 'center',
+    alignItems: 'stretch',
     borderWidth: StyleSheet.hairlineWidth,
-    flexDirection: 'row',
     gap: 10,
     left: 12,
     paddingHorizontal: 12,
@@ -484,8 +496,8 @@ const styles = StyleSheet.create({
     right: 12,
     top: 12,
   },
-  permissionText: { flex: 1, fontSize: 12, lineHeight: 17 },
-  permissionActions: { flexDirection: 'row', gap: 7 },
+  permissionText: { fontSize: 12, lineHeight: 17 },
+  permissionActions: { alignSelf: 'flex-end', flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   timeline: {
     borderTopWidth: StyleSheet.hairlineWidth,
     bottom: 0,

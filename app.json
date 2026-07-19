@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "app.sunstone1029.fig1171",
-      "buildNumber": "27",
+      "buildNumber": "28",
       "supportsTablet": true,
       "requireFullScreen": false,
       "entitlements": {
@@ -127,17 +127,10 @@
       [
         "expo-secure-store",
         {
-          "configureAndroidBackup": true,
-          "faceIDPermission": "允许 Hermes Agent 使用面容 ID 保护敏感凭据。"
+          "configureAndroidBackup": true
         }
       ],
       "expo-notifications",
-      [
-        "expo-local-authentication",
-        {
-          "faceIDPermission": "允许 Hermes Agent 使用面容 ID 验证身份。"
-        }
-      ],
       [
         "expo-image-picker",
         {
@@ -149,7 +142,7 @@
       [
         "expo-splash-screen",
         {
-          "backgroundColor": "#170d02",
+          "backgroundColor": "#0e0e0e",
           "image": "./assets/splash-icon.png",
           "imageWidth": 180,
           "resizeMode": "contain"

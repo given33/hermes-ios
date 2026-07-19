@@ -321,6 +321,12 @@ test('chat header exposes live dual-gateway status while SwiftUI keeps back sema
   assert.match(shell, /id: 'wsl', label: 'WSL', state: 'unknown'/);
 });
 
+test('native account documentation matches the one-time login contract', () => {
+  const admin = read('modules/hermes-ios-controls/ios/HermesSwiftUIAdminPages.swift');
+  assert.match(admin, /首次登录后会自动恢复会话/);
+  assert.doesNotMatch(admin, /Face ID|quick unlock/);
+});
+
 test('heavy analytics content is staged before the sidebar close signal', () => {
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',

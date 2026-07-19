@@ -120,24 +120,22 @@ test('native v2 uses the isolated beta identity and required Expo plugins', () =
 
   assert.equal(appConfig.expo.ios.bundleIdentifier, 'app.sunstone1029.fig1171');
   assert.equal(appConfig.expo.version, '2.0.0-beta.1');
-  assert.equal(appConfig.expo.ios.buildNumber, '27');
+  assert.equal(appConfig.expo.ios.buildNumber, '28');
   assert.equal(packageConfig.version, '2.0.0-beta.1');
   assert.deepEqual(
     pluginNames.filter((name: string) => [
       'expo-secure-store',
       'expo-notifications',
-      'expo-local-authentication',
       'expo-image-picker',
       'expo-splash-screen',
     ].includes(name)),
     [
       'expo-secure-store',
       'expo-notifications',
-      'expo-local-authentication',
       'expo-image-picker',
       'expo-splash-screen',
     ],
   );
   assert.ok(Array.isArray(secureStorePlugin));
-  assert.equal(typeof secureStorePlugin[1].faceIDPermission, 'string');
+  assert.equal(secureStorePlugin[1].faceIDPermission, undefined);
 });

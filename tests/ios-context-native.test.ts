@@ -401,6 +401,9 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /NativeMapErrorBoundary/);
   assert.match(source, /smart-weather-map-error/);
   assert.match(source, /smart-weather-permission-status/);
+  assert.match(source, /centerOnUserRequest=\{centerRequest\}/);
+  assert.match(source, /permissionBanner: \{[\s\S]*alignItems: 'stretch'/);
+  assert.match(source, /permissionActions: \{[\s\S]*flexWrap: 'wrap'/);
 });
 
 test('logout keeps Always location collection; delete stops owner scope', () => {

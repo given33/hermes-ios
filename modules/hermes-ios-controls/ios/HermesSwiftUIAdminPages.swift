@@ -756,7 +756,7 @@ struct HermesDocsPage: View {
         id: "auth",
         section: chinese ? "开始使用" : "Getting Started",
         title: chinese ? "连接与认证" : "Connection and Authentication",
-        content: chinese ? "Base URL 和 API 密钥保存在系统安全存储中，Face ID 用于快速解锁。" : "The Base URL and API key live in secure system storage, with Face ID for quick unlock."
+        content: chinese ? "Base URL 和 API 密钥保存在系统安全存储中；首次登录后会自动恢复会话。" : "The Base URL and API key live in secure system storage; the session restores automatically after the first login."
       ),
       HermesDocEntry(
         id: "tasks",

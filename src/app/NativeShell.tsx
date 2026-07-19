@@ -39,6 +39,7 @@ import { SymbolView, type SFSymbol } from 'expo-symbols';
 import {
   DefaultTheme,
   NavigationContainer,
+  StackActions,
   useNavigationContainerRef,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -239,7 +240,6 @@ type CompactStackParamList = Record<
   { path?: string; sidebarSelection?: boolean } | undefined
 >;
 const STABLE_SWIFTUI_ROUTE_NAME = '__hermes-swiftui-sidebar-root';
-const STABLE_SWIFTUI_ROUTE_KEY = 'hermes-swiftui-sidebar-root';
 const CompactStack = createNativeStackNavigator<CompactStackParamList>();
 
 export interface NativeShellSlotContext {
@@ -450,24 +450,28 @@ export function NativeShell({
           (route) => route.path === resolved,
         );
         const reuseSwiftUIHost =
-          nativeRouteChrome && resolvedRoute?.routeId !== 'chat';
+          nativeRouteChrome
+          && resolvedRoute?.routeId !== 'chat'
+          && resolvedRoute?.routeId !== 'smart-weather'
+          && resolvedRoute?.routeId !== 'account';
         clearPendingSidebarSelection();
         pendingSidebarPath.current = resolved;
-        compactNavigationRef.resetRoot({
-          index: 0,
-          routes: [{
-            key: reuseSwiftUIHost ? STABLE_SWIFTUI_ROUTE_KEY : undefined,
-            name: reuseSwiftUIHost ? STABLE_SWIFTUI_ROUTE_NAME : resolved,
-            params: {
-              path: reuseSwiftUIHost ? resolved : undefined,
-              sidebarSelection: true,
-            },
-          }],
-        });
+        const targetName = reuseSwiftUIHost ? STABLE_SWIFTUI_ROUTE_NAME : resolved;
+        const rootRoute = compactNavigationRef.getRootState()?.routes?.[0];
+        const rootPath = rootRoute?.name === STABLE_SWIFTUI_ROUTE_NAME
+          ? (rootRoute.params as { path?: string } | undefined)?.path
+          : rootRoute?.name;
+        compactNavigationRef.dispatch(StackActions.popToTop());
+        if (rootPath !== resolved) {
+          compactNavigationRef.dispatch(StackActions.push(targetName, {
+            path: reuseSwiftUIHost ? resolved : undefined,
+            sidebarSelection: true,
+          }));
+        }
         dispatch({ type: 'select-route', path: resolved });
-        pendingSidebarFallback.current = setTimeout(() => {
-          reportRouteReady(resolved);
-        }, 1200);
+        // The drawer owns the visible transition.  Closing it immediately
+        // avoids waiting on network data, JSON decoding, or layout readiness.
+        dispatch({ type: 'close-mobile' });
         return;
       }
       dispatch({ type: 'navigate', path: resolved });
@@ -616,9 +620,9 @@ export function NativeShell({
               <CompactStack.Navigator
                 initialRouteName={state.activePath}
                 screenOptions={{
-                  animation: 'default',
+                  animation: 'slide_from_right',
                   contentStyle: { backgroundColor: rootBackground },
-                  gestureEnabled: false,
+                  gestureEnabled: true,
                   headerBackButtonDisplayMode: 'minimal',
                   headerBackButtonMenuEnabled: true,
                   headerShadowVisible: false,
@@ -637,6 +641,10 @@ export function NativeShell({
                     (item) => item.path === route.path,
                   )?.label ?? route.path;
                   const chatRoute = route.routeId === 'chat';
+                  const swiftUIRoute = nativeRouteChrome
+                    && route.routeId !== 'chat'
+                    && route.routeId !== 'smart-weather'
+                    && route.routeId !== 'account';
                   return (
                     <CompactStack.Screen
                       key={route.path}
@@ -667,7 +675,7 @@ export function NativeShell({
                                 )}
                               </IOSPressable>
                             ),
-                        headerShown: !chatRoute && !nativeRouteChrome,
+                        headerShown: !chatRoute && !swiftUIRoute,
                         title: label || 'Hermes Agent',
                       })}
                     >
@@ -918,10 +926,7 @@ function Sidebar({
       <View
         style={[
           styles.sidebarHeader,
-          {
-            borderBottomColor: borderStrong,
-            paddingHorizontal: typography.spacingUnit * 4,
-          },
+          { paddingHorizontal: typography.spacingUnit * 4 },
           collapsed && styles.sidebarHeaderCollapsed,
         ]}
       >
@@ -978,7 +983,7 @@ function Sidebar({
         }}
         showsVerticalScrollIndicator={false}
         scrollEventThrottle={8}
-        style={[styles.navigation, { borderTopColor: borderSoft }]}
+        style={styles.navigation}
       >
         {composition.coreItems.map((item, index) => (
           <ShellNavigationItem
@@ -995,10 +1000,7 @@ function Sidebar({
           <View
             style={[
               styles.pluginSection,
-              {
-                borderTopColor: borderSoft,
-                paddingBottom: typography.spacingUnit * 2,
-              },
+              { paddingBottom: typography.spacingUnit * 2 },
             ]}
           >
             {!collapsed ? (
@@ -1475,14 +1477,12 @@ const styles = StyleSheet.create({
     zIndex: 50,
   },
   sidebar: {
-    borderRightWidth: SHELL_METRICS.borderWidth,
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',
   },
   sidebarHeader: {
     alignItems: 'center',
-    borderBottomWidth: SHELL_METRICS.borderWidth,
     flexDirection: 'row',
     height: SHELL_METRICS.headerHeight,
     justifyContent: 'space-between',
@@ -1585,7 +1585,6 @@ const styles = StyleSheet.create({
     lineHeight: 14,
   },
   navigation: {
-    borderTopWidth: SHELL_METRICS.borderWidth,
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',
@@ -1616,7 +1615,7 @@ const styles = StyleSheet.create({
     width: SHELL_METRICS.activeIndicatorWidth,
   },
   pluginSection: {
-    borderTopWidth: SHELL_METRICS.borderWidth,
+    borderTopWidth: 0,
   },
   sectionLabel: {},
   overlay: {

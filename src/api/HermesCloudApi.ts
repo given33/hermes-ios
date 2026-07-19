@@ -922,17 +922,14 @@ export class HermesCloudApi {
   }
 
   async getUnifiedConversations(profile = 'default') {
-    const activeProfile = profile.trim() || 'default';
-    const [cloud, official] = await Promise.all([
-      this.getConversations(),
-      this.getAllProfileSessions(),
-    ]);
+    // Profile session history is a process-wide server resource and is not
+    // account-scoped on older Hermes deployments.  Merging it here leaks
+    // other accounts' sessions and produces 404s when adoption is attempted.
+    // Account conversations already carry their profile and runtime metadata,
+    // so they are the only safe source for the default history surface.
+    const cloud = await this.getConversations();
     return {
-      conversations: mergeUnifiedConversationIndex(
-        cloud.conversations,
-        official.sessions,
-        activeProfile,
-      ),
+      conversations: cloud.conversations,
     };
   }
 

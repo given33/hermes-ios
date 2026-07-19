@@ -5,12 +5,22 @@ import {
   BASE_URL_STORAGE_KEY,
   CREDENTIAL_STORAGE_KEYS,
   DEVICE_ID_STORAGE_KEY,
-  FACE_ID_PROMPT,
+  LEGACY_ACCESS_EXPIRES_AT_STORAGE_KEY,
+  LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+  LEGACY_BASE_URL_STORAGE_KEY,
+  LEGACY_REFRESH_TOKEN_KEY_PREFIX,
+  LEGACY_REFRESH_TOKEN_POINTER_STORAGE_KEY,
+  LEGACY_REFRESH_TOKEN_STORAGE_KEY,
+  LEGACY_REMEMBERED_PASSWORD_STORAGE_KEY,
+  LEGACY_REMEMBER_LOGIN_STORAGE_KEY,
+  LEGACY_USERNAME_STORAGE_KEY,
   REFRESH_TOKEN_KEY_PREFIX,
   REFRESH_TOKEN_POINTER_STORAGE_KEY,
   REFRESH_TOKEN_STORAGE_KEY,
   REMEMBER_LOGIN_STORAGE_KEY,
   REMEMBERED_PASSWORD_STORAGE_KEY,
+  SESSION_STORAGE_VERSION,
+  SESSION_STORAGE_VERSION_KEY,
   USERNAME_STORAGE_KEY,
   type RememberedLogin,
   type SavedConnection,
@@ -39,15 +49,38 @@ export interface SessionTokenWriter {
   ): Promise<void>;
 }
 
-const PROTECTED_CREDENTIAL_OPTIONS = Object.freeze({
-  requireAuthentication: true,
-  authenticationPrompt: FACE_ID_PROMPT,
-});
-
 export class CredentialStore implements CredentialWriter, SessionTokenWriter {
   constructor(private readonly secureStore: SecureStoreAdapter) {}
 
-  readBaseUrl(): Promise<string | null> {
+  async clearLegacySession(): Promise<void> {
+    const version = await this.secureStore.getItemAsync(SESSION_STORAGE_VERSION_KEY)
+      .catch(() => null);
+    if (version === SESSION_STORAGE_VERSION) return;
+
+    // Older builds stored tokens and the optional remembered password behind
+    // a biometric ACL. Delete those items without reading their values. Any
+    // deletion failure is deliberately ignored: v2 uses different names, so
+    // a stale ACL can never block the next normal login.
+    const legacyKey = await this.secureStore.getItemAsync(
+      LEGACY_REFRESH_TOKEN_POINTER_STORAGE_KEY,
+    ).catch(() => null);
+    const keys = [
+      LEGACY_BASE_URL_STORAGE_KEY,
+      LEGACY_USERNAME_STORAGE_KEY,
+      LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+      LEGACY_REFRESH_TOKEN_STORAGE_KEY,
+      LEGACY_REFRESH_TOKEN_POINTER_STORAGE_KEY,
+      LEGACY_ACCESS_EXPIRES_AT_STORAGE_KEY,
+      LEGACY_REMEMBER_LOGIN_STORAGE_KEY,
+      LEGACY_REMEMBERED_PASSWORD_STORAGE_KEY,
+      ...(isLegacyRefreshTokenKey(legacyKey) ? [legacyKey] : []),
+    ];
+    await Promise.allSettled(keys.map((key) => this.secureStore.deleteItemAsync(key)));
+  }
+
+  async readBaseUrl(): Promise<string | null> {
+    const version = await this.secureStore.getItemAsync(SESSION_STORAGE_VERSION_KEY);
+    if (version !== SESSION_STORAGE_VERSION) return null;
     return this.secureStore.getItemAsync(BASE_URL_STORAGE_KEY);
   }
 
@@ -56,15 +89,9 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       REFRESH_TOKEN_POINTER_STORAGE_KEY,
     );
     if (isRefreshTokenKey(currentKey)) {
-      return this.secureStore.getItemAsync(
-        currentKey,
-        PROTECTED_CREDENTIAL_OPTIONS,
-      );
+      return this.secureStore.getItemAsync(currentKey);
     }
-    return this.secureStore.getItemAsync(
-      REFRESH_TOKEN_STORAGE_KEY,
-      PROTECTED_CREDENTIAL_OPTIONS,
-    );
+    return this.secureStore.getItemAsync(REFRESH_TOKEN_STORAGE_KEY);
   }
 
   readUsername(): Promise<string | null> {
@@ -97,10 +124,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
         username: preference.username,
       };
     }
-    const password = await this.secureStore.getItemAsync(
-      REMEMBERED_PASSWORD_STORAGE_KEY,
-      PROTECTED_CREDENTIAL_OPTIONS,
-    );
+    const password = await this.secureStore.getItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY);
     const enabled = Boolean(password);
     return {
       enabled,
@@ -131,16 +155,12 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       this.secureStore.setItemAsync(
         REMEMBERED_PASSWORD_STORAGE_KEY,
         password,
-        PROTECTED_CREDENTIAL_OPTIONS,
       ),
     ]);
   }
 
   readAccessToken(): Promise<string | null> {
-    return this.secureStore.getItemAsync(
-      ACCESS_TOKEN_STORAGE_KEY,
-      PROTECTED_CREDENTIAL_OPTIONS,
-    );
+    return this.secureStore.getItemAsync(ACCESS_TOKEN_STORAGE_KEY);
   }
 
   readDeviceId(): Promise<string | null> {
@@ -162,7 +182,6 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       await this.secureStore.setItemAsync(
         ACCESS_TOKEN_STORAGE_KEY,
         connection.accessToken,
-        PROTECTED_CREDENTIAL_OPTIONS,
       );
       await this.secureStore.setItemAsync(
         ACCESS_EXPIRES_AT_STORAGE_KEY,
@@ -177,13 +196,16 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       await this.secureStore.setItemAsync(
         refreshTokenKey,
         connection.refreshToken,
-        PROTECTED_CREDENTIAL_OPTIONS,
       );
       await this.secureStore.setItemAsync(
         REFRESH_TOKEN_POINTER_STORAGE_KEY,
         refreshTokenKey,
       );
       await this.secureStore.deleteItemAsync(REFRESH_TOKEN_STORAGE_KEY);
+      await this.secureStore.setItemAsync(
+        SESSION_STORAGE_VERSION_KEY,
+        SESSION_STORAGE_VERSION,
+      );
     } catch {
       await this.deleteAll(refreshTokenKey);
       throw new Error('Unable to save Hermes credentials');
@@ -210,13 +232,9 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     );
     const nextKey = createRefreshTokenKey();
     try {
-      // A fresh Keychain item keeps Face ID protection without prompting again
-      // during background token rotation. Face ID is requested only when the
-      // protected token is read on a later app unlock.
       await this.secureStore.setItemAsync(
         nextKey,
         normalizedRefreshToken,
-        PROTECTED_CREDENTIAL_OPTIONS,
       );
       await this.secureStore.setItemAsync(
         REFRESH_TOKEN_POINTER_STORAGE_KEY,
@@ -225,7 +243,6 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       await this.secureStore.setItemAsync(
         ACCESS_TOKEN_STORAGE_KEY,
         normalizedToken,
-        PROTECTED_CREDENTIAL_OPTIONS,
       );
       await this.secureStore.setItemAsync(
         ACCESS_EXPIRES_AT_STORAGE_KEY,
@@ -235,6 +252,10 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
         await this.secureStore.deleteItemAsync(previousKey);
       }
       await this.secureStore.deleteItemAsync(REFRESH_TOKEN_STORAGE_KEY);
+      await this.secureStore.setItemAsync(
+        SESSION_STORAGE_VERSION_KEY,
+        SESSION_STORAGE_VERSION,
+      );
     } catch {
       throw new Error('Unable to update Hermes token session');
     }
@@ -265,6 +286,9 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       this.secureStore.getItemAsync(REMEMBER_LOGIN_STORAGE_KEY).catch(() => null),
     ]);
     const rememberEnabled = rememberPreference === '1';
+    const legacyKey = await this.secureStore.getItemAsync(
+      LEGACY_REFRESH_TOKEN_POINTER_STORAGE_KEY,
+    ).catch(() => null);
     const keys = [
       BASE_URL_STORAGE_KEY,
       ACCESS_TOKEN_STORAGE_KEY,
@@ -272,6 +296,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       REFRESH_TOKEN_POINTER_STORAGE_KEY,
       ACCESS_EXPIRES_AT_STORAGE_KEY,
       DEVICE_ID_STORAGE_KEY,
+      SESSION_STORAGE_VERSION_KEY,
       ...(rememberEnabled
         ? []
         : [
@@ -280,6 +305,15 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
             REMEMBERED_PASSWORD_STORAGE_KEY,
           ]),
       ...(isRefreshTokenKey(currentKey) ? [currentKey] : []),
+      LEGACY_BASE_URL_STORAGE_KEY,
+      LEGACY_USERNAME_STORAGE_KEY,
+      LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+      LEGACY_REFRESH_TOKEN_STORAGE_KEY,
+      LEGACY_REFRESH_TOKEN_POINTER_STORAGE_KEY,
+      LEGACY_ACCESS_EXPIRES_AT_STORAGE_KEY,
+      LEGACY_REMEMBER_LOGIN_STORAGE_KEY,
+      LEGACY_REMEMBERED_PASSWORD_STORAGE_KEY,
+      ...(isLegacyRefreshTokenKey(legacyKey) ? [legacyKey] : []),
     ];
     const results = await Promise.allSettled(
       keys.map((key) => this.secureStore.deleteItemAsync(key)),
@@ -309,6 +343,12 @@ function isRefreshTokenKey(value: string | null | undefined): value is string {
   return typeof value === 'string'
     && value.startsWith(REFRESH_TOKEN_KEY_PREFIX)
     && value.length > REFRESH_TOKEN_KEY_PREFIX.length;
+}
+
+function isLegacyRefreshTokenKey(value: string | null | undefined): value is string {
+  return typeof value === 'string'
+    && value.startsWith(LEGACY_REFRESH_TOKEN_KEY_PREFIX)
+    && value.length > LEGACY_REFRESH_TOKEN_KEY_PREFIX.length;
 }
 
 export async function provisionConnection(

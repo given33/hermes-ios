@@ -380,7 +380,7 @@ export function ChatPreviewPage({
     return result.conversation;
   }, [applyConversation, cloudApi]);
 
-  const deliverPendingEnqueue = useCallback(async (
+  const deliverPendingEnqueueOnce = useCallback(async (
     source: HostedTurnOutboxItem,
   ): Promise<HostedTurnOutboxItem> => {
     if (!cloudApi || !localStore || !cacheOwner) {
@@ -437,6 +437,37 @@ export function ChatPreviewPage({
     await cloudApi.enqueueHostedTurn(item.conversationId, item.input);
     return item;
   }, [cacheOwner, cloudApi, isChinese, localStore, profile]);
+
+  const deliverPendingEnqueue = useCallback(async (
+    source: HostedTurnOutboxItem,
+  ): Promise<HostedTurnOutboxItem> => {
+    try {
+      return await deliverPendingEnqueueOnce(source);
+    } catch (error) {
+      // A conversation may be deleted on another device between the index
+      // read and enqueue.  Re-home this same idempotent request once rather
+      // than surfacing a permanent 404 or sending the user message twice.
+      if (
+        !isConversationNotFoundError(error)
+        || source.conversationPending
+        || !source.input.requestId
+      ) {
+        throw error;
+      }
+      const replacementId = `chat_${safeOutboxPathComponent(source.input.requestId).slice(0, 251)}`;
+      if (replacementId === source.conversationId) throw error;
+      const replacement: HostedTurnOutboxItem = {
+        ...source,
+        conversationId: replacementId,
+        conversationPending: true,
+        pendingAttachments: source.pendingAttachments?.map(({ uploaded: _uploaded, ...attachment }) => attachment),
+      };
+      if (localStore && cacheOwner) {
+        await localStore.upsertPendingEnqueue(cacheOwner, replacement);
+      }
+      return deliverPendingEnqueueOnce(replacement);
+    }
+  }, [cacheOwner, deliverPendingEnqueueOnce, localStore]);
 
   const replayPendingEnqueues = useCallback(async () => {
     if (!cloudApi || !localStore || !cacheOwner) return;
@@ -546,22 +577,39 @@ export function ChatPreviewPage({
       localConversations,
       result.conversations,
     );
-    const downloaded = await mapWithConcurrency(
-      reconciliation.downloadIds,
-      4,
-      async (id) => (await cloudApi.getConversation(id)).conversation,
-    );
-    if (syncGeneration !== conversationSyncGenerationRef.current) return;
-    const synchronized = mergeDownloadedConversations(
-      reconciliation.conversations,
-      downloaded,
-    );
-    const activeId = resolveConversationId(
+    const requestedActiveId = resolveConversationId(
       preferredId
         || activeConversationIdRef.current
         || rememberedId
-        || synchronized[0]?.id
+        || reconciliation.conversations[0]?.id
         || '',
+      reconciliation.conversations,
+    );
+    const missingIds = new Set<string>();
+    const downloaded = await mapWithConcurrency(
+      reconciliation.downloadIds.filter((id) => id === requestedActiveId),
+      1,
+      async (id) => {
+        try {
+          return (await cloudApi.getConversation(id)).conversation;
+        } catch (error) {
+          // The index and detail endpoints are eventually consistent.  A
+          // deleted row must not blank the whole history or trigger a toast.
+          if (isConversationNotFoundError(error)) {
+            missingIds.add(id);
+            return null;
+          }
+          throw error;
+        }
+      },
+    );
+    if (syncGeneration !== conversationSyncGenerationRef.current) return;
+    const synchronized = mergeDownloadedConversations(
+      reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
+      downloaded.filter((conversation): conversation is SingleConversation => conversation !== null),
+    );
+    const activeId = resolveConversationId(
+      requestedActiveId || synchronized[0]?.id || '',
       synchronized,
     );
     commitConversationIndex(synchronized, activeId);
@@ -1013,10 +1061,25 @@ export function ChatPreviewPage({
     setContent('');
     contentRef.current = '';
     setAttachments([]);
+    const generation = ++conversationSyncGenerationRef.current;
     try {
-      const generation = ++conversationSyncGenerationRef.current;
       await openConversation(conversationId, generation);
     } catch (error) {
+      if (isConversationNotFoundError(error)) {
+        const remaining = conversationIndexRef.current.filter(
+          ({ id }) => id !== conversationId,
+        );
+        const fallbackId = remaining[0]?.id || '';
+        commitConversationIndex(remaining, fallbackId);
+        if (fallbackId) {
+          await openConversation(fallbackId, generation);
+        } else {
+          activeConversationIdRef.current = '';
+          setActiveConversationId('');
+          setMessages([]);
+        }
+        return;
+      }
       notify(serverFailure(error, isChinese));
     }
   };
@@ -1846,6 +1909,11 @@ function resolveConversationId(
     if (adopted) return adopted.id;
   }
   return conversations[0]?.id || '';
+}
+
+function isConversationNotFoundError(error: unknown): boolean {
+  return isRecord(error)
+    && (error.status === 404 || error.statusCode === 404);
 }
 
 async function mapWithConcurrency<T, R>(
@@ -2681,11 +2749,11 @@ const styles = StyleSheet.create({
   headingTitleCompact: { fontSize: 12, lineHeight: 16 },
   headingSubtitle: { fontFamily: BODY_REGULAR, fontSize: 10, lineHeight: 14 },
   headerControls: { alignItems: 'center', flexDirection: 'row', gap: 4, justifyContent: 'flex-end' },
-  gatewayStatuses: { gap: 2, justifyContent: 'center', width: 122 },
-  gatewayStatusRow: { alignItems: 'center', flexDirection: 'row', gap: 4, height: 13, width: '100%' },
+  gatewayStatuses: { gap: 2, justifyContent: 'center', width: 94 },
+  gatewayStatusRow: { alignItems: 'center', flexDirection: 'row', gap: 4, height: 13, width: 94 },
   gatewayStatusDot: { borderRadius: 3, height: 6, width: 6 },
-  gatewayStatusLabel: { flexShrink: 0, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10, width: 34 },
-  gatewayStatusVersion: { flex: 1, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10, textAlign: 'right' },
+  gatewayStatusLabel: { flexShrink: 0, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10, width: 36 },
+  gatewayStatusVersion: { flexShrink: 0, fontFamily: MONO_REGULAR, fontSize: 7.5, lineHeight: 10, textAlign: 'left', width: 42 },
   modelTools: { alignItems: 'center', borderRadius: 8, borderWidth: 1, height: 32, justifyContent: 'center', paddingHorizontal: 7 },
   modelToolsText: { fontFamily: BODY_BOLD, fontSize: 9, lineHeight: 12 },
   liveDot: { backgroundColor: '#20a879', borderRadius: 4, height: 8, marginHorizontal: 5, width: 8 },

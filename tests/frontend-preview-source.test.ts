@@ -166,8 +166,8 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /当前窗口持续使用同一个会话/);
   assert.match(chat, /styles\.gatewayStatusLabel/);
   assert.match(chat, /styles\.gatewayStatusVersion/);
-  assert.match(chat, /gatewayStatusLabel: \{[\s\S]*width: 34/);
-  assert.match(chat, /gatewayStatusVersion: \{[\s\S]*textAlign: 'right'/);
+  assert.match(chat, /gatewayStatusLabel: \{[\s\S]*width: 36/);
+  assert.match(chat, /gatewayStatusVersion: \{[\s\S]*textAlign: 'left'/);
   assert.match(chat, /直接告诉 Hermes 你想做什么/);
   assert.match(chat, /function UnifiedMessage/);
   assert.match(app, /clearPreferredConversationId/);
@@ -399,6 +399,14 @@ test('chat continuation keeps the opened conversation Profile on every send step
   assert.match(chat, /profiles: \[conversationProfile\]/);
   assert.match(chat, /conversationProfile,\s*conversationTitle:/);
   assert.match(chat, /profile: conversationProfile,\s*turnId:/);
+});
+
+test('stale conversation selection is removed instead of surfacing another 404', () => {
+  const chat = read('src/preview/PreviewChatPage.tsx');
+  assert.match(chat, /if \(isConversationNotFoundError\(error\)\) \{/);
+  assert.match(chat, /conversationIndexRef\.current\.filter\([\s\S]*id !== conversationId/);
+  assert.match(chat, /commitConversationIndex\(remaining, fallbackId\)/);
+  assert.match(chat, /await openConversation\(fallbackId, generation\)/);
 });
 
 test('Chinese preview mode translates every shared visible control surface', () => {

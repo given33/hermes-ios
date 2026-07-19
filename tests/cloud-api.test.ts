@@ -43,7 +43,6 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
     calls.map(({ path }) => path),
     [
       '/api/plugins/collaboration/single/conversations',
-      '/api/profiles/sessions',
       '/api/analytics/usage',
       '/api/analytics/models',
       '/api/dashboard/plugins',
@@ -52,17 +51,8 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
     ],
   );
   assert.equal(calls[0].options.profile, undefined);
-  assert.equal(calls[1].options.profile, undefined);
-  assert.deepEqual(calls[1].options.query, {
-    archived: 'exclude',
-    limit: 100,
-    min_messages: 0,
-    offset: 0,
-    order: 'recent',
-    profile: 'all',
-  });
+  assert.equal(calls[1].options.profile, 'reviewer');
   assert.equal(calls[2].options.profile, 'reviewer');
-  assert.equal(calls[3].options.profile, 'reviewer');
 });
 
 test('account files and contextual routing use the collaboration cloud contract', async () => {
@@ -360,13 +350,12 @@ test('conversation history reads, renames, and deletes the same server records a
   assert.equal(opened.conversation.messages[0].content, '继续');
   assert.deepEqual(calls.map(({ path }) => path), [
     '/api/plugins/collaboration/single/conversations',
-    '/api/profiles/sessions',
     '/api/plugins/collaboration/single/conversations/chat-1',
     '/api/plugins/collaboration/single/conversations/chat-1',
     '/api/plugins/collaboration/single/conversations/chat-1',
   ]);
-  assert.equal(calls[3].options.method, 'PATCH');
-  assert.equal(calls[4].options.method, 'DELETE');
+  assert.equal(calls[2].options.method, 'PATCH');
+  assert.equal(calls[3].options.method, 'DELETE');
 });
 
 test('unified history adds official task titles and suppresses mapped sessions', () => {

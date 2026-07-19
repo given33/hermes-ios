@@ -60,8 +60,6 @@ export function LoginScreen() {
     authenticate,
     register,
     requestRegistrationCode,
-    unlock,
-    logout,
   } = useAuth();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -86,10 +84,8 @@ export function LoginScreen() {
   >(null);
 
   const loading = state.status === 'loading';
-  const locked = state.status === 'locked';
   const busy = state.status !== 'loading' && state.status !== 'authenticated' && state.busy;
-  const error =
-    state.status === 'locked' || state.status === 'provisioning' ? state.error : undefined;
+  const error = state.status === 'provisioning' ? state.error : undefined;
   const canSubmit =
     username.trim().length > 0
     && password.length > 0
@@ -215,46 +211,15 @@ export function LoginScreen() {
                 <Text style={styles.subtitle}>
                   {loading
                     ? '正在读取 Hermes 安全连接。'
-                    : locked
-                      ? '使用 Face ID 快速解锁已登录账号。'
-                      : mode === 'register'
-                        ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
-                        : '登录后继续使用 Hermes Agent 管理面板。'}
+                    : mode === 'register'
+                      ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
+                      : '登录后继续使用 Hermes Agent 管理面板。'}
                 </Text>
 
                 {loading ? (
                   <View accessibilityRole="progressbar" style={styles.loadingRow}>
                     <ActivityIndicator color={LOGIN_COLORS.accent} size="small" />
                     <Text style={styles.loadingText}>正在准备</Text>
-                  </View>
-                ) : locked ? (
-                  <View style={styles.form}>
-                    <Text style={styles.formTitle}>使用 FACE ID 登录</Text>
-                    <Text style={styles.attemptText}>
-                      {state.failedAttempts > 0
-                        ? `已尝试 ${state.failedAttempts}/5 次`
-                        : '验证失败后可继续重试，连续 5 次后使用密码登录'}
-                    </Text>
-                    {error ? (
-                      <Text accessibilityRole="alert" style={styles.errorText}>
-                        {error}
-                      </Text>
-                    ) : null}
-                    <ProviderButton
-                      busy={busy}
-                      disabled={busy}
-                      label={busy ? '正在验证' : '使用 FACE ID 登录'}
-                      onPress={() => void unlock()}
-                    />
-                    <IOSPressable
-                      accessibilityRole="button"
-                      disabled={busy}
-                      onPress={() => void logout()}
-                      pressedStyle={!busy ? styles.buttonPressed : undefined}
-                      style={styles.secondaryButton}
-                    >
-                      <Text style={styles.secondaryButtonText}>使用其他账号</Text>
-                    </IOSPressable>
                   </View>
                 ) : (
                   <View style={styles.form}>

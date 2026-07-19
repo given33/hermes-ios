@@ -114,7 +114,7 @@ function isLightColor(hex: string): boolean {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: '#170d02',
+    backgroundColor: '#0e0e0e',
   },
   nativeContent: {
     flex: 1,

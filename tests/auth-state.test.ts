@@ -18,12 +18,20 @@ import {
   BASE_URL_STORAGE_KEY,
   CREDENTIAL_STORAGE_KEYS,
   DEVICE_ID_STORAGE_KEY,
-  FACE_ID_PROMPT,
+  LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+  LEGACY_BASE_URL_STORAGE_KEY,
+  LEGACY_REFRESH_TOKEN_KEY_PREFIX,
+  LEGACY_REFRESH_TOKEN_POINTER_STORAGE_KEY,
+  LEGACY_REFRESH_TOKEN_STORAGE_KEY,
+  LEGACY_REMEMBERED_PASSWORD_STORAGE_KEY,
+  LEGACY_USERNAME_STORAGE_KEY,
   REFRESH_TOKEN_KEY_PREFIX,
   REFRESH_TOKEN_POINTER_STORAGE_KEY,
   REFRESH_TOKEN_STORAGE_KEY,
   REMEMBER_LOGIN_STORAGE_KEY,
   REMEMBERED_PASSWORD_STORAGE_KEY,
+  SESSION_STORAGE_VERSION,
+  SESSION_STORAGE_VERSION_KEY,
   USERNAME_STORAGE_KEY,
   type SavedConnection,
 } from '../src/auth/credential-contract';
@@ -344,13 +352,14 @@ test('Face ID cancellation remains retryable without consuming an attempt', () =
   }
 });
 
-test('SecureStore protects access token, refresh token, and remembered password with Face ID', async () => {
+test('SecureStore keeps the first-login session available for automatic cold-start recovery', async () => {
   const values = new Map<string, string>([
     [BASE_URL_STORAGE_KEY, session.baseUrl],
     [USERNAME_STORAGE_KEY, session.username],
     [ACCESS_TOKEN_STORAGE_KEY, session.accessToken],
     [REFRESH_TOKEN_STORAGE_KEY, session.refreshToken],
     [ACCESS_EXPIRES_AT_STORAGE_KEY, String(session.expiresAt)],
+    [SESSION_STORAGE_VERSION_KEY, SESSION_STORAGE_VERSION],
   ]);
   const operations: Array<{
     operation: 'get' | 'set' | 'delete';
@@ -373,21 +382,19 @@ test('SecureStore protects access token, refresh token, and remembered password 
     },
   };
   const store = new CredentialStore(secureStore);
-  const protectedOptions = {
-    requireAuthentication: true,
-    authenticationPrompt: FACE_ID_PROMPT,
-  };
+  const sessionOptions = undefined;
 
   assert.deepEqual(CREDENTIAL_STORAGE_KEYS, [
-    'hermes.native.baseUrl',
-    'hermes.native.username',
-    'hermes.native.accessToken',
-    'hermes.native.refreshToken',
-    'hermes.native.refreshTokenKey',
-    'hermes.native.accessExpiresAt',
+    'hermes.native.v2.baseUrl',
+    'hermes.native.v2.username',
+    'hermes.native.v2.accessToken',
+    'hermes.native.v2.refreshToken',
+    'hermes.native.v2.refreshTokenKey',
+    'hermes.native.v2.accessExpiresAt',
     'hermes.native.deviceId',
-    'hermes.native.rememberLogin',
-    'hermes.native.rememberedPassword',
+    'hermes.native.v2.sessionVersion',
+    'hermes.native.v2.rememberLogin',
+    'hermes.native.v2.rememberedPassword',
   ]);
   assert.equal(await store.readBaseUrl(), session.baseUrl);
   assert.equal(await store.readRefreshToken(), session.refreshToken);
@@ -445,17 +452,13 @@ test('SecureStore protects access token, refresh token, and remembered password 
       isProtectedSecretKey(key) && (operation === 'get' || operation === 'set'),
   );
   assert.ok(protectedOperations.length >= 4);
-  for (const operation of protectedOperations) {
-    assert.deepEqual(operation.options, protectedOptions);
-  }
+  for (const operation of protectedOperations) assert.equal(operation.options, sessionOptions);
   const accessTokenOperations = operations.filter(
     ({ operation, key }) =>
       key === ACCESS_TOKEN_STORAGE_KEY && (operation === 'get' || operation === 'set'),
   );
   assert.ok(accessTokenOperations.length >= 2);
-  assert.ok(accessTokenOperations.every(
-    ({ options }) => JSON.stringify(options) === JSON.stringify(protectedOptions),
-  ));
+  assert.ok(accessTokenOperations.every(({ options }) => options === sessionOptions));
   const pointerOperations = operations.filter(
     ({ key }) => key === REFRESH_TOKEN_POINTER_STORAGE_KEY,
   );
@@ -466,9 +469,7 @@ test('SecureStore protects access token, refresh token, and remembered password 
       key === REMEMBERED_PASSWORD_STORAGE_KEY && (operation === 'get' || operation === 'set'),
   );
   assert.ok(rememberedPasswordOperations.length >= 1);
-  assert.ok(rememberedPasswordOperations.every(
-    ({ options }) => JSON.stringify(options) === JSON.stringify(protectedOptions),
-  ));
+  assert.ok(rememberedPasswordOperations.every(({ options }) => options === sessionOptions));
   const preferenceReads = operations.filter(
     ({ key, operation }) =>
       key === REMEMBER_LOGIN_STORAGE_KEY && operation === 'get',
@@ -478,7 +479,88 @@ test('SecureStore protects access token, refresh token, and remembered password 
     ({ key, operation, value }) =>
       key === REMEMBER_LOGIN_STORAGE_KEY && operation === 'set' && value === '1',
   ));
-  assert.equal(FACE_ID_PROMPT, '使用 Face ID 登录 Hermes');
+});
+
+test('legacy biometric entries are deleted without reading them before the first v2 login', async () => {
+  const legacyRefreshKey = `${LEGACY_REFRESH_TOKEN_KEY_PREFIX}legacy`;
+  const values = new Map<string, string>([
+    [LEGACY_BASE_URL_STORAGE_KEY, session.baseUrl],
+    [LEGACY_USERNAME_STORAGE_KEY, session.username],
+    [LEGACY_ACCESS_TOKEN_STORAGE_KEY, session.accessToken],
+    [LEGACY_REFRESH_TOKEN_POINTER_STORAGE_KEY, legacyRefreshKey],
+    [legacyRefreshKey, session.refreshToken],
+    [LEGACY_REMEMBERED_PASSWORD_STORAGE_KEY, 'account-password'],
+  ]);
+  const operations: Array<{ operation: 'get' | 'set' | 'delete'; key: string }> = [];
+  const protectedKeys = new Set([
+    LEGACY_ACCESS_TOKEN_STORAGE_KEY,
+    LEGACY_REFRESH_TOKEN_STORAGE_KEY,
+    LEGACY_REMEMBERED_PASSWORD_STORAGE_KEY,
+    legacyRefreshKey,
+  ]);
+  const secureStore: SecureStoreAdapter = {
+    async getItemAsync(key) {
+      operations.push({ operation: 'get', key });
+      if (protectedKeys.has(key) && values.has(key)) {
+        throw new Error('biometric authentication required');
+      }
+      return values.get(key) ?? null;
+    },
+    async setItemAsync(key, value) {
+      operations.push({ operation: 'set', key });
+      values.set(key, value);
+    },
+    async deleteItemAsync(key) {
+      operations.push({ operation: 'delete', key });
+      values.delete(key);
+    },
+  };
+  const store = new CredentialStore(secureStore);
+
+  await store.clearLegacySession();
+  assert.equal(values.size, 0);
+  assert.equal(
+    operations.some(({ operation, key }) => operation === 'get' && protectedKeys.has(key)),
+    false,
+  );
+
+  await store.save(session);
+  assert.equal(values.get(SESSION_STORAGE_VERSION_KEY), SESSION_STORAGE_VERSION);
+  assert.equal(values.get(ACCESS_TOKEN_STORAGE_KEY), session.accessToken);
+});
+
+test('a legacy ACL deletion failure cannot block or overwrite the v2 session', async () => {
+  const values = new Map<string, string>([
+    [LEGACY_ACCESS_TOKEN_STORAGE_KEY, 'legacy-protected-access'],
+  ]);
+  const reads: string[] = [];
+  const secureStore: SecureStoreAdapter = {
+    async getItemAsync(key) {
+      reads.push(key);
+      if (key === LEGACY_ACCESS_TOKEN_STORAGE_KEY) {
+        throw new Error('legacy authentication required');
+      }
+      return values.get(key) ?? null;
+    },
+    async setItemAsync(key, value) {
+      values.set(key, value);
+    },
+    async deleteItemAsync(key) {
+      if (key === LEGACY_ACCESS_TOKEN_STORAGE_KEY) {
+        throw new Error('legacy ACL retained');
+      }
+      values.delete(key);
+    },
+  };
+  const store = new CredentialStore(secureStore);
+
+  await store.clearLegacySession();
+  await store.save(session);
+
+  assert.equal(values.get(LEGACY_ACCESS_TOKEN_STORAGE_KEY), 'legacy-protected-access');
+  assert.equal(values.get(ACCESS_TOKEN_STORAGE_KEY), session.accessToken);
+  assert.equal(values.get(SESSION_STORAGE_VERSION_KEY), SESSION_STORAGE_VERSION);
+  assert.equal(reads.includes(LEGACY_ACCESS_TOKEN_STORAGE_KEY), false);
 });
 
 test('credential save rolls back every session key when protected storage fails', async () => {
@@ -594,7 +676,7 @@ test('authenticated sessions are normalized, handshaken, and only then saved', a
   );
 });
 
-test('native auth integrates owner endpoints, refresh, Face ID, and the complete app root', () => {
+test('native auth restores one non-interactive session and keeps the complete app root', () => {
   const providerSource = readFileSync(
     resolve(projectRoot, 'src/auth/AuthProvider.tsx'),
     'utf8',
@@ -614,18 +696,16 @@ test('native auth integrates owner endpoints, refresh, Face ID, and the complete
 
   assert.doesNotMatch(providerSource, /\bAppState\b/);
   assert.match(providerSource, /bootstrapSavedConnection/);
-  assert.match(providerSource, /inspectSavedConnection/);
+  assert.doesNotMatch(providerSource, /inspectSavedConnection/);
+  assert.match(providerSource, /result\.status === 'authenticated'/);
   assert.match(providerSource, /AccessTokenController/);
   assert.match(providerSource, /clientSession\?\.accessTokens\.dispose\(\)/);
   assert.match(providerSource, /new AbortController\(\)/);
   assert.match(providerSource, /APNS_LOGOUT_DEADLINE_MS/);
-  assert.match(providerSource, /FACE_ID_UNLOCK_DEADLINE_MS\s*=\s*45_000/);
-  assert.match(
-    providerSource,
-    /withDeadline\(\s*bootstrapSavedConnection\(credentialStore\),\s*FACE_ID_UNLOCK_DEADLINE_MS/,
-  );
-  assert.match(providerSource, /readRememberedLoginPreference\(\)/);
-  assert.match(providerSource, /AsyncDeadlineError/);
+  assert.match(providerSource, /credentialMutations\.run\(\(\) => credentialStore\.clearSession\(\)\)/);
+  assert.match(providerSource, /readRememberedLogin\(\)/);
+  assert.doesNotMatch(providerSource, /\bunlock\b|Face ID|FACE_ID/);
+  assert.doesNotMatch(loginSource, /\bunlock\b|Face ID|FACE ID/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(providerSource, /HermesIOSContext\.activateOwnerScope\(/);
   assert.match(providerSource, /runOptionalAuthEffect/);

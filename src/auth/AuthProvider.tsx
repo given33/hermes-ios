@@ -14,7 +14,7 @@ import {
 } from 'react';
 
 import { HermesApiClient, HermesApiError } from '../api/HermesApiClient';
-import { AsyncDeadlineError, withDeadline } from '../api/async-deadline';
+import { withDeadline } from '../api/async-deadline';
 import { assertMobileHandshake } from '../api/hermes-types';
 import { purgeLocalAccountData } from '../api/local-account-purge';
 import { HERMES_ORIGIN } from '../config';
@@ -30,7 +30,6 @@ import {
 import {
   authReducer,
   bootstrapSavedConnection,
-  inspectSavedConnection,
   initialAuthState,
   type AuthState,
 } from './auth-state';
@@ -60,7 +59,6 @@ interface AuthContextValue {
   ): Promise<void>;
   requestRegistrationCode(email: string): Promise<number>;
   rememberDeviceId(deviceId: string): Promise<void>;
-  unlock(): Promise<void>;
   logout(): Promise<void>;
   deleteAccount(): Promise<void>;
 }
@@ -70,18 +68,9 @@ const credentialStore = new CredentialStore(SecureStore);
 const credentialMutations = new CredentialMutationQueue();
 const APNS_LOGOUT_DEADLINE_MS = 2_500;
 const REMOTE_LOGOUT_DEADLINE_MS = 8_000;
-// Face ID / SecureStore can take several seconds on cold biometrics. A short
-// wall-clock race makes unlock look like a crash; keep it generous and map the
-// deadline to the same unavailable path as a cancelled biometric.
-const FACE_ID_UNLOCK_DEADLINE_MS = 45_000;
-
-const UNLOCK_ERROR = 'Face ID 已取消或凭据不可用，请重试。';
-const UNLOCK_CANCELLED_ERROR = 'Face ID 已取消，可以再次尝试。';
-const UNLOCK_UNAVAILABLE_ERROR = 'Face ID 或已保存的登录凭据不可用，请使用账号密码登录。';
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
 const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
-const FACE_ID_PASSWORD_FALLBACK = 'Face ID 已连续失败 5 次，请输入账号密码。';
 const EMPTY_REMEMBERED_LOGIN: RememberedLogin = {
   enabled: false,
   password: '',
@@ -110,33 +99,43 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const bootstrapGeneration = authLifecycle.current.mount();
     let active = true;
 
-    void Promise.all([
-      // Preference only on cold start so the Face ID lock screen never
-      // unlocks the remembered password before the user authenticates.
-      credentialStore.readRememberedLoginPreference().catch(() => EMPTY_REMEMBERED_LOGIN),
-      inspectSavedConnection(credentialStore),
-    ])
+    // Legacy biometric entries are never read. Cleanup finishes before the
+    // v2 session is inspected, while cleanup failures remain local and cannot
+    // be misreported as a Hermes server connection failure.
+    void credentialStore.clearLegacySession()
+      .catch(() => undefined)
+      .then(() => Promise.all([
+        credentialStore.readRememberedLogin().catch(() => EMPTY_REMEMBERED_LOGIN),
+        bootstrapSavedConnection(credentialStore),
+      ]))
       .then(async ([savedLogin, result]) => {
         if (!active || !authLifecycle.current.isCurrent(bootstrapGeneration)) return;
         setRememberedLogin(savedLogin);
-        if (result.status === 'provisioning') {
+        if (result.status === 'authenticated') {
+          if (hasNativeIOSContext) {
+            await runOptionalAuthEffect(
+              () => HermesIOSContext.activateOwnerScope(
+                `${result.connection.baseUrl}|${result.connection.username}`,
+              ),
+            );
+          }
+          if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
+            dispatch({ type: 'AUTHENTICATED', connection: result.connection });
+          }
+          return;
+        }
+
+        if (result.status === 'locked') {
+          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+        }
+
+        if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
           let error: string | undefined;
           try {
             const status = await new MobileAuthApiClient(HERMES_ORIGIN).getStatus();
             setRegistrationOpen(status.registrationOpen);
           } catch {
             error = CONNECTION_ERROR;
-          }
-          // Load the biometric-protected password only for the login form.
-          if (active && authLifecycle.current.isCurrent(bootstrapGeneration) && savedLogin.enabled) {
-            try {
-              const fullLogin = await credentialStore.readRememberedLogin();
-              if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
-                setRememberedLogin(fullLogin);
-              }
-            } catch {
-              // Leave preference-only state; user can type the password.
-            }
           }
           if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
             dispatch({
@@ -146,11 +145,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
               error,
             });
           }
-        } else if (result.status === 'locked') {
-          dispatch({
-            type: 'BOOTSTRAP_LOCKED',
-            baseUrl: result.baseUrl,
-          });
         }
       })
       .catch(() => {
@@ -333,70 +327,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
       .requestRegistrationCode(email);
     return delivery.resendAfter;
   }, []);
-
-  const unlock = useCallback(async () => {
-    if (state.status !== 'locked' || state.busy) return;
-    const operationGeneration = authLifecycle.current.beginOperation();
-    if (operationGeneration === null) return;
-    dispatch({ type: 'UNLOCK_STARTED' });
-    try {
-      const result = await withDeadline(
-        bootstrapSavedConnection(credentialStore),
-        FACE_ID_UNLOCK_DEADLINE_MS,
-        'Face ID unlock timed out',
-      );
-      if (!authLifecycle.current.isCurrent(operationGeneration)) return;
-      if (result.status === 'locked') {
-        const cancelled = result.failure === 'cancelled' || result.cancelled === true;
-        const unavailable = result.failure === 'unavailable';
-        dispatch({
-          type: 'UNLOCK_FAILED',
-          error: cancelled
-            ? UNLOCK_CANCELLED_ERROR
-            : unavailable
-              ? UNLOCK_UNAVAILABLE_ERROR
-              : UNLOCK_ERROR,
-          fallbackError: FACE_ID_PASSWORD_FALLBACK,
-          countAttempt: !cancelled && !unavailable,
-          fallbackImmediately: unavailable,
-        });
-        return;
-      }
-      if (result.status !== 'authenticated') {
-        dispatch({
-          type: 'UNLOCK_FAILED',
-          error: UNLOCK_UNAVAILABLE_ERROR,
-          fallbackError: UNLOCK_UNAVAILABLE_ERROR,
-          countAttempt: false,
-          fallbackImmediately: true,
-        });
-        return;
-      }
-      if (hasNativeIOSContext) {
-        await runOptionalAuthEffect(
-          () => HermesIOSContext.activateOwnerScope(
-            `${result.connection.baseUrl}|${result.connection.username}`,
-          ),
-        );
-      }
-      if (authLifecycle.current.isCurrent(operationGeneration)) {
-        dispatch({ type: 'AUTHENTICATED', connection: result.connection });
-      }
-    } catch (error) {
-      if (authLifecycle.current.isCurrent(operationGeneration)) {
-        const timedOut = error instanceof AsyncDeadlineError;
-        dispatch({
-          type: 'UNLOCK_FAILED',
-          error: timedOut ? UNLOCK_UNAVAILABLE_ERROR : UNLOCK_ERROR,
-          fallbackError: FACE_ID_PASSWORD_FALLBACK,
-          countAttempt: !timedOut,
-          fallbackImmediately: timedOut,
-        });
-      }
-    } finally {
-      authLifecycle.current.finishOperation(operationGeneration);
-    }
-  }, [state]);
 
   const sessionConnection = state.status === 'authenticated'
     ? state.connection
@@ -619,7 +549,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
       register,
       requestRegistrationCode,
       rememberDeviceId,
-      unlock,
       logout,
       deleteAccount,
     }),
@@ -634,7 +563,6 @@ export function AuthProvider({ children }: PropsWithChildren) {
       rememberDeviceId,
       requestRegistrationCode,
       state,
-      unlock,
     ],
   );
 

@@ -91,7 +91,7 @@ test('local account keys remain isolated for owners that collide under the legac
   assert.equal((await store.read(ownerB))?.conversations[0].id, 'collision-b');
 });
 
-test('local conversation history can still read the legacy owner-hash key', async () => {
+test('legacy conversation cache is ignored after the account-scoped schema bump', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
   const owner = 'legacy-owner';
@@ -108,7 +108,7 @@ test('local conversation history can still read the legacy owner-hash key', asyn
     syncedAt: 10,
   }));
 
-  assert.equal((await store.read(owner))?.activeConversationId, 'legacy-chat');
+  assert.equal(await store.read(owner), null);
 });
 
 test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed after acknowledgement', async () => {
@@ -227,6 +227,20 @@ test('account purge removes conversation and outbox keys while preserving attach
     requestId: 'room-delete',
     roomId: 'room-delete',
   });
+  const normalizedOwner = owner.toLowerCase();
+  const encodedOwner = `u${Array.from(normalizedOwner)
+    .map((character) => character.charCodeAt(0).toString(16).padStart(4, '0'))
+    .join('')}`;
+  let legacyHash = 0x811c9dc5;
+  for (const character of normalizedOwner) {
+    legacyHash ^= character.charCodeAt(0);
+    legacyHash = Math.imul(legacyHash, 0x01000193);
+  }
+  storage.values.set(`hermes.native.conversations.v1.${encodedOwner}`, 'legacy-v1');
+  storage.values.set(
+    `hermes.native.conversations.v1.${(legacyHash >>> 0).toString(16)}`,
+    'legacy-hash',
+  );
 
   const cleanup = await store.purge(owner);
 
@@ -352,6 +366,33 @@ test('session-page synchronization stores full changed transcripts for later loc
   assert.equal(synchronized.activeConversationId, 'unchanged');
   assert.equal(restored?.conversations.find(({ id }) => id === 'unchanged')?.messages[0].content, '本地完整正文');
   assert.equal(restored?.conversations.find(({ id }) => id === 'changed')?.messages.length, 2);
+});
+
+test('a detail 404 removes the stale summary and selects the next live conversation', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|stale-summary@example.test';
+  const api = {
+    async getUnifiedConversations() {
+      return {
+        conversations: [
+          conversation('missing', 200, [], 1),
+          conversation('survivor', 100, []),
+        ],
+      };
+    },
+    async getConversation(id: string) {
+      if (id === 'survivor') return { conversation: conversation('survivor', 100, []) };
+      throw Object.assign(new Error('Conversation not found'), { status: 404 });
+    },
+  } as unknown as HermesCloudApi;
+
+  const synchronized = await synchronizeConversationCache(api, store, owner);
+  const restored = await store.read(owner);
+
+  assert.deepEqual(synchronized.conversations.map(({ id }) => id), ['survivor']);
+  assert.equal(synchronized.activeConversationId, 'survivor');
+  assert.deepEqual(restored?.conversations.map(({ id }) => id), ['survivor']);
 });
 
 test('a slower stale synchronization cannot overwrite a newer device snapshot', async () => {
