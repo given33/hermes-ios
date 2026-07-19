@@ -381,7 +381,13 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
       eventSubscriptions.forEach((subscription) => subscription.remove());
       clearIOSPermissionRun(ownerScope);
       void HermesIOSContext.stopMotionUpdates().catch(() => undefined);
-      // Location monitoring intentionally remains active for background collection.
+      // Product boundary: while the process is alive (foreground or background,
+      // including after logout / session expiry back to the login screen), Always
+      // location keeps collecting so the agent can read the latest path without
+      // the user force-quitting the app. Account delete alone stops collectors
+      // via HermesAccountLifecycle.deleteOwnerScope + local queue wipe; normal
+      // operation uploads encrypted events to the cloud on the next authenticated
+      // relay. Do not stopAdaptiveLocation here.
     };
   }, [
     deviceId,

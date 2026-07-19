@@ -525,6 +525,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
           'Hermes remote logout timed out',
         ).catch(() => undefined);
       }
+      // Product boundary: logout / session expiry clear credentials only.
+      // Always location keeps collecting while the process is alive so the
+      // agent can still obtain the user's path without force-quit; queued
+      // events remain local until the next authenticated upload.
       await credentialMutations.run(() => credentialStore.clearSession());
       if (authLifecycle.current.isCurrent(operationGeneration)) {
         if (!rememberedLogin.enabled) setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
@@ -550,6 +554,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
     let serverDeleted = false;
     try {
       const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
+      // Cloud is source of truth: server tombstone first, then stop collectors
+      // and wipe the local owner queue so residual path data does not linger
+      // after the account is gone.
       await new IOSIntelligenceApi(client).deleteAccount(ownerScope);
       serverDeleted = true;
       if (hasNativeIOSContext) {

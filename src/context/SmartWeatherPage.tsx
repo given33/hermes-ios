@@ -4,6 +4,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ErrorInfo,
   type ReactNode,
@@ -58,6 +59,9 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   const [snapshotStale, setSnapshotStale] = useState(false);
   const [mapError, setMapError] = useState('');
   const [mapAttempt, setMapAttempt] = useState(0);
+  // Toast only on the first continuous failure (or when the message changes)
+  // so the 30s poll does not spam the commercial surface.
+  const lastNotifiedErrorRef = useRef('');
   const permissions = useIOSPermissionCoordinator();
 
   const reload = useCallback(async () => {
@@ -72,11 +76,11 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
       setSnapshot(await api.snapshot());
       setLoadError('');
       setSnapshotStale(false);
+      lastNotifiedErrorRef.current = '';
     } catch (error) {
       const message = error instanceof Error
         ? error.message
         : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load');
-      setLoadError(message);
       // Keep last-good data only when we already had a successful snapshot;
       // mark it stale so the UI never presents failed reloads as live weather.
       setSnapshot((previous) => {
@@ -87,7 +91,11 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
         setSnapshotStale(false);
         return EMPTY;
       });
-      notify(message);
+      setLoadError(message);
+      if (lastNotifiedErrorRef.current !== message) {
+        lastNotifiedErrorRef.current = message;
+        notify(message);
+      }
     } finally {
       setLoading(false);
       onReady?.();

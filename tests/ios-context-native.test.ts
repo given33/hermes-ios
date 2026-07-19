@@ -370,10 +370,29 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /expires === null && starts === null/);
   assert.match(source, /smart-weather-stale-banner/);
   assert.match(source, /setSnapshot\(EMPTY\)/);
+  // 30s poll must not toast on every identical failure while the stale banner is up.
+  assert.match(source, /lastNotifiedErrorRef/);
+  assert.match(source, /lastNotifiedErrorRef\.current !== message/);
   assert.doesNotMatch(source, /LocateFixed|IOSPressable/);
   assert.match(source, /NativeMapErrorBoundary/);
   assert.match(source, /smart-weather-map-error/);
   assert.match(source, /smart-weather-permission-status/);
+});
+
+test('logout keeps Always location collection; delete stops owner scope', () => {
+  const auth = readFileSync(resolve(root, 'src', 'auth', 'AuthProvider.tsx'), 'utf8');
+  const provider = readFileSync(resolve(root, 'src', 'context', 'IOSContextProvider.tsx'), 'utf8');
+  // Product boundary: logout / session expiry clear credentials only.
+  assert.match(auth, /Product boundary: logout \/ session expiry clear credentials only/);
+  assert.doesNotMatch(auth, /logout[\s\S]{0,400}stopAdaptiveLocation/);
+  assert.match(auth, /deleteOwnerScope\(ownerScope\)/);
+  // Provider unmount stops motion but deliberately leaves adaptive location running.
+  assert.match(provider, /stopMotionUpdates\(\)\.catch/);
+  assert.match(provider, /Do not stopAdaptiveLocation here/);
+  assert.doesNotMatch(
+    provider,
+    /return \(\) => \{[\s\S]*stopAdaptiveLocation\(\)/,
+  );
 });
 
 test('native map registration is verified after pods and after Xcode compilation', () => {
