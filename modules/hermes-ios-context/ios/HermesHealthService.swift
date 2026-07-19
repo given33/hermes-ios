@@ -34,7 +34,10 @@ final class HermesHealthService {
       }
       switch requestStatus {
       case .shouldRequest: return "notDetermined"
-      case .unnecessary: return "authorized"
+      // HealthKit intentionally does not reveal read authorization per type.
+      // "limited" means the request was handled and reads may be attempted;
+      // it must not be presented as proof that every data type was granted.
+      case .unnecessary: return "limited"
       case .unknown: return "unavailable"
       @unknown default: return "unavailable"
       }
@@ -47,9 +50,9 @@ final class HermesHealthService {
     guard HKHealthStore.isHealthDataAvailable() else { return "unavailable" }
     do {
       try await store.requestAuthorization(toShare: [], read: readTypes)
-      return "authorized"
+      return "limited"
     } catch {
-      return "denied"
+      return "unavailable"
     }
   }
 
@@ -59,6 +62,7 @@ final class HermesHealthService {
     }
     let rangeStart = min(start, end)
     let rangeEnd = max(start, end)
+    let authorization = await authorizationStatus()
     async let heartRate = averageQuantity(
       .heartRate,
       unit: HKUnit.count().unitDivided(by: .minute()),
@@ -105,7 +109,7 @@ final class HermesHealthService {
     async let workouts = workoutSummary(start: rangeStart, end: rangeEnd)
 
     return [
-      "authorization": "authorized",
+      "authorization": authorization,
       "activeEnergyKcal": hermesNullable(try await activeEnergy),
       "distanceWalkingRunningMeters": hermesNullable(try await distance),
       "exerciseMinutes": hermesNullable(try await exerciseMinutes),
@@ -195,7 +199,22 @@ final class HermesHealthService {
         && sample.value != HKCategoryValueSleepAnalysis.awake.rawValue
     }
     guard !asleep.isEmpty else { return nil }
-    return asleep.reduce(0) { $0 + $1.endDate.timeIntervalSince($1.startDate) } / 60
+    let intervals = asleep
+      .map { (start: max($0.startDate, start), end: min($0.endDate, end)) }
+      .filter { $0.end > $0.start }
+      .sorted { $0.start < $1.start }
+    guard var current = intervals.first else { return nil }
+    var total: TimeInterval = 0
+    for interval in intervals.dropFirst() {
+      if interval.start <= current.end {
+        current.end = max(current.end, interval.end)
+      } else {
+        total += current.end.timeIntervalSince(current.start)
+        current = interval
+      }
+    }
+    total += current.end.timeIntervalSince(current.start)
+    return total / 60
   }
 
   private func workoutSummary(start: Date, end: Date) async throws -> [[String: Any]] {

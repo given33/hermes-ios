@@ -310,6 +310,10 @@ final class HermesContextEventQueue {
     var completed = state["completedCommandIDsByScope"] as? [String: [String]] ?? [:]
     completed.removeValue(forKey: scope)
     state["completedCommandIDsByScope"] = completed
+    var executionResults = state["commandExecutionResultsByScope"]
+      as? [String: [String: [String: Any]]] ?? [:]
+    executionResults.removeValue(forKey: scope)
+    state["commandExecutionResultsByScope"] = executionResults
     if deletingCurrentScope {
       let generation = (state["accountGeneration"] as? Int ?? 0) + 1
       state["accountGeneration"] = generation
@@ -352,6 +356,37 @@ final class HermesContextEventQueue {
       var cursors = state["commandCursorsByScope"] as? [String: String] ?? [:]
       cursors[scope] = cursor
       state["commandCursorsByScope"] = cursors
+      state["updatedAt"] = Date().timeIntervalSince1970 * 1000
+      persistRelayStateUnlocked(state)
+    }
+  }
+
+  func commandExecutionResult(id: String) -> [String: Any]? {
+    ioQueue.sync {
+      let state = loadRelayStateUnlocked()
+      let scope = state["ownerScope"] as? String ?? ""
+      let results = state["commandExecutionResultsByScope"]
+        as? [String: [String: [String: Any]]] ?? [:]
+      return results[scope]?[id]
+    }
+  }
+
+  func recordCommandExecutionResult(id: String, result: [String: Any]) {
+    guard !id.isEmpty else { return }
+    ioQueue.sync {
+      var state = loadRelayStateUnlocked()
+      let scope = state["ownerScope"] as? String ?? ""
+      var resultsByScope = state["commandExecutionResultsByScope"]
+        as? [String: [String: [String: Any]]] ?? [:]
+      var results = resultsByScope[scope] ?? [:]
+      results[id] = result
+      if results.count > 200 {
+        let completedByScope = state["completedCommandIDsByScope"] as? [String: [String]] ?? [:]
+        let keep = Set(Array((completedByScope[scope] ?? []).suffix(199)) + [id])
+        results = results.filter { keep.contains($0.key) }
+      }
+      resultsByScope[scope] = results
+      state["commandExecutionResultsByScope"] = resultsByScope
       state["updatedAt"] = Date().timeIntervalSince1970 * 1000
       persistRelayStateUnlocked(state)
     }

@@ -311,6 +311,9 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRestart:
       await api.restartGateway();
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRecover:
+      await api.recoverManagedNodes(payload.id || '');
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemUpdate:
       await api.updateHermes();
       return 'reload';
@@ -866,23 +869,29 @@ function systemSnapshot(source: unknown): HermesSwiftUISystemSnapshot {
     const memoryTotal = numberValue(metrics.memory_total_bytes);
     const memoryAvailable = numberValue(metrics.memory_available_bytes);
     const gatewayState = stringValue(node.gateway_state);
+    const metricsAvailable = node.metrics_available === true;
+    const recoveryState = stringValue(node.recovery_state);
     const gatewayOnline = isFreshObservation(node)
       && node.online === true
       && ['active', 'online', 'ready', 'running'].includes(gatewayState.toLowerCase());
     return {
       id: stringValue(node.id),
       label: stringValue(node.label) || stringValue(node.id),
-      cpu: numberValue(metrics.cpu_percent),
-      memory: numberValue(metrics.memory_percent),
-      disk: numberValue(metrics.disk_percent),
-      memoryLabel: formatBytes(Math.max(0, memoryTotal - memoryAvailable)),
-      uptimeLabel: formatDuration(numberValue(metrics.uptime_seconds)),
+      cpu: metricsAvailable ? numberValue(metrics.cpu_percent) : 0,
+      memory: metricsAvailable ? numberValue(metrics.memory_percent) : 0,
+      disk: metricsAvailable ? numberValue(metrics.disk_percent) : 0,
+      memoryLabel: metricsAvailable
+        ? formatBytes(Math.max(0, memoryTotal - memoryAvailable))
+        : '-',
+      uptimeLabel: metricsAvailable ? formatDuration(numberValue(metrics.uptime_seconds)) : '-',
       activeTasks: String(node.active_tasks ?? '-'),
       gatewayOnline,
+      metricsAvailable,
       gatewayState,
       version: stringValue(node.version) || stringValue(node.gateway_version),
       observedAt: stringValue(node.observed_at),
       metricsSource: stringValue(node.metrics_source),
+      recoveryState,
     };
   }).filter((node) => node.id);
   const primaryNode = nodeSnapshots.find((node) => node.id === 'dbb3') || nodeSnapshots[0];
@@ -913,6 +922,7 @@ function systemSnapshot(source: unknown): HermesSwiftUISystemSnapshot {
         ?? gateway.running
         ?? status.running,
     )),
+    metricsAvailable: primaryNode?.metricsAvailable ?? !managedConfigured,
     nodes: nodeSnapshots,
     operationMessage: stringValue(root.operation_message) || undefined,
   };

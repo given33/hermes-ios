@@ -62,9 +62,12 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   // Toast only on the first continuous failure (or when the message changes)
   // so the 30s poll does not spam the commercial surface.
   const lastNotifiedErrorRef = useRef('');
+  const reloadGenerationRef = useRef(0);
   const permissions = useIOSPermissionCoordinator();
 
   const reload = useCallback(async () => {
+    const generation = ++reloadGenerationRef.current;
+    const requestedDay = dayKey(new Date());
     if (!api) {
       setLoading(false);
       setLoadError(locale === 'zh' ? '尚未连接 Hermes 服务' : 'Hermes is not connected');
@@ -73,11 +76,20 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
     }
     setLoading(true);
     try {
-      setSnapshot(await api.snapshot());
+      const next = await api.snapshot();
+      if (
+        generation !== reloadGenerationRef.current
+        || requestedDay !== dayKey(new Date())
+      ) return;
+      setSnapshot(next);
       setLoadError('');
       setSnapshotStale(false);
       lastNotifiedErrorRef.current = '';
     } catch (error) {
+      if (
+        generation !== reloadGenerationRef.current
+        || requestedDay !== dayKey(new Date())
+      ) return;
       const message = error instanceof Error
         ? error.message
         : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load');
@@ -97,15 +109,20 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
         notify(message);
       }
     } finally {
-      setLoading(false);
-      onReady?.();
+      if (generation === reloadGenerationRef.current) {
+        setLoading(false);
+        onReady?.();
+      }
     }
   }, [api, locale, notify, onReady]);
 
   useEffect(() => {
     void reload();
     const timer = setInterval(() => { void reload(); }, 30_000);
-    return () => clearInterval(timer);
+    return () => {
+      reloadGenerationRef.current += 1;
+      clearInterval(timer);
+    };
   }, [reload]);
 
   useEffect(() => {
@@ -145,7 +162,6 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
       // Incomplete validity windows are not treated as live travel weather.
       if (expires === null && starts === null) return false;
       if (expires !== null && expires <= now) return false;
-      if (starts !== null && starts > now + 6 * 60 * 60 * 1000) return false;
       return true;
     });
 

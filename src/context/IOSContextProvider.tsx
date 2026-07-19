@@ -50,6 +50,7 @@ interface PersistedIOSDeviceCommand extends IOSDeviceCommand {
   _relay_owner_scope: string;
   _relay_error?: string;
   _relay_execution_status?: 'completed' | 'executing' | 'failed';
+  _relay_attempts?: number;
   _relay_result?: Record<string, unknown>;
 }
 
@@ -212,18 +213,30 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
           continue;
         }
 
-        if (command.expires_at && normalizeTimestamp(command.expires_at) <= Date.now()) {
-          command = { ...command, _relay_error: 'expired', _relay_execution_status: 'failed' };
-          await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
-        } else if (command._relay_execution_status === 'executing') {
+        const recoveredResult = command._relay_execution_status === 'executing'
+          ? await HermesIOSContext.getCommandExecutionResult(command.id)
+          : null;
+        if (recoveredResult) {
           command = {
             ...command,
-            _relay_error: 'interrupted during native execution',
-            _relay_execution_status: 'failed',
+            _relay_error: undefined,
+            _relay_execution_status: 'completed',
+            _relay_result: recoveredResult,
           };
           await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
-        } else if (!command._relay_execution_status) {
-          command = { ...command, _relay_execution_status: 'executing' };
+        } else if (command.expires_at && normalizeTimestamp(command.expires_at) <= Date.now()) {
+          command = { ...command, _relay_error: 'expired', _relay_execution_status: 'failed' };
+          await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
+        } else if (
+          !command._relay_execution_status
+          || command._relay_execution_status === 'executing'
+        ) {
+          command = {
+            ...command,
+            _relay_error: undefined,
+            _relay_execution_status: 'executing',
+            _relay_attempts: (command._relay_attempts || 0) + 1,
+          };
           await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
           try {
             const result = await executeDeviceCommand(
@@ -669,29 +682,27 @@ async function executeDeviceCommand(
       return { health, value: health[field] ?? null };
     }
     case 'ios-calendar:create': {
-      const id = await HermesIOSContext.createCalendarEvent({
+      return HermesIOSContext.createCalendarEventForCommand(command.id, {
         title: requiredString(payload.title, 'title'),
         start: requiredTimestamp(payload.start),
         end: requiredTimestamp(payload.end),
         ...(typeof payload.location === 'string' ? { location: payload.location } : {}),
         ...(typeof payload.notes === 'string' ? { notes: payload.notes } : {}),
       });
-      return { id };
     }
     case 'ios-reminders:create': {
-      const id = await HermesIOSContext.createReminder({
+      return HermesIOSContext.createReminderForCommand(command.id, {
         title: requiredString(payload.title, 'title'),
         ...(payload.due !== undefined ? { due: requiredTimestamp(payload.due) } : {}),
         ...(typeof payload.notes === 'string' ? { notes: payload.notes } : {}),
       });
-      return { id };
     }
     case 'ios-notes:share-text': {
-      const shown = await HermesIOSContext.shareTextToNotes(
+      return HermesIOSContext.shareTextToNotesForCommand(
+        command.id,
         requiredString(payload.text, 'text'),
         typeof payload.title === 'string' ? payload.title : undefined,
       );
-      return { shown };
     }
     case 'ios-calendar:list': {
       const end = requiredTimestamp(payload.end, Date.now() + 7 * 24 * 60 * 60_000);
@@ -861,6 +872,9 @@ function parseStoredCommand(value: Record<string, unknown>): PersistedIOSDeviceC
       ? { _relay_execution_status: value._relay_execution_status }
       : {}),
     ...(typeof value._relay_error === 'string' ? { _relay_error: value._relay_error } : {}),
+    ...(typeof value._relay_attempts === 'number' && Number.isFinite(value._relay_attempts)
+      ? { _relay_attempts: Math.max(0, Math.floor(value._relay_attempts)) }
+      : {}),
     ...(typeof value._relay_result === 'object' && value._relay_result
       ? { _relay_result: value._relay_result as Record<string, unknown> }
       : {}),

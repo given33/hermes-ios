@@ -16,6 +16,7 @@ import {
 import { HermesApiClient, HermesApiError } from '../api/HermesApiClient';
 import { AsyncDeadlineError, withDeadline } from '../api/async-deadline';
 import { assertMobileHandshake } from '../api/hermes-types';
+import { purgeLocalAccountData } from '../api/local-account-purge';
 import { HERMES_ORIGIN } from '../config';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
 import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
@@ -578,6 +579,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       // after the account is gone.
       await new IOSIntelligenceApi(client).deleteAccount(ownerScope);
       serverDeleted = true;
+      await purgeLocalAccountData(ownerScope);
       if (hasNativeIOSContext) {
         await HermesIOSContext.deleteOwnerScope(ownerScope);
       }
@@ -588,6 +590,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
     } catch {
       if (serverDeleted && authLifecycle.current.isCurrent(operationGeneration)) {
+        await purgeLocalAccountData(
+          `${state.connection.baseUrl}|${state.connection.username}`,
+        ).catch(() => undefined);
         await credentialMutations
           .run(() => credentialStore.clear())
           .catch(() => undefined);

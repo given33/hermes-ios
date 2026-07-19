@@ -48,6 +48,33 @@ final class HermesEventStore {
   }
 
   func createCalendarEvent(_ input: HermesCalendarEventInput) throws -> String {
+    try createCalendarEvent(input, commandURL: nil)
+  }
+
+  func createCalendarEventForCommand(
+    _ input: HermesCalendarEventInput,
+    commandID: String
+  ) throws -> String {
+    guard let commandURL = Self.commandURL(commandID) else {
+      throw HermesEventError.commandIDRequired
+    }
+    let start = Date(timeIntervalSince1970: input.start / 1000)
+    let end = Date(timeIntervalSince1970: input.end / 1000)
+    let predicate = store.predicateForEvents(
+      withStart: min(start, end).addingTimeInterval(-1),
+      end: max(start, end).addingTimeInterval(1),
+      calendars: nil
+    )
+    if let existing = store.events(matching: predicate).first(where: { $0.url == commandURL }) {
+      return existing.eventIdentifier ?? existing.calendarItemIdentifier
+    }
+    return try createCalendarEvent(input, commandURL: commandURL)
+  }
+
+  private func createCalendarEvent(
+    _ input: HermesCalendarEventInput,
+    commandURL: URL?
+  ) throws -> String {
     guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else {
       throw HermesEventError.calendarPermissionRequired
     }
@@ -58,6 +85,7 @@ final class HermesEventStore {
     event.endDate = Date(timeIntervalSince1970: input.end / 1000)
     event.location = input.location
     event.notes = input.notes
+    event.url = commandURL
     try store.save(event, span: .thisEvent, commit: true)
     return event.eventIdentifier ?? ""
   }
@@ -99,6 +127,26 @@ final class HermesEventStore {
   }
 
   func createReminder(_ input: HermesReminderInput) throws -> String {
+    try createReminder(input, commandURL: nil)
+  }
+
+  func createReminderForCommand(
+    _ input: HermesReminderInput,
+    commandID: String
+  ) async throws -> String {
+    guard let commandURL = Self.commandURL(commandID) else {
+      throw HermesEventError.commandIDRequired
+    }
+    if let existing = await reminder(with: commandURL) {
+      return existing.calendarItemIdentifier
+    }
+    return try createReminder(input, commandURL: commandURL)
+  }
+
+  private func createReminder(
+    _ input: HermesReminderInput,
+    commandURL: URL?
+  ) throws -> String {
     guard EKEventStore.authorizationStatus(for: .reminder) == .fullAccess else {
       throw HermesEventError.reminderPermissionRequired
     }
@@ -106,6 +154,7 @@ final class HermesEventStore {
     reminder.calendar = store.defaultCalendarForNewReminders()
     reminder.title = input.title
     reminder.notes = input.notes
+    reminder.url = commandURL
     if let due = input.due {
       reminder.dueDateComponents = Calendar.current.dateComponents(
         [.year, .month, .day, .hour, .minute, .second, .timeZone],
@@ -114,6 +163,25 @@ final class HermesEventStore {
     }
     try store.save(reminder, commit: true)
     return reminder.calendarItemIdentifier
+  }
+
+  private func reminder(with commandURL: URL) async -> EKReminder? {
+    let predicate = store.predicateForReminders(in: nil)
+    return await withCheckedContinuation { continuation in
+      store.fetchReminders(matching: predicate) { reminders in
+        continuation.resume(returning: reminders?.first(where: { $0.url == commandURL }))
+      }
+    }
+  }
+
+  private static func commandURL(_ commandID: String) -> URL? {
+    let normalized = commandID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return nil }
+    var components = URLComponents()
+    components.scheme = "hermes-agent"
+    components.host = "device-command"
+    components.path = "/\(normalized)"
+    return components.url
   }
 
   private static func date(from components: DateComponents?) -> Date? {
@@ -135,11 +203,13 @@ final class HermesEventStore {
 
 private enum HermesEventError: LocalizedError {
   case calendarPermissionRequired
+  case commandIDRequired
   case reminderPermissionRequired
 
   var errorDescription: String? {
     switch self {
     case .calendarPermissionRequired: return "Calendar full access is required."
+    case .commandIDRequired: return "A device command id is required."
     case .reminderPermissionRequired: return "Reminders full access is required."
     }
   }

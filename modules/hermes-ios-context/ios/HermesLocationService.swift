@@ -16,11 +16,13 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   private let manager = CLLocationManager()
   private var authorizationGate: HermesLocationAuthorizationGate?
   private var locationContinuation: CheckedContinuation<[String: Any]?, Never>?
+  private var locationTimeout: DispatchWorkItem?
   private var lastLocation: CLLocation?
   private var stableSamples: [CLLocation] = []
   private var stableRegion: CLCircularRegion?
   private var requestedAlwaysUpgrade = false
   private var predictedDepartureAt: Date?
+  private var predictedDepartureActivation: DispatchWorkItem?
   private var predictedDepartureReset: DispatchWorkItem?
   private(set) var mode: HermesLocationMode = .stationary
   var onLocation: (([String: Any]) -> Void)?
@@ -88,9 +90,12 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   }
 
   func resetAccountState() {
+    predictedDepartureActivation?.cancel()
+    predictedDepartureActivation = nil
     predictedDepartureReset?.cancel()
     predictedDepartureReset = nil
     predictedDepartureAt = nil
+    resolveLocationRequest(with: nil)
     stop()
     lastLocation = nil
     stableSamples.removeAll()
@@ -102,13 +107,31 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   }
 
   func setPredictedDeparture(at date: Date?) {
+    predictedDepartureActivation?.cancel()
+    predictedDepartureActivation = nil
     predictedDepartureReset?.cancel()
     predictedDepartureReset = nil
     predictedDepartureAt = date
-    apply(mode: currentAdaptiveMode(), force: true)
     guard let date else {
       if mode == .predictedDeparture { apply(mode: .stationary, force: true) }
       return
+    }
+    let activation = DispatchWorkItem { [weak self] in
+      guard let self, self.predictedDepartureAt == date else { return }
+      self.predictedDepartureActivation = nil
+      if self.mode == .stationary || self.mode == .predictedDeparture {
+        self.apply(mode: .predictedDeparture, force: true)
+      }
+    }
+    predictedDepartureActivation = activation
+    let activationDelay = date.timeIntervalSinceNow - 30 * 60
+    if activationDelay <= 0 {
+      activation.perform()
+    } else {
+      DispatchQueue.main.asyncAfter(
+        deadline: .now() + activationDelay,
+        execute: activation
+      )
     }
     let reset = DispatchWorkItem { [weak self] in
       guard let self, self.predictedDepartureAt == date else { return }
@@ -152,8 +175,13 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     }
     await requestTemporaryFullAccuracyIfNeeded()
     return await withCheckedContinuation { continuation in
-      locationContinuation?.resume(returning: nil)
+      resolveLocationRequest(with: nil)
       locationContinuation = continuation
+      let timeout = DispatchWorkItem { [weak self] in
+        self?.resolveLocationRequest(with: nil)
+      }
+      locationTimeout = timeout
+      DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
       manager.requestLocation()
     }
   }
@@ -215,16 +243,12 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       occurredAt: location.timestamp
     ) { [weak self] in
       self?.onLocation?(payload)
-      self?.locationContinuation?.resume(returning: payload)
-      self?.locationContinuation = nil
+      self?.resolveLocationRequest(with: payload)
     }
   }
 
   func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-    if (error as? CLError)?.code != .locationUnknown {
-      locationContinuation?.resume(returning: nil)
-      locationContinuation = nil
-    }
+    resolveLocationRequest(with: nil)
   }
 
   func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
@@ -304,11 +328,20 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   private func currentAdaptiveMode(now: Date = Date()) -> HermesLocationMode {
     if let predictedDepartureAt,
        predictedDepartureAt.timeIntervalSince(now) <= 30 * 60,
-       predictedDepartureAt.timeIntervalSince(now) >= -10 * 60 {
+       predictedDepartureAt.timeIntervalSince(now) >= -10 * 60,
+       mode == .stationary || mode == .predictedDeparture {
       return .predictedDeparture
     }
     if mode == .predictedDeparture { return .stationary }
     return mode == .stationary ? .stationary : mode
+  }
+
+  private func resolveLocationRequest(with payload: [String: Any]?) {
+    locationTimeout?.cancel()
+    locationTimeout = nil
+    let continuation = locationContinuation
+    locationContinuation = nil
+    continuation?.resume(returning: payload)
   }
 
   private func apply(mode next: HermesLocationMode, force: Bool = false) {

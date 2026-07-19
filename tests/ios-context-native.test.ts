@@ -223,6 +223,9 @@ test('location collector is adaptive, resumable, and eligible for background del
   assert.match(source, /startMonitoring\(for: region\)[\s\S]*manager\.stopUpdatingLocation\(\)/);
   assert.match(source, /applyMotionActivity/);
   assert.match(source, /HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner/);
+  assert.match(source, /date\.timeIntervalSinceNow - 30 \* 60/);
+  assert.match(source, /deadline: \.now\(\) \+ 15/);
+  assert.match(source, /didFailWithError[\s\S]*resolveLocationRequest\(with: nil\)/);
   assert.match(
     read('ios/HermesIOSContextAppDelegateSubscriber.swift'),
     /guard HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner else \{ return \}/,
@@ -258,7 +261,11 @@ test('native relay covers durable cursors, background services, health, watch, n
     'getInstallationIdentifier',
     'getCommandCursor',
     'hasCompletedCommand',
+    'getCommandExecutionResult',
     'recordCommandCompletion',
+    'createCalendarEventForCommand',
+    'createReminderForCommand',
+    'shareTextToNotesForCommand',
     'storePendingCommand',
     'readPendingCommands',
     'removePendingCommand',
@@ -304,6 +311,14 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /snapshotEvent\('watch'/);
   assert.doesNotMatch(provider, /payload\.place_id = payload\.place_id \?\? event\.id/);
   assert.match(provider, /_relay_execution_status: 'executing'/);
+  assert.match(provider, /getCommandExecutionResult\(command\.id\)/);
+  assert.ok(
+    provider.indexOf('getCommandExecutionResult(command.id)') < provider.indexOf("_relay_error: 'expired'"),
+    'native execution checkpoints are recovered before command expiry is evaluated',
+  );
+  assert.match(provider, /_relay_attempts:/);
+  assert.match(provider, /createCalendarEventForCommand\(command\.id/);
+  assert.match(provider, /createReminderForCommand\(command\.id/);
   assert.match(provider, /_relay_device_id: deviceId/);
   assert.match(provider, /_relay_owner_scope: ownerScope/);
   assert.match(provider, /setOwnerScope\(ownerScope\)/);
@@ -339,6 +354,9 @@ test('native relay covers durable cursors, background services, health, watch, n
   );
   assert.match(read('ios/HermesContextEventQueue.swift'), /commandCursorsByScope/);
   assert.match(read('ios/HermesContextEventQueue.swift'), /completedCommandIDsByScope/);
+  assert.match(read('ios/HermesContextEventQueue.swift'), /commandExecutionResultsByScope/);
+  assert.match(read('ios/HermesEventStore.swift'), /hermes-agent/);
+  assert.match(read('ios/HermesEventStore.swift'), /device-command/);
   assert.match(read('ios/HermesContextEventQueue.swift'), /pendingRelayWakes/);
   assert.match(read('ios/HermesContextEventQueue.swift'), /recordRelayWake/);
   assert.match(read('ios/HermesBackgroundService.swift'), /recordRelayWake/);
@@ -359,6 +377,9 @@ test('HealthKit sleep totals retain generic asleep samples', () => {
     health,
     /sample\.value != HKCategoryValueSleepAnalysis\.asleepUnspecified\.rawValue/,
   );
+  assert.match(health, /case \.unnecessary: return "limited"/);
+  assert.match(health, /interval\.start <= current\.end/);
+  assert.match(health, /current\.end = max\(current\.end, interval\.end\)/);
 });
 
 test('smart weather view only renders local today data and valid alerts', () => {
@@ -373,6 +394,9 @@ test('smart weather view only renders local today data and valid alerts', () => 
   // 30s poll must not toast on every identical failure while the stale banner is up.
   assert.match(source, /lastNotifiedErrorRef/);
   assert.match(source, /lastNotifiedErrorRef\.current !== message/);
+  assert.match(source, /reloadGenerationRef/);
+  assert.match(source, /requestedDay !== dayKey\(new Date\(\)\)/);
+  assert.doesNotMatch(source, /now \+ 6 \* 60 \* 60 \* 1000/);
   assert.doesNotMatch(source, /LocateFixed|IOSPressable/);
   assert.match(source, /NativeMapErrorBoundary/);
   assert.match(source, /smart-weather-map-error/);

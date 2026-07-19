@@ -387,10 +387,11 @@ export class HermesCloudApi {
   }
 
   saveCustomModel(configuration: CustomModelConfiguration, profile = 'default') {
+    const baseUrl = normalizeModelCatalogBaseUrl(configuration.baseUrl);
     return this.json<JsonRecord>('/api/model/custom', 'PUT', {
       api_key: configuration.apiKey || '',
       api_mode: configuration.apiMode,
-      base_url: configuration.baseUrl,
+      base_url: baseUrl,
       context_length: configuration.contextLength,
       model: configuration.model,
       reasoning_effort: configuration.reasoningEffort,
@@ -399,10 +400,11 @@ export class HermesCloudApi {
   }
 
   testCustomModel(configuration: CustomModelConfiguration, profile = 'default') {
+    const baseUrl = normalizeModelCatalogBaseUrl(configuration.baseUrl);
     return this.json<CustomModelConnectionResult>('/api/model/custom/test', 'POST', {
       api_key: configuration.apiKey || '',
       api_mode: configuration.apiMode,
-      base_url: configuration.baseUrl,
+      base_url: baseUrl,
       model: configuration.model,
       profile,
     });
@@ -738,6 +740,12 @@ export class HermesCloudApi {
       this.request<JsonRecord>('/api/system/stats'),
       this.request<JsonRecord>('/api/managed-nodes/status'),
     ]).then(([status, stats, managedNodes]) => ({ managedNodes, status, stats }));
+  }
+
+  recoverManagedNodes(nodeId = '') {
+    return this.json<JsonRecord>('/api/managed-nodes/recover', 'POST', {
+      node_id: nodeId,
+    });
   }
 
   restartGateway() {
@@ -1381,9 +1389,20 @@ function normalizeModelCatalogBaseUrl(value: string): string {
   ) {
     throw new Error('Base URL 必须是不含账号信息的 HTTP(S) 地址');
   }
+  if (parsed.protocol === 'http:' && !isLoopbackHostname(parsed.hostname)) {
+    throw new Error('HTTP 模型地址仅限本机回环；局域网或公网模型必须使用 HTTPS');
+  }
   parsed.hash = '';
   parsed.search = '';
   return parsed.toString().replace(/\/$/, '');
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost'
+    || normalized.endsWith('.localhost')
+    || normalized === '::1'
+    || /^127(?:\.\d{1,3}){3}$/.test(normalized);
 }
 
 function assertModelCatalogResponseOrigin(response: Response, endpoint: string): void {

@@ -161,8 +161,8 @@ export function AccountPage({
         cancelLabel={chinese ? '取消' : 'Cancel'}
         confirmLabel={chinese ? '永久删除' : 'Delete permanently'}
         description={chinese
-          ? '账户数据、轨迹、地点规律、设备会话和云端模型将被删除。'
-          : 'Account data, trajectories, place patterns, device sessions, and cloud models will be deleted.'}
+          ? '账户数据、协作会话、云文件、轨迹、地点规律、设备会话和云端模型将被永久删除。'
+          : 'Account data, collaboration chats, cloud files, trajectories, place patterns, device sessions, and cloud models will be permanently deleted.'}
         destructive
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => { void runDelete(); }}

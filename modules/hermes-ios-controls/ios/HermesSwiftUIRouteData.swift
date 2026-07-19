@@ -396,10 +396,12 @@ struct HermesSystemNodeSnapshot: Decodable, Equatable, Identifiable {
   let uptimeLabel: String
   let activeTasks: String
   let gatewayOnline: Bool
+  let metricsAvailable: Bool
   let gatewayState: String
   let version: String
   let observedAt: String
   let metricsSource: String
+  let recoveryState: String
 }
 
 struct HermesSystemSnapshot: Decodable, Equatable {
@@ -410,6 +412,7 @@ struct HermesSystemSnapshot: Decodable, Equatable {
   let uptimeLabel: String
   let activeTasks: String
   let gatewayOnline: Bool
+  let metricsAvailable: Bool
   let nodes: [HermesSystemNodeSnapshot]
   let operationMessage: String?
 
@@ -421,6 +424,7 @@ struct HermesSystemSnapshot: Decodable, Equatable {
     uptimeLabel: "-",
     activeTasks: "-",
     gatewayOnline: false,
+    metricsAvailable: false,
     nodes: [],
     operationMessage: nil
   )
@@ -513,6 +517,7 @@ enum HermesRouteAction: String, CaseIterable {
   case configImport = "config.import"
   case environmentDelete = "environment.delete"
   case systemRestart = "system.restart"
+  case systemRecover = "system.recover"
   case systemUpdate = "system.update"
   case kanbanCreate = "kanban.create"
   case kanbanUpdate = "kanban.update"

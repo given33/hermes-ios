@@ -528,7 +528,7 @@ private struct HermesRemoteRoutePage: View {
       HermesPage(subtitle: chinese ? "Hermes 网关、任务和资源状态" : "Hermes gateway, task, and resource status") {
         Grid(horizontalSpacing: 12, verticalSpacing: 12) {
           GridRow {
-            HermesMetric(title: "CPU", value: String(format: "%.0f%%", data.system.cpu), symbol: "cpu", tint: appearance.palette.primary)
+            HermesMetric(title: "CPU", value: data.system.metricsAvailable ? String(format: "%.0f%%", data.system.cpu) : "-", symbol: "cpu", tint: appearance.palette.primary)
             HermesMetric(title: chinese ? "内存" : "Memory", value: data.system.memoryLabel, symbol: "memorychip", tint: appearance.palette.warning)
           }
           GridRow {
@@ -549,9 +549,24 @@ private struct HermesRemoteRoutePage: View {
                 Text(node.label)
                   .font(HermesFonts.display(15))
                 Spacer()
+                Button {
+                  onAction(.systemRecover, HermesRouteActionPayload(route: "system", id: node.id))
+                } label: {
+                  Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(chinese ? "重新连接 \(node.label)" : "Reconnect \(node.label)")
                 HermesStatusPill(
-                  text: node.gatewayOnline ? (chinese ? "网关在线" : "Online") : (chinese ? "网关离线" : "Offline"),
-                  color: node.gatewayOnline ? appearance.palette.success : appearance.palette.destructive
+                  text: node.gatewayOnline
+                    ? (chinese ? "网关在线" : "Online")
+                    : node.recoveryState == "recovering" || node.recoveryState == "cooldown"
+                      ? (chinese ? "正在重连" : "Reconnecting")
+                      : (chinese ? "网关离线" : "Offline"),
+                  color: node.gatewayOnline
+                    ? appearance.palette.success
+                    : node.recoveryState == "recovering" || node.recoveryState == "cooldown"
+                      ? appearance.palette.warning
+                      : appearance.palette.destructive
                 )
               }
               if !node.version.isEmpty {
@@ -561,11 +576,11 @@ private struct HermesRemoteRoutePage: View {
               }
               Grid(horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
-                  LabeledContent("CPU", value: String(format: "%.0f%%", node.cpu))
-                  LabeledContent(chinese ? "内存" : "Memory", value: String(format: "%.0f%%", node.memory))
+                  LabeledContent("CPU", value: node.metricsAvailable ? String(format: "%.0f%%", node.cpu) : "-")
+                  LabeledContent(chinese ? "内存" : "Memory", value: node.metricsAvailable ? String(format: "%.0f%%", node.memory) : "-")
                 }
                 GridRow {
-                  LabeledContent(chinese ? "磁盘" : "Disk", value: String(format: "%.0f%%", node.disk))
+                  LabeledContent(chinese ? "磁盘" : "Disk", value: node.metricsAvailable ? String(format: "%.0f%%", node.disk) : "-")
                   LabeledContent(chinese ? "活动任务" : "Tasks", value: node.activeTasks)
                 }
               }
@@ -579,6 +594,7 @@ private struct HermesRemoteRoutePage: View {
           }
         }
         HStack {
+          Button { onAction(.systemRecover, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "立即重连" : "Reconnect", systemImage: "arrow.triangle.2.circlepath") }.buttonStyle(HermesPrimaryButtonStyle())
           Button { onAction(.systemRestart, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "重启网关" : "Restart gateway", systemImage: "arrow.clockwise") }.buttonStyle(HermesPrimaryButtonStyle())
           Button { onAction(.systemUpdate, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "更新 Hermes" : "Update Hermes", systemImage: "arrow.down.circle") }.buttonStyle(.bordered)
         }

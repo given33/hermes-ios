@@ -248,6 +248,10 @@ public final class HermesIOSContextModule: Module {
       self.eventQueue.hasCompletedCommand(id)
     }
 
+    AsyncFunction("getCommandExecutionResult") { (id: String) -> [String: Any]? in
+      self.eventQueue.commandExecutionResult(id: id)
+    }
+
     AsyncFunction("recordCommandCompletion") { (id: String, cursor: String) in
       self.eventQueue.recordCommandCompletion(id: id, cursor: cursor)
     }
@@ -316,6 +320,18 @@ public final class HermesIOSContextModule: Module {
       try self.events.createCalendarEvent(input)
     }
 
+    AsyncFunction("createCalendarEventForCommand") {
+      (commandID: String, input: HermesCalendarEventInput) throws -> [String: Any] in
+      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+        return existing
+      }
+      let result: [String: Any] = [
+        "id": try self.events.createCalendarEventForCommand(input, commandID: commandID)
+      ]
+      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      return result
+    }
+
     AsyncFunction("listReminders") { (completed: Bool?, promise: Promise) in
       self.resolveAsync(promise) { await self.events.reminders(completed: completed) }
     }
@@ -324,24 +340,32 @@ public final class HermesIOSContextModule: Module {
       try self.events.createReminder(input)
     }
 
+    AsyncFunction("createReminderForCommand") {
+      (commandID: String, input: HermesReminderInput, promise: Promise) in
+      self.resolveAsync(promise) {
+        if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+          return existing
+        }
+        let result: [String: Any] = [
+          "id": try await self.events.createReminderForCommand(input, commandID: commandID)
+        ]
+        self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+        return result
+      }
+    }
+
     AsyncFunction("shareTextToNotes") { (text: String, title: String?) -> Bool in
-      guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            let presenter = Self.topViewController() else {
-        return false
+      Self.presentSharedText(text, title: title)
+    }.runOnQueue(.main)
+
+    AsyncFunction("shareTextToNotesForCommand") {
+      (commandID: String, text: String, title: String?) -> [String: Any] in
+      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+        return existing
       }
-      let content = [title, text].compactMap { $0 }.joined(separator: "\n\n")
-      let controller = UIActivityViewController(activityItems: [content], applicationActivities: nil)
-      if let popover = controller.popoverPresentationController {
-        popover.sourceView = presenter.view
-        popover.sourceRect = CGRect(
-          x: presenter.view.bounds.midX,
-          y: presenter.view.bounds.midY,
-          width: 1,
-          height: 1
-        )
-      }
-      presenter.present(controller, animated: true)
-      return true
+      let result: [String: Any] = ["shown": Self.presentSharedText(text, title: title)]
+      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      return result
     }.runOnQueue(.main)
   }
 
@@ -533,6 +557,26 @@ public final class HermesIOSContextModule: Module {
       return topViewController(from: tabs.selectedViewController)
     }
     return root
+  }
+
+  private static func presentSharedText(_ text: String, title: String?) -> Bool {
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          let presenter = topViewController() else {
+      return false
+    }
+    let content = [title, text].compactMap { $0 }.joined(separator: "\n\n")
+    let controller = UIActivityViewController(activityItems: [content], applicationActivities: nil)
+    if let popover = controller.popoverPresentationController {
+      popover.sourceView = presenter.view
+      popover.sourceRect = CGRect(
+        x: presenter.view.bounds.midX,
+        y: presenter.view.bounds.midY,
+        width: 1,
+        height: 1
+      )
+    }
+    presenter.present(controller, animated: true)
+    return true
   }
 
   private static func activeWindow() -> UIWindow? {

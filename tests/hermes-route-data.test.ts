@@ -290,6 +290,8 @@ test('system snapshots expose real DBB3 and WSL gateway metrics and versions', a
             version: 'v0.18.2 (2026.7.7.2)',
             active_tasks: 2,
             observed_at: freshObservedAt,
+            metrics_available: true,
+            recovery_state: 'idle',
             metrics_source: 'linux_procfs',
             metrics: {
               cpu_percent: 21,
@@ -308,6 +310,8 @@ test('system snapshots expose real DBB3 and WSL gateway metrics and versions', a
             version: 'v0.18.3 (2026.7.8.1)',
             active_tasks: 0,
             observed_at: freshObservedAt,
+            metrics_available: true,
+            recovery_state: 'idle',
             metrics_source: 'windows_psutil_push',
             metrics: { cpu_percent: 12, memory_percent: 54, disk_percent: 42 },
           },
@@ -385,6 +389,7 @@ test('native management actions write through the canonical cloud APIs', async (
     updateKanbanTask: async (...args: unknown[]) => { calls.push(['kanban-update', ...args]); },
     updateSkillContent: async (...args: unknown[]) => { calls.push(['skill-update', ...args]); },
     restartGateway: async (...args: unknown[]) => { calls.push(['restart', ...args]); },
+    recoverManagedNodes: async (...args: unknown[]) => { calls.push(['recover', ...args]); },
   } as unknown as HermesCloudApi;
 
   await performHermesSwiftUIRouteAction(api, { action: 'cron.toggle', payload: { route: 'cron', id: 'cron-1', enabled: false } }, 'default');
@@ -393,6 +398,7 @@ test('native management actions write through the canonical cloud APIs', async (
   await performHermesSwiftUIRouteAction(api, { action: 'profile.activate', payload: { route: 'profiles', id: 'worker' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'environment.delete', payload: { route: 'env', id: 'custom-main' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'system.restart', payload: { route: 'system' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'system.recover', payload: { route: 'system', id: 'wsl' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'skill.update', payload: { route: 'skills', id: 'browser', detail: '# Browser' } }, 'reviewer');
   await performHermesSwiftUIRouteAction(api, { action: 'achievements.rescan', payload: { route: 'achievements' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'kanban.create', payload: { route: 'kanban', name: '云端任务', detail: '检查同步', targetId: 'ready' } }, 'default');
@@ -406,6 +412,7 @@ test('native management actions write through the canonical cloud APIs', async (
     ['profile-active', 'worker'],
     ['model-credential-delete', 'custom-main', 'default'],
     ['restart'],
+    ['recover', 'wsl'],
     ['skill-update', 'browser', '# Browser', 'reviewer'],
     ['achievement-rescan'],
     ['kanban-create', { title: '云端任务', body: '检查同步' }],

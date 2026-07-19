@@ -606,6 +606,30 @@ test('custom model discovery rejects invalid URLs and oversized catalogs', async
   }
 });
 
+test('custom model credentials require HTTPS except for loopback services', async () => {
+  const { api, calls } = createApi();
+  const insecure = {
+    apiKey: 'must-not-leak',
+    apiMode: 'chat_completions' as const,
+    baseUrl: 'http://models.example/v1',
+    contextLength: 32_000,
+    model: 'model-a',
+    reasoningEffort: 'medium' as const,
+  };
+
+  await assert.rejects(
+    api.discoverCustomModels(insecure.baseUrl, insecure.apiKey),
+    /HTTPS/,
+  );
+  assert.throws(() => api.saveCustomModel(insecure), /HTTPS/);
+  assert.throws(() => api.testCustomModel(insecure), /HTTPS/);
+  assert.equal(calls.length, 0);
+
+  await api.saveCustomModel({ ...insecure, baseUrl: 'http://127.0.0.1:11434/v1' });
+  const body = JSON.parse(String(calls[0].options.body)) as Record<string, unknown>;
+  assert.equal(body.base_url, 'http://127.0.0.1:11434/v1');
+});
+
 test('custom model discovery rejects a cross-origin final redirect', async () => {
   const { api } = createApi();
   const originalFetch = globalThis.fetch;

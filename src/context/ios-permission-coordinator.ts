@@ -172,6 +172,10 @@ export function canCollectIOSPermission(
   // Provisional notifications are deliverable, while EventKit write-only
   // access cannot be used by the calendar/reminder collectors.
   if (key === 'notification') return state === 'authorized' || state === 'limited';
+  // HealthKit hides per-type read grants. "limited" means authorization was
+  // requested and collectors should attempt each query without claiming that
+  // every requested type was granted.
+  if (key === 'health') return state === 'authorized' || state === 'limited';
   return state === 'authorized';
 }
 

@@ -185,6 +185,7 @@ export interface HermesSwiftUISystemSnapshot {
   uptimeLabel: string;
   activeTasks: string;
   gatewayOnline: boolean;
+  metricsAvailable: boolean;
   nodes: readonly HermesSwiftUISystemNodeSnapshot[];
   operationMessage?: string;
 }
@@ -199,10 +200,12 @@ export interface HermesSwiftUISystemNodeSnapshot {
   uptimeLabel: string;
   activeTasks: string;
   gatewayOnline: boolean;
+  metricsAvailable: boolean;
   gatewayState: string;
   version: string;
   observedAt: string;
   metricsSource: string;
+  recoveryState: string;
 }
 
 export interface HermesSwiftUIRouteSnapshot {
@@ -268,6 +271,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   configImport: 'config.import',
   environmentDelete: 'environment.delete',
   systemRestart: 'system.restart',
+  systemRecover: 'system.recover',
   systemUpdate: 'system.update',
   kanbanCreate: 'kanban.create',
   kanbanUpdate: 'kanban.update',

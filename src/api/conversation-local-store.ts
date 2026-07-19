@@ -59,6 +59,7 @@ export interface CollaborationRoomOutboxItem {
 
 export interface ConversationStorageAdapter {
   getItem(key: string): Promise<string | null>;
+  removeItem(key: string): Promise<void>;
   setItem(key: string, value: string): Promise<void>;
 }
 
@@ -258,6 +259,36 @@ export class ConversationLocalStore {
         items: current.filter(({ requestId: currentId }) => currentId !== normalizedRequestId),
       }));
     });
+  }
+
+  async purge(
+    owner: string,
+    beforeRemove?: (pending: HostedTurnOutboxItem[]) => Promise<void>,
+  ): Promise<HostedTurnOutboxItem[]> {
+    const normalizedOwner = normalizeOwner(owner);
+    if (!normalizedOwner) return [];
+    advanceSynchronization(normalizedOwner);
+    let pendingAttachments: HostedTurnOutboxItem[] = [];
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      pendingAttachments = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      await beforeRemove?.(pendingAttachments);
+      await Promise.all([
+        cacheKey(normalizedOwner),
+        legacyCacheKey(normalizedOwner),
+        outboxKey(normalizedOwner),
+        legacyOutboxKey(normalizedOwner),
+        roomOutboxKey(normalizedOwner),
+        legacyRoomOutboxKey(normalizedOwner),
+      ].map((key) => this.storage.removeItem(key)));
+    });
+    return pendingAttachments;
   }
 }
 

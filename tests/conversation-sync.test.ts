@@ -21,6 +21,10 @@ class MemoryStorage {
     return this.values.get(key) ?? null;
   }
 
+  async removeItem(key: string) {
+    this.values.delete(key);
+  }
+
   async setItem(key: string, value: string) {
     this.values.set(key, value);
   }
@@ -188,6 +192,83 @@ test('collaboration room outbox keeps one stable request until server acknowledg
   await store.removePendingRoomMessage(ownerA, pending.requestId);
   assert.deepEqual(await store.readPendingRoomMessages(ownerA), []);
   assert.equal((await store.readPendingRoomMessages(ownerB)).length, 1);
+});
+
+test('account purge removes conversation and outbox keys while preserving attachment cleanup data', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|owner@example.test';
+  const pending = {
+    conversationId: 'conversation-delete',
+    input: {
+      attachmentIds: [],
+      message: { content: 'delete me', id: 'message-delete', name: '你', role: 'user' },
+      recentMessages: [],
+      requestId: 'request-delete',
+      turnId: 'turn-delete',
+    },
+    pendingAttachments: [{
+      id: 'upload-delete',
+      kind: 'file' as const,
+      mimeType: 'text/plain',
+      name: 'delete.txt',
+      size: 6,
+      uri: 'file:///documents/hermes-outbox/delete.txt',
+    }],
+    queuedAt: 100,
+  };
+
+  await store.write(owner, [conversation('conversation-delete', 1, [])], 'conversation-delete');
+  await store.upsertPendingEnqueue(owner, pending);
+  await store.upsertPendingRoomMessage(owner, {
+    content: 'delete room message',
+    profiles: ['default'],
+    queuedAt: 100,
+    requestId: 'room-delete',
+    roomId: 'room-delete',
+  });
+
+  const cleanup = await store.purge(owner);
+
+  assert.equal(cleanup[0].pendingAttachments?.[0].uri, pending.pendingAttachments[0].uri);
+  assert.equal(await store.read(owner), null);
+  assert.deepEqual(await store.readPendingEnqueues(owner), []);
+  assert.deepEqual(await store.readPendingRoomMessages(owner), []);
+  assert.equal(storage.values.size, 0);
+});
+
+test('account purge retains retry metadata when attachment cleanup fails', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'owner-retry';
+  await store.upsertPendingEnqueue(owner, {
+    conversationId: 'conversation-retry',
+    input: {
+      attachmentIds: [],
+      message: { content: 'retry', id: 'message-retry', name: '你', role: 'user' },
+      recentMessages: [],
+      requestId: 'request-retry',
+      turnId: 'turn-retry',
+    },
+    pendingAttachments: [{
+      id: 'upload-retry',
+      kind: 'file',
+      mimeType: 'text/plain',
+      name: 'retry.txt',
+      size: 5,
+      uri: 'file:///documents/hermes-outbox/retry.txt',
+    }],
+    queuedAt: 100,
+  });
+
+  await assert.rejects(
+    store.purge(owner, async () => { throw new Error('file busy'); }),
+    /file busy/,
+  );
+
+  assert.equal((await store.readPendingEnqueues(owner)).length, 1);
+  await store.purge(owner, async () => undefined);
+  assert.deepEqual(await store.readPendingEnqueues(owner), []);
 });
 
 test('cloud reconciliation reuses unchanged local transcripts and downloads only changed records', () => {

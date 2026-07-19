@@ -159,6 +159,7 @@ export interface IOSContextNativeModule {
   deleteOwnerScope(scope: string): Promise<number>;
   getCommandCursor(): Promise<string>;
   hasCompletedCommand(id: string): Promise<boolean>;
+  getCommandExecutionResult(id: string): Promise<Record<string, unknown> | null>;
   recordCommandCompletion(id: string, cursor: string): Promise<void>;
   storePendingCommand(command: Record<string, unknown>): Promise<void>;
   readPendingCommands(): Promise<Array<Record<string, unknown>>>;
@@ -178,13 +179,30 @@ export interface IOSContextNativeModule {
     start: number;
     title: string;
   }): Promise<string>;
+  createCalendarEventForCommand(commandId: string, input: {
+    end: number;
+    location?: string;
+    notes?: string;
+    start: number;
+    title: string;
+  }): Promise<Record<string, unknown>>;
   listReminders(completed?: boolean): Promise<IOSReminderItem[]>;
   createReminder(input: {
     due?: number;
     notes?: string;
     title: string;
   }): Promise<string>;
+  createReminderForCommand(commandId: string, input: {
+    due?: number;
+    notes?: string;
+    title: string;
+  }): Promise<Record<string, unknown>>;
   shareTextToNotes(text: string, title?: string): Promise<boolean>;
+  shareTextToNotesForCommand(
+    commandId: string,
+    text: string,
+    title?: string,
+  ): Promise<Record<string, unknown>>;
   requestNotificationAuthorization(): Promise<IOSAuthorizationState>;
   getNotificationAuthorization(): Promise<IOSAuthorizationState>;
   scheduleLocalNotification(
@@ -258,6 +276,8 @@ export const HermesIOSContext = {
   deleteOwnerScope: (scope: string) => requireContextModule().deleteOwnerScope(scope),
   getCommandCursor: () => requireContextModule().getCommandCursor(),
   hasCompletedCommand: (id: string) => requireContextModule().hasCompletedCommand(id),
+  getCommandExecutionResult: (id: string) =>
+    requireContextModule().getCommandExecutionResult(id),
   recordCommandCompletion: (id: string, cursor: string) =>
     requireContextModule().recordCommandCompletion(id, cursor),
   storePendingCommand: (command: Record<string, unknown>) =>
@@ -276,11 +296,21 @@ export const HermesIOSContext = {
     requireContextModule().listCalendarEvents(start, end),
   createCalendarEvent: (input: Parameters<IOSContextNativeModule['createCalendarEvent']>[0]) =>
     requireContextModule().createCalendarEvent(input),
+  createCalendarEventForCommand: (
+    commandId: string,
+    input: Parameters<IOSContextNativeModule['createCalendarEvent']>[0],
+  ) => requireContextModule().createCalendarEventForCommand(commandId, input),
   listReminders: (completed?: boolean) => requireContextModule().listReminders(completed),
   createReminder: (input: Parameters<IOSContextNativeModule['createReminder']>[0]) =>
     requireContextModule().createReminder(input),
+  createReminderForCommand: (
+    commandId: string,
+    input: Parameters<IOSContextNativeModule['createReminder']>[0],
+  ) => requireContextModule().createReminderForCommand(commandId, input),
   shareTextToNotes: (text: string, title?: string) =>
     requireContextModule().shareTextToNotes(text, title),
+  shareTextToNotesForCommand: (commandId: string, text: string, title?: string) =>
+    requireContextModule().shareTextToNotesForCommand(commandId, text, title),
   requestNotificationAuthorization: () => requireContextModule().requestNotificationAuthorization(),
   getNotificationAuthorization: () => requireContextModule().getNotificationAuthorization(),
   scheduleLocalNotification: (
