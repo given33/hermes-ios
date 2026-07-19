@@ -6,6 +6,7 @@ import {
   CredentialMutationQueue,
   isCurrentAuthLifecycle,
   isCurrentAuthSession,
+  runOptionalAuthEffect,
 } from '../src/auth/auth-lifecycle';
 import type { SavedConnection } from '../src/auth/credential-contract';
 
@@ -40,6 +41,21 @@ test('credential mutations remain ordered after a failed operation', async () =>
   await assert.rejects(first, /expected/);
   await second;
   assert.deepEqual(calls, ['first-start', 'first-failed', 'second']);
+});
+
+test('optional post-login effects never turn a valid remote session into a login failure', async () => {
+  const calls: string[] = [];
+  const failed = await runOptionalAuthEffect(async () => {
+    calls.push('keychain-failed');
+    throw new Error('stale biometric item');
+  });
+  const completed = await runOptionalAuthEffect(async () => {
+    calls.push('session-continues');
+  });
+
+  assert.equal(failed, false);
+  assert.equal(completed, true);
+  assert.deepEqual(calls, ['keychain-failed', 'session-continues']);
 });
 
 test('a late operation cannot unlock the gate or update a remounted auth provider', () => {

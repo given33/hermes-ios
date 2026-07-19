@@ -10,6 +10,17 @@ export class CredentialMutationQueue {
   }
 }
 
+export async function runOptionalAuthEffect(
+  effect: () => Promise<unknown>,
+): Promise<boolean> {
+  try {
+    await effect();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Owns the generation and exclusive-operation state for one mounted auth
  * provider. Tokens make late native/network callbacks harmless after an

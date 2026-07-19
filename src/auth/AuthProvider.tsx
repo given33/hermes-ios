@@ -24,6 +24,7 @@ import {
   AuthLifecycleCoordinator,
   CredentialMutationQueue,
   isCurrentAuthSession,
+  runOptionalAuthEffect,
 } from './auth-lifecycle';
 import {
   authReducer,
@@ -85,6 +86,12 @@ const EMPTY_REMEMBERED_LOGIN: RememberedLogin = {
   password: '',
   username: '',
 };
+
+function currentMobileAppVersion(): string {
+  const version = Constants.expoConfig?.version?.trim() || 'unknown';
+  const build = Constants.expoConfig?.ios?.buildNumber?.trim();
+  return build ? `${version} (${build})` : version;
+}
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
@@ -177,8 +184,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       },
       {
         store: {
-          save(candidate) {
-            return credentialMutations.run(async () => {
+          async save(candidate) {
+            await runOptionalAuthEffect(() => credentialMutations.run(async () => {
               if (!authLifecycle.current.isCurrent(operationGeneration)) {
                 throw new Error('Stale Hermes authentication operation');
               }
@@ -187,7 +194,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
                 await credentialStore.clear();
                 throw new Error('Stale Hermes authentication operation');
               }
-            });
+            }));
           },
         },
         async verify(candidate) {
@@ -204,8 +211,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       throw new Error('Stale Hermes authentication operation');
     }
     if (hasNativeIOSContext) {
-      await HermesIOSContext.activateOwnerScope(
-        `${connection.baseUrl}|${connection.username}`,
+      await runOptionalAuthEffect(
+        () => HermesIOSContext.activateOwnerScope(
+          `${connection.baseUrl}|${connection.username}`,
+        ),
       );
     }
     if (!authLifecycle.current.isCurrent(operationGeneration)) {
@@ -223,7 +232,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       try {
         const mobileAuth = new MobileAuthApiClient(HERMES_ORIGIN);
         const device = await getMobileDeviceIdentity(SecureStore, {
-          appVersion: Constants.expoConfig?.version,
+          appVersion: currentMobileAppVersion(),
           deviceName: Device.deviceName,
           modelId: Device.modelId,
           modelName: Device.modelName,
@@ -236,14 +245,22 @@ export function AuthProvider({ children }: PropsWithChildren) {
           session,
           operationGeneration,
         );
-        await credentialMutations.run(async () => {
-          if (!authLifecycle.current.isCurrent(operationGeneration)) return;
-          await credentialStore.saveRememberedLogin(username, password, rememberLogin);
-        });
+        const rememberedLoginSaved = await runOptionalAuthEffect(
+          () => credentialMutations.run(async () => {
+            if (!authLifecycle.current.isCurrent(operationGeneration)) return;
+            await credentialStore.saveRememberedLogin(username, password, rememberLogin);
+          }),
+        );
+        if (!rememberedLoginSaved && rememberLogin) {
+          await runOptionalAuthEffect(() => credentialMutations.run(async () => {
+            await credentialStore.saveRememberedLogin(username, password, false);
+          }));
+        }
         if (!authLifecycle.current.isCurrent(operationGeneration)) return;
+        const remembered = rememberLogin && rememberedLoginSaved;
         setRememberedLogin({
-          enabled: rememberLogin,
-          password: rememberLogin ? password : '',
+          enabled: remembered,
+          password: remembered ? password : '',
           username: username.trim(),
         });
         dispatch({ type: 'AUTHENTICATED', connection });
@@ -279,7 +296,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         throw new MobileAuthApiError(403, 'Owner registration is closed');
       }
       const device = await getMobileDeviceIdentity(SecureStore, {
-        appVersion: Constants.expoConfig?.version,
+        appVersion: currentMobileAppVersion(),
         deviceName: Device.deviceName,
         modelId: Device.modelId,
         modelName: Device.modelName,
@@ -355,8 +372,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
         return;
       }
       if (hasNativeIOSContext) {
-        await HermesIOSContext.activateOwnerScope(
-          `${result.connection.baseUrl}|${result.connection.username}`,
+        await runOptionalAuthEffect(
+          () => HermesIOSContext.activateOwnerScope(
+            `${result.connection.baseUrl}|${result.connection.username}`,
+          ),
         );
       }
       if (authLifecycle.current.isCurrent(operationGeneration)) {

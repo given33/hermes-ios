@@ -628,6 +628,9 @@ test('native auth integrates owner endpoints, refresh, Face ID, and the complete
   assert.match(providerSource, /AsyncDeadlineError/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(providerSource, /HermesIOSContext\.activateOwnerScope\(/);
+  assert.match(providerSource, /runOptionalAuthEffect/);
+  assert.match(providerSource, /currentMobileAppVersion\(\)/);
+  assert.match(providerSource, /expoConfig\?\.ios\?\.buildNumber/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/status/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/registration-code/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/register/);
