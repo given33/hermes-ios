@@ -1344,182 +1344,8 @@ private struct HermesModelsPage: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
-        HermesPanel {
-          VStack(alignment: .leading, spacing: 12) {
-            Label(chinese ? "可用模型" : "Available models", systemImage: "square.stack.3d.up")
-              .font(HermesFonts.display(17))
-
-            if models.isEmpty {
-              Text(chinese ? "当前没有可选择的模型" : "No models are available")
-                .font(HermesFonts.body(13))
-                .foregroundStyle(appearance.palette.secondary)
-            } else {
-              LazyVStack(spacing: 0) {
-                ForEach(models) { model in
-                  Button {
-                    if !model.active {
-                      onAction(
-                        .modelSelect,
-                        HermesRouteActionPayload(route: "models", id: model.id)
-                      )
-                    }
-                  } label: {
-                    HStack(spacing: 12) {
-                      Image(systemName: model.active ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(
-                          model.active ? appearance.palette.success : appearance.palette.secondary
-                        )
-                        .frame(width: 24, height: 24)
-
-                      VStack(alignment: .leading, spacing: 3) {
-                        Text(model.model)
-                          .font(HermesFonts.bodyBold(14))
-                          .foregroundStyle(appearance.palette.text)
-                          .lineLimit(2)
-                        HStack(spacing: 8) {
-                          Text(model.provider)
-                          if !model.context.isEmpty {
-                            Text(model.context)
-                          }
-                        }
-                        .font(HermesFonts.body(11))
-                        .foregroundStyle(appearance.palette.secondary)
-                      }
-
-                      Spacer(minLength: 8)
-                    }
-                    .contentShape(Rectangle())
-                    .padding(.vertical, 11)
-                  }
-                  .buttonStyle(.plain)
-                  .accessibilityIdentifier("hermes-model-\(model.provider)-\(model.model)")
-
-                  if model.id != models.last?.id {
-                    Divider()
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        HermesPanel {
-          VStack(alignment: .leading, spacing: 14) {
-            Label(chinese ? "自定义模型" : "Custom model", systemImage: "cpu")
-              .font(HermesFonts.display(17))
-
-            modelField("Base URL", text: $baseUrl, keyboard: .URL)
-            modelField(chinese ? "API 密钥（可选）" : "API key (optional)", text: $apiKey, secure: true)
-            if apiKey.isEmpty, let configuration, configuration.apiKeyConfigured {
-              Text(chinese
-                ? "已保存密钥 \(configuration.apiKeyPreview)。留空将继续使用已保存密钥。"
-                : "Saved key \(configuration.apiKeyPreview). Leave blank to keep it.")
-                .font(HermesFonts.body(11))
-                .foregroundStyle(appearance.palette.secondary)
-            }
-            Button {
-              onAction(
-                .modelDiscover,
-                HermesRouteActionPayload(
-                  route: "models",
-                  fields: ["apiKey": apiKey, "baseUrl": baseUrl]
-                )
-              )
-            } label: {
-              Label(chinese ? "检测可用模型" : "Detect models", systemImage: "magnifyingglass")
-            }
-            .buttonStyle(.bordered)
-            .disabled(baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            .accessibilityIdentifier("hermes-detect-models")
-
-            if detectedModels.isEmpty {
-              modelField(chinese ? "模型名称" : "Model", text: $modelName)
-            } else {
-              VStack(alignment: .leading, spacing: 6) {
-                Text(chinese ? "可用模型" : "Available model")
-                  .font(HermesFonts.bodyBold(12))
-                  .foregroundStyle(appearance.palette.secondary)
-                Picker(chinese ? "可用模型" : "Available model", selection: $modelName) {
-                  ForEach(detectedModels, id: \.self) { model in
-                    Text(model).tag(model)
-                  }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .padding(.horizontal, 8)
-                .background(appearance.palette.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay {
-                  RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(appearance.palette.border, lineWidth: 1)
-                }
-              }
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-              Text(chinese ? "接口协议" : "API protocol")
-                .font(HermesFonts.bodyBold(12))
-                .foregroundStyle(appearance.palette.secondary)
-              Picker(chinese ? "接口协议" : "API protocol", selection: $apiMode) {
-                Text("OpenAI Chat Completions").tag("chat_completions")
-                Text("Anthropic Messages").tag("anthropic_messages")
-                Text("OpenAI Responses").tag("codex_responses")
-              }
-              .pickerStyle(.menu)
-            }
-
-            modelField(
-              chinese ? "上下文长度" : "Context length",
-              text: $contextLength,
-              keyboard: .numberPad
-            )
-
-            VStack(alignment: .leading, spacing: 6) {
-              Text(chinese ? "推理强度" : "Reasoning effort")
-                .font(HermesFonts.bodyBold(12))
-                .foregroundStyle(appearance.palette.secondary)
-              Picker(chinese ? "推理强度" : "Reasoning effort", selection: $reasoningEffort) {
-                ForEach(
-                  ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
-                  id: \.self
-                ) { effort in
-                  Text(reasoningLabel(effort)).tag(effort)
-                }
-              }
-              .pickerStyle(.menu)
-            }
-
-            HStack(spacing: 10) {
-              Button {
-                onAction(
-                  .modelTest,
-                  HermesRouteActionPayload(route: "models", fields: fields)
-                )
-              } label: {
-                Label(
-                  chinese ? "测试连接" : "Test connection",
-                  systemImage: "bolt.horizontal.circle"
-                )
-              }
-              .buttonStyle(.bordered)
-              .disabled(!isValid)
-
-              Button {
-                onAction(
-                  .modelSave,
-                  HermesRouteActionPayload(route: "models", fields: fields)
-                )
-              } label: {
-                Label(chinese ? "保存" : "Save", systemImage: "checkmark")
-              }
-              .buttonStyle(.borderedProminent)
-              .tint(appearance.palette.accent)
-              .disabled(!isValid)
-            }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-          }
-        }
+        availableModelsPanel
+        customModelPanel
       }
       .padding(14)
     }
@@ -1532,6 +1358,202 @@ private struct HermesModelsPage: View {
     .onChange(of: detectedModels) { _, next in
       if let first = next.first, !next.contains(modelName) { modelName = first }
     }
+  }
+
+  @ViewBuilder private var availableModelsPanel: some View {
+    HermesPanel {
+      VStack(alignment: .leading, spacing: 12) {
+        Label(chinese ? "可用模型" : "Available models", systemImage: "square.stack.3d.up")
+          .font(HermesFonts.display(17))
+
+        if models.isEmpty {
+          Text(chinese ? "当前没有可选择的模型" : "No models are available")
+            .font(HermesFonts.body(13))
+            .foregroundStyle(appearance.palette.secondary)
+        } else {
+          LazyVStack(spacing: 0) {
+            ForEach(models) { model in
+              modelRow(model)
+              if model.id != models.last?.id {
+                Divider()
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private func modelRow(_ model: HermesModelSnapshot) -> some View {
+    Button {
+      if !model.active {
+        onAction(
+          .modelSelect,
+          HermesRouteActionPayload(route: "models", id: model.id)
+        )
+      }
+    } label: {
+      HStack(spacing: 12) {
+        Image(systemName: model.active ? "checkmark.circle.fill" : "circle")
+          .font(.system(size: 18, weight: .semibold))
+          .foregroundStyle(
+            model.active ? appearance.palette.success : appearance.palette.secondary
+          )
+          .frame(width: 24, height: 24)
+
+        VStack(alignment: .leading, spacing: 3) {
+          Text(model.model)
+            .font(HermesFonts.bodyBold(14))
+            .foregroundStyle(appearance.palette.text)
+            .lineLimit(2)
+          HStack(spacing: 8) {
+            Text(model.provider)
+            if !model.context.isEmpty {
+              Text(model.context)
+            }
+          }
+          .font(HermesFonts.body(11))
+          .foregroundStyle(appearance.palette.secondary)
+        }
+
+        Spacer(minLength: 8)
+      }
+      .contentShape(Rectangle())
+      .padding(.vertical, 11)
+    }
+    .buttonStyle(.plain)
+    .accessibilityIdentifier("hermes-model-\(model.provider)-\(model.model)")
+  }
+
+  @ViewBuilder private var customModelPanel: some View {
+    HermesPanel {
+      VStack(alignment: .leading, spacing: 14) {
+        Label(chinese ? "自定义模型" : "Custom model", systemImage: "cpu")
+          .font(HermesFonts.display(17))
+
+        modelField("Base URL", text: $baseUrl, keyboard: .URL)
+        modelField(chinese ? "API 密钥（可选）" : "API key (optional)", text: $apiKey, secure: true)
+        if apiKey.isEmpty, let configuration, configuration.apiKeyConfigured {
+          Text(chinese
+            ? "已保存密钥 \(configuration.apiKeyPreview)。留空将继续使用已保存密钥。"
+            : "Saved key \(configuration.apiKeyPreview). Leave blank to keep it.")
+            .font(HermesFonts.body(11))
+            .foregroundStyle(appearance.palette.secondary)
+        }
+        Button {
+          onAction(
+            .modelDiscover,
+            HermesRouteActionPayload(
+              route: "models",
+              fields: ["apiKey": apiKey, "baseUrl": baseUrl]
+            )
+          )
+        } label: {
+          Label(chinese ? "检测可用模型" : "Detect models", systemImage: "magnifyingglass")
+        }
+        .buttonStyle(.bordered)
+        .disabled(baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        .accessibilityIdentifier("hermes-detect-models")
+
+        modelNameField
+        apiProtocolPicker
+        modelField(
+          chinese ? "上下文长度" : "Context length",
+          text: $contextLength,
+          keyboard: .numberPad
+        )
+        reasoningEffortPicker
+        modelActionButtons
+      }
+    }
+  }
+
+  @ViewBuilder private var modelNameField: some View {
+    if detectedModels.isEmpty {
+      modelField(chinese ? "模型名称" : "Model", text: $modelName)
+    } else {
+      VStack(alignment: .leading, spacing: 6) {
+        Text(chinese ? "可用模型" : "Available model")
+          .font(HermesFonts.bodyBold(12))
+          .foregroundStyle(appearance.palette.secondary)
+        Picker(chinese ? "可用模型" : "Available model", selection: $modelName) {
+          ForEach(detectedModels, id: \.self) { model in
+            Text(model).tag(model)
+          }
+        }
+        .pickerStyle(.menu)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .padding(.horizontal, 8)
+        .background(appearance.palette.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+          RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .stroke(appearance.palette.border, lineWidth: 1)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private var apiProtocolPicker: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(chinese ? "接口协议" : "API protocol")
+        .font(HermesFonts.bodyBold(12))
+        .foregroundStyle(appearance.palette.secondary)
+      Picker(chinese ? "接口协议" : "API protocol", selection: $apiMode) {
+        Text("OpenAI Chat Completions").tag("chat_completions")
+        Text("Anthropic Messages").tag("anthropic_messages")
+        Text("OpenAI Responses").tag("codex_responses")
+      }
+      .pickerStyle(.menu)
+    }
+  }
+
+  @ViewBuilder private var reasoningEffortPicker: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(chinese ? "推理强度" : "Reasoning effort")
+        .font(HermesFonts.bodyBold(12))
+        .foregroundStyle(appearance.palette.secondary)
+      Picker(chinese ? "推理强度" : "Reasoning effort", selection: $reasoningEffort) {
+        ForEach(
+          ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
+          id: \.self
+        ) { effort in
+          Text(reasoningLabel(effort)).tag(effort)
+        }
+      }
+      .pickerStyle(.menu)
+    }
+  }
+
+  @ViewBuilder private var modelActionButtons: some View {
+    HStack(spacing: 10) {
+      Button {
+        onAction(
+          .modelTest,
+          HermesRouteActionPayload(route: "models", fields: fields)
+        )
+      } label: {
+        Label(
+          chinese ? "测试连接" : "Test connection",
+          systemImage: "bolt.horizontal.circle"
+        )
+      }
+      .buttonStyle(.bordered)
+      .disabled(!isValid)
+
+      Button {
+        onAction(
+          .modelSave,
+          HermesRouteActionPayload(route: "models", fields: fields)
+        )
+      } label: {
+        Label(chinese ? "保存" : "Save", systemImage: "checkmark")
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(appearance.palette.accent)
+      .disabled(!isValid)
+    }
+    .frame(maxWidth: .infinity, alignment: .trailing)
   }
 
   private var isValid: Bool {
