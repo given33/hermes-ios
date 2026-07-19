@@ -181,33 +181,20 @@ test('rejects a native-followed cross-origin response before reading its body', 
   assert.equal(requestInit?.redirect, undefined);
 });
 
-test('rejects a response without a final URL before reading its body', async () => {
-  let bodyRead = false;
-  const response = new Response('{"detail":"mobile-secret"}', {
-    headers: { 'Content-Type': 'application/json' },
-  });
-  Object.defineProperty(response, 'text', {
-    configurable: true,
-    value: async () => {
-      bodyRead = true;
-      return '{"detail":"mobile-secret"}';
-    },
-  });
+test('accepts a direct response without a final URL (React Native transport)', async () => {
+  // Expo/React Native often leaves Response.url empty for same-origin
+  // replies. Hard-failing that path made password login look like
+  // CONNECTION_ERROR after a successful /auth/mobile/token round trip.
   const client = new HermesApiClient(
     'https://hermes.test',
     'mobile-secret',
-    async () => response,
+    async () => new Response(JSON.stringify({ ok: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
   );
 
-  await assert.rejects(client.request('/api/config'), (error: unknown) => {
-    const serialized = `${String(error)}\n${JSON.stringify(error)}\n${
-      error instanceof Error ? error.stack ?? '' : ''
-    }`;
-    assert.match(serialized, /origin.*verified/i);
-    assert.doesNotMatch(serialized, /mobile-secret/);
-    return true;
-  });
-  assert.equal(bodyRead, false);
+  const result = await client.request<{ ok: boolean }>('/api/config');
+  assert.deepEqual(result, { ok: true });
 });
 
 test('parses JSON, text, and empty successful responses', async () => {

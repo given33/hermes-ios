@@ -305,14 +305,19 @@ function serializeDevice(device: MobileDeviceIdentity): Record<string, string> {
 }
 
 function assertSameOriginResponse(response: Response, baseUrl: string): void {
-  if (!response.url) throw new Error('Hermes authentication response origin could not be verified');
+  const finalRaw = response.url?.trim();
+  // React Native / Expo frequently omit Response.url on direct replies.
+  // Treat a missing final URL as "no redirect observed" rather than a hard
+  // failure — otherwise correct password login fails with the generic
+  // CONNECTION_ERROR after /auth/mobile/token succeeds on the wire.
+  if (!finalRaw) return;
   let finalUrl: URL;
   try {
-    finalUrl = new URL(response.url);
+    finalUrl = new URL(finalRaw, `${baseUrl}/`);
   } catch {
     throw new Error('Hermes authentication response origin could not be verified');
   }
-  if (finalUrl.origin !== baseUrl) {
+  if (finalUrl.origin !== baseUrl || finalUrl.username || finalUrl.password) {
     throw new Error('Hermes authentication responses must remain same-origin');
   }
 }

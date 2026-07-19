@@ -254,14 +254,17 @@ export class HermesApiClient {
     const accessToken = await this.resolveAccessToken();
     this.assertUrlHasNoCredentials(url, [accessToken]);
     // React Native's transport may follow redirects without preserving the
-    // Authorization header. Always validate the final response origin.
+    // Authorization header. Always validate the final response origin when
+    // the runtime exposes one; empty Response.url is common on RN and must
+    // not abort an otherwise successful same-origin request.
+    const requestedUrl = url.toString();
     let response = await this.fetchWithAccessToken(
       url,
       accessToken,
       callerHeaders,
       requestInit,
     );
-    this.assertResponseSameOrigin(response);
+    this.assertResponseSameOrigin(response, requestedUrl);
     const attemptedTokens = [accessToken];
     if (response.status === 401 && typeof this.credential !== 'string') {
       const refreshedToken = normalizeAccessToken(
@@ -278,7 +281,7 @@ export class HermesApiClient {
         callerHeaders,
         requestInit,
       );
-      this.assertResponseSameOrigin(response);
+      this.assertResponseSameOrigin(response, requestedUrl);
     }
     return { attemptedTokens, response };
   }
@@ -295,17 +298,23 @@ export class HermesApiClient {
     return this.fetchImpl(url.toString(), { ...requestInit, headers });
   }
 
-  private assertResponseSameOrigin(response: Response): void {
-    if (!response.url) {
-      throw new Error('Hermes response origin could not be verified');
-    }
+  private assertResponseSameOrigin(response: Response, requestedUrl: string): void {
+    const finalRaw = response.url?.trim();
+    // React Native / Expo often leave Response.url empty even for a direct
+    // same-origin reply. Only reject when a final URL is present and points
+    // off-origin (or carries userinfo), matching HermesCloudApi's contract.
+    if (!finalRaw) return;
     let finalUrl: URL;
     try {
-      finalUrl = new URL(response.url);
+      finalUrl = new URL(finalRaw, requestedUrl);
     } catch {
       throw new Error('Hermes response origin could not be verified');
     }
-    if (finalUrl.origin !== new URL(this.baseUrl).origin) {
+    if (
+      finalUrl.origin !== new URL(this.baseUrl).origin
+      || finalUrl.username
+      || finalUrl.password
+    ) {
       throw new Error('Hermes responses must remain same-origin');
     }
   }

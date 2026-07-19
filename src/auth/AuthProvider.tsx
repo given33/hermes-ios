@@ -13,7 +13,7 @@ import {
   type PropsWithChildren,
 } from 'react';
 
-import { HermesApiClient } from '../api/HermesApiClient';
+import { HermesApiClient, HermesApiError } from '../api/HermesApiClient';
 import { AsyncDeadlineError, withDeadline } from '../api/async-deadline';
 import { assertMobileHandshake } from '../api/hermes-types';
 import { HERMES_ORIGIN } from '../config';
@@ -654,6 +654,32 @@ function authenticationErrorMessage(error: unknown): string {
     if (error.status === 422) return '邮箱、验证码、账号或密码格式不符合要求。';
     if (error.status === 429) return '尝试次数过多，请稍后重试。';
     if (error.status === 502 || error.status === 503) return 'QQ 邮箱验证码服务尚未配置。';
+  }
+  if (error instanceof HermesApiError) {
+    if (error.status === 401 || error.status === 403) {
+      return '登录成功但会话未被服务器接受，请重试或联系管理员。';
+    }
+    if (error.status === 404) {
+      return '服务器未部署移动端接口，请升级 Hermes 后端后重试。';
+    }
+    if (error.status >= 500) {
+      return 'Hermes 服务器暂时不可用，请稍后重试。';
+    }
+  }
+  if (error instanceof Error) {
+    const message = error.message;
+    if (/timed?\s*out|timeout/i.test(message)) {
+      return '连接 Hermes 超时，请检查网络后重试。';
+    }
+    if (/incompatible mobile handshake/i.test(message)) {
+      return '服务器移动端协议不兼容，请升级 Hermes 后端后重试。';
+    }
+    if (/same-origin|origin could not be verified/i.test(message)) {
+      return 'Hermes 连接被重定向到不受信任的地址。';
+    }
+    if (/Network request failed|Failed to fetch|network/i.test(message)) {
+      return '无法连接到 Hermes 服务器，请检查网络后重试。';
+    }
   }
   return CONNECTION_ERROR;
 }

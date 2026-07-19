@@ -275,6 +275,22 @@ test('authentication errors redact submitted secrets and reject redirected origi
   );
   await assert.rejects(redirected.getStatus(), /same-origin/i);
   assert.equal(bodyRead, false);
+
+  // RN often omits Response.url; treat as no redirect observed.
+  const emptyUrl = new MobileAuthApiClient(
+    'https://hermes.test',
+    async () => new Response(
+      JSON.stringify({
+        registration_open: false,
+        account_configured: true,
+        email_verification_required: true,
+        owner_email_configured: true,
+      }),
+      { headers: { 'Content-Type': 'application/json' } },
+    ),
+  );
+  const status = await emptyUrl.getStatus();
+  assert.equal(status.accountConfigured, true);
 });
 
 test('token pairs rotate once across concurrent requests near expiry', async () => {
