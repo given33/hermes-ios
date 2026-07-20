@@ -139,15 +139,15 @@ export function NotificationProvider({ children }: PropsWithChildren) {
             requestUndeterminedPermission: !coordinated,
           },
         );
-        if (coordinated && !canCollectIOSPermission(coordinated, 'notification')) {
-          return;
-        }
         if (
           active
           && 'deviceId' in result
           && result.deviceId !== state.connection.deviceId
         ) {
           await rememberDeviceId(result.deviceId);
+        }
+        if (coordinated && !canCollectIOSPermission(coordinated, 'notification')) {
+          return;
         }
       }).catch(() => undefined);
     };
