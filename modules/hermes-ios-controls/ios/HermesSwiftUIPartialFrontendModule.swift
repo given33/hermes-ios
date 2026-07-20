@@ -233,9 +233,6 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     GeometryReader { proxy in
       let drawerWidth = fillsAvailableWidth ? proxy.size.width : min(360, proxy.size.width)
       ZStack(alignment: .leading) {
-        appearance.palette.background
-          .ignoresSafeArea()
-
         HermesSidebarContent(
           activePath: props.activePath,
           chinese: chinese,
@@ -246,7 +243,7 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       }
       .frame(width: drawerWidth)
       .frame(maxHeight: .infinity, alignment: .leading)
-      .background(appearance.palette.background.ignoresSafeArea())
+      .background(Color.clear)
       .offset(x: isDrawer ? drawerOffset(width: drawerWidth) : 0)
       .shadow(
         color: .black.opacity(isDrawer && presented ? 0.22 : 0),
@@ -255,7 +252,7 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       )
       .contentShape(Rectangle())
     }
-    .background(Color.clear)
+    .background(Color.clear.ignoresSafeArea())
     .clipped()
     .onAppear {
       presented = isDrawer ? false : true
@@ -306,77 +303,72 @@ private struct HermesSidebarContent: View {
   let onNavigate: (HermesRoute) -> Void
 
   var body: some View {
-    ZStack {
-      appearance.palette.background
-        .ignoresSafeArea()
+    ScrollView(.vertical, showsIndicators: false) {
+      LazyVStack(alignment: .leading, spacing: 0) {
+        Text("Hermes Agent")
+          .font(.largeTitle.bold())
+          .foregroundStyle(appearance.palette.foreground)
+          .padding(.horizontal, 20)
+          .padding(.vertical, 8)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityAddTraits(.isHeader)
 
-      ScrollView(.vertical, showsIndicators: false) {
-        LazyVStack(alignment: .leading, spacing: 0) {
-          Text("Hermes Agent")
-            .font(.largeTitle.bold())
-            .foregroundStyle(appearance.palette.foreground)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityAddTraits(.isHeader)
-
-          ForEach(HermesRoute.allCases.filter(\.visibleInSidebar)) { route in
-            Button {
-              onNavigate(route)
-            } label: {
-              HStack(spacing: 10) {
-                Label {
-                  Text(route.title(chinese))
-                    .foregroundStyle(appearance.palette.foreground)
-                } icon: {
-                  Image(systemName: route.symbol)
-                    .foregroundStyle(appearance.palette.accent)
-                }
-                .font(HermesFonts.body(15))
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right")
-                  .font(.system(size: 13, weight: .semibold))
-                  .foregroundStyle(appearance.palette.tertiary)
+        ForEach(HermesRoute.allCases.filter(\.visibleInSidebar)) { route in
+          Button {
+            onNavigate(route)
+          } label: {
+            HStack(spacing: 10) {
+              Label {
+                Text(route.title(chinese))
+                  .foregroundStyle(appearance.palette.foreground)
+              } icon: {
+                Image(systemName: route.symbol)
+                  .foregroundStyle(appearance.palette.accent)
               }
-              .padding(.horizontal, 20)
-              .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-              .contentShape(Rectangle())
+              .font(HermesFonts.body(15))
+              Spacer(minLength: 8)
+              Image(systemName: "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(appearance.palette.tertiary)
             }
-            .buttonStyle(.plain)
+            .padding(.horizontal, 20)
             .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-            .background(
-              activePath == route.path
-                ? appearance.palette.accent.opacity(0.10)
-                : Color.clear
-            )
             .contentShape(Rectangle())
           }
+          .buttonStyle(.plain)
+          .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+          .background(
+            activePath == route.path
+              ? appearance.palette.accent.opacity(0.10)
+              : Color.clear
+          )
+          .contentShape(Rectangle())
+        }
 
-          ForEach(gateways) { gateway in
-            HStack(spacing: 10) {
-              Circle()
-                .fill(gatewayColor(gateway.state))
-                .frame(width: 8, height: 8)
-              Text(gateway.label)
-                .font(HermesFonts.body(13))
-                .foregroundStyle(appearance.palette.foreground)
-                .lineLimit(1)
-              Spacer(minLength: 8)
-              Text(gatewayMeta(gateway))
-                .font(HermesFonts.mono(11))
-                .foregroundStyle(appearance.palette.secondary)
-                .lineLimit(1)
-            }
-            .padding(.horizontal, 20)
-            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        ForEach(gateways) { gateway in
+          HStack(spacing: 10) {
+            Circle()
+              .fill(gatewayColor(gateway.state))
+              .frame(width: 8, height: 8)
+            Text(gateway.label)
+              .font(HermesFonts.body(13))
+              .foregroundStyle(appearance.palette.foreground)
+              .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(gatewayMeta(gateway))
+              .font(HermesFonts.mono(11))
+              .foregroundStyle(appearance.palette.secondary)
+              .lineLimit(1)
           }
+          .padding(.horizontal, 20)
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         }
       }
-      .padding(.bottom, 18)
     }
+    .padding(.bottom, 18)
     .scrollDismissesKeyboard(.immediately)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(appearance.palette.background.ignoresSafeArea())
+    .background(Color.clear)
   }
 
   private func gatewayColor(_ state: String) -> Color {

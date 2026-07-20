@@ -8,7 +8,7 @@ const source = readFileSync(
   'utf8',
 );
 
-test('workflow activity is collapsed above the avatar row with a compact hairline split', () => {
+test('workflow activity preserves the Build 28 order and keeps the summary chevron beside elapsed time', () => {
   const messageStart = source.indexOf('function UnifiedMessage');
   const messageEnd = source.indexOf('function MessageAvatar', messageStart);
   const message = source.slice(messageStart, messageEnd);
@@ -16,10 +16,28 @@ test('workflow activity is collapsed above the avatar row with a compact hairlin
   const avatarRow = message.indexOf('<View style={[styles.messageRow');
 
   assert.ok(activity >= 0, 'workflow activity group is rendered');
-  assert.ok(avatarRow > activity, 'activity group stays above avatar and message row');
+  assert.ok(avatarRow > activity, 'activity group stays above its avatar and message row');
   assert.match(source, /const \[open, setOpen\] = useState\(false\)/);
   assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
+  assert.match(source, /formatActivitySummary\(message, isChinese, now\)\}\s*<\/Text>\s*<AnimatedChevron/);
+  assert.match(source, /activitySummary: \{ alignItems: 'center', flexDirection: 'row', gap: 6,/);
+  assert.doesNotMatch(source, /activitySummary: \{[^\n]*justifyContent: 'space-between'/);
+  assert.match(source, /activityTitle: \{ flexShrink: 1,/);
+  assert.doesNotMatch(source, /activityTitle: \{ flex: 1,/);
   assert.match(source, /activityDivider: \{ height: StyleSheet\.hairlineWidth, marginBottom: 7, marginTop: 6/);
+});
+
+test('message timestamps stay adjacent to sender names and user time precedes the user name', () => {
+  const messageStart = source.indexOf('function UnifiedMessage');
+  const messageEnd = source.indexOf('function MessageAvatar', messageStart);
+  const message = source.slice(messageStart, messageEnd);
+  const userTimestamp = message.indexOf('{isUser ? metadataNode : null}');
+  const sender = message.indexOf('<View style={[styles.senderMeta');
+
+  assert.ok(userTimestamp >= 0 && userTimestamp < sender);
+  assert.match(source, /messageMeta: \{ alignItems: 'center', flexDirection: 'row', gap: 5,/);
+  assert.doesNotMatch(source, /messageMeta: \{[^\n]*justifyContent: 'space-between'/);
+  assert.doesNotMatch(source, /messageMeta: \{[^\n]*width: '100%'/);
 });
 
 test('chat messages expose role avatars, local metadata, and Codex-like Markdown hierarchy', () => {
@@ -37,6 +55,8 @@ test('chat messages expose role avatars, local metadata, and Codex-like Markdown
 });
 
 test('sending is one durable idempotent enqueue with foreground outbox compensation', () => {
+  assert.match(source, /shouldRenderPendingMessage\(messages, hostedRunning\)/);
+  assert.doesNotMatch(source, /shouldRenderPendingMessage\(messages, sending\)/);
   assert.match(source, /requestId: userMessageId/);
   assert.match(source, /turnId: hostedTurnId/);
   assert.match(source, /upsertPendingEnqueue\(cacheOwner,/);
@@ -50,6 +70,13 @@ test('sending is one durable idempotent enqueue with foreground outbox compensat
   assert.match(source, /replayPendingEnqueues/);
   assert.doesNotMatch(source, /recordConversationMessage\(conversationId|routeMessage\(/);
   assert.doesNotMatch(source, /new HermesChatStream|createNativeHermesChatStreamRuntime/);
+});
+
+test('chat maps gateway failures to bounded native copy instead of proxy documents', () => {
+  assert.match(source, /error instanceof HermesApiError/);
+  assert.match(source, /error\.status === 429/);
+  assert.match(source, /error\.status >= 500/);
+  assert.match(source, /Hermes 服务暂时不可用，请稍后重试/);
 });
 
 test('a running hosted turn exposes the real server cancellation control', () => {

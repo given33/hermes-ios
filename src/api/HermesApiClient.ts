@@ -360,12 +360,18 @@ function safeResponseDetail(
         detail = firstString(parsed.detail, parsed.error, parsed.message);
       }
     } catch {
-      detail = body;
+      // Reverse proxies commonly return an HTML error document for 429/5xx.
+      // Never render that document in native banners or chat toasts.
+      if (!looksLikeMarkup(body)) detail = body;
     }
   }
   detail = detail ?? (response.statusText || undefined);
   if (!detail) return undefined;
   return redactSecrets(detail, secrets).slice(0, 240);
+}
+
+function looksLikeMarkup(value: string): boolean {
+  return /<\s*(?:!doctype|html|head|body|title|center|h1|hr)\b/i.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { IOSContextCapabilities } from '../modules/hermes-ios-context/index';
 import {
   canCollectIOSPermission,
+  canStartIOSCollection,
   clearIOSPermissionRun,
   coordinateIOSPermissions,
   ensureIOSPermissions,
@@ -122,6 +123,19 @@ test('an unresolved system permission pauses before the next sheet', async () =>
   assert.equal(result.phase, 'paused');
   assert.equal(result.current, 'motion');
   assert.equal(healthRead, false);
+  assert.equal(canStartIOSCollection(result), true);
+});
+
+test('an unresolved location sheet keeps every owner-scoped collector closed', async () => {
+  const result = await coordinateIOSPermissions(authorizedRuntime({
+    getLocationAuthorization: async () => 'notDetermined',
+    getLocationAuthorizationDetails: async () => ({ accuracy: 'reduced', always: false }),
+    requestLocationAuthorization: async () => 'notDetermined',
+  }));
+
+  assert.equal(result.phase, 'paused');
+  assert.equal(result.current, 'location');
+  assert.equal(canStartIOSCollection(result), false);
 });
 
 test('a settled paused run is reused until foreground recovery forces the next permission pass', async () => {
@@ -147,6 +161,43 @@ test('a settled paused run is reused until foreground recovery forces the next p
   assert.equal(resumed.phase, 'ready');
   assert.equal(resumed.permissions.motion, 'authorized');
   assert.equal(motionReads, 2);
+  clearIOSPermissionRun(ownerScope);
+});
+
+test('a page joining an in-flight permission run receives current and subsequent progress', async () => {
+  const ownerScope = 'permission-shared-progress-owner';
+  let releaseMotion!: (state: 'authorized') => void;
+  let markMotionStarted!: () => void;
+  const motionStarted = new Promise<void>((resolvePromise) => {
+    markMotionStarted = resolvePromise;
+  });
+  const runtime = authorizedRuntime({
+    getMotionAuthorization: async () => 'notDetermined',
+    requestMotionAuthorization: async () => {
+      markMotionStarted();
+      return new Promise<'authorized'>((resolvePromise) => {
+        releaseMotion = resolvePromise;
+      });
+    },
+  });
+  const firstProgress: string[] = [];
+  const joinedProgress: string[] = [];
+  const first = ensureIOSPermissions(ownerScope, runtime, (snapshot) => {
+    firstProgress.push(`${snapshot.current}:${snapshot.permissions.location}:${snapshot.phase}`);
+  });
+
+  await motionStarted;
+  const joined = ensureIOSPermissions(ownerScope, runtime, (snapshot) => {
+    joinedProgress.push(`${snapshot.current}:${snapshot.permissions.location}:${snapshot.phase}`);
+  });
+
+  assert.deepEqual(joinedProgress, ['motion:authorized:requesting']);
+  releaseMotion('authorized');
+  const [firstResult, joinedResult] = await Promise.all([first, joined]);
+  assert.equal(firstResult.phase, 'ready');
+  assert.equal(joinedResult.phase, 'ready');
+  assert.ok(joinedProgress.includes('null:authorized:ready'));
+  assert.ok(firstProgress.includes('motion:authorized:requesting'));
   clearIOSPermissionRun(ownerScope);
 });
 

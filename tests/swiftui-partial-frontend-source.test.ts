@@ -187,6 +187,8 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.doesNotMatch(native, /navigationTitle\("Hermes Agent"\)/);
   assert.match(native, /Text\("Hermes Agent"\)\s*\.font\(\.largeTitle\.bold\(\)\)/);
   assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
+  assert.match(nativeSidebar, /\.background\(Color\.clear\.ignoresSafeArea\(\)\)/);
+  assert.doesNotMatch(nativeSidebar, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
   assert.match(native, /\.frame\(maxWidth: \.infinity, minHeight: 52, alignment: \.leading\)/);
   assert.match(nativeSidebar, /ForEach\(HermesRoute\.allCases\.filter\(\\\.visibleInSidebar\)\)/);
   assert.doesNotMatch(nativeSidebar, /ForEach\(0\.\.<4|sectionTitle|Workspace|Automation|Administration/);

@@ -52,7 +52,9 @@ const INITIAL_PERMISSIONS = Object.fromEntries(
 ) as Record<IOSPermissionKey, IOSAuthorizationState>;
 
 interface CachedPermissionRun {
+  listeners: Set<IOSPermissionProgress>;
   promise: Promise<IOSPermissionSnapshot>;
+  snapshot: IOSPermissionSnapshot;
   settled: boolean;
 }
 
@@ -83,18 +85,28 @@ export function ensureIOSPermissions(
   const key = ownerScope.trim() || 'anonymous';
   const existing = permissionRuns.get(key);
   if (existing && (!forceRefresh || !existing.settled)) {
-    return existing.promise.then((snapshot) => {
-      onProgress?.(snapshot);
-      return snapshot;
+    if (onProgress) {
+      publishToListener(onProgress, existing.snapshot);
+      if (!existing.settled) existing.listeners.add(onProgress);
+    }
+    return existing.promise.finally(() => {
+      if (onProgress) existing.listeners.delete(onProgress);
     });
   }
 
   const cached: CachedPermissionRun = {
+    listeners: new Set(onProgress ? [onProgress] : []),
     promise: Promise.resolve(initialIOSPermissionSnapshot()),
+    snapshot: initialIOSPermissionSnapshot(),
     settled: false,
   };
-  cached.promise = coordinateIOSPermissions(runtime, onProgress)
-    .finally(() => { cached.settled = true; });
+  cached.promise = coordinateIOSPermissions(runtime, (snapshot) => {
+    cached.snapshot = cloneSnapshot(snapshot);
+    for (const listener of cached.listeners) publishToListener(listener, snapshot);
+  }).finally(() => {
+    cached.settled = true;
+    cached.listeners.clear();
+  });
   permissionRuns.set(key, cached);
   return cached.promise;
 }
@@ -177,6 +189,14 @@ export function canCollectIOSPermission(
   // every requested type was granted.
   if (key === 'health') return state === 'authorized' || state === 'limited';
   return state === 'authorized';
+}
+
+export function canStartIOSCollection(snapshot: IOSPermissionSnapshot): boolean {
+  if (snapshot.phase === 'ready') return true;
+  // An unresolved location sheet must keep the account-scoped native queue
+  // closed. A later unrelated sheet may pause without disabling collectors
+  // whose own authorization has already been granted.
+  return snapshot.phase === 'paused' && snapshot.current !== 'location';
 }
 
 async function resolvePermission(
@@ -297,6 +317,17 @@ function cloneSnapshot(snapshot: IOSPermissionSnapshot): IOSPermissionSnapshot {
     errors: { ...snapshot.errors },
     permissions: { ...snapshot.permissions },
   };
+}
+
+function publishToListener(
+  listener: IOSPermissionProgress,
+  snapshot: IOSPermissionSnapshot,
+): void {
+  try {
+    listener(cloneSnapshot(snapshot));
+  } catch {
+    // A rendering subscriber must never interrupt the native authorization run.
+  }
 }
 
 function errorMessage(error: unknown): string {

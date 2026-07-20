@@ -135,6 +135,8 @@ test('sidebar uses one opaque safe-area surface, full-width hit targets, and no 
 
   assert.match(source, /const sidebarBackground = rootBackground/);
   assert.match(source, /drawerStyle=\{\{ backgroundColor, width: drawerWidth \}\}/);
+  assert.match(source, /styles\.compactDrawerSurface, \{ backgroundColor \}/);
+  assert.match(source, /styles\.splitSidebar,[\s\S]*backgroundColor: sidebarBackground/);
   assert.match(source, /showsVerticalScrollIndicator=\{false\}/);
   assert.match(source, /referenceSidebarRow:[\s\S]*minHeight: 52/);
   assert.match(source, /navItem:[\s\S]*minHeight: 52/);

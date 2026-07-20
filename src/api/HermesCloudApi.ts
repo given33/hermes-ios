@@ -174,6 +174,11 @@ export interface HostedTurnEnqueueResponse {
   route: RouteDecision;
   route_message?: CollaborationMessage;
   hosted_turn: JsonRecord;
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+  } | null;
 }
 
 export interface NativeUpload {

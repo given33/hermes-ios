@@ -32,6 +32,7 @@ import { predictedDepartureTimestamp } from './ios-command-contract';
 import { buildCollectionSnapshotEvents, snapshotEvent } from './ios-snapshot-events';
 import {
   canCollectIOSPermission,
+  canStartIOSCollection,
   clearIOSPermissionRun,
   ensureIOSPermissions,
   initialIOSPermissionSnapshot,
@@ -183,7 +184,7 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
 
   const executeCommands = useCallback(async () => {
     if (!hasNativeIOSContext
-      || permissionSnapshotRef.current.phase !== 'ready'
+      || !canStartIOSCollection(permissionSnapshotRef.current)
       || commandsRunningRef.current) return;
     commandsRunningRef.current = true;
     try {
@@ -323,7 +324,7 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
       updatePermissionSnapshot(authorization);
       await HermesIOSContext.setPermissionCollectionReady(
         ownerScope,
-        authorization.phase === 'ready',
+        canStartIOSCollection(authorization),
       );
       if (canCollectIOSPermission(authorization, 'screenTime')) {
         await HermesIOSContext

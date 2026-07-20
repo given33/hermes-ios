@@ -63,7 +63,7 @@ import {
 import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
-import type { HermesApiClient } from '../api/HermesApiClient';
+import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
 import { withDeadline } from '../api/async-deadline';
 import type { SidebarGatewayStatus } from '../app/NativeShell';
 import {
@@ -71,6 +71,7 @@ import {
   parseOfficialConversationPlaceholderId,
   type CollaborationMessage,
   type HostedTurnEnqueueInput,
+  type HostedTurnEnqueueResponse,
   type SingleConversation,
 } from '../api/HermesCloudApi';
 import {
@@ -135,6 +136,11 @@ interface ChatAttachment {
   name: string;
   size?: number | null;
   uri: string;
+}
+
+interface HostedTurnDelivery {
+  item: HostedTurnOutboxItem;
+  response: HostedTurnEnqueueResponse;
 }
 
 interface ChatPreviewPageProps {
@@ -382,7 +388,7 @@ export function ChatPreviewPage({
 
   const deliverPendingEnqueueOnce = useCallback(async (
     source: HostedTurnOutboxItem,
-  ): Promise<HostedTurnOutboxItem> => {
+  ): Promise<HostedTurnDelivery> => {
     if (!cloudApi || !localStore || !cacheOwner) {
       throw new Error('Durable outbox is unavailable');
     }
@@ -434,13 +440,13 @@ export function ChatPreviewPage({
     }
     item = hydrateOutboxInput({ ...item, pendingAttachments });
     await localStore.upsertPendingEnqueue(cacheOwner, item);
-    await cloudApi.enqueueHostedTurn(item.conversationId, item.input);
-    return item;
+    const response = await cloudApi.enqueueHostedTurn(item.conversationId, item.input);
+    return { item, response };
   }, [cacheOwner, cloudApi, isChinese, localStore, profile]);
 
   const deliverPendingEnqueue = useCallback(async (
     source: HostedTurnOutboxItem,
-  ): Promise<HostedTurnOutboxItem> => {
+  ): Promise<HostedTurnDelivery> => {
     try {
       return await deliverPendingEnqueueOnce(source);
     } catch (error) {
@@ -476,7 +482,7 @@ export function ChatPreviewPage({
       const pending = await localStore.readPendingEnqueues(cacheOwner);
       for (const pendingItem of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
         try {
-          const item = await deliverPendingEnqueue(pendingItem);
+          const { item, response } = await deliverPendingEnqueue(pendingItem);
           await localStore.removePendingEnqueue(cacheOwner, item.input.requestId);
           cleanupPendingAttachments(item);
           if (!activeConversationIdRef.current) {
@@ -484,11 +490,19 @@ export function ChatPreviewPage({
             setActiveConversationId(item.conversationId);
           }
           if (activeConversationIdRef.current === item.conversationId) {
-            activeHostedTurnIdRef.current = item.input.turnId;
-            beginOptimisticHostedTurn(item.conversationId, item.input.turnId);
-            setActiveHostedTurnId(item.input.turnId);
-            setHostedRunning(true);
-            setSending(true);
+            if (response.accepted) {
+              activeHostedTurnIdRef.current = item.input.turnId;
+              beginOptimisticHostedTurn(item.conversationId, item.input.turnId);
+              setActiveHostedTurnId(item.input.turnId);
+              setHostedRunning(true);
+              setSending(true);
+            } else {
+              activeHostedTurnIdRef.current = '';
+              clearOptimisticHostedTurn();
+              setActiveHostedTurnId('');
+              setHostedRunning(false);
+              setSending(false);
+            }
             const generation = ++conversationSyncGenerationRef.current;
             await loadConversation(item.conversationId, generation);
           }
@@ -504,7 +518,15 @@ export function ChatPreviewPage({
     } finally {
       if (outboxReplayRef.current === replay) outboxReplayRef.current = null;
     }
-  }, [beginOptimisticHostedTurn, cacheOwner, cloudApi, deliverPendingEnqueue, loadConversation, localStore]);
+  }, [
+    beginOptimisticHostedTurn,
+    cacheOwner,
+    clearOptimisticHostedTurn,
+    cloudApi,
+    deliverPendingEnqueue,
+    loadConversation,
+    localStore,
+  ]);
 
   const openConversation = useCallback(async (
     conversationId: string,
@@ -846,6 +868,7 @@ export function ChatPreviewPage({
       return;
     }
 
+    let enqueueAcknowledged = false;
     let hostedAccepted = false;
     let enqueuePersisted = false;
     const hostedTurnId = uniqueTurnId('hosted');
@@ -902,8 +925,11 @@ export function ChatPreviewPage({
         await localStore.upsertPendingEnqueue(cacheOwner, queuedItem);
         enqueuePersisted = true;
         clearQueuedComposer();
-        queuedItem = await deliverPendingEnqueue(queuedItem);
+        const delivery = await deliverPendingEnqueue(queuedItem);
+        queuedItem = delivery.item;
         conversationId = queuedItem.conversationId;
+        enqueueAcknowledged = true;
+        hostedAccepted = delivery.response.accepted;
       } else {
         if (conversationPending) {
           await cloudApi.createConversation(
@@ -939,9 +965,10 @@ export function ChatPreviewPage({
           conversationPending: false,
           pendingAttachments: fallbackAttachments,
         });
-        await cloudApi.enqueueHostedTurn(conversationId, queuedItem.input);
+        const response = await cloudApi.enqueueHostedTurn(conversationId, queuedItem.input);
+        enqueueAcknowledged = true;
+        hostedAccepted = response.accepted;
       }
-      hostedAccepted = true;
       clearQueuedComposer();
       if (enqueuePersisted && localStore && cacheOwner) {
         await localStore.removePendingEnqueue(cacheOwner, userMessageId).catch(() => undefined);
@@ -950,20 +977,27 @@ export function ChatPreviewPage({
       activeConversationIdRef.current = conversationId;
       setActiveConversationId(conversationId);
       if (activeConversationIdRef.current === conversationId) {
-        activeHostedTurnIdRef.current = hostedTurnId;
-        beginOptimisticHostedTurn(conversationId, hostedTurnId);
-        setActiveHostedTurnId(hostedTurnId);
-        setHostedRunning(true);
+        if (hostedAccepted) {
+          activeHostedTurnIdRef.current = hostedTurnId;
+          beginOptimisticHostedTurn(conversationId, hostedTurnId);
+          setActiveHostedTurnId(hostedTurnId);
+          setHostedRunning(true);
+        } else {
+          activeHostedTurnIdRef.current = '';
+          clearOptimisticHostedTurn();
+          setActiveHostedTurnId('');
+          setHostedRunning(false);
+        }
         const generation = ++conversationSyncGenerationRef.current;
         await loadConversation(conversationId, generation);
       }
     } catch (error) {
-      if (enqueuePersisted && !hostedAccepted) {
+      if (enqueuePersisted && !enqueueAcknowledged) {
         notify(isChinese
           ? '消息已保存在待发送队列，连接恢复后会自动继续。'
           : 'Message queued and will continue automatically when the connection returns.');
         void replayPendingEnqueues();
-      } else if (!hostedAccepted) {
+      } else if (!enqueueAcknowledged) {
         if (queuedItem) cleanupPendingAttachments(queuedItem);
         const failure = serverFailure(error, isChinese);
         notify(failure);
@@ -1438,7 +1472,7 @@ export function ChatPreviewPage({
                 onOpenAttachment={openStoredAttachment}
               />
             ))}
-            {shouldRenderPendingMessage(messages, sending)
+            {shouldRenderPendingMessage(messages, hostedRunning)
               ? <PendingMessage index={messages.length} />
               : null}
           </ScrollView>
@@ -1938,6 +1972,23 @@ async function mapWithConcurrency<T, R>(
 }
 
 function serverFailure(error: unknown, chinese: boolean): string {
+  if (error instanceof HermesApiError) {
+    if (error.status === 401 || error.status === 403) {
+      return chinese
+        ? 'Hermes 登录状态已失效，请重新登录。'
+        : 'Your Hermes session has expired. Sign in again.';
+    }
+    if (error.status === 429) {
+      return chinese
+        ? '服务器请求过于频繁，请稍后重试。'
+        : 'The server is receiving too many requests. Try again shortly.';
+    }
+    if (error.status >= 500) {
+      return chinese
+        ? 'Hermes 服务暂时不可用，请稍后重试。'
+        : 'Hermes is temporarily unavailable. Try again shortly.';
+    }
+  }
   if (error instanceof Error && error.message) {
     return chinese ? `服务器操作失败：${error.message}` : `Server operation failed: ${error.message}`;
   }
@@ -2035,6 +2086,11 @@ function UnifiedMessage({
     multiplyAlpha(tokens.colors.foreground, 0.055),
     tokens.colors.border,
   );
+  const metadataNode = metadata ? (
+    <Text numberOfLines={1} style={[styles.messageTime, { color: tokens.colors.textTertiary }]}>
+      {metadata}
+    </Text>
+  ) : null;
   return (
     <Reanimated.View
       entering={FadeInUp
@@ -2056,17 +2112,14 @@ function UnifiedMessage({
         <MessageAvatar isUser={isUser} message={message} />
         <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
           <View style={[styles.messageMeta, isUser && styles.userMessageMeta]}>
+            {isUser ? metadataNode : null}
             <View style={[styles.senderMeta, isUser && styles.userSenderMeta]}>
               <Text numberOfLines={1} style={[styles.messageName, { color: tokens.colors.textSecondary }]}>{message.name}</Text>
               {!isUser && message.roleStage !== 'chat' ? (
                 <Text numberOfLines={1} style={[styles.roleLabel, { color: tokens.colors.textTertiary }]}>{message.roleLabel}</Text>
               ) : null}
             </View>
-            {metadata ? (
-              <Text numberOfLines={1} style={[styles.messageTime, { color: tokens.colors.textTertiary }]}>
-                {metadata}
-              </Text>
-            ) : null}
+            {!isUser ? metadataNode : null}
           </View>
           {!isUser && runtime ? (
             <Text numberOfLines={2} style={[styles.runtimeModel, { color: tokens.colors.textTertiary }]}>
@@ -2780,10 +2833,10 @@ const styles = StyleSheet.create({
   roleAvatarBadgeFallback: { color: '#FFFFFF', fontFamily: BODY_BOLD, fontSize: 6, lineHeight: 8 },
   messageStack: { alignItems: 'flex-start', flexShrink: 1, maxWidth: '88%', minWidth: 0 },
   userMessageStack: { alignItems: 'flex-end', maxWidth: '82%' },
-  messageMeta: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'space-between', marginBottom: 3, marginHorizontal: 3, minHeight: 16, width: '100%' },
-  userMessageMeta: { flexDirection: 'row-reverse' },
+  messageMeta: { alignItems: 'center', flexDirection: 'row', gap: 5, marginBottom: 3, marginHorizontal: 3, minHeight: 16 },
+  userMessageMeta: { alignSelf: 'flex-end' },
   senderMeta: { alignItems: 'center', flexDirection: 'row', flexShrink: 1, gap: 5 },
-  userSenderMeta: { flexDirection: 'row-reverse' },
+  userSenderMeta: { flexShrink: 0 },
   messageName: { flexShrink: 1, fontFamily: BODY_BOLD, fontSize: 11, lineHeight: 15 },
   roleLabel: { flexShrink: 1, fontFamily: BODY_SEMIBOLD, fontSize: 9, lineHeight: 13 },
   messageTime: { flexShrink: 0, fontFamily: BODY_REGULAR, fontSize: 8.5, lineHeight: 12 },
@@ -2795,7 +2848,7 @@ const styles = StyleSheet.create({
   pendingDot: { backgroundColor: '#0d7164', borderRadius: 3, height: 5, width: 5 },
   activityGroup: { maxWidth: 720, width: '100%' },
   activitySummary: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 27, paddingHorizontal: 2, paddingVertical: 4 },
-  activityTitle: { flex: 1, fontFamily: BODY_REGULAR, fontSize: 11, lineHeight: 15 },
+  activityTitle: { flexShrink: 1, fontFamily: BODY_REGULAR, fontSize: 11, lineHeight: 15 },
   activityDivider: { height: StyleSheet.hairlineWidth, marginBottom: 7, marginTop: 6, width: '100%' },
   activityTimeline: { gap: 6, paddingBottom: 2, paddingHorizontal: 2 },
   activityCard: { borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },

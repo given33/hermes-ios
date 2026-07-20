@@ -505,7 +505,13 @@ export function NativeShell({
       >
         <View style={styles.body}>
         {state.mode === 'split' ? (
-          <Reanimated.View style={[styles.splitSidebar, drawerWidthStyle]}>
+          <Reanimated.View
+            style={[
+              styles.splitSidebar,
+              { backgroundColor: sidebarBackground },
+              drawerWidthStyle,
+            ]}
+          >
             {useSwiftUISidebar ? (
               <HermesSwiftUISidebarView
                 {...swiftUIThemeProps}
@@ -725,7 +731,14 @@ function CompactDrawerFrame({
       open={open}
       overlayAccessibilityLabel={locale === 'zh' ? '关闭导航' : 'Close navigation'}
       overlayStyle={{ backgroundColor: SHELL_METRICS.overlayColor }}
-      renderDrawerContent={() => drawerContent}
+      renderDrawerContent={() => (
+        <View
+          collapsable={false}
+          style={[styles.compactDrawerSurface, { backgroundColor }]}
+        >
+          {drawerContent}
+        </View>
+      )}
       style={styles.compactDrawer}
       swipeEdgeWidth={28}
       swipeEnabled={swipeEnabled}
@@ -1288,6 +1301,10 @@ const styles = StyleSheet.create({
   },
   compactDrawer: {
     flex: 1,
+  },
+  compactDrawerSurface: {
+    flex: 1,
+    minHeight: 0,
   },
   swiftUISidebar: {
     flex: 1,

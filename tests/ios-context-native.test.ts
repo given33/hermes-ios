@@ -250,8 +250,11 @@ test('weather map stays a flat standard vector map with native gestures and user
   assert.match(source, /requestPreciseAuthorization\(\)/);
   assert.match(source, /requestCurrent\(\)/);
   assert.match(source, /centerOnUser\(animated: true\)/);
+  assert.match(source, /centerOnNextUserLocation = true/);
+  assert.match(source, /didUpdate userLocation[\s\S]*!hasCenteredOnUser \|\| centerOnNextUserLocation/);
   assert.match(source, /isPitchEnabled = false/);
-  assert.match(source, /showsUserLocation = true/);
+  assert.match(source, /var showsUserLocation = false/);
+  assert.match(source, /mapView\.showsUserLocation = showsUserLocation/);
   assert.match(source, /MKPolyline/);
   assert.doesNotMatch(source, /satellite|hybrid|search/i);
 });
@@ -328,8 +331,8 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /_relay_owner_scope: ownerScope/);
   assert.match(provider, /setOwnerScope\(ownerScope\)/);
   assert.match(provider, /setPermissionCollectionReady\(ownerScope, false\)/);
-  assert.match(provider, /authorization\.phase === 'ready'/);
-  assert.match(provider, /permissionSnapshotRef\.current\.phase !== 'ready'/);
+  assert.match(provider, /canStartIOSCollection\(authorization\)/);
+  assert.match(provider, /!canStartIOSCollection\(permissionSnapshotRef\.current\)/);
   assert.match(provider, /permissionSettingsOpenedRef\.current = true/);
   assert.match(provider, /permissionSettingsOpenedRef\.current = false/);
   assert.match(provider, /clearIOSPermissionRun\(ownerScope\)/);
@@ -396,9 +399,14 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /expires === null && starts === null/);
   assert.match(source, /smart-weather-stale-banner/);
   assert.match(source, /setSnapshot\(EMPTY\)/);
-  // 30s poll must not toast on every identical failure while the stale banner is up.
-  assert.match(source, /lastNotifiedErrorRef/);
-  assert.match(source, /lastNotifiedErrorRef\.current !== message/);
+  // Route readiness is one-shot and must not be a reload dependency: the
+  // parent supplies an inline callback, which previously caused a 429 loop.
+  assert.match(source, /readyReportedRef\.current/);
+  assert.match(source, /reloadInFlightRef\.current/);
+  assert.match(source, /nextAutomaticReloadAtRef\.current/);
+  assert.match(source, /\}, \[api, locale, reportReady\]\)/);
+  assert.doesNotMatch(source, /\[api, locale, notify, onReady\]/);
+  assert.doesNotMatch(source, /notify\(message\)/);
   assert.match(source, /reloadGenerationRef/);
   assert.match(source, /requestedDay !== dayKey\(new Date\(\)\)/);
   assert.doesNotMatch(source, /now \+ 6 \* 60 \* 60 \* 1000/);
@@ -407,6 +415,8 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /smart-weather-map-error/);
   assert.match(source, /smart-weather-permission-status/);
   assert.match(source, /centerOnUserRequest=\{centerRequest\}/);
+  assert.match(source, /smartWeatherLoadErrorMessage/);
+  assert.doesNotMatch(source, /statusOverlay/);
   assert.match(source, /permissionBanner: \{[\s\S]*alignItems: 'stretch'/);
   assert.match(source, /permissionActions: \{[\s\S]*flexWrap: 'wrap'/);
 });

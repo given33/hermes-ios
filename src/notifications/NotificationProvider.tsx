@@ -29,6 +29,7 @@ import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
 import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
 import {
   canCollectIOSPermission,
+  canStartIOSCollection,
   ensureIOSPermissions,
 } from '../context/ios-permission-coordinator';
 
@@ -122,7 +123,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
         if (coordinated) {
           await HermesIOSContext.setPermissionCollectionReady(
             ownerScope,
-            coordinated.phase === 'ready',
+            canStartIOSCollection(coordinated),
           );
         }
         const result = await synchronizeApnsRegistration(

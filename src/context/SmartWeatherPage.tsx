@@ -32,6 +32,10 @@ import {
   normalizeTimestamp,
   timestampOverlapsLocalDay,
 } from './smart-weather-day';
+import {
+  smartWeatherLoadErrorMessage,
+  smartWeatherRetryDelayMs,
+} from './smart-weather-load';
 import { useIOSPermissionCoordinator } from './IOSContextProvider';
 
 interface SmartWeatherPageProps {
@@ -48,34 +52,43 @@ const EMPTY: IOSIntelligenceSnapshot = {
   places: [],
 };
 
-export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeatherPageProps) {
+export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPageProps) {
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
   const api = useMemo(() => client ? new IOSIntelligenceApi(client) : null, [client]);
   const [snapshot, setSnapshot] = useState<IOSIntelligenceSnapshot>(EMPTY);
   const [currentDayKey, setCurrentDayKey] = useState(() => dayKey(new Date()));
-  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [snapshotStale, setSnapshotStale] = useState(false);
   const [mapError, setMapError] = useState('');
   const [mapAttempt, setMapAttempt] = useState(0);
   const [centerRequest, setCenterRequest] = useState(0);
-  // Toast only on the first continuous failure (or when the message changes)
-  // so the 30s poll does not spam the commercial surface.
-  const lastNotifiedErrorRef = useRef('');
   const reloadGenerationRef = useRef(0);
+  const reloadInFlightRef = useRef(false);
+  const nextAutomaticReloadAtRef = useRef(0);
+  const onReadyRef = useRef(onReady);
+  const readyReportedRef = useRef(false);
   const permissions = useIOSPermissionCoordinator();
+  onReadyRef.current = onReady;
 
-  const reload = useCallback(async () => {
+  const reportReady = useCallback(() => {
+    if (readyReportedRef.current) return;
+    readyReportedRef.current = true;
+    onReadyRef.current?.();
+  }, []);
+
+  const reload = useCallback(async (manual = false) => {
+    if (reloadInFlightRef.current) return;
+    if (!manual && Date.now() < nextAutomaticReloadAtRef.current) return;
+    reloadInFlightRef.current = true;
     const generation = ++reloadGenerationRef.current;
     const requestedDay = dayKey(new Date());
     if (!api) {
-      setLoading(false);
       setLoadError(locale === 'zh' ? '尚未连接 Hermes 服务' : 'Hermes is not connected');
-      onReady?.();
+      reloadInFlightRef.current = false;
+      reportReady();
       return;
     }
-    setLoading(true);
     try {
       const next = await api.snapshot();
       if (
@@ -85,15 +98,13 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
       setSnapshot(next);
       setLoadError('');
       setSnapshotStale(false);
-      lastNotifiedErrorRef.current = '';
+      nextAutomaticReloadAtRef.current = 0;
     } catch (error) {
       if (
         generation !== reloadGenerationRef.current
         || requestedDay !== dayKey(new Date())
       ) return;
-      const message = error instanceof Error
-        ? error.message
-        : (locale === 'zh' ? '智能天气加载失败' : 'Smart Weather failed to load');
+      const message = smartWeatherLoadErrorMessage(error, locale);
       // Keep last-good data only when we already had a successful snapshot;
       // mark it stale so the UI never presents failed reloads as live weather.
       setSnapshot((previous) => {
@@ -105,21 +116,18 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
         return EMPTY;
       });
       setLoadError(message);
-      if (lastNotifiedErrorRef.current !== message) {
-        lastNotifiedErrorRef.current = message;
-        notify(message);
-      }
+      nextAutomaticReloadAtRef.current = Date.now() + smartWeatherRetryDelayMs(error);
     } finally {
       if (generation === reloadGenerationRef.current) {
-        setLoading(false);
-        onReady?.();
+        reportReady();
       }
+      reloadInFlightRef.current = false;
     }
-  }, [api, locale, notify, onReady]);
+  }, [api, locale, reportReady]);
 
   useEffect(() => {
-    void reload();
-    const timer = setInterval(() => { void reload(); }, 30_000);
+    void reload(false);
+    const timer = setInterval(() => { void reload(false); }, 30_000);
     return () => {
       reloadGenerationRef.current += 1;
       clearInterval(timer);
@@ -136,7 +144,7 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
         // immediately reloads so yesterday's forecasts do not linger.
         setSnapshot(EMPTY);
         setSnapshotStale(false);
-        void reload();
+        void reload(false);
         return next;
       });
     }, 30_000);
@@ -188,6 +196,7 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
   const locationState = permissions.snapshot.permissions.location;
   const locationMessage = permissionMessage(
     permissions.snapshot.phase,
+    permissions.snapshot.current,
     locationState,
     permissions.snapshot.locationAlways,
     permissions.snapshot.locationPrecise,
@@ -197,7 +206,7 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
     setMapError('');
     setMapAttempt((value) => value + 1);
     permissions.retry();
-    void reload();
+    void reload(true);
   }, [permissions, reload]);
   const mapUnavailableMessage = mapError || (!hasNativeStandardMapView
     ? (locale === 'zh'
@@ -233,7 +242,10 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
               centerOnUserRequest={centerRequest}
               onLocationPress={() => {
                 setCenterRequest((value) => value + 1);
-                permissions.retry();
+                if (
+                  permissions.snapshot.phase !== 'requesting'
+                  && (locationState === 'notDetermined' || locationState === 'limited')
+                ) permissions.retry();
               }}
               places={places}
               showsUserLocation={locationState === 'authorized' || locationState === 'limited'}
@@ -243,92 +255,67 @@ export function SmartWeatherPage({ client, locale, notify, onReady }: SmartWeath
           </NativeMapErrorBoundary>
         )}
 
-        {loading && snapshot.date === '' ? (
-          <View style={[styles.statusOverlay, { backgroundColor: tokens.colors.background }]}>
-            <ScreenState
-              kind="loading"
-              message={locale === 'zh' ? '正在加载智能天气' : 'Loading Smart Weather'}
-              testID="smart-weather-loading"
-            />
-          </View>
-        ) : null}
-
-        {!loading && loadError && !snapshotStale ? (
-          <View style={[styles.statusOverlay, { backgroundColor: tokens.colors.background }]}>
-            <ScreenState
-              kind="error"
-              message={loadError}
-              onRetry={reload}
-              retryLabel={locale === 'zh' ? '重新加载' : 'Reload'}
-              testID="smart-weather-load-error"
-            />
-          </View>
-        ) : null}
-
-        {snapshotStale && loadError ? (
-          <View
-            style={[
-              styles.permissionBanner,
-              {
-                backgroundColor: tokens.colors.background,
-                borderColor: tokens.colors.border,
-                top: insets.top + (locationMessage ? 112 : 12),
-              },
-            ]}
-            testID="smart-weather-stale-banner"
-          >
-            <Text style={[styles.permissionText, { color: secondary }]}>
-              {locale === 'zh'
-                ? `数据可能已过期：${loadError}`
-                : `Showing last-known data (stale): ${loadError}`}
-            </Text>
-            <NativeButton
-              accessibilityLabel={locale === 'zh' ? '重新加载' : 'Reload'}
-              onPress={() => { void reload(); }}
-              outlined
-              prefix={<RefreshCw color={foreground} size={15} />}
-              size="sm"
-            >
-              {locale === 'zh' ? '重试' : 'Retry'}
-            </NativeButton>
-          </View>
-        ) : null}
-
-        {locationMessage && !mapUnavailableMessage ? (
-          <View
-            style={[
-              styles.permissionBanner,
-              {
-                backgroundColor: tokens.colors.background,
-                borderColor: tokens.colors.border,
-                top: insets.top + 12,
-              },
-            ]}
-            testID="smart-weather-permission-status"
-          >
-            <Text style={[styles.permissionText, { color: secondary }]}>{locationMessage}</Text>
-            <View style={styles.permissionActions}>
-              <NativeButton
-                accessibilityLabel={locale === 'zh' ? '重试位置权限' : 'Retry location permission'}
-                onPress={retry}
-                outlined
-                prefix={<RefreshCw color={foreground} size={15} />}
-                size="sm"
+        {(locationMessage || loadError) && !mapUnavailableMessage ? (
+          <View style={[styles.bannerStack, { top: insets.top + 12 }]}>
+            {locationMessage ? (
+              <View
+                style={[
+                  styles.permissionBanner,
+                  { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border },
+                ]}
+                testID="smart-weather-permission-status"
               >
-                {locale === 'zh' ? '重试' : 'Retry'}
-              </NativeButton>
-              {(locationState === 'denied' || locationState === 'restricted') ? (
+                <Text style={[styles.permissionText, { color: secondary }]}>{locationMessage}</Text>
+                <View style={styles.permissionActions}>
+                  <NativeButton
+                    accessibilityLabel={locale === 'zh' ? '重试位置权限' : 'Retry location permission'}
+                    onPress={retry}
+                    outlined
+                    prefix={<RefreshCw color={foreground} size={15} />}
+                    size="sm"
+                  >
+                    {locale === 'zh' ? '重试' : 'Retry'}
+                  </NativeButton>
+                  {(locationState === 'denied' || locationState === 'restricted') ? (
+                    <NativeButton
+                      accessibilityLabel={locale === 'zh' ? '打开系统设置' : 'Open system settings'}
+                      onPress={() => { void permissions.openSettings(); }}
+                      outlined
+                      prefix={<Settings color={foreground} size={15} />}
+                      size="sm"
+                    >
+                      {locale === 'zh' ? '设置' : 'Settings'}
+                    </NativeButton>
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
+            {loadError ? (
+              <View
+                style={[
+                  styles.permissionBanner,
+                  { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border },
+                ]}
+                testID={snapshotStale ? 'smart-weather-stale-banner' : 'smart-weather-load-error'}
+              >
+                <Text style={[styles.permissionText, { color: secondary }]}>
+                  {snapshotStale
+                    ? locale === 'zh'
+                      ? `显示上次同步的数据：${loadError}`
+                      : `Showing last-synced data: ${loadError}`
+                    : loadError}
+                </Text>
                 <NativeButton
-                  accessibilityLabel={locale === 'zh' ? '打开系统设置' : 'Open system settings'}
-                  onPress={() => { void permissions.openSettings(); }}
+                  accessibilityLabel={locale === 'zh' ? '重新加载' : 'Reload'}
+                  onPress={() => { void reload(true); }}
                   outlined
-                  prefix={<Settings color={foreground} size={15} />}
+                  prefix={<RefreshCw color={foreground} size={15} />}
                   size="sm"
                 >
-                  {locale === 'zh' ? '设置' : 'Settings'}
+                  {locale === 'zh' ? '重试' : 'Retry'}
                 </NativeButton>
-              ) : null}
-            </View>
+              </View>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -414,14 +401,12 @@ class NativeMapErrorBoundary extends Component<NativeMapErrorBoundaryProps, { fa
 
 function permissionMessage(
   phase: string,
+  current: string | null,
   state: string,
   always: boolean,
   precise: boolean,
   locale: 'en' | 'zh',
 ): string {
-  if (phase === 'requesting' || phase === 'idle') {
-    return locale === 'zh' ? '正在依次确认定位与数据权限' : 'Checking location and data permissions';
-  }
   if (state === 'denied' || state === 'restricted') {
     return locale === 'zh'
       ? '定位权限未开启，当前位置和新轨迹暂不可用。'
@@ -432,11 +417,16 @@ function permissionMessage(
       ? '此设备或安装包不支持定位能力。'
       : 'Location is unavailable on this device or build.';
   }
-  if (state === 'notDetermined' || phase === 'paused') {
+  if (state === 'notDetermined' || (phase === 'paused' && current === 'location')) {
+    if (phase === 'requesting' || phase === 'idle') {
+      return locale === 'zh' ? '正在确认定位权限' : 'Checking location permission';
+    }
     return locale === 'zh'
       ? '定位授权尚未完成，完成系统提示后可重试。'
       : 'Location authorization is unfinished. Complete the system prompt, then retry.';
   }
+  // Once location itself is usable, later HealthKit/EventKit prompts must not
+  // leave the map covered by a generic permission-in-progress banner.
   if (!always || !precise || state === 'limited') {
     return locale === 'zh'
       ? '定位权限受限；请开启“始终”和“精确位置”以恢复完整轨迹。'
@@ -475,26 +465,19 @@ function formatRange(start: number, end: number | null | undefined, locale: 'en'
 
 const styles = StyleSheet.create({
   root: { flex: 1, overflow: 'hidden' },
-  statusOverlay: {
-    alignItems: 'center',
-    bottom: '38%',
-    justifyContent: 'center',
+  bannerStack: {
+    gap: 8,
     left: 0,
-    opacity: 0.96,
     position: 'absolute',
     right: 0,
-    top: 0,
   },
   permissionBanner: {
     alignItems: 'stretch',
     borderWidth: StyleSheet.hairlineWidth,
     gap: 10,
-    left: 12,
+    marginHorizontal: 12,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    position: 'absolute',
-    right: 12,
-    top: 12,
   },
   permissionText: { fontSize: 12, lineHeight: 17 },
   permissionActions: { alignSelf: 'flex-end', flexDirection: 'row', flexWrap: 'wrap', gap: 7 },

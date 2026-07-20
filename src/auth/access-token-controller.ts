@@ -4,7 +4,7 @@ import type {
 } from '../api/HermesApiClient';
 import type { SavedConnection } from './credential-contract';
 import type { SessionTokenWriter } from './credential-store';
-import type { MobileAuthSession } from './mobile-auth';
+import { MobileAuthApiError, type MobileAuthSession } from './mobile-auth';
 
 export interface AccessTokenControllerDependencies {
   store: SessionTokenWriter;
@@ -19,6 +19,9 @@ export class AccessTokenController implements HermesAccessTokenProvider {
   private refreshToken: string;
   private expiresAt: number;
   private refreshInFlight: Promise<string> | null = null;
+  private refreshBlockedUntil = 0;
+  private refreshFailure: unknown = null;
+  private refreshFailureCount = 0;
   private disposed = false;
   private readonly now: () => number;
   private readonly refreshLeewaySeconds: number;
@@ -49,6 +52,9 @@ export class AccessTokenController implements HermesAccessTokenProvider {
     }
     const expiresSoon = this.expiresAt <= this.now() + this.refreshLeewaySeconds;
     if (!request.forceRefresh && !expiresSoon) return this.accessToken;
+    if (this.refreshFailure !== null && this.now() < this.refreshBlockedUntil) {
+      throw this.refreshFailure;
+    }
     return this.refreshAccessToken();
   }
 
@@ -68,21 +74,44 @@ export class AccessTokenController implements HermesAccessTokenProvider {
   }
 
   private async performRefresh(): Promise<string> {
-    const session = await this.dependencies.refresh(this.refreshToken);
-    if (this.disposed) throw new Error('Hermes session is no longer active');
-    if (session.expiresAt <= this.now()) {
-      throw new Error('Hermes returned an expired access token');
+    try {
+      const session = await this.dependencies.refresh(this.refreshToken);
+      if (this.disposed) throw new Error('Hermes session is no longer active');
+      if (session.expiresAt <= this.now()) {
+        throw new Error('Hermes returned an expired access token');
+      }
+      await this.dependencies.store.saveSessionTokens(
+        session.accessToken,
+        session.refreshToken,
+        session.expiresAt,
+      );
+      if (this.disposed) throw new Error('Hermes session is no longer active');
+      this.accessToken = session.accessToken;
+      this.refreshToken = session.refreshToken;
+      this.expiresAt = session.expiresAt;
+      this.refreshBlockedUntil = 0;
+      this.refreshFailure = null;
+      this.refreshFailureCount = 0;
+      this.dependencies.onSessionRefreshed?.(session);
+      return this.accessToken;
+    } catch (error) {
+      if (!this.disposed) {
+        this.refreshFailureCount += 1;
+        this.refreshBlockedUntil = this.now() + refreshBackoffSeconds(
+          error,
+          this.refreshFailureCount,
+        );
+        this.refreshFailure = error;
+      }
+      throw error;
     }
-    await this.dependencies.store.saveSessionTokens(
-      session.accessToken,
-      session.refreshToken,
-      session.expiresAt,
-    );
-    if (this.disposed) throw new Error('Hermes session is no longer active');
-    this.accessToken = session.accessToken;
-    this.refreshToken = session.refreshToken;
-    this.expiresAt = session.expiresAt;
-    this.dependencies.onSessionRefreshed?.(session);
-    return this.accessToken;
   }
+}
+
+function refreshBackoffSeconds(error: unknown, attempt: number): number {
+  const status = error instanceof MobileAuthApiError ? error.status : null;
+  const exponent = Math.min(Math.max(attempt - 1, 0), 3);
+  if (status === 429) return Math.min(5 * 60, 60 * (2 ** exponent));
+  if (status !== null && status >= 500) return Math.min(60, 15 * (2 ** exponent));
+  return Math.min(30, 5 * (2 ** exponent));
 }

@@ -293,6 +293,25 @@ test('authentication errors redact submitted secrets and reject redirected origi
   assert.equal(status.accountConfigured, true);
 });
 
+test('authentication gateway HTML is reduced to a bounded status error', async () => {
+  const client = new MobileAuthApiClient('https://hermes.test', async (input) => {
+    const response = new Response(
+      '<html><head><title>429 Too Many Requests</title></head><body><h1>nginx</h1></body></html>',
+      { status: 429, statusText: 'Too Many Requests' },
+    );
+    Object.defineProperty(response, 'url', { configurable: true, value: String(input) });
+    return response;
+  });
+
+  await assert.rejects(client.getStatus(), (error: unknown) => {
+    assert.ok(error instanceof MobileAuthApiError);
+    assert.equal(error.status, 429);
+    assert.match(error.message, /Too Many Requests/);
+    assert.doesNotMatch(error.message, /<html>|<h1>|nginx/i);
+    return true;
+  });
+});
+
 test('token pairs rotate once across concurrent requests near expiry', async () => {
   let refreshCalls = 0;
   const refreshedSessions: MobileAuthSession[] = [];
@@ -396,6 +415,33 @@ test('a 401 refresh is single-flight and stale 401 responses reuse the rotated t
 
   now = 1_100;
   assert.equal(await controller.getAccessToken(), 'access-3');
+  assert.equal(refreshCalls, 2);
+});
+
+test('a failed 429 token refresh opens a local cooldown instead of retrying per API call', async () => {
+  let now = 100;
+  let refreshCalls = 0;
+  const rateLimit = new MobileAuthApiError(429, 'Too Many Requests');
+  const controller = new AccessTokenController(
+    { ...initialConnection, expiresAt: 1 },
+    {
+      now: () => now,
+      store: { async saveSessionTokens() {} },
+      async refresh() {
+        refreshCalls += 1;
+        throw rateLimit;
+      },
+    },
+  );
+
+  await assert.rejects(controller.getAccessToken(), (error) => error === rateLimit);
+  await assert.rejects(controller.getAccessToken(), (error) => error === rateLimit);
+  now = 159;
+  await assert.rejects(controller.getAccessToken({ forceRefresh: true }), (error) => error === rateLimit);
+  assert.equal(refreshCalls, 1);
+
+  now = 160;
+  await assert.rejects(controller.getAccessToken(), (error) => error === rateLimit);
   assert.equal(refreshCalls, 2);
 });
 

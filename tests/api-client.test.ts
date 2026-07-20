@@ -302,6 +302,26 @@ test('non-2xx errors expose status but redact keys, headers, and echoed secrets'
   });
 });
 
+test('gateway HTML is never exposed through Hermes API errors', async () => {
+  const html = '<html><head><title>502 Bad Gateway</title></head><body><h1>nginx</h1></body></html>';
+  const client = new HermesApiClient('https://hermes.test', 'mobile-secret', async () => {
+    const response = new Response(html, {
+      headers: { 'Content-Type': 'text/html' },
+      status: 502,
+      statusText: 'Bad Gateway',
+    });
+    return withResponseUrl(response, 'https://hermes.test/api/status');
+  });
+
+  await assert.rejects(client.request('/api/status'), (error: unknown) => {
+    assert.ok(error instanceof HermesApiError);
+    assert.equal(error.status, 502);
+    assert.match(error.message, /Bad Gateway/);
+    assert.doesNotMatch(error.message, /<html>|<h1>|nginx/i);
+    return true;
+  });
+});
+
 test('error redaction covers URLSearchParams space and tilde encoding', async () => {
   for (const { accessToken, echoed } of [
     { accessToken: 'mobile secret', echoed: 'mobile+secret' },

@@ -336,7 +336,10 @@ function safeResponseDetail(
           .find((value): value is string => typeof value === 'string');
       }
     } catch {
-      detail = body;
+      // nginx and other gateways may answer authentication endpoints with a
+      // complete HTML error page. It is not actionable UI copy and must never
+      // leak into a native error surface.
+      if (!looksLikeMarkup(body)) detail = body;
     }
   }
   detail = detail ?? (statusText || undefined);
@@ -347,6 +350,10 @@ function safeResponseDetail(
     }
   }
   return detail.slice(0, 240);
+}
+
+function looksLikeMarkup(value: string): boolean {
+  return /<\s*(?:!doctype|html|head|body|title|center|h1|hr)\b/i.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

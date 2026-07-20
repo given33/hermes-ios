@@ -250,12 +250,19 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /queuedItem = await deliverPendingEnqueue\(queuedItem\);/,
+    /const delivery = await deliverPendingEnqueue\(queuedItem\);\s*queuedItem = delivery\.item;/,
   );
-  assert.match(chat, /hostedAccepted = true;\s*clearQueuedComposer\(\);/);
   assert.match(
     chat,
-    /else if \(!hostedAccepted\) \{[\s\S]{0,320}\.\.\.userMessage,[\s\S]{0,80}status: 'failed'/,
+    /enqueueAcknowledged = true;\s*hostedAccepted = delivery\.response\.accepted;/,
+  );
+  assert.match(
+    chat,
+    /if \(hostedAccepted\) \{[\s\S]{0,320}setHostedRunning\(true\);[\s\S]{0,240}else \{[\s\S]{0,200}setHostedRunning\(false\);/,
+  );
+  assert.match(
+    chat,
+    /else if \(!enqueueAcknowledged\) \{[\s\S]{0,320}\.\.\.userMessage,[\s\S]{0,80}status: 'failed'/,
   );
   assert.doesNotMatch(chat, /<HermesLiquidGlassView/);
   assert.match(chat, /require\('\.\.\/\.\.\/assets\/icon\.png'\)/);

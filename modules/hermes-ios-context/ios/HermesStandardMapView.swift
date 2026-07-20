@@ -25,8 +25,10 @@ final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
   private var trackOverlay: MKPolyline?
   private var accuracyOverlay: MKCircle?
   private var placeAnnotations: [HermesPlaceAnnotation] = []
+  private var hasCenteredOnUser = false
+  private var centerOnNextUserLocation = true
 
-  var showsUserLocation = true {
+  var showsUserLocation = false {
     didSet { mapView.showsUserLocation = showsUserLocation }
   }
 
@@ -53,7 +55,10 @@ final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
     configuration.showsTraffic = false
     mapView.preferredConfiguration = configuration
     mapView.delegate = self
-    mapView.showsUserLocation = true
+    // The shared permission coordinator owns the system sheet. Starting
+    // MapKit location before its React prop is authorized can race a second
+    // CLLocationManager prompt during first launch.
+    mapView.showsUserLocation = false
     mapView.showsCompass = true
     mapView.showsScale = true
     mapView.showsBuildings = false
@@ -93,6 +98,7 @@ final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
   }
 
   @objc private func refreshCurrentLocation() {
+    centerOnNextUserLocation = true
     onLocationPress([:])
     Task { @MainActor [weak self] in
       guard let self else { return }
@@ -103,13 +109,19 @@ final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
   }
 
   private func centerOnUser(animated: Bool) {
-    guard let location = mapView.userLocation.location else { return }
+    guard let location = mapView.userLocation.location,
+          location.horizontalAccuracy >= 0 else {
+      centerOnNextUserLocation = true
+      return
+    }
     let region = MKCoordinateRegion(
       center: location.coordinate,
       latitudinalMeters: 900,
       longitudinalMeters: 900
     )
     mapView.setRegion(region, animated: animated)
+    hasCenteredOnUser = true
+    centerOnNextUserLocation = false
   }
 
   private func renderTrack() {
@@ -155,6 +167,9 @@ final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
     let circle = MKCircle(center: location.coordinate, radius: location.horizontalAccuracy)
     accuracyOverlay = circle
     mapView.addOverlay(circle, level: .aboveRoads)
+    if !hasCenteredOnUser || centerOnNextUserLocation {
+      centerOnUser(animated: hasCenteredOnUser)
+    }
   }
 
   func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
