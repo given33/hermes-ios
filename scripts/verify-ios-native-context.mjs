@@ -23,6 +23,7 @@ function verifySource(projectRoot) {
   const moduleRoot = join(projectRoot, 'modules', 'hermes-ios-context');
   const config = parseJSON(join(moduleRoot, 'expo-module.config.json'));
   requireIncludes(config.apple?.modules, 'HermesIOSContextModule', 'Expo module registration');
+  requireIncludes(config.apple?.modules, 'HermesStandardMapModule', 'Expo map module registration');
   requireIncludes(
     config.apple?.appDelegateSubscribers,
     'HermesIOSContextAppDelegateSubscriber',
@@ -34,8 +35,12 @@ function verifySource(projectRoot) {
   requireMatch(podspec, /s\.source_files\s*=\s*['"]\*\*\/\*\.\{h,m,mm,swift\}['"]/, 'Swift source discovery');
 
   const nativeModule = read(join(moduleRoot, 'ios', 'HermesIOSContextModule.swift'));
+  const mapModule = read(join(moduleRoot, 'ios', 'HermesStandardMapModule.swift'));
   requireMatch(nativeModule, /Function\("getNativeViewContract"\)/, 'native view build contract');
-  requireMatch(nativeModule, /View\(HermesStandardMapView\.self\)/, 'standard map view definition');
+  requireMatch(mapModule, /Name\("HermesStandardMap"\)/, 'standard map module name');
+  requireMatch(mapModule, /Function\("getRegistrationContract"\)/, 'standard map runtime contract');
+  requireMatch(mapModule, /View\(HermesStandardMapView\.self\)/, 'standard map default view definition');
+  requireNoMatch(nativeModule, /View\(HermesStandardMapView\.self\)/, 'named map view in context module');
   requireMatch(nativeModule, /View\(HermesScreenTimeReportView\.self\)/, 'screen time view definition');
   read(join(moduleRoot, 'ios', 'HermesStandardMapView.swift'));
   read(join(moduleRoot, 'ios', 'HermesScreenTimeReportView.swift'));
@@ -44,10 +49,34 @@ function verifySource(projectRoot) {
   const bridge = read(join(moduleRoot, 'index.ts'));
   requireMatch(
     bridge,
-    /requireNativeView<P>\('HermesIOSContext', viewName\)/,
-    'two-argument Expo requireNativeView contract',
+    /requireOptionalNativeModule\('HermesStandardMap'\)/,
+    'standard map native module lookup',
   );
+  requireMatch(bridge, /NativeUnimoduleProxy\?\.viewManagersMetadata/, 'native view metadata gate');
+  requireMatch(bridge, /getViewConfig/, 'Expo runtime view config gate');
+  requireMatch(bridge, /requireNativeView<P>\(registeredModuleName\)/, 'default native map view');
   requireMatch(bridge, /getNativeViewContract/, 'old-build native view guard');
+
+  const provider = read(join(projectRoot, 'src', 'context', 'IOSContextProvider.tsx'));
+  requireMatch(provider, /await ensureIOSPermissions\(/, 'OS permission coordination');
+  requireMatch(
+    provider,
+    /if \(canCollectIOSPermission\(authorization, 'location'\)\) \{\s*await HermesIOSContext\.startAdaptiveLocation\(\)/,
+    'authorized location collector startup',
+  );
+  requireMatch(
+    provider,
+    /if \(canCollectIOSPermission\(authorization, 'motion'\)\) \{\s*await HermesIOSContext\.startMotionUpdates\(\)/,
+    'authorized motion collector startup',
+  );
+  const locationService = read(join(moduleRoot, 'ios', 'HermesLocationService.swift'));
+  requireMatch(locationService, /guard HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner/, 'native permission gate');
+  requireMatch(locationService, /guard status == \.authorizedAlways/, 'native Always authorization gate');
+
+  const controlsRoot = join(projectRoot, 'modules', 'hermes-ios-controls', 'ios');
+  const controlsPodspec = read(join(controlsRoot, 'HermesIOSControls.podspec'));
+  requireMatch(controlsPodspec, /s\.exclude_files[\s\S]*HermesSwiftUIAdminPages\.swift[\s\S]*HermesSwiftUIAutomationPages\.swift/, 'legacy fixture source exclusion');
+  read(join(controlsRoot, 'HermesSwiftUIDocsPage.swift'));
 }
 
 function verifyPods(iosDirectory) {
@@ -60,6 +89,7 @@ function verifyPods(iosDirectory) {
   if (!providers.length) fail('Generated ExpoModulesProvider.swift was not found after pod install.');
   const providerSource = providers.map(read).join('\n');
   requireMatch(providerSource, /HermesIOSContextModule\.self/, 'generated Expo module provider');
+  requireMatch(providerSource, /HermesStandardMapModule\.self/, 'generated Expo map module provider');
   requireMatch(
     providerSource,
     /HermesIOSContextAppDelegateSubscriber\.self/,
@@ -68,6 +98,7 @@ function verifyPods(iosDirectory) {
 
   const podsProject = read(join(iosDirectory, 'Pods', 'Pods.xcodeproj', 'project.pbxproj'));
   requireMatch(podsProject, /HermesIOSContextModule\.swift/, 'Pods project native module source');
+  requireMatch(podsProject, /HermesStandardMapModule\.swift/, 'Pods project map module source');
   requireMatch(podsProject, /HermesStandardMapView\.swift/, 'Pods project standard map source');
   requireMatch(podsProject, /HermesScreenTimeReportView\.swift/, 'Pods project Screen Time view source');
   requireMatch(
@@ -75,6 +106,9 @@ function verifyPods(iosDirectory) {
     /HermesPermissionCollectionGate\.swift/,
     'Pods project permission collection gate source',
   );
+  requireMatch(podsProject, /HermesSwiftUIDocsPage\.swift/, 'Pods project live documentation source');
+  requireNoMatch(podsProject, /HermesSwiftUIAdminPages\.swift/, 'legacy native admin fixtures');
+  requireNoMatch(podsProject, /HermesSwiftUIAutomationPages\.swift/, 'legacy native automation fixtures');
 }
 
 function verifyCompiledObjects(derivedRoot) {
@@ -84,12 +118,17 @@ function verifyCompiledObjects(derivedRoot) {
   ));
   if (!buildDirectories.length) fail('HermesIOSContext build intermediates were not produced.');
   const buildFiles = buildDirectories.flatMap((directory) => findFiles(directory, () => true));
-  const evidence = buildFiles.some((path) => /HermesStandardMapView\.(?:o|d|swiftdeps)$/i.test(path))
+  const mapViewEvidence = buildFiles.some((path) => /HermesStandardMapView\.(?:o|d|swiftdeps)$/i.test(path))
     || buildFiles.some((path) => {
       if (!/(?:output-file-map\.json|HermesIOSContext\.SwiftFileList)$/i.test(path)) return false;
       return read(path).includes('HermesStandardMapView.swift');
     });
-  if (!evidence) {
+  const mapModuleEvidence = buildFiles.some((path) => /HermesStandardMapModule\.(?:o|d|swiftdeps)$/i.test(path))
+    || buildFiles.some((path) => {
+      if (!/(?:output-file-map\.json|HermesIOSContext\.SwiftFileList)$/i.test(path)) return false;
+      return read(path).includes('HermesStandardMapModule.swift');
+    });
+  if (!mapViewEvidence || !mapModuleEvidence) {
     fail('Xcode did not emit compile evidence for HermesStandardMapView.swift.');
   }
 }
@@ -140,6 +179,10 @@ function requireIncludes(value, expected, label) {
 
 function requireMatch(value, pattern, label) {
   if (!pattern.test(value)) fail(`${label} is missing.`);
+}
+
+function requireNoMatch(value, pattern, label) {
+  if (pattern.test(value)) fail(`${label} must be absent.`);
 }
 
 function fail(message) {

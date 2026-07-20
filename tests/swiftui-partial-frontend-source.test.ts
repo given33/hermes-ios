@@ -188,12 +188,16 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(native, /Text\("Hermes Agent"\)\s*\.font\(\.largeTitle\.bold\(\)\)/);
   assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
   assert.match(native, /\.frame\(maxWidth: \.infinity, minHeight: 52, alignment: \.leading\)/);
+  assert.match(nativeSidebar, /ForEach\(HermesRoute\.allCases\.filter\(\\\.visibleInSidebar\)\)/);
+  assert.doesNotMatch(nativeSidebar, /ForEach\(0\.\.<4|sectionTitle|Workspace|Automation|Administration/);
   assert.match(
     native,
     /private func select\(_ route: HermesRoute\) \{\s*dismissHermesKeyboard\(\)\s*feedbackTrigger \+= 1\s*props\.onNavigate\(\["path": route\.path\]\)\s*\}/,
   );
   assert.doesNotMatch(native, /props\.onNavigate\(\["path": route\.path\]\)\s*if isDrawer/);
   assert.doesNotMatch(nativeSidebar, /DragGesture\(minimumDistance: 8/);
+  assert.doesNotMatch(native, /DragGesture\(minimumDistance: 12/);
+  assert.match(shell, /import \{ Drawer \} from 'react-native-drawer-layout'/);
   assert.match(admin, /HermesProfileEditor\([\s\S]*\.onDisappear \{ dismissHermesKeyboard\(\) \}/);
   // Offline admin system catalog must never invent CPU/memory/online metrics.
   assert.match(admin, /struct HermesSystemPage: View/);
@@ -212,15 +216,14 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(native, /props\.onReady\(\["path": path\]\)/);
   assert.match(shell, /useSwiftUISidebar \? \(/);
   assert.match(shell, /<HermesSwiftUISidebarView/);
-  const compactBranchStart = shell.indexOf("{state.mode === 'compact' ? (");
-  const swiftUIBranchStart = shell.indexOf('useSwiftUISidebar ? (', compactBranchStart);
-  const fallbackBranchStart = shell.indexOf(') : (\n        <Fragment>', swiftUIBranchStart);
-  assert.ok(compactBranchStart >= 0 && swiftUIBranchStart > compactBranchStart);
-  assert.ok(fallbackBranchStart > swiftUIBranchStart);
-  assert.doesNotMatch(
-    shell.slice(swiftUIBranchStart, fallbackBranchStart),
-    /overlayStyle|drawerTranslationStyle/,
-  );
+  assert.match(shell, /const compactSidebar = useSwiftUISidebar \? \(/);
+  assert.match(shell, /<CompactDrawerFrame[\s\S]*drawerContent=\{compactSidebar\}/);
+  assert.match(shell, /presentation="embedded"/);
+  assert.match(native, /fillsAvailableWidth/);
+  assert.match(native, /ForEach\(gateways\)/);
+  assert.match(native, /gatewayMeta\(gateway\)/);
+  assert.match(native, /gatewayColor\(gateway\.state\)/);
+  assert.doesNotMatch(shell, /drawerTranslationStyle|swiftUIDrawerHost/);
 });
 
 test('the composer keeps RN controls above a relayout-safe native blur background', () => {

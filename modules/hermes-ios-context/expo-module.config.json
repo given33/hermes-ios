@@ -1,7 +1,7 @@
 {
   "platforms": ["apple"],
   "apple": {
-    "modules": ["HermesIOSContextModule"],
+    "modules": ["HermesIOSContextModule", "HermesStandardMapModule"],
     "appDelegateSubscribers": ["HermesIOSContextAppDelegateSubscriber"]
   }
 }

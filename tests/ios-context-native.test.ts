@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 import {
-  discoverNativeContextView,
+  discoverRegisteredNativeView,
+  isNativeViewRegistered,
   readNativeViewContract,
 } from '../modules/hermes-ios-context/native-view-loader';
 
@@ -428,14 +429,25 @@ test('logout keeps Always location collection; delete stops owner scope', () => 
 
 test('native map registration is verified after pods and after Xcode compilation', () => {
   const module = read('ios/HermesIOSContextModule.swift');
+  const mapModule = read('ios/HermesStandardMapModule.swift');
+  const moduleConfig = JSON.parse(read('expo-module.config.json')) as {
+    apple?: { modules?: string[] };
+  };
   const bridge = readFileSync(resolve(root, 'modules/hermes-ios-context/index.ts'), 'utf8');
   const workflow = readFileSync(resolve(root, '.github/workflows/ios-unsigned.yml'), 'utf8');
   const verifier = readFileSync(resolve(root, 'scripts/verify-ios-native-context.mjs'), 'utf8');
   assert.match(module, /Function\("getNativeViewContract"\)/);
+  assert.ok(moduleConfig.apple?.modules?.includes('HermesStandardMapModule'));
+  assert.match(mapModule, /Name\("HermesStandardMap"\)/);
+  assert.match(mapModule, /Function\("getRegistrationContract"\)/);
+  assert.match(mapModule, /View\(HermesStandardMapView\.self\)/);
+  assert.doesNotMatch(module, /View\(HermesStandardMapView\.self\)/);
   assert.match(bridge, /getNativeViewContract/);
-  assert.match(bridge, /requireNativeView<P>\('HermesIOSContext', viewName\)/);
+  assert.match(bridge, /requireOptionalNativeModule\('HermesStandardMap'\)/);
+  assert.match(bridge, /requireNativeView<P>\(registeredModuleName\)/);
+  assert.match(bridge, /NativeUnimoduleProxy\?\.viewManagersMetadata/);
+  assert.match(bridge, /getViewConfig/);
   assert.match(bridge, /export const hasNativeStandardMapView = NativeMap !== null;/);
-  assert.match(bridge, /Expo's native view registry is authoritative/);
   assert.doesNotMatch(
     bridge,
     /nativeViewContract\.views\.includes\('HermesStandardMapView'\)/,
@@ -447,43 +459,91 @@ test('native map registration is verified after pods and after Xcode compilation
   assert.match(verifier, /HermesStandardMapView\\\.swift/);
 });
 
-test('native map discovery trusts the runtime view registry instead of bootstrap metadata', () => {
+test('native map discovery requires the default Expo view manager and runtime config', () => {
   const registeredMap = { nativeComponent: 'HermesStandardMapView' };
-  const staleModule = {
-    getNativeViewContract: () => ({ version: 1, views: [] }),
+  const mapModule = {};
+  const runtime = {
+    viewManagersMetadata: {
+      HermesStandardMap: { propsNames: ['track', 'places'] },
+    },
+    getViewConfig: (moduleName: string, viewName?: string) => {
+      assert.equal(moduleName, 'HermesStandardMap');
+      assert.equal(viewName, undefined);
+      return { validAttributes: {}, directEventTypes: {} };
+    },
   };
 
-  assert.deepEqual(readNativeViewContract(staleModule), { version: 1, views: [] });
+  assert.equal(isNativeViewRegistered(runtime, 'HermesStandardMap'), true);
   assert.equal(
-    discoverNativeContextView(staleModule, 'HermesStandardMapView', (viewName) => {
-      assert.equal(viewName, 'HermesStandardMapView');
+    discoverRegisteredNativeView(
+      mapModule,
+      runtime,
+      'HermesStandardMap',
+      undefined,
+      (moduleName, viewName) => {
+      assert.equal(moduleName, 'HermesStandardMap');
+      assert.equal(viewName, undefined);
       return registeredMap;
-    }),
+      },
+    ),
     registeredMap,
   );
 });
 
-test('native map discovery fails closed only when the module or registered view is absent', () => {
+test('native view discovery fails closed before Expo can render an unimplemented placeholder', () => {
   let calls = 0;
   assert.equal(
-    discoverNativeContextView(null, 'HermesStandardMapView', () => {
-      calls += 1;
-      return {};
-    }),
+    discoverRegisteredNativeView(
+      null,
+      { viewManagersMetadata: {}, getViewConfig: () => null },
+      'HermesStandardMap',
+      undefined,
+      () => {
+        calls += 1;
+        return {};
+      },
+    ),
     null,
   );
   assert.equal(calls, 0);
 
-  const advertisedModule = {
-    getNativeViewContract: () => ({
-      version: 2,
-      views: ['HermesStandardMapView'],
-    }),
-  };
+  const advertisedModule = {};
   assert.equal(
-    discoverNativeContextView(advertisedModule, 'HermesStandardMapView', () => {
-      throw new Error('view manager is not registered');
-    }),
+    discoverRegisteredNativeView(
+      advertisedModule,
+      { viewManagersMetadata: {}, getViewConfig: () => ({
+        validAttributes: {},
+        directEventTypes: {},
+      }) },
+      'HermesStandardMap',
+      undefined,
+      () => {
+        calls += 1;
+        return {};
+      },
+    ),
+    null,
+  );
+  assert.equal(calls, 0);
+
+  assert.equal(isNativeViewRegistered({
+    viewManagersMetadata: { HermesStandardMap: { propsNames: [] } },
+    getViewConfig: () => null,
+  }, 'HermesStandardMap'), false);
+
+  assert.equal(
+    discoverRegisteredNativeView(
+      advertisedModule,
+      {
+        viewManagersMetadata: { HermesStandardMap: { propsNames: [] } },
+        getViewConfig: () => ({ validAttributes: {}, directEventTypes: {} }),
+      },
+      'HermesStandardMap',
+      undefined,
+      () => {
+        throw new Error('view manager is not registered');
+      },
+    ),
     null,
   );
 });

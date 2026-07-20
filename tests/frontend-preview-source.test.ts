@@ -64,6 +64,11 @@ test('frontend preview renders every customized route and authenticated builds m
 test('manual IPA builds launch the standalone frontend without login', () => {
   const workflow = read('.github/workflows/ios-unsigned.yml');
   const app = read('src/app/HermesNativeApp.tsx');
+  const metro = read('metro.config.js');
+  const productionFixtures = read('src/preview/production-fixtures.ts');
+  const productionRouteStubs = read('src/preview/production-route-stubs.tsx');
+  const productionPreviewLocalization = read('src/i18n/production-preview-localization.ts');
+  const productionVerifier = read('scripts/verify-production-bundle.mjs');
 
   assert.match(workflow, /frontend_preview:/);
   assert.match(workflow, /default: false/);
@@ -71,6 +76,26 @@ test('manual IPA builds launch the standalone frontend without login', () => {
   assert.match(workflow, /inputs\.frontend_preview/);
   assert.match(app, /process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
   assert.doesNotMatch(app, /__DEV__[\s\S]{0,80}EXPO_PUBLIC_FRONTEND_PREVIEW/);
+  assert.match(metro, /EXPO_PUBLIC_FRONTEND_PREVIEW !== '1'/);
+  assert.match(metro, /production-fixtures\.ts/);
+  assert.match(metro, /production-route-stubs\.tsx/);
+  assert.match(metro, /production-preview-localization\.ts/);
+  assert.doesNotMatch(productionFixtures, /ses_|HMS-|Mapped the customized|Deployment is healthy/);
+  assert.doesNotMatch(productionRouteStubs, /v0\.9\.3|HMS-|Workspace backup|Deployment is healthy/);
+  assert.doesNotMatch(productionPreviewLocalization, /HMS-|fixture routes|Gateway deployment|Workspace backup/);
+  assert.match(workflow, /verify-production-bundle\.mjs/);
+  assert.match(productionVerifier, /preview fixture leaked into the production bundle/);
+  for (const marker of [
+    'HMS-142',
+    'Complete frontend fixture routes',
+    'Research digest automation',
+    'Workspace backup',
+    'Tasks Completed',
+    'native-ios',
+    'HERMES AGENT  v0.9.3',
+  ]) {
+    assert.ok(productionVerifier.includes(marker));
+  }
 });
 
 test('Expo Go fallback never replaces the exact blur in signed native builds', () => {
@@ -282,10 +307,11 @@ test('mobile shell remains full bleed and keeps the WebUI sidebar readable witho
 
   assert.match(shell, /const sidebarBackground = rootBackground/);
   assert.match(shell, /backgroundColor: sidebarBackground/);
-  assert.match(shell, /backgroundColor: state\.mobileOpen[\s\S]*\? rootBackground[\s\S]*: 'transparent'/);
+  assert.match(shell, /drawerStyle=\{\{ backgroundColor, width: drawerWidth \}\}/);
+  assert.match(shell, /drawerType="front"/);
   assert.doesNotMatch(app, /accessibilityLabel="Theme and font"|onTheme=/);
   assert.doesNotMatch(shell, /HermesLiveBlurView/);
-  assert.match(shell, /left: drawerExtent/);
+  assert.doesNotMatch(shell, /swiftUIDrawerHost|mobileSidebar|left: drawerExtent/);
   assert.match(chat, /backgroundColor: 'transparent'/);
   assert.match(chat, /drawerBackdrop: \{ backgroundColor: 'rgba\(0,0,0,0\.60\)', right: 256 \}/);
   const contentStart = shell.indexOf('styles.content,');

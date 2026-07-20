@@ -7,8 +7,9 @@ import type {
   SingleConversation,
 } from './HermesCloudApi';
 
-const CACHE_VERSION = 2 as const;
-const CACHE_PREFIX = 'hermes.native.conversations.v2';
+const CACHE_VERSION = 3 as const;
+const CACHE_PREFIX = 'hermes.native.conversations.v3';
+const PREVIOUS_CACHE_PREFIX = 'hermes.native.conversations.v2';
 const LEGACY_CACHE_PREFIX = 'hermes.native.conversations.v1';
 const OUTBOX_VERSION = 1 as const;
 const OUTBOX_PREFIX = 'hermes.native.hosted-turn-outbox.v1';
@@ -70,9 +71,14 @@ export class ConversationLocalStore {
   async read(owner: string): Promise<ConversationCacheSnapshot | null> {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return null;
-    // Do not hydrate the v1 cache. It predates the account-scoped history
-    // contract and can contain process-wide test or Profile sessions. The
-    // cloud account index is the source of truth while the v2 cache rebuilds.
+    // Do not hydrate v1/v2 data. Both schemas were distributed while
+    // development conversations could be claimed by the production account,
+    // so the account-scoped cloud index must rebuild this cache from scratch.
+    await Promise.allSettled([
+      previousCacheKey(normalizedOwner),
+      legacyEncodedCacheKey(normalizedOwner),
+      legacyHashedCacheKey(normalizedOwner),
+    ].map((key) => this.storage.removeItem(key)));
     const raw = await this.storage.getItem(cacheKey(normalizedOwner));
     if (!raw) return null;
     try {
@@ -281,6 +287,7 @@ export class ConversationLocalStore {
       await beforeRemove?.(pendingAttachments);
       await Promise.all([
         cacheKey(normalizedOwner),
+        previousCacheKey(normalizedOwner),
         legacyEncodedCacheKey(normalizedOwner),
         legacyHashedCacheKey(normalizedOwner),
         outboxKey(normalizedOwner),
@@ -473,6 +480,10 @@ function normalizeConversation(value: unknown): SingleConversation[] {
 
 function cacheKey(owner: string): string {
   return `${CACHE_PREFIX}.${ownerStorageKey(owner)}`;
+}
+
+function previousCacheKey(owner: string): string {
+  return `${PREVIOUS_CACHE_PREFIX}.${ownerStorageKey(owner)}`;
 }
 
 function outboxKey(owner: string): string {

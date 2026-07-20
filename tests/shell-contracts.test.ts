@@ -6,6 +6,7 @@ import {
   SHELL_SLOT_ORDER,
   SHELL_SOURCES,
   createNativeShellState,
+  createSidebarRootState,
   reduceNativeShellState,
   resolveMobileDrawerTranslation,
   resolveNativeShellPath,
@@ -106,6 +107,16 @@ test('compact navigation opens, closes, and closes on route selection', () => {
     mobileOpen: false,
   });
   assert.equal(resolveMobileDrawerTranslation(navigated), -256);
+});
+
+test('sidebar selection creates a one-route root with no chat fallback', () => {
+  assert.deepEqual(createSidebarRootState('/files'), {
+    index: 0,
+    routes: [{
+      name: '/files',
+      params: { sidebarSelection: true },
+    }],
+  });
 });
 
 test('sidebar route selection keeps the drawer covering the previous route until ready', () => {

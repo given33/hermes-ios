@@ -40,10 +40,27 @@ test('native extension config declares every V4 companion target', () => {
   assert.doesNotMatch(workflow, /-sdk iphoneos/);
   assert.match(workflow, /expo export --platform ios --output-dir/);
   assert.match(workflow, /verify-native-font-export\.mjs/);
+  assert.match(workflow, /verify-production-bundle\.mjs/);
   assert.match(workflow, /APP_BUILD_NUMBER=/);
+  assert.match(workflow, /ARTIFACT_NAME="Hermes-Agent-build-\$\{APP_BUILD_NUMBER\}-\$\{SHORT_SHA\}"/);
+  assert.match(workflow, /Hermes-Agent-build\.json/);
+  assert.match(workflow, /"frontend_preview":%s/);
+  assert.match(workflow, /name: \$\{\{ steps\.package\.outputs\.artifact_name \}\}/);
   assert.match(workflow, /verify_bundle_version "\$EXTENSION_PATH"/);
   assert.match(workflow, /verify_bundle_version "\$WATCH_APP"/);
   assert.match(workflow, /verify_bundle_version "\$WATCH_EXTENSION"/);
+});
+
+test('signed native controls exclude legacy fixture-only Swift pages', () => {
+  const podspec = read('modules/hermes-ios-controls/ios/HermesIOSControls.podspec');
+  const docs = read('modules/hermes-ios-controls/ios/HermesSwiftUIDocsPage.swift');
+  const verifier = read('scripts/verify-ios-native-context.mjs');
+
+  assert.match(podspec, /s\.exclude_files[\s\S]*HermesSwiftUIAdminPages\.swift[\s\S]*HermesSwiftUIAutomationPages\.swift/);
+  assert.match(docs, /struct HermesDocsPage: View/);
+  assert.doesNotMatch(docs, /Tasks Completed.*128|Workspace backup|native-ios/);
+  assert.match(verifier, /legacy fixture source exclusion/);
+  assert.match(verifier, /legacy native admin fixtures/);
 });
 
 test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inputs', () => {

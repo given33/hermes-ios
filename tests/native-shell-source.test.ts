@@ -16,14 +16,17 @@ test('native shell uses only native surfaces and the canonical route composer', 
   assert.doesNotMatch(source, /WebView|WKWebView|document\.|window\.|localStorage/);
 });
 
-test('phone drawer is button-driven while the iPad rail keeps native motion', () => {
+test('phone drawer uses the UI-thread native gesture while the iPad rail keeps native motion', () => {
   const source = read('src/app/NativeShell.tsx');
   assert.match(source, /IOS_MOTION\.duration\.rail/);
   assert.match(source, /IOS_MOTION\.curve\.navigation/);
-  assert.match(source, /IOS_DRAWER_SPRING/);
+  assert.match(source, /import \{ Drawer \} from 'react-native-drawer-layout'/);
+  assert.match(source, /drawerType="front"/);
+  assert.match(source, /swipeEdgeWidth=\{28\}/);
+  assert.match(source, /swipeMinDistance=\{48\}/);
+  assert.match(source, /direction="ltr"[\s\S]*drawerPosition="left"/);
   assert.match(source, /resolveVisibleSidebarWidth/);
-  assert.match(source, /resolveMobileDrawerTranslation/);
-  assert.doesNotMatch(source, /Gesture\.Pan\(\)|GestureDetector|styles\.openEdge/);
+  assert.doesNotMatch(source, /PanResponder|CompactSidebarReturnSurface|styles\.openEdge/);
   assert.match(source, /onPress=\{openMobile\}/);
   assert.match(source, /onPress=\{closeMobile\}/);
   assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
@@ -98,8 +101,8 @@ test('safe areas and modal accessibility cover phone and tablet shells', () => {
   assert.match(source, /paddingRight: insets\.right/);
   assert.match(source, /paddingBottom: insets\.bottom/);
   assert.match(source, /SHELL_METRICS\.sidebarWidth \+ insets\.left/);
-  assert.match(source, /accessibilityElementsHidden=\{!state\.mobileOpen\}/);
-  assert.match(source, /accessibilityViewIsModal=\{state\.mobileOpen\}/);
+  assert.match(source, /accessibilityElementsHidden=\{\s*state\.mode === 'compact' && state\.mobileOpen/);
+  assert.match(source, /overlayAccessibilityLabel=/);
   assert.match(source, /'no-hide-descendants'/);
 });
 
@@ -131,7 +134,7 @@ test('sidebar uses one opaque safe-area surface, full-width hit targets, and no 
   const routes = read('src/app/route-registry.ts');
 
   assert.match(source, /const sidebarBackground = rootBackground/);
-  assert.match(source, /swiftUIDrawerHost,[\s\S]*backgroundColor: state\.mobileOpen[\s\S]*\? rootBackground[\s\S]*: 'transparent'/);
+  assert.match(source, /drawerStyle=\{\{ backgroundColor, width: drawerWidth \}\}/);
   assert.match(source, /showsVerticalScrollIndicator=\{false\}/);
   assert.match(source, /referenceSidebarRow:[\s\S]*minHeight: 52/);
   assert.match(source, /navItem:[\s\S]*minHeight: 52/);
@@ -157,13 +160,17 @@ test('secondary root pages return to the sidebar while chat retains the menu but
   assert.match(source, /onPress=\{openMobile\}/);
 });
 
-test('sidebar selections keep a root page so the native edge swipe can return', () => {
+test('sidebar selections replace the chat stack and edge gestures reopen the sidebar', () => {
   const source = read('src/app/NativeShell.tsx');
 
   assert.match(source, /const selectSidebarRoute = useCallback/);
-  assert.match(source, /compactNavigationRef\.dispatch\(StackActions\.popToTop\(\)\)/);
-  assert.match(source, /compactNavigationRef\.dispatch\(StackActions\.push\(resolved, \{/);
+  assert.match(source, /compactNavigationRef\.resetRoot\(createSidebarRootState\(resolved\)\)/);
+  assert.doesNotMatch(source, /StackActions\.popToTop|StackActions\.push/);
   assert.match(source, /animation: navigationRoute\.params\?\.sidebarSelection\s*\? 'none'\s*: 'default'/);
+  assert.match(source, /function CompactDrawerFrame/);
+  assert.match(source, /<CompactDrawerFrame[\s\S]*swipeEnabled\s*[\s\S]*>/);
+  assert.doesNotMatch(source, /swipeEnabled=\{state\.activePath/);
+  assert.doesNotMatch(source, /PanResponder/);
   assert.doesNotMatch(source, /STABLE_SWIFTUI_ROUTE_NAME/);
   assert.doesNotMatch(source, /reuseSwiftUIHost/);
   assert.match(source, /name=\{route\.path\}/);
@@ -183,6 +190,22 @@ test('the compact fallback sidebar is one continuous panel without row dividers'
     source.indexOf('function ShellNavigationItem'),
   );
 
-  assert.match(sidebar, /<ScrollView[\s\S]*referenceSidebarHeader[\s\S]*REFERENCE_SIDEBAR_GROUPS[\s\S]*referenceSidebarFooter[\s\S]*<\/ScrollView>/);
-  assert.doesNotMatch(sidebar, /borderBottomWidth/);
+  assert.match(sidebar, /<ScrollView[\s\S]*referenceSidebarHeader[\s\S]*REFERENCE_SIDEBAR_ROUTES[\s\S]*referenceSidebarFooter[\s\S]*<\/ScrollView>/);
+  assert.doesNotMatch(sidebar, /referenceSidebarSection|referenceSidebarSectionLabel|borderBottomWidth/);
+  assert.doesNotMatch(source, /REFERENCE_SIDEBAR_GROUPS/);
+});
+
+test('the generic sidebar is one scroll flow and exposes no fake release version', () => {
+  const shell = read('src/app/NativeShell.tsx');
+  const app = read('src/preview/FrontendPreviewApp.tsx');
+  const sidebar = shell.slice(
+    shell.indexOf('function Sidebar'),
+    shell.indexOf('function ExpoReferenceSidebar'),
+  );
+
+  assert.match(sidebar, /<ScrollView[\s\S]*styles\.sidebarHeader[\s\S]*slots\?\.profile[\s\S]*composition\.coreItems\.map[\s\S]*composition\.pluginItems\.map[\s\S]*slots\?\.system[\s\S]*slots\?\.footer[\s\S]*<\/ScrollView>/);
+  assert.doesNotMatch(sidebar, /sectionLabel|pluginSection/);
+  assert.doesNotMatch(app, /v0\.9\.3/);
+  assert.match(app, /Constants\.expoConfig\?\.version/);
+  assert.match(app, /Constants\.expoConfig\?\.ios\?\.buildNumber/);
 });

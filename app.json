@@ -10,7 +10,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "app.sunstone1029.fig1171",
-      "buildNumber": "29",
+      "buildNumber": "30",
       "supportsTablet": true,
       "requireFullScreen": false,
       "entitlements": {

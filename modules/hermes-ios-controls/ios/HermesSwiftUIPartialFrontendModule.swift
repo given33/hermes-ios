@@ -227,10 +227,11 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
 
   private var chinese: Bool { props.locale == "zh" }
   private var isDrawer: Bool { props.presentation == "drawer" }
+  private var fillsAvailableWidth: Bool { props.presentation != "split" }
 
   var body: some View {
     GeometryReader { proxy in
-      let drawerWidth = isDrawer ? proxy.size.width : min(360, proxy.size.width)
+      let drawerWidth = fillsAvailableWidth ? proxy.size.width : min(360, proxy.size.width)
       ZStack(alignment: .leading) {
         appearance.palette.background
           .ignoresSafeArea()
@@ -319,47 +320,55 @@ private struct HermesSidebarContent: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
 
-          ForEach(0..<4, id: \.self) { group in
-            Text(sectionTitle(group))
-              .font(HermesFonts.body(13))
-              .foregroundStyle(appearance.palette.tertiary)
-              .padding(.horizontal, 20)
-              .padding(.top, 18)
-              .padding(.bottom, 4)
-
-            ForEach(
-              HermesRoute.allCases.filter { $0.group == group && $0.visibleInSidebar }
-            ) { route in
-              Button {
-                onNavigate(route)
-              } label: {
-                HStack(spacing: 10) {
-                  Label {
-                    Text(route.title(chinese))
-                      .foregroundStyle(appearance.palette.foreground)
-                  } icon: {
-                    Image(systemName: route.symbol)
-                      .foregroundStyle(appearance.palette.accent)
-                  }
-                  .font(HermesFonts.body(15))
-                  Spacer(minLength: 8)
-                  Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(appearance.palette.tertiary)
+          ForEach(HermesRoute.allCases.filter(\.visibleInSidebar)) { route in
+            Button {
+              onNavigate(route)
+            } label: {
+              HStack(spacing: 10) {
+                Label {
+                  Text(route.title(chinese))
+                    .foregroundStyle(appearance.palette.foreground)
+                } icon: {
+                  Image(systemName: route.symbol)
+                    .foregroundStyle(appearance.palette.accent)
                 }
-                .padding(.horizontal, 20)
-                .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-                .contentShape(Rectangle())
+                .font(HermesFonts.body(15))
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                  .font(.system(size: 13, weight: .semibold))
+                  .foregroundStyle(appearance.palette.tertiary)
               }
-              .buttonStyle(.plain)
+              .padding(.horizontal, 20)
               .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-              .background(
-                activePath == route.path
-                  ? appearance.palette.accent.opacity(0.10)
-                  : Color.clear
-              )
               .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .background(
+              activePath == route.path
+                ? appearance.palette.accent.opacity(0.10)
+                : Color.clear
+            )
+            .contentShape(Rectangle())
+          }
+
+          ForEach(gateways) { gateway in
+            HStack(spacing: 10) {
+              Circle()
+                .fill(gatewayColor(gateway.state))
+                .frame(width: 8, height: 8)
+              Text(gateway.label)
+                .font(HermesFonts.body(13))
+                .foregroundStyle(appearance.palette.foreground)
+                .lineLimit(1)
+              Spacer(minLength: 8)
+              Text(gatewayMeta(gateway))
+                .font(HermesFonts.mono(11))
+                .foregroundStyle(appearance.palette.secondary)
+                .lineLimit(1)
+            }
+            .padding(.horizontal, 20)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
           }
         }
       }
@@ -370,11 +379,26 @@ private struct HermesSidebarContent: View {
     .background(appearance.palette.background.ignoresSafeArea())
   }
 
-  private func sectionTitle(_ group: Int) -> String {
-    if !chinese {
-      return ["Workspace", "Automation", "Extensions", "Administration"][group]
+  private func gatewayColor(_ state: String) -> Color {
+    switch state {
+    case "online": appearance.palette.success
+    case "degraded": appearance.palette.warning
+    case "offline": appearance.palette.destructive
+    default: appearance.palette.tertiary
     }
-    return ["工作区", "自动化", "扩展", "管理"][group]
+  }
+
+  private func gatewayMeta(_ gateway: HermesSidebarGateway) -> String {
+    let state: String
+    switch gateway.state {
+    case "online": state = chinese ? "在线" : "Online"
+    case "degraded": state = chinese ? "异常" : "Degraded"
+    case "offline": state = chinese ? "离线" : "Offline"
+    default: state = chinese ? "未知" : "Unknown"
+    }
+    guard let version = gateway.version?.trimmingCharacters(in: .whitespacesAndNewlines),
+          !version.isEmpty else { return state }
+    return "\(state) · \(version)"
   }
 }
 

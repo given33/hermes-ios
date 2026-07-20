@@ -205,6 +205,16 @@ export function resolveMobileDrawerTranslation(state: NativeShellState): number 
   return -SHELL_METRICS.sidebarWidth;
 }
 
+export function createSidebarRootState(path: string) {
+  return {
+    index: 0,
+    routes: [{
+      name: path,
+      params: { sidebarSelection: true },
+    }],
+  };
+}
+
 export function resolveNativeShellPath(
   routes: readonly ComposedRoute[],
   requestedPath: string,

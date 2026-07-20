@@ -2,14 +2,12 @@ import { requireNativeView, requireOptionalNativeModule } from 'expo';
 import { createElement, forwardRef, type ComponentType } from 'react';
 import {
   Platform,
+  NativeModules,
   View,
   type NativeSyntheticEvent,
   type ViewProps,
 } from 'react-native';
-import {
-  discoverNativeContextView,
-  readNativeViewContract,
-} from './native-view-loader';
+import { discoverRegisteredNativeView, readNativeViewContract } from './native-view-loader';
 
 export type IOSAuthorizationState =
   | 'authorized'
@@ -231,6 +229,7 @@ export interface IOSContextNativeModule {
 }
 
 const nativeModule = requireOptionalNativeModule<IOSContextNativeModule>('HermesIOSContext');
+const nativeMapModule = requireOptionalNativeModule('HermesStandardMap');
 
 function requireContextModule(): IOSContextNativeModule {
   if (!nativeModule) {
@@ -371,11 +370,16 @@ export interface HermesScreenTimeReportProps extends ViewProps {
   refreshToken: number;
 }
 
-// Expo's native view registry is authoritative. The native contract is
-// diagnostic metadata and must not gate discovery: during module bootstrap it
-// can be unavailable or stale even though Expo has registered the view.
-const NativeMap = optionalNativeView<HermesStandardMapProps>('HermesStandardMapView');
+// Expo SDK 54 registers the default adapter reliably under the module name.
+// Keeping MapKit in its own module avoids the unsupported named-view adapter
+// that previously rendered React Native's "Unimplemented component" surface.
+const NativeMap = optionalNativeView<HermesStandardMapProps>(
+  nativeMapModule,
+  'HermesStandardMap',
+);
 const NativeScreenTimeReport = optionalNativeView<HermesScreenTimeReportProps>(
+  nativeModule,
+  'HermesIOSContext',
   'HermesScreenTimeReportView',
 );
 const nativeViewContract = readNativeViewContract(nativeModule);
@@ -395,9 +399,26 @@ export const HermesStandardMapView = forwardRef<View, HermesStandardMapProps>(
   },
 );
 
-function optionalNativeView<P extends ViewProps>(viewName: string): ComponentType<P> | null {
-  return discoverNativeContextView(nativeModule, viewName, (viewName) =>
-    requireNativeView<P>('HermesIOSContext', viewName) as ComponentType<P>);
+function optionalNativeView<P extends ViewProps>(
+  module: object | null,
+  moduleName: string,
+  viewName?: string,
+): ComponentType<P> | null {
+  const expoRuntime = (globalThis as typeof globalThis & {
+    expo?: { getViewConfig?(moduleName: string, viewName?: string): unknown };
+  }).expo;
+  return discoverRegisteredNativeView(
+    module,
+    {
+      getViewConfig: expoRuntime?.getViewConfig?.bind(expoRuntime),
+      viewManagersMetadata: NativeModules.NativeUnimoduleProxy?.viewManagersMetadata,
+    },
+    moduleName,
+    viewName,
+    (registeredModuleName, registeredViewName) => registeredViewName
+      ? requireNativeView<P>(registeredModuleName, registeredViewName) as ComponentType<P>
+      : requireNativeView<P>(registeredModuleName) as ComponentType<P>,
+  );
 }
 
 export const HermesScreenTimeReportView = forwardRef<View, HermesScreenTimeReportProps>(

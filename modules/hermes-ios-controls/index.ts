@@ -136,7 +136,7 @@ export interface HermesSwiftUISidebarProps extends NativeViewProps, HermesSwiftU
   onNavigate?(event: NativeSyntheticEvent<{ path: string }>): void;
   onRequestClose?(event: NativeSyntheticEvent<Record<string, never>>): void;
   open: boolean;
-  presentation: 'drawer' | 'split';
+  presentation: 'drawer' | 'embedded' | 'split';
 }
 
 export interface HermesSwiftUIRouteProps extends NativeViewProps, HermesSwiftUIThemeProps {

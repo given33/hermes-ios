@@ -38,6 +38,9 @@ jobs:
         run: |
           pnpm exec expo export --platform ios --output-dir "$RUNNER_TEMP/hermes-font-export"
           node scripts/verify-native-font-export.mjs "$RUNNER_TEMP/hermes-font-export"
+          if [ "$EXPO_PUBLIC_FRONTEND_PREVIEW" = "0" ]; then
+            node scripts/verify-production-bundle.mjs "$RUNNER_TEMP/hermes-font-export"
+          fi
       - name: Select Xcode with Swift 6.2
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
@@ -83,6 +86,7 @@ jobs:
             --ios ios \
             --derived-data "$RUNNER_TEMP/hermes-build"
       - name: Package the IPA
+        id: package
         shell: bash
         run: |
           APP_PATH="$(find "$RUNNER_TEMP/hermes-build/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
@@ -119,12 +123,21 @@ jobs:
           cd "$RUNNER_TEMP/ipa"
           ditto -c -k --sequesterRsrc --keepParent Payload "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
           shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" > "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256"
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          ARTIFACT_NAME="Hermes-Agent-build-${APP_BUILD_NUMBER}-${SHORT_SHA}"
+          printf '{"build":"%s","commit":"%s","frontend_preview":%s}\n' \
+            "$APP_BUILD_NUMBER" \
+            "$GITHUB_SHA" \
+            "$([ "$EXPO_PUBLIC_FRONTEND_PREVIEW" = "1" ] && printf true || printf false)" \
+            > "$RUNNER_TEMP/Hermes-Agent-build.json"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: Hermes-Agent-unsigned
+          name: ${{ steps.package.outputs.artifact_name }}
           path: |
             ${{ runner.temp }}/Hermes-Agent-unsigned.ipa
             ${{ runner.temp }}/Hermes-Agent-unsigned.ipa.sha256
+            ${{ runner.temp }}/Hermes-Agent-build.json
       - name: Publish the tagged release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -135,11 +148,13 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" \
               "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" \
               "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256" \
+              "$RUNNER_TEMP/Hermes-Agent-build.json" \
               --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" \
               "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256" \
+              "$RUNNER_TEMP/Hermes-Agent-build.json" \
               --generate-notes \
               --title "Hermes Agent $GITHUB_REF_NAME"
           fi

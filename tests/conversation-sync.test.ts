@@ -16,12 +16,14 @@ import {
 
 class MemoryStorage {
   readonly values = new Map<string, string>();
+  readonly removeFailures = new Set<string>();
 
   async getItem(key: string) {
     return this.values.get(key) ?? null;
   }
 
   async removeItem(key: string) {
+    if (this.removeFailures.has(key)) throw new Error('storage cleanup failed');
     this.values.delete(key);
   }
 
@@ -91,10 +93,13 @@ test('local account keys remain isolated for owners that collide under the legac
   assert.equal((await store.read(ownerB))?.conversations[0].id, 'collision-b');
 });
 
-test('legacy conversation cache is ignored after the account-scoped schema bump', async () => {
+test('v1 and v2 conversation caches are deleted and ignored after the clean schema bump', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
   const owner = 'legacy-owner';
+  const encodedOwner = `u${Array.from(owner)
+    .map((character) => character.charCodeAt(0).toString(16).padStart(4, '0'))
+    .join('')}`;
   let hash = 0x811c9dc5;
   for (const character of owner) {
     hash ^= character.charCodeAt(0);
@@ -107,8 +112,40 @@ test('legacy conversation cache is ignored after the account-scoped schema bump'
     conversations: [conversation('legacy-chat', 10, [])],
     syncedAt: 10,
   }));
+  storage.values.set(`hermes.native.conversations.v2.${encodedOwner}`, JSON.stringify({
+    version: 2,
+    owner,
+    activeConversationId: 'e2e-contamination',
+    conversations: [conversation('e2e-contamination', 20, [
+      { id: 'e2e-message', role: 'user', name: '你', content: 'test fixture' },
+    ])],
+    syncedAt: 20,
+  }));
 
   assert.equal(await store.read(owner), null);
+  assert.equal(storage.values.size, 0);
+});
+
+test('legacy cleanup failure never blocks the clean cache or subsequent cloud sync', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'cleanup-failure-owner';
+  const encodedOwner = `u${Array.from(owner)
+    .map((character) => character.charCodeAt(0).toString(16).padStart(4, '0'))
+    .join('')}`;
+  const previousKey = `hermes.native.conversations.v2.${encodedOwner}`;
+  storage.values.set(previousKey, 'contaminated-v2');
+  storage.removeFailures.add(previousKey);
+
+  assert.equal(await store.read(owner), null);
+  assert.equal(storage.values.get(previousKey), 'contaminated-v2');
+  const synchronized = await synchronizeConversationCache({
+    async getUnifiedConversations() {
+      return { conversations: [] };
+    },
+  } as unknown as HermesCloudApi, store, owner);
+  assert.deepEqual(synchronized.conversations, []);
+  assert.deepEqual((await store.read(owner))?.conversations, []);
 });
 
 test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed after acknowledgement', async () => {
@@ -237,6 +274,7 @@ test('account purge removes conversation and outbox keys while preserving attach
     legacyHash = Math.imul(legacyHash, 0x01000193);
   }
   storage.values.set(`hermes.native.conversations.v1.${encodedOwner}`, 'legacy-v1');
+  storage.values.set(`hermes.native.conversations.v2.${encodedOwner}`, 'legacy-v2');
   storage.values.set(
     `hermes.native.conversations.v1.${(legacyHash >>> 0).toString(16)}`,
     'legacy-hash',

@@ -8,6 +8,7 @@ import {
   Server,
   UserRound,
 } from 'lucide-react-native';
+import Constants from 'expo-constants';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import Reanimated, {
@@ -549,9 +550,8 @@ function ProfileSlot({
   onOpen(): void;
   profile: string;
 }) {
-  const { tokens } = useTheme();
   return (
-    <View style={[styles.slotBlock, { borderBottomColor: tokens.colors.border }]}> 
+    <View style={styles.slotBlock}>
       <NativeButton
         accessibilityLabel={`Managing profile: ${profile}`}
         ghost
@@ -582,7 +582,7 @@ function SystemSlot({
   const { tokens } = useTheme();
   if (context.collapsed) {
     return (
-      <View style={[styles.collapsedSystem, { borderTopColor: tokens.colors.border }]}> 
+      <View style={styles.collapsedSystem}>
         <NativeButton accessibilityLabel="System status" ghost onPress={() => context.navigate('/system')} size="icon">
           <Server />
         </NativeButton>
@@ -590,7 +590,7 @@ function SystemSlot({
     );
   }
   return (
-    <View style={[styles.systemSlot, { borderTopColor: tokens.colors.border }]}> 
+    <View style={styles.systemSlot}>
       <PreviewText style={styles.systemHeading} variant="label">
         {locale === 'zh' ? '系统' : 'System'}
       </PreviewText>
@@ -673,9 +673,8 @@ function ControlsSlot({
   locale: NativeRouteLocale;
   onLanguage(): void;
 }) {
-  const { tokens } = useTheme();
   return (
-    <View style={[styles.controlsSlot, { borderTopColor: tokens.colors.border }]}> 
+    <View style={styles.controlsSlot}>
       <SidebarControl
         accessibilityLabel="Language"
         collapsed={context.collapsed}
@@ -725,10 +724,15 @@ function SidebarControl({
 }
 
 function FooterSlot() {
-  const { tokens } = useTheme();
+  const version = Constants.expoConfig?.version?.trim() || '';
+  const build = Constants.expoConfig?.ios?.buildNumber?.trim() || '';
+  const versionLabel = [version ? `v${version}` : '', build ? `(${build})` : '']
+    .filter(Boolean)
+    .join(' ');
+  if (!versionLabel) return null;
   return (
-    <View style={[styles.footerSlot, { borderTopColor: tokens.colors.border }]}>
-      <PreviewText style={styles.footerVersion} variant="tiny">v0.9.3</PreviewText>
+    <View style={styles.footerSlot}>
+      <PreviewText style={styles.footerVersion} variant="tiny">{versionLabel}</PreviewText>
       <PreviewText numberOfLines={1} style={styles.footerCredit} variant="tiny">Nous Research</PreviewText>
     </View>
   );
@@ -879,7 +883,6 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   slotBlock: {
-    borderBottomWidth: 1,
     paddingHorizontal: 8,
     paddingVertical: 8,
   },
@@ -888,13 +891,11 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   systemSlot: {
-    borderTopWidth: 1,
     paddingBottom: 4,
     paddingTop: 4,
   },
   collapsedSystem: {
     alignItems: 'center',
-    borderTopWidth: 1,
     paddingVertical: 6,
   },
   systemHeading: {
@@ -916,7 +917,6 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   controlsSlot: {
-    borderTopWidth: 1,
     flexDirection: 'row',
     gap: 2,
     justifyContent: 'flex-start',
@@ -943,7 +943,6 @@ const styles = StyleSheet.create({
   },
   footerSlot: {
     alignItems: 'center',
-    borderTopWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
     minHeight: 40,

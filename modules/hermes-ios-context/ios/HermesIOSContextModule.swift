@@ -55,8 +55,8 @@ public final class HermesIOSContextModule: Module {
   private func lifecycleDefinitions() -> ModuleDefinition {
     Function("getNativeViewContract") { () -> [String: Any] in
       [
-        "version": 2,
-        "views": ["HermesStandardMapView", "HermesScreenTimeReportView"],
+        "version": 3,
+        "views": ["HermesScreenTimeReportView"],
       ]
     }
 
@@ -498,23 +498,6 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func viewDefinitions() -> ModuleDefinition {
-    View(HermesStandardMapView.self) {
-      Events("onLocationPress")
-
-      Prop("showsUserLocation") { (view, value: Bool) in
-        view.showsUserLocation = value
-      }
-      Prop("centerOnUserRequest") { (view, value: Int) in
-        view.centerOnUserRequest = value
-      }
-      Prop("track") { (view, value: [HermesMapCoordinate]) in
-        view.track = value
-      }
-      Prop("places") { (view, value: [HermesMapPlace]) in
-        view.places = value
-      }
-    }
-
     View(HermesScreenTimeReportView.self) {
       Prop("refreshToken") { (view, value: Int) in
         view.refreshToken = value

@@ -39,12 +39,11 @@ import { SymbolView, type SFSymbol } from 'expo-symbols';
 import {
   DefaultTheme,
   NavigationContainer,
-  StackActions,
   useNavigationContainerRef,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { Drawer } from 'react-native-drawer-layout';
 import {
-  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -65,10 +64,8 @@ import Reanimated, {
   Easing,
   FadeInRight,
   FadeOutLeft,
-  interpolate,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -95,9 +92,9 @@ import {
 } from './route-composition';
 import {
   SHELL_METRICS,
+  createSidebarRootState,
   createNativeShellState,
   reduceNativeShellState,
-  resolveMobileDrawerTranslation,
   resolveNativeShellPath,
   resolveShellTypography,
   resolveVisibleSidebarWidth,
@@ -139,56 +136,33 @@ const NAV_ICONS: Record<NativeNavigationIconName, LucideIcon> = {
   Zap,
 };
 
-const REFERENCE_SIDEBAR_GROUPS = [
-  {
-    labels: { en: 'Workspace', zh: '工作区' },
-    routes: [
-      { labels: { en: 'Chat', zh: '单聊' }, path: '/chat', symbol: 'message.fill' },
-      { labels: { en: 'Sessions', zh: '会话' }, path: '/sessions', symbol: 'bubble.left.and.bubble.right' },
-      { labels: { en: 'Files', zh: '文件' }, path: '/files', symbol: 'folder' },
-      { labels: { en: 'Analytics', zh: '分析' }, path: '/analytics', symbol: 'chart.bar.xaxis' },
-      { labels: { en: 'Smart Weather', zh: '智能天气' }, path: '/smart-weather', symbol: 'cloud.rain' },
-      { labels: { en: 'Models', zh: '模型' }, path: '/models', symbol: 'cpu' },
-      { labels: { en: 'Logs', zh: '日志' }, path: '/logs', symbol: 'doc.text.magnifyingglass' },
-    ],
-  },
-  {
-    labels: { en: 'Automation', zh: '自动化' },
-    routes: [
-      { labels: { en: 'Scheduled tasks', zh: '定时任务' }, path: '/cron', symbol: 'clock.arrow.circlepath' },
-      { labels: { en: 'Skills', zh: '技能' }, path: '/skills', symbol: 'shippingbox' },
-      { labels: { en: 'MCP', zh: 'MCP' }, path: '/mcp', symbol: 'network' },
-      { labels: { en: 'Device pairing', zh: '设备配对' }, path: '/pairing', symbol: 'lock.shield' },
-      { labels: { en: 'Channels', zh: '消息渠道' }, path: '/channels', symbol: 'dot.radiowaves.left.and.right' },
-      { labels: { en: 'Webhooks', zh: '网络钩子' }, path: '/webhooks', symbol: 'arrow.triangle.branch' },
-    ],
-  },
-  {
-    labels: { en: 'Extensions', zh: '扩展' },
-    routes: [
-      { labels: { en: 'Achievements', zh: '成就' }, path: '/achievements', symbol: 'trophy' },
-      { labels: { en: 'Collaboration', zh: '协作' }, path: '/collaboration', symbol: 'person.3' },
-      { labels: { en: 'Kanban', zh: '看板' }, path: '/kanban', symbol: 'rectangle.3.group' },
-    ],
-  },
-  {
-    labels: { en: 'Administration', zh: '管理' },
-    routes: [
-      { labels: { en: 'Agent profiles', zh: '多 Agent 配置' }, path: '/profiles', symbol: 'person.2' },
-      { labels: { en: 'Configuration', zh: '配置' }, path: '/config', symbol: 'slider.horizontal.3' },
-      { labels: { en: 'Account', zh: '账户' }, path: '/account', symbol: 'person.crop.circle' },
-      { labels: { en: 'Secrets', zh: '密钥' }, path: '/env', symbol: 'key' },
-      { labels: { en: 'System', zh: '系统监控' }, path: '/system', symbol: 'gauge' },
-      { labels: { en: 'Documentation', zh: '文档' }, path: '/docs', symbol: 'book.closed' },
-    ],
-  },
+const REFERENCE_SIDEBAR_ROUTES = [
+  { labels: { en: 'Chat', zh: '单聊' }, path: '/chat', symbol: 'message.fill' },
+  { labels: { en: 'Sessions', zh: '会话' }, path: '/sessions', symbol: 'bubble.left.and.bubble.right' },
+  { labels: { en: 'Files', zh: '文件' }, path: '/files', symbol: 'folder' },
+  { labels: { en: 'Analytics', zh: '分析' }, path: '/analytics', symbol: 'chart.bar.xaxis' },
+  { labels: { en: 'Smart Weather', zh: '智能天气' }, path: '/smart-weather', symbol: 'cloud.rain' },
+  { labels: { en: 'Models', zh: '模型' }, path: '/models', symbol: 'cpu' },
+  { labels: { en: 'Logs', zh: '日志' }, path: '/logs', symbol: 'doc.text.magnifyingglass' },
+  { labels: { en: 'Scheduled tasks', zh: '定时任务' }, path: '/cron', symbol: 'clock.arrow.circlepath' },
+  { labels: { en: 'Skills', zh: '技能' }, path: '/skills', symbol: 'shippingbox' },
+  { labels: { en: 'MCP', zh: 'MCP' }, path: '/mcp', symbol: 'network' },
+  { labels: { en: 'Device pairing', zh: '设备配对' }, path: '/pairing', symbol: 'lock.shield' },
+  { labels: { en: 'Channels', zh: '消息渠道' }, path: '/channels', symbol: 'dot.radiowaves.left.and.right' },
+  { labels: { en: 'Webhooks', zh: '网络钩子' }, path: '/webhooks', symbol: 'arrow.triangle.branch' },
+  { labels: { en: 'Achievements', zh: '成就' }, path: '/achievements', symbol: 'trophy' },
+  { labels: { en: 'Collaboration', zh: '协作' }, path: '/collaboration', symbol: 'person.3' },
+  { labels: { en: 'Kanban', zh: '看板' }, path: '/kanban', symbol: 'rectangle.3.group' },
+  { labels: { en: 'Agent profiles', zh: '多 Agent 配置' }, path: '/profiles', symbol: 'person.2' },
+  { labels: { en: 'Configuration', zh: '配置' }, path: '/config', symbol: 'slider.horizontal.3' },
+  { labels: { en: 'Account', zh: '账户' }, path: '/account', symbol: 'person.crop.circle' },
+  { labels: { en: 'Secrets', zh: '密钥' }, path: '/env', symbol: 'key' },
+  { labels: { en: 'System', zh: '系统监控' }, path: '/system', symbol: 'gauge' },
+  { labels: { en: 'Documentation', zh: '文档' }, path: '/docs', symbol: 'book.closed' },
 ] as const satisfies readonly {
   labels: Record<NativeRouteLocale, string>;
-  routes: readonly {
-    labels: Record<NativeRouteLocale, string>;
-    path: string;
-    symbol: SFSymbol;
-  }[];
+  path: string;
+  symbol: SFSymbol;
 }[];
 
 const REFERENCE_SIDEBAR_FALLBACK_ICONS = {
@@ -215,7 +189,7 @@ const REFERENCE_SIDEBAR_FALLBACK_ICONS = {
   '/system': 'Activity',
   '/webhooks': 'Webhook',
 } as const satisfies Record<
-  (typeof REFERENCE_SIDEBAR_GROUPS)[number]['routes'][number]['path'],
+  (typeof REFERENCE_SIDEBAR_ROUTES)[number]['path'],
   NativeNavigationIconName
 >;
 
@@ -223,12 +197,6 @@ const COLOR_TRANSITION_EASING = Easing.bezier(
   ...IOS_MOTION.curve.standard,
 );
 const IOS_NAVIGATION_EASING = Easing.bezier(...IOS_MOTION.curve.navigation);
-const IOS_DRAWER_SPRING = {
-  damping: IOS_MOTION.spring.damping,
-  mass: IOS_MOTION.spring.mass,
-  overshootClamping: true,
-  stiffness: IOS_MOTION.spring.stiffness,
-} as const;
 const PAGE_ENTERING = FadeInRight
   .duration(IOS_MOTION.duration.navigationEnter)
   .easing(IOS_NAVIGATION_EASING);
@@ -325,11 +293,7 @@ export function NativeShell({
   const visibleSidebarWidth = state.mode === 'compact' && referenceCompactSidebar
     ? compactSidebarWidth
     : resolveVisibleSidebarWidth(state) + insets.left;
-  const initialDrawerTranslation = resolveMobileDrawerTranslation(state) < 0
-    ? -drawerExtent
-    : 0;
   const sidebarWidth = useSharedValue(visibleSidebarWidth);
-  const drawerTranslation = useSharedValue(initialDrawerTranslation);
   const pendingSidebarPath = useRef<string | null>(null);
   const pendingSidebarFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSidebarCloseFrame = useRef<number | null>(null);
@@ -368,13 +332,6 @@ export function NativeShell({
       easing: IOS_NAVIGATION_EASING,
     });
   }, [sidebarWidth, state.collapsed, state.mode, visibleSidebarWidth]);
-
-  useEffect(() => {
-    const target = resolveMobileDrawerTranslation(state) < 0
-      ? -drawerExtent
-      : 0;
-    drawerTranslation.value = withSpring(target, IOS_DRAWER_SPRING);
-  }, [drawerExtent, drawerTranslation, state.mobileOpen, state.mode]);
 
   const clearPendingSidebarSelection = useCallback(() => {
     pendingSidebarPath.current = null;
@@ -443,14 +400,7 @@ export function NativeShell({
         }
         clearPendingSidebarSelection();
         pendingSidebarPath.current = resolved;
-        const rootRoute = compactNavigationRef.getRootState()?.routes?.[0];
-        const rootPath = rootRoute?.name;
-        compactNavigationRef.dispatch(StackActions.popToTop());
-        if (rootPath !== resolved) {
-          compactNavigationRef.dispatch(StackActions.push(resolved, {
-            sidebarSelection: true,
-          }));
-        }
+        compactNavigationRef.resetRoot(createSidebarRootState(resolved));
         dispatch({ type: 'select-route', path: resolved });
         // The drawer owns the visible transition.  Closing it immediately
         // avoids waiting on network data, JSON decoding, or layout readiness.
@@ -489,17 +439,6 @@ export function NativeShell({
   const drawerWidthStyle = useAnimatedStyle(() => ({
     width: sidebarWidth.value,
   }));
-  const drawerTranslationStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: drawerTranslation.value }],
-  }));
-  const overlayStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      drawerTranslation.value,
-      [-drawerExtent, 0],
-      [0, 1],
-      'clamp',
-    ),
-  }));
   const activeRoute = composition.routes.find(
     (route) => route.path === state.activePath,
   );
@@ -519,10 +458,52 @@ export function NativeShell({
     reportRouteReady,
   };
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
+  const compactSidebar = useSwiftUISidebar ? (
+    <HermesSwiftUISidebarView
+      {...swiftUIThemeProps}
+      activePath={state.activePath}
+      gatewayStatusesJson={gatewayStatusesJson}
+      locale={locale}
+      onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
+      onRequestClose={closeMobile}
+      open
+      presentation="embedded"
+      themeBackgroundColor={rootBackground}
+      style={styles.swiftUISidebar}
+    />
+  ) : (
+    <Sidebar
+      borderSoft={borderSoft}
+      borderStrong={borderStrong}
+      closeMobile={closeMobile}
+      composition={composition}
+      gatewayStatuses={resolvedGatewayStatuses}
+      insets={insets}
+      locale={locale}
+      navigate={selectSidebarRoute}
+      onToggleCollapsed={toggleCollapsed}
+      sidebarBackground={sidebarBackground}
+      slotContext={slotContext}
+      slots={slots}
+      state={state}
+      typography={typography}
+    />
+  );
 
   return (
     <View style={[styles.root, { backgroundColor: rootBackground }]}>
-      <View style={styles.body}>
+      <CompactDrawerFrame
+        backgroundColor={sidebarBackground}
+        compact={state.mode === 'compact'}
+        drawerContent={compactSidebar}
+        drawerWidth={drawerExtent}
+        locale={locale}
+        onClose={closeMobile}
+        onOpen={openMobile}
+        open={state.mobileOpen}
+        swipeEnabled
+      >
+        <View style={styles.body}>
         {state.mode === 'split' ? (
           <Reanimated.View style={[styles.splitSidebar, drawerWidthStyle]}>
             {useSwiftUISidebar ? (
@@ -667,7 +648,7 @@ export function NativeShell({
                           <View
                             style={[
                               styles.routeStage,
-                              chatRoute ? null : {
+                              chatRoute ? undefined : {
                                 paddingLeft: insets.left,
                                 paddingRight: insets.right,
                               },
@@ -702,98 +683,57 @@ export function NativeShell({
             )
           ) : null}
         </View>
-      </View>
-
-      {state.mode === 'compact' ? (
-        useSwiftUISidebar ? (
-          <View
-            accessibilityElementsHidden={!state.mobileOpen}
-            accessibilityViewIsModal={state.mobileOpen}
-            importantForAccessibility={state.mobileOpen ? 'yes' : 'no-hide-descendants'}
-            pointerEvents={state.mobileOpen ? 'auto' : 'none'}
-            style={[
-              styles.swiftUIDrawerHost,
-              {
-                backgroundColor: state.mobileOpen
-                  ? rootBackground
-                  : 'transparent',
-              },
-            ]}
-          >
-            <HermesSwiftUISidebarView
-              {...swiftUIThemeProps}
-              activePath={state.activePath}
-              gatewayStatusesJson={gatewayStatusesJson}
-              locale={locale}
-              onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
-              onRequestClose={closeMobile}
-              open={state.mobileOpen}
-              presentation="drawer"
-              themeBackgroundColor={rootBackground}
-              style={styles.swiftUISidebar}
-            />
-          </View>
-        ) : (
-        <Fragment>
-          <Reanimated.View
-            accessibilityElementsHidden={!state.mobileOpen}
-            importantForAccessibility={
-              state.mobileOpen ? 'yes' : 'no-hide-descendants'
-            }
-            pointerEvents={state.mobileOpen ? 'auto' : 'none'}
-            style={[
-              styles.overlay,
-              {
-                backgroundColor: SHELL_METRICS.overlayColor,
-                left: drawerExtent,
-              },
-              overlayStyle,
-            ]}
-          >
-            <IOSPressable
-              accessibilityLabel={locale === 'zh' ? '\u5173\u95ed\u5bfc\u822a' : 'Close navigation'}
-              haptic="none"
-              onPress={closeMobile}
-              opacityTo={1}
-              scaleTo={1}
-              style={StyleSheet.absoluteFill}
-            />
-          </Reanimated.View>
-
-          <Reanimated.View
-            accessibilityElementsHidden={!state.mobileOpen}
-            accessibilityViewIsModal={state.mobileOpen}
-            importantForAccessibility={
-              state.mobileOpen ? 'yes' : 'no-hide-descendants'
-            }
-            style={[
-              styles.mobileSidebar,
-              { backgroundColor: sidebarBackground },
-              drawerWidthStyle,
-              drawerTranslationStyle,
-            ]}
-          >
-            <Sidebar
-              borderSoft={borderSoft}
-              borderStrong={borderStrong}
-              closeMobile={closeMobile}
-              composition={composition}
-              gatewayStatuses={resolvedGatewayStatuses}
-              insets={insets}
-              locale={locale}
-              navigate={selectSidebarRoute}
-              onToggleCollapsed={toggleCollapsed}
-              sidebarBackground={sidebarBackground}
-              slotContext={slotContext}
-              slots={slots}
-              state={state}
-              typography={typography}
-            />
-          </Reanimated.View>
-        </Fragment>
-        )
-      ) : null}
+        </View>
+      </CompactDrawerFrame>
     </View>
+  );
+}
+
+function CompactDrawerFrame({
+  backgroundColor,
+  children,
+  compact,
+  drawerContent,
+  drawerWidth,
+  locale,
+  onClose,
+  onOpen,
+  open,
+  swipeEnabled,
+}: {
+  backgroundColor: string;
+  children: ReactNode;
+  compact: boolean;
+  drawerContent: ReactNode;
+  drawerWidth: number;
+  locale: NativeRouteLocale;
+  onClose(): void;
+  onOpen(): void;
+  open: boolean;
+  swipeEnabled: boolean;
+}) {
+  if (!compact) return children;
+  return (
+    <Drawer
+      direction="ltr"
+      drawerPosition="left"
+      drawerStyle={{ backgroundColor, width: drawerWidth }}
+      drawerType="front"
+      keyboardDismissMode="on-drag"
+      onClose={onClose}
+      onOpen={onOpen}
+      open={open}
+      overlayAccessibilityLabel={locale === 'zh' ? '关闭导航' : 'Close navigation'}
+      overlayStyle={{ backgroundColor: SHELL_METRICS.overlayColor }}
+      renderDrawerContent={() => drawerContent}
+      style={styles.compactDrawer}
+      swipeEdgeWidth={28}
+      swipeEnabled={swipeEnabled}
+      swipeMinDistance={48}
+      swipeMinVelocity={450}
+    >
+      {children}
+    </Drawer>
   );
 }
 
@@ -859,58 +799,6 @@ function Sidebar({
         },
       ]}
     >
-      <View
-        style={[
-          styles.sidebarHeader,
-          { paddingHorizontal: typography.spacingUnit * 4 },
-          collapsed && styles.sidebarHeaderCollapsed,
-        ]}
-      >
-        {!collapsed ? (
-          <Text
-            style={[
-              styles.sidebarBrand,
-              {
-                color: tokens.colors.foreground,
-                fontFamily: displayFont,
-                fontSize: typography.brand.fontSize,
-                fontWeight: displayFont ? undefined : '700',
-                letterSpacing: typography.brand.letterSpacing,
-                lineHeight: typography.brand.lineHeight,
-              },
-            ]}
-          >
-            HERMES{'\n'}AGENT
-          </Text>
-        ) : null}
-
-        {state.mode === 'compact' ? (
-          <NativeButton
-            accessibilityLabel={locale === 'zh' ? '\u5173\u95ed\u5bfc\u822a' : 'Close navigation'}
-            ghost
-            onPress={closeMobile}
-            size="icon"
-          >
-            <X />
-          </NativeButton>
-        ) : (
-          <NativeButton
-            accessibilityLabel={
-              locale === 'zh'
-                ? collapsed ? '\u5c55\u5f00' : '\u6298\u53e0'
-                : collapsed ? 'Expand' : 'Collapse'
-            }
-            ghost
-            onPress={onToggleCollapsed}
-            size="icon"
-          >
-            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-          </NativeButton>
-        )}
-      </View>
-
-      {slots?.profile?.(slotContext)}
-
       <ScrollView
         bounces={false}
         decelerationRate="normal"
@@ -921,6 +809,57 @@ function Sidebar({
         scrollEventThrottle={8}
         style={styles.navigation}
       >
+        <View
+          style={[
+            styles.sidebarHeader,
+            { paddingHorizontal: typography.spacingUnit * 4 },
+            collapsed && styles.sidebarHeaderCollapsed,
+          ]}
+        >
+          {!collapsed ? (
+            <Text
+              style={[
+                styles.sidebarBrand,
+                {
+                  color: tokens.colors.foreground,
+                  fontFamily: displayFont,
+                  fontSize: typography.brand.fontSize,
+                  fontWeight: displayFont ? undefined : '700',
+                  letterSpacing: typography.brand.letterSpacing,
+                  lineHeight: typography.brand.lineHeight,
+                },
+              ]}
+            >
+              HERMES{'\n'}AGENT
+            </Text>
+          ) : null}
+
+          {state.mode === 'compact' ? (
+            <NativeButton
+              accessibilityLabel={locale === 'zh' ? '\u5173\u95ed\u5bfc\u822a' : 'Close navigation'}
+              ghost
+              onPress={closeMobile}
+              size="icon"
+            >
+              <X />
+            </NativeButton>
+          ) : (
+            <NativeButton
+              accessibilityLabel={
+                locale === 'zh'
+                  ? collapsed ? '\u5c55\u5f00' : '\u6298\u53e0'
+                  : collapsed ? 'Expand' : 'Collapse'
+              }
+              ghost
+              onPress={onToggleCollapsed}
+              size="icon"
+            >
+              {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+            </NativeButton>
+          )}
+        </View>
+
+        {slots?.profile?.(slotContext)}
         {composition.coreItems.map((item, index) => (
           <ShellNavigationItem
             active={state.activePath === item.path}
@@ -932,52 +871,21 @@ function Sidebar({
           />
         ))}
 
-        {composition.pluginItems.length > 0 ? (
-          <View
-            style={[
-              styles.pluginSection,
-              { paddingBottom: typography.spacingUnit * 2 },
-            ]}
-          >
-            {!collapsed ? (
-              <Text
-                style={[
-                  styles.sectionLabel,
-                  {
-                    color: tokens.colors.textTertiary,
-                    fontFamily: resolveNativeFontStack(
-                      tokens.typography.fontDisplay,
-                      400,
-                    ),
-                    fontSize: typography.section.fontSize,
-                    letterSpacing: typography.section.letterSpacing,
-                    paddingBottom: typography.spacingUnit,
-                    paddingHorizontal: typography.spacingUnit * 5,
-                    paddingTop: typography.spacingUnit * 2.5,
-                  },
-                ]}
-              >
-                {locale === 'zh' ? '\u63d2\u4ef6' : 'Plugins'}
-              </Text>
-            ) : null}
-            {composition.pluginItems.map((item, index) => (
-              <ShellNavigationItem
-                active={state.activePath === item.path}
-                collapsed={collapsed}
-                item={item}
-                key={navigationItemKey(item, index)}
-                onPress={() => navigate(item.path)}
-                typography={typography}
-              />
-            ))}
-          </View>
-        ) : null}
+        {composition.pluginItems.map((item, index) => (
+          <ShellNavigationItem
+            active={state.activePath === item.path}
+            collapsed={collapsed}
+            item={item}
+            key={navigationItemKey(item, index)}
+            onPress={() => navigate(item.path)}
+            typography={typography}
+          />
+        ))}
+        {slots?.system?.(slotContext)}
+        {slots?.controls?.(slotContext)}
+        {!collapsed ? slots?.auth?.(slotContext) : null}
+        {!collapsed ? slots?.footer?.(slotContext) : null}
       </ScrollView>
-
-      {slots?.system?.(slotContext)}
-      {slots?.controls?.(slotContext)}
-      {!collapsed ? slots?.auth?.(slotContext) : null}
-      {!collapsed ? slots?.footer?.(slotContext) : null}
     </View>
   );
 }
@@ -1027,24 +935,14 @@ function ExpoReferenceSidebar({
           </Text>
         </View>
 
-        {REFERENCE_SIDEBAR_GROUPS.map((group) => (
-          <View key={group.labels.en} style={styles.referenceSidebarSection}>
-            <Text
-              style={[
-                styles.referenceSidebarSectionLabel,
-                { color: tokens.colors.textTertiary },
-              ]}
-            >
-              {group.labels[locale]}
-            </Text>
-            <View style={styles.referenceSidebarGroup}>
-              {group.routes.map((route) => {
-                const FallbackIcon = NAV_ICONS[
-                  REFERENCE_SIDEBAR_FALLBACK_ICONS[route.path]
-                ];
-                const active = activePath === route.path;
-                return (
-                  <IOSPressable
+        <View style={styles.referenceSidebarGroup}>
+          {REFERENCE_SIDEBAR_ROUTES.map((route) => {
+            const FallbackIcon = NAV_ICONS[
+              REFERENCE_SIDEBAR_FALLBACK_ICONS[route.path]
+            ];
+            const active = activePath === route.path;
+            return (
+              <IOSPressable
                     accessibilityRole="link"
                     accessibilityState={{ selected: active }}
                     key={route.path}
@@ -1095,12 +993,10 @@ function ExpoReferenceSidebar({
                       type="monochrome"
                       weight="semibold"
                     />
-                  </IOSPressable>
-                );
-              })}
-            </View>
-          </View>
-        ))}
+              </IOSPressable>
+            );
+          })}
+        </View>
         <View style={styles.referenceSidebarFooter}>
           <View style={styles.referenceSidebarGatewayList}>
             {gatewayStatuses.map((gateway) => (
@@ -1390,20 +1286,11 @@ const styles = StyleSheet.create({
     height: '100%',
     overflow: 'hidden',
   },
-  swiftUIDrawerHost: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 60,
+  compactDrawer: {
+    flex: 1,
   },
   swiftUISidebar: {
     flex: 1,
-  },
-  mobileSidebar: {
-    bottom: 0,
-    left: 0,
-    overflow: 'hidden',
-    position: 'absolute',
-    top: 0,
-    zIndex: 50,
   },
   sidebar: {
     flex: 1,
@@ -1446,16 +1333,6 @@ const styles = StyleSheet.create({
   },
   referenceSidebarContent: {
     paddingBottom: 18,
-  },
-  referenceSidebarSection: {
-    marginBottom: 24,
-  },
-  referenceSidebarSectionLabel: {
-    fontFamily: 'Collapse-Regular',
-    fontSize: 13,
-    lineHeight: 18,
-    marginBottom: 7,
-    paddingHorizontal: 16,
   },
   referenceSidebarGroup: {
     backgroundColor: 'transparent',
@@ -1542,14 +1419,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     width: SHELL_METRICS.activeIndicatorWidth,
-  },
-  pluginSection: {
-    borderTopWidth: 0,
-  },
-  sectionLabel: {},
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 40,
   },
   routePreview: {
     flex: 1,
