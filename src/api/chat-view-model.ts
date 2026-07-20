@@ -895,6 +895,30 @@ function deduplicateMessages(messages: HermesChatViewMessage[]): HermesChatViewM
       result[existingIndex] = message;
     }
   }
+  return deduplicateByContent(result);
+}
+
+const CONTENT_DEDUP_WINDOW_MS = 60_000;
+
+function deduplicateByContent(messages: HermesChatViewMessage[]): HermesChatViewMessage[] {
+  const result: HermesChatViewMessage[] = [];
+  for (const message of messages) {
+    if (message.role === 'assistant' && message.content) {
+      const duplicateIndex = result.findIndex(
+        (existing) => existing.role === 'assistant'
+          && existing.content === message.content
+          && Math.abs(
+            (existing.completedAt || existing.updatedAt || existing.createdAt || 0)
+            - (message.completedAt || message.updatedAt || message.createdAt || 0),
+          ) < CONTENT_DEDUP_WINDOW_MS,
+      );
+      if (duplicateIndex >= 0) {
+        result[duplicateIndex] = message;
+        continue;
+      }
+    }
+    result.push(message);
+  }
   return result;
 }
 

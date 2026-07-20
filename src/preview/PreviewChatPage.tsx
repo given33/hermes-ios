@@ -225,9 +225,12 @@ export function ChatPreviewPage({
   const safeAreaTop = shellSplit ? 0 : insets.top;
   const attachmentCount = attachments.length;
   const canSend = !sending && Boolean(content.trim() || attachmentCount > 0);
-  const canCancelHostedTurn = hostedRunning && Boolean(activeConversationId);
-  const pendingStartedAt = [...messages].reverse().find(({ role }) => role === 'user')
-    ?.createdAt || Date.now();
+  const canCancelHostedTurn = (hostedRunning || sending) && Boolean(activeConversationId);
+  const pendingStartedAt = hostedRunning
+    ? ([...messages].reverse().find(({ role }) => role === 'assistant')?.startedAt
+      || [...messages].reverse().find(({ role }) => role === 'user')?.createdAt
+      || Date.now())
+    : ([...messages].reverse().find(({ role }) => role === 'user')?.createdAt || Date.now());
   const inputFontSize = resolveComposerFontSize(content);
   const keepLatestVisible = useCallback((animated = false, force = false) => {
     if (!force && !autoFollowStreamRef.current) return;
@@ -1497,13 +1500,14 @@ export function ChatPreviewPage({
                 onInspectActivity={pauseStreamAutoFollow}
               />
             ))}
-            {shouldRenderPendingMessage(messages, hostedRunning)
+            {shouldRenderPendingMessage(messages, hostedRunning || sending)
               ? (
                   <PendingMessage
                     index={messages.length}
                     isChinese={isChinese}
                     onInspectActivity={pauseStreamAutoFollow}
                     startedAt={pendingStartedAt}
+                    thinking={!hostedRunning}
                   />
                 )
               : null}
@@ -2301,21 +2305,26 @@ function PendingMessage({
   isChinese,
   onInspectActivity,
   startedAt,
+  thinking,
 }: {
   index: number;
   isChinese: boolean;
   onInspectActivity(): void;
   startedAt: number;
+  thinking?: boolean;
 }) {
   const { tokens } = useTheme();
+  const statusText = thinking
+    ? (isChinese ? '\u6b63\u5728\u601d\u8003\u4e2d' : 'Thinking')
+    : (isChinese ? '\u6b63\u5728\u6267\u884c' : 'The model is running');
   const pendingMessage: ChatMessage = {
     activities: [{
       category: 'other',
       duration: '',
       id: `pending-status-${startedAt}`,
       name: isChinese ? '\u8fd0\u884c\u72b6\u6001' : 'Runtime status',
-      output: isChinese ? '\u6a21\u578b\u6b63\u5728\u6267\u884c' : 'The model is running',
-      preview: isChinese ? '\u6a21\u578b\u6b63\u5728\u6267\u884c' : 'The model is running',
+      output: statusText,
+      preview: statusText,
       startedAt,
       status: 'running',
     }],
