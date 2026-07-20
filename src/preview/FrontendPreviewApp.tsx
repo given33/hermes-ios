@@ -20,7 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   HermesSwiftUIRouteView,
-  hasNativeSwiftUIPartialFrontend,
+  hasNativeSwiftUIRoute,
 } from '../../modules/hermes-ios-controls';
 import { HermesCloudApi, type JsonRecord } from '../api/HermesCloudApi';
 import {
@@ -71,6 +71,7 @@ import {
   SessionsPreviewPage,
   type PreviewPageProps,
 } from './PreviewCorePages';
+import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
 import { AccountPage } from '../auth/AccountPage';
 import {
@@ -120,7 +121,7 @@ export function FrontendPreviewApp({
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
   const useSwiftUIRoutes =
-    Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
+    Platform.OS === 'ios' && hasNativeSwiftUIRoute;
   const [locale, setLocale] = useState<NativeRouteLocale>('zh');
   const [profile, setProfile] = useState('default');
   const [profileChoices, setProfileChoices] = useState<ProfileChoice[]>(() =>
@@ -413,7 +414,7 @@ function PreviewRoute({
   const props = { locale, navigate, notify };
   const usesNativeSwiftUIRoute =
     Platform.OS === 'ios'
-    && hasNativeSwiftUIPartialFrontend
+    && hasNativeSwiftUIRoute
     && route.routeId !== 'smart-weather'
     && route.routeId !== 'account'
     && route.routeId !== 'chat';
@@ -470,7 +471,12 @@ function PreviewRoute({
   // product data. Fixture *PreviewPage surfaces are restricted to the explicit
   // frontend-preview packaging flag (manual Expo Go / design previews only).
   const allowFixturePages = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1' && !client;
-  if (!allowFixturePages && route.routeId !== 'chat' && route.routeId !== 'account') {
+  if (
+    !allowFixturePages
+    && route.routeId !== 'chat'
+    && route.routeId !== 'account'
+    && !(route.routeId === 'models' && client)
+  ) {
     const message = locale === 'zh'
       ? '此页面需要原生 SwiftUI 界面。请使用完整签名安装包。'
       : 'This page requires the native SwiftUI shell. Install a full signed build.';
@@ -502,7 +508,9 @@ function PreviewRoute({
     case 'sessions': return <SessionsPreviewPage {...props} />;
     case 'files': return <FilesPreviewPage {...props} />;
     case 'analytics': return <AnalyticsPreviewPage {...props} />;
-    case 'models': return <ModelsPreviewPage {...props} />;
+    case 'models': return client
+      ? <ModelsManagementPage {...props} client={client} profile={profile} />
+      : <ModelsPreviewPage {...props} />;
     case 'logs': return <LogsPreviewPage {...props} />;
     case 'cron': return <CronPreviewPage {...props} />;
     case 'skills': return <SkillsPreviewPage {...props} />;

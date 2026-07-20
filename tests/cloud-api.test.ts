@@ -58,6 +58,16 @@ function createApi() {
       if (path === '/api/model/custom') {
         return Promise.resolve({} as T);
       }
+      if (path === '/api/model/custom/discover') {
+        return Promise.resolve({
+          latency_ms: 240,
+          message: 'Model catalog loaded.',
+          models: ['model-b', 'model-a'],
+          ok: true,
+          reachable: true,
+          status: 200,
+        } as T);
+      }
       return Promise.resolve({} as T);
     },
   } as HermesApiClient;
@@ -578,54 +588,35 @@ test('custom model configuration carries the full runtime contract', async () =>
   });
 });
 
-test('custom model discovery reads a bounded Base URL catalog without saving the key', async () => {
-  const { api, calls: serverCalls } = createApi();
-  const originalFetch = globalThis.fetch;
-  const calls: Array<{ input: string; init?: RequestInit }> = [];
-  globalThis.fetch = async (input, init) => {
-    calls.push({ input: String(input), init });
-    return new Response(JSON.stringify({
-      data: [
-        { id: 'model-b' },
-        { id: 'model-a' },
-        { id: 'model-a' },
-      ],
-    }), {
-      headers: { 'content-type': 'application/json' },
-      status: 200,
-    });
-  };
-  try {
-    const result = await api.discoverCustomModels(
-      'https://models.example/v1/',
-      'private-key',
-    );
-    assert.deepEqual(result, {
-      baseUrl: 'https://models.example/v1',
-      models: ['model-b', 'model-a'],
-    });
-    assert.equal(calls[0].input, 'https://models.example/v1/models');
-    assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, 'Bearer private-key');
-    assert.deepEqual(serverCalls, []);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+test('custom model discovery runs through Hermes server with normalized input', async () => {
+  const { api, calls } = createApi();
+  const result = await api.discoverCustomModels(
+    'https://models.example/v1/',
+    'private-key',
+    'reviewer',
+  );
+
+  assert.deepEqual(result, {
+    baseUrl: 'https://models.example/v1',
+    latency_ms: 240,
+    message: 'Model catalog loaded.',
+    models: ['model-b', 'model-a'],
+    ok: true,
+    reachable: true,
+    status: 200,
+  });
+  assert.equal(calls[0].path, '/api/model/custom/discover');
+  assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
+    api_key: 'private-key',
+    base_url: 'https://models.example/v1',
+    profile: 'reviewer',
+  });
 });
 
-test('custom model discovery rejects invalid URLs and oversized catalogs', async () => {
-  const { api } = createApi();
+test('custom model discovery rejects invalid URLs before sending a key', async () => {
+  const { api, calls } = createApi();
   await assert.rejects(api.discoverCustomModels('file:///tmp/models'), /HTTP\(S\)/);
-
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response('x'.repeat(1024 * 1024 + 1), { status: 200 });
-  try {
-    await assert.rejects(
-      api.discoverCustomModels('https://models.example/v1'),
-      /1 MiB/,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  assert.equal(calls.length, 0);
 });
 
 test('custom model credentials require HTTPS except for loopback services', async () => {
@@ -650,30 +641,6 @@ test('custom model credentials require HTTPS except for loopback services', asyn
   await api.saveCustomModel({ ...insecure, baseUrl: 'http://127.0.0.1:11434/v1' });
   const body = JSON.parse(String(calls[0].options.body)) as Record<string, unknown>;
   assert.equal(body.base_url, 'http://127.0.0.1:11434/v1');
-});
-
-test('custom model discovery rejects a cross-origin final redirect', async () => {
-  const { api } = createApi();
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => {
-    const response = new Response(JSON.stringify({ data: [{ id: 'model-a' }] }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-    Object.defineProperty(response, 'url', {
-      configurable: true,
-      value: 'https://attacker.example/collect',
-    });
-    return response;
-  };
-  try {
-    await assert.rejects(
-      api.discoverCustomModels('https://models.example/v1', 'temporary-key'),
-      /untrusted|不受信任/,
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
 });
 
 test('group collaboration reads and writes the modified Hermes room APIs', async () => {

@@ -314,7 +314,7 @@ test('mobile shell remains full bleed and keeps the WebUI sidebar readable witho
 
   assert.match(shell, /const sidebarBackground = rootBackground/);
   assert.match(shell, /backgroundColor: sidebarBackground/);
-  assert.match(shell, /drawerStyle=\{\{ backgroundColor, width: drawerWidth \}\}/);
+  assert.match(shell, /drawerStyle=\{\[[\s\S]*\{ backgroundColor, width: drawerWidth \}[\s\S]*\]\}/);
   assert.match(shell, /drawerType="front"/);
   assert.doesNotMatch(app, /accessibilityLabel="Theme and font"|onTheme=/);
   assert.doesNotMatch(shell, /HermesLiveBlurView/);

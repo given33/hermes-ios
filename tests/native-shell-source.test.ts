@@ -132,10 +132,25 @@ test('compact navigation keeps UIKit native-stack edge-swipe navigation enabled'
 test('sidebar uses one opaque safe-area surface, full-width hit targets, and no theme shortcut', () => {
   const source = read('src/app/NativeShell.tsx');
   const routes = read('src/app/route-registry.ts');
+  const compactDrawer = source.slice(
+    source.indexOf('function CompactDrawerFrame'),
+    source.indexOf('function Sidebar'),
+  );
+  const referenceSidebar = source.slice(
+    source.indexOf('function ExpoReferenceSidebar'),
+    source.indexOf('function ShellNavigationItem'),
+  );
 
   assert.match(source, /const sidebarBackground = rootBackground/);
-  assert.match(source, /drawerStyle=\{\{ backgroundColor, width: drawerWidth \}\}/);
-  assert.match(source, /styles\.compactDrawerSurface, \{ backgroundColor \}/);
+  assert.match(compactDrawer, /drawerStyle=\{\[[\s\S]*styles\.compactDrawerPanel[\s\S]*\{ backgroundColor, width: drawerWidth \}[\s\S]*\]\}/);
+  assert.match(compactDrawer, /<View collapsable=\{false\} style=\{styles\.compactDrawerSurface\}>/);
+  assert.doesNotMatch(compactDrawer, /compactDrawerSurface, \{ backgroundColor \}/);
+  assert.doesNotMatch(referenceSidebar, /backgroundColor: opaque\(tokens\.colors\.background\)/);
+  assert.match(source, /compactDrawerSurface:[\s\S]*backgroundColor: 'transparent'/);
+  assert.match(source, /referenceSidebar:[\s\S]*backgroundColor: 'transparent'/);
+  assert.match(referenceSidebar, /automaticallyAdjustContentInsets=\{false\}/);
+  assert.match(referenceSidebar, /contentInsetAdjustmentBehavior="never"/);
+  assert.match(referenceSidebar, /bounces=\{false\}/);
   assert.match(source, /styles\.splitSidebar,[\s\S]*backgroundColor: sidebarBackground/);
   assert.match(source, /showsVerticalScrollIndicator=\{false\}/);
   assert.match(source, /referenceSidebarRow:[\s\S]*minHeight: 52/);

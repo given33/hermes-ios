@@ -183,22 +183,24 @@ export async function performHermesSwiftUIRouteAction(
       const result = await api.discoverCustomModels(
         fields.baseUrl || '',
         fields.apiKey || '',
+        profile,
       );
+      if (!result.ok) throw new Error(customModelOperationError('模型检测', result));
       return {
         detectedModels: result.models,
-        message: `检测到 ${result.models.length} 个可用模型`,
+        message: `检测到 ${result.models.length} 个可用模型（${result.latency_ms} ms）`,
       };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.modelSave:
       await api.saveCustomModel(customModelConfiguration(payload.fields), profile);
-      return 'reload';
+      return { message: '模型配置已保存', reload: true };
     case HERMES_SWIFTUI_ROUTE_ACTIONS.modelTest: {
       const result = await api.testCustomModel(customModelConfiguration(payload.fields), profile);
       if (!result.ok || !result.reachable) {
-        throw new Error(result.message || `Model endpoint returned HTTP ${result.status || 0}`);
+        throw new Error(customModelOperationError('连接测试', result));
       }
       return {
-        message: result.message || `Model connection succeeded in ${result.latency_ms} ms`,
+        message: `连接成功（HTTP ${result.status}，${result.latency_ms} ms）`,
       };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronCreate:
@@ -375,6 +377,19 @@ export async function performHermesSwiftUIRouteAction(
     default:
       return 'none';
   }
+}
+
+function customModelOperationError(
+  action: string,
+  result: { message: string; reachable: boolean; status: number },
+): string {
+  if (result.status === 401) return `${action}失败：API 密钥被拒绝（HTTP 401）`;
+  if (result.status === 403) return `${action}失败：密钥权限不足（HTTP 403）`;
+  if (result.status === 404) return `${action}失败：接口路径不存在（HTTP 404）`;
+  if (result.status === 429) return `${action}失败：请求过多（HTTP 429）`;
+  if (result.status >= 400) return `${action}失败：模型服务返回 HTTP ${result.status}`;
+  if (!result.reachable) return `${action}失败：模型服务连接超时或不可达`;
+  return `${action}失败：${result.message || '模型服务没有返回有效结果'}`;
 }
 
 function sessionsSnapshot(source: unknown): HermesSwiftUISessionSnapshot[] {

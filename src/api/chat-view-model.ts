@@ -1,5 +1,6 @@
 import type {
   CollaborationMessage,
+  JsonRecord,
   SingleConversation,
 } from './HermesCloudApi';
 import {
@@ -126,11 +127,153 @@ export function conversationMessagesToView(
   chinese = true,
   now = Date.now(),
 ): HermesChatViewMessage[] {
-  const converted = (conversation.messages ?? []).flatMap((message) => {
+  const sourceMessages = conversation.messages ?? [];
+  const finalChatIndices = latestFinalChatMessageIndices(sourceMessages);
+  const terminalTurnIds = terminalHostedTurnIds(conversation, finalChatIndices);
+  const cancelledTurnIds = cancelledHostedTurnIds(conversation);
+  const converted = sourceMessages.flatMap((message, index) => {
+    if (shouldHideSupersededChatMessage(
+      message,
+      finalChatIndices,
+      terminalTurnIds,
+      cancelledTurnIds,
+      index,
+    )) return [];
     const converted = collaborationMessageToView(message, chinese, now);
-    return converted ? [converted] : [];
+    if (!converted) return [];
+    const meta = messageMetadata(message);
+    const turnId = messageRuntimeTurnId(message, meta);
+    const terminal = hostedTurnTerminalAuthority(conversation, turnId);
+    if (!terminal) return [converted];
+    return [{
+      ...converted,
+      activities: converted.activities?.map((activity) => (
+        activity.status === 'queued' || activity.status === 'running'
+          ? {
+              ...activity,
+              completedAt: activity.completedAt || terminal.completedAt || undefined,
+              status: terminal.status,
+            }
+          : activity
+      )),
+      completedAt: converted.completedAt || terminal.completedAt || undefined,
+      status: ['queued', 'running'].includes(converted.status || '')
+        ? terminal.status
+        : converted.status,
+      updatedAt: terminal.completedAt || converted.updatedAt,
+    }];
   });
   return deduplicateMessages(converted);
+}
+
+function cancelledHostedTurnIds(conversation: SingleConversation): Set<string> {
+  const cancelled = new Set<string>();
+  for (const [key, record] of Object.entries(conversation.hosted_turns || {})) {
+    if (!isRecord(record) || terminalStatus(record.status) !== 'cancelled') continue;
+    const turnId = stringValue(record.turn_id) || stringValue(record.id) || key;
+    if (turnId) cancelled.add(turnId);
+  }
+  for (const message of conversation.messages || []) {
+    const meta = messageMetadata(message);
+    if (!meta.final_report || terminalStatus(message.status || meta.status) !== 'cancelled') {
+      continue;
+    }
+    const turnId = messageRuntimeTurnId(message, meta);
+    if (turnId) cancelled.add(turnId);
+  }
+  return cancelled;
+}
+
+function terminalHostedTurnIds(
+  conversation: SingleConversation,
+  finalChatIndices: ReadonlyMap<string, number>,
+): Set<string> {
+  const terminal = new Set(finalChatIndices.keys());
+  for (const [key, record] of Object.entries(conversation.hosted_turns || {})) {
+    if (!isRecord(record) || !terminalStatus(record.status)) continue;
+    const turnId = stringValue(record.turn_id) || stringValue(record.id) || key;
+    if (turnId) terminal.add(turnId);
+  }
+  for (const message of conversation.messages || []) {
+    const meta = messageMetadata(message);
+    const turnId = messageRuntimeTurnId(message, meta);
+    if (!turnId || !terminalStatus(message.status || meta.status)) continue;
+    if (meta.final_report || isFinalChatMessage(message, meta)) terminal.add(turnId);
+  }
+  return terminal;
+}
+
+function latestFinalChatMessageIndices(
+  messages: readonly CollaborationMessage[],
+): Map<string, number> {
+  const latest = new Map<string, number>();
+  messages.forEach((message, index) => {
+    const meta = messageMetadata(message);
+    const turnId = messageRuntimeTurnId(message, meta);
+    if (turnId && isFinalChatMessage(message, meta)) latest.set(turnId, index);
+  });
+  return latest;
+}
+
+function shouldHideSupersededChatMessage(
+  message: CollaborationMessage,
+  finalChatIndices: ReadonlyMap<string, number>,
+  terminalTurnIds: ReadonlySet<string>,
+  cancelledTurnIds: ReadonlySet<string>,
+  index: number,
+): boolean {
+  const meta = messageMetadata(message);
+  const turnId = messageRuntimeTurnId(message, meta);
+  if (!turnId) return false;
+  if (cancelledTurnIds.has(turnId) && chatMessageBaseStage(meta) === 'chat') return true;
+  const finalIndex = finalChatIndices.get(turnId);
+  if (isFinalChatMessage(message, meta)) return finalIndex !== index;
+  return terminalTurnIds.has(turnId) && isSupersededChatProgress(message, meta);
+}
+
+function messageRuntimeTurnId(
+  message: CollaborationMessage,
+  meta = messageMetadata(message),
+): string {
+  const direct = stringValue(meta.runtime_turn_id) || stringValue(meta.turn_id);
+  if (direct) return direct;
+  const key = stringValue(meta.message_key);
+  const separator = key.indexOf(':');
+  return separator > 0 ? key.slice(0, separator) : '';
+}
+
+function chatMessageBaseStage(meta: JsonRecord): string {
+  return stringValue(meta.base_role_stage || meta.role_stage)
+    .toLowerCase()
+    .split(/[.:/]/, 1)[0];
+}
+
+function isFinalChatMessage(
+  message: CollaborationMessage,
+  meta: JsonRecord,
+): boolean {
+  if (chatMessageBaseStage(meta) !== 'chat') return false;
+  const phase = stringValue(meta.phase).toLowerCase();
+  const key = stringValue(meta.message_key).toLowerCase();
+  const status = terminalStatus(message.status || meta.status);
+  return phase === 'completed'
+    || /:chat:(?:completed|failed|cancelled|canceled|stopped)$/.test(key)
+    || Boolean(meta.final_report && status);
+}
+
+function isSupersededChatProgress(
+  message: CollaborationMessage,
+  meta: JsonRecord,
+): boolean {
+  if (chatMessageBaseStage(meta) !== 'chat') return false;
+  const phase = stringValue(meta.phase).toLowerCase();
+  const roleStage = stringValue(meta.role_stage).toLowerCase();
+  const key = stringValue(meta.message_key).toLowerCase();
+  return phase === 'opening'
+    || phase === 'progress'
+    || roleStage === 'chat.opening'
+    || roleStage === 'chat.progress'
+    || /:chat:(?:opening|progress)$/.test(key);
 }
 
 export function chatModelConfigurationError(
@@ -358,11 +501,13 @@ export function conversationHasRunningWork(
   conversation: SingleConversation,
   now = Date.now(),
 ): boolean {
-  return hasRunningRecord(
-    conversation.hosted_turns,
-    HOSTED_TURN_FRESHNESS_MS,
-    now,
-  ) || hasRunningRecord(
+  const hostedRunning = Object.entries(conversation.hosted_turns || {}).some(([key, record]) => {
+    if (!isRecord(record)) return false;
+    const turnId = stringValue(record.turn_id) || stringValue(record.id) || key;
+    return !hostedTurnHasTerminalMessage(conversation, turnId)
+      && runningConversationRecordIsFresh(record, HOSTED_TURN_FRESHNESS_MS, now);
+  });
+  return hostedRunning || hasRunningRecord(
     conversation.runtime_runs,
     RUNTIME_RUN_FRESHNESS_MS,
     now,
@@ -378,6 +523,7 @@ export function conversationRunningHostedTurnId(
     if (!runningConversationRecordIsFresh(record, HOSTED_TURN_FRESHNESS_MS, now)) return [];
     const id = stringValue(record.turn_id) || stringValue(record.id) || key;
     if (!id) return [];
+    if (hostedTurnHasTerminalMessage(conversation, id)) return [];
     return [{
       id,
       timestamp: timestampValue(record.updated_at)
@@ -396,6 +542,7 @@ export function conversationHostedTurnState(
 ): 'missing' | 'running' | 'terminal' {
   const normalizedTurnId = turnId.trim();
   if (!normalizedTurnId) return 'missing';
+  if (hostedTurnHasTerminalMessage(conversation, normalizedTurnId)) return 'terminal';
   for (const [key, record] of Object.entries(conversation.hosted_turns || {})) {
     if (!isRecord(record)) continue;
     const id = stringValue(record.turn_id) || stringValue(record.id) || key;
@@ -407,6 +554,76 @@ export function conversationHostedTurnState(
     ) ? 'running' : 'terminal';
   }
   return 'missing';
+}
+
+function hostedTurnHasTerminalMessage(
+  conversation: SingleConversation,
+  turnId: string,
+): boolean {
+  return hostedTurnTerminalAuthority(conversation, turnId) !== null;
+}
+
+function hostedTurnTerminalAuthority(
+  conversation: SingleConversation,
+  turnId: string,
+): { completedAt: number; status: 'cancelled' | 'completed' | 'failed' } | null {
+  if (!turnId) return null;
+  for (const [key, record] of Object.entries(conversation.hosted_turns || {})) {
+    if (!isRecord(record)) continue;
+    const recordTurnId = stringValue(record.turn_id) || stringValue(record.id) || key;
+    if (recordTurnId !== turnId) continue;
+    const status = terminalStatus(record.status);
+    if (!status) break;
+    return {
+      completedAt: timestampValue(record.completed_at) || timestampValue(record.updated_at),
+      status,
+    };
+  }
+  for (const message of [...(conversation.messages || [])].reverse()) {
+    if (message.role !== 'assistant' || stringValue(message.kind).toLowerCase() === 'route') {
+      continue;
+    }
+    const meta = messageMetadata(message);
+    const runtimeTurnId = stringValue(meta.runtime_turn_id) || stringValue(meta.turn_id);
+    const messageKey = stringValue(meta.message_key);
+    if (runtimeTurnId !== turnId && !messageKey.startsWith(`${turnId}:`)) continue;
+    const status = terminalStatus(message.status);
+    if (!status) continue;
+    const phase = stringValue(meta.phase).toLowerCase();
+    const baseStage = stringValue(meta.base_role_stage || meta.role_stage)
+      .toLowerCase()
+      .split(/[.:/]/, 1)[0];
+    const isFinal = status === 'failed'
+      || status === 'cancelled'
+      || Boolean(meta.final_report)
+      || (baseStage === 'chat' && phase === 'completed');
+    if (!isFinal) continue;
+    return {
+      completedAt: timestampValue(message.completed_at)
+        || timestampValue(meta.completed_at)
+        || timestampValue(message.updated_at)
+        || timestampValue(message.created_at),
+      status,
+    };
+  }
+  return null;
+}
+
+function messageMetadata(message: CollaborationMessage): JsonRecord {
+  return {
+    ...(isRecord(message.metadata) ? message.metadata : {}),
+    ...(isRecord(message.meta) ? message.meta : {}),
+  };
+}
+
+function terminalStatus(value: unknown): 'cancelled' | 'completed' | 'failed' | null {
+  const status = stringValue(value).toLowerCase();
+  if (status === 'cancelled' || status === 'canceled' || status === 'stopped') {
+    return 'cancelled';
+  }
+  if (status === 'completed') return 'completed';
+  if (status === 'failed' || status === 'error') return 'failed';
+  return null;
 }
 
 export function reconcileHostedTurnVisibilityFailures(
@@ -453,7 +670,7 @@ export function streamEventToActivity(
       output: text,
       preview: text.slice(0, 80),
       startedAt: timestampValue(payload.started_at) || now,
-      status: eventType === 'reasoning.delta' ? 'running' : 'completed',
+      status: eventType === 'reasoning.available' ? 'completed' : 'running',
     };
   }
   if (!eventType.startsWith('tool.')) return null;
@@ -489,6 +706,45 @@ export function streamEventToActivity(
     status,
     toolName: stringValue(payload.tool_name) || name,
   };
+}
+
+export function activityDisplayContent(activity: HermesChatActivity): string {
+  const category = activity.category.toLowerCase();
+  const tool = `${activity.toolName || ''} ${activity.name}`.toLowerCase();
+  if (category === 'reasoning') {
+    return firstText(activity.output, activity.detail, activity.preview, activity.input);
+  }
+  if (category === 'command' || /(?:terminal|shell|exec|command)/.test(tool)) {
+    const input = firstText(activity.input, activity.detail, activity.preview);
+    const command = commandFromStructuredInput(input);
+    return command || input;
+  }
+  return firstText(
+    activity.error,
+    activity.output,
+    activity.input,
+    activity.detail,
+    activity.preview === activity.name ? '' : activity.preview,
+  );
+}
+
+function firstText(...values: Array<string | undefined>): string {
+  return values.map((value) => value?.trim() || '').find(Boolean) || '';
+}
+
+function commandFromStructuredInput(value: string): string {
+  if (!value) return '';
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!isRecord(parsed)) return '';
+    return firstText(
+      stringValue(parsed.command),
+      stringValue(parsed.cmd),
+      stringValue(parsed.script),
+    );
+  } catch {
+    return '';
+  }
 }
 
 function mapActivities(
@@ -826,9 +1082,7 @@ export function formatActivitySummary(
   chinese = true,
   now = Date.now(),
 ): string {
-  const running = ['pending', 'queued', 'running', 'starting', 'streaming'].includes(
-    (message.status || '').toLowerCase(),
-  ) || Boolean(message.activities?.some(({ status }) => status === 'running'));
+  const running = messageIsRunning(message);
   const durationMs = messageDurationMs(message, now);
   const prefix = running
     ? chinese ? '处理中' : 'Processing'
@@ -843,15 +1097,24 @@ export function messageDurationMs(
   >,
   now = Date.now(),
 ): number {
-  const running = ['pending', 'queued', 'running', 'starting', 'streaming'].includes(
-    (message.status || '').toLowerCase(),
-  ) || Boolean(message.activities?.some(({ status }) => status === 'running'));
+  const running = messageIsRunning(message);
   if (running && message.startedAt) return Math.max(0, now - message.startedAt);
   if ((message.durationMs || 0) > 0) return message.durationMs || 0;
   if (message.startedAt) {
     return Math.max(0, (message.completedAt || message.updatedAt || now) - message.startedAt);
   }
   return 0;
+}
+
+export function messageIsRunning(
+  message: Pick<HermesChatViewMessage, 'activities' | 'status'>,
+): boolean {
+  const status = (message.status || '').toLowerCase();
+  if (TERMINAL_TURN_STATES.has(status)) return false;
+  return ['pending', 'queued', 'running', 'starting', 'streaming'].includes(status)
+    || Boolean(message.activities?.some(({ status: activityStatus }) => (
+      activityStatus === 'queued' || activityStatus === 'running'
+    )));
 }
 
 export function formatMessageLocalTime(

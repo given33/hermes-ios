@@ -17,6 +17,7 @@ import {
   encodeHermesSwiftUIRouteSnapshot,
   HERMES_SWIFTUI_ROUTE_ACTIONS,
   HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+  type HermesSwiftUIRouteOperationSnapshot,
 } from './swiftui-route-contract';
 import {
   loadHermesSwiftUIRouteSnapshot,
@@ -59,10 +60,17 @@ export function useHermesSwiftUIRouteData({
   const selectedItemId = useRef('');
   const acknowledgedRoomRequestId = useRef('');
   const collaborationReplay = useRef<Promise<string> | null>(null);
+  const operationRef = useRef<HermesSwiftUIRouteOperationSnapshot | undefined>(undefined);
   const [dataJson, setDataJson] = useState(() => encodeHermesSwiftUIRouteSnapshot({
     version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
     route: routeId,
   }));
+  const updateOperation = useCallback((
+    operation: HermesSwiftUIRouteOperationSnapshot | undefined,
+  ) => {
+    operationRef.current = operation;
+    setDataJson((current) => mergeRouteOperation(current, operation));
+  }, []);
 
   const replayPendingCollaborationMessages = useCallback(async () => {
     if (!api || !localStore || !cacheOwner || routeId !== 'collaboration') return '';
@@ -137,6 +145,9 @@ export function useHermesSwiftUIRouteData({
       }
       if (version !== requestVersion.current) return;
       if (routeId === 'system') lastSuccessfulReloadAt.current = Date.now();
+      if (routeId === 'models' && operationRef.current) {
+        snapshot = { ...snapshot, operation: operationRef.current };
+      }
       setDataJson(encodeHermesSwiftUIRouteSnapshot(snapshot));
     } catch (error) {
       if (version !== requestVersion.current) return;
@@ -163,6 +174,7 @@ export function useHermesSwiftUIRouteData({
     const lifecycleVersion = ++requestVersion.current;
     lastSuccessfulReloadAt.current = 0;
     selectedItemId.current = '';
+    operationRef.current = undefined;
     setDataJson(encodeHermesSwiftUIRouteSnapshot({
       version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
       route: routeId,
@@ -215,6 +227,14 @@ export function useHermesSwiftUIRouteData({
     if (!event) {
       notify('无法识别页面操作，请刷新后重试。');
       return;
+    }
+    const modelOperation = modelOperationForAction(event.action);
+    if (modelOperation) {
+      updateOperation({
+        action: modelOperation,
+        message: modelOperationRunningMessage(modelOperation),
+        state: 'running',
+      });
     }
     if (
       (
@@ -289,16 +309,69 @@ export function useHermesSwiftUIRouteData({
       if (typeof result === 'object' && result.detectedModels) {
         setDataJson((current) => mergeDetectedModels(current, result.detectedModels || []));
       }
+      const resultMessage = typeof result === 'object' ? result.message : '';
+      if (modelOperation) {
+        updateOperation({
+          action: modelOperation,
+          message: resultMessage || modelOperationSuccessMessage(modelOperation),
+          state: 'success',
+        });
+      }
       if (result === 'reload' || (typeof result === 'object' && result.reload)) {
         await reload();
       }
-      if (typeof result === 'object' && result.message) notify(result.message);
+      if (resultMessage) notify(resultMessage);
     } catch (error) {
-      notify(serverErrorMessage(error));
+      const message = serverErrorMessage(error);
+      if (modelOperation) {
+        updateOperation({ action: modelOperation, message, state: 'error' });
+      }
+      notify(message);
     }
-  }, [api, cacheOwner, localStore, notify, profile, reload]);
+  }, [api, cacheOwner, localStore, notify, profile, reload, updateOperation]);
 
   return { dataJson, onAction, reload };
+}
+
+function mergeRouteOperation(
+  dataJson: string,
+  operation: HermesSwiftUIRouteOperationSnapshot | undefined,
+): string {
+  try {
+    const source: unknown = JSON.parse(dataJson);
+    if (typeof source !== 'object' || source === null || Array.isArray(source)) return dataJson;
+    const next = { ...source } as Record<string, unknown>;
+    if (operation) next.operation = operation;
+    else delete next.operation;
+    return JSON.stringify(next);
+  } catch {
+    return dataJson;
+  }
+}
+
+function modelOperationForAction(
+  action: string,
+): HermesSwiftUIRouteOperationSnapshot['action'] | null {
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.modelDiscover) return 'model.discover';
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.modelSave) return 'model.save';
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.modelTest) return 'model.test';
+  return null;
+}
+
+function modelOperationRunningMessage(
+  action: HermesSwiftUIRouteOperationSnapshot['action'],
+): string {
+  if (action === 'model.discover') return '正在检测可用模型…';
+  if (action === 'model.test') return '正在测试模型连接…';
+  return '正在保存模型配置…';
+}
+
+function modelOperationSuccessMessage(
+  action: HermesSwiftUIRouteOperationSnapshot['action'],
+): string {
+  if (action === 'model.discover') return '模型检测完成';
+  if (action === 'model.test') return '模型连接测试通过';
+  return '模型配置已保存';
 }
 
 function mergeDetectedModels(dataJson: string, models: readonly string[]): string {

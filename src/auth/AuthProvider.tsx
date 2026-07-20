@@ -12,6 +12,7 @@ import {
   useState,
   type PropsWithChildren,
 } from 'react';
+import { Platform } from 'react-native';
 
 import { HermesApiClient, HermesApiError } from '../api/HermesApiClient';
 import { withDeadline } from '../api/async-deadline';
@@ -36,6 +37,7 @@ import {
 import {
   CredentialStore,
   provisionConnection as persistVerifiedConnection,
+  type SecureStoreAdapter,
 } from './credential-store';
 import type { RememberedLogin, SavedConnection } from './credential-contract';
 import { getMobileDeviceIdentity } from './device-identity';
@@ -64,7 +66,34 @@ interface AuthContextValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-const credentialStore = new CredentialStore(SecureStore);
+const volatileWebSession = new Map<string, string>();
+const webSessionStore: SecureStoreAdapter = {
+  async getItemAsync(key) {
+    try {
+      return globalThis.sessionStorage?.getItem(key) ?? volatileWebSession.get(key) ?? null;
+    } catch {
+      return volatileWebSession.get(key) ?? null;
+    }
+  },
+  async setItemAsync(key, value) {
+    volatileWebSession.set(key, value);
+    try {
+      globalThis.sessionStorage?.setItem(key, value);
+    } catch {
+      // The in-memory value keeps the current test tab usable.
+    }
+  },
+  async deleteItemAsync(key) {
+    volatileWebSession.delete(key);
+    try {
+      globalThis.sessionStorage?.removeItem(key);
+    } catch {
+      // The in-memory value is already removed.
+    }
+  },
+};
+const authStore: SecureStoreAdapter = Platform.OS === 'web' ? webSessionStore : SecureStore;
+const credentialStore = new CredentialStore(authStore);
 const credentialMutations = new CredentialMutationQueue();
 const APNS_LOGOUT_DEADLINE_MS = 2_500;
 const REMOTE_LOGOUT_DEADLINE_MS = 8_000;
@@ -226,7 +255,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       dispatch({ type: 'PROVISION_STARTED' });
       try {
         const mobileAuth = new MobileAuthApiClient(HERMES_ORIGIN);
-        const device = await getMobileDeviceIdentity(SecureStore, {
+        const device = await getMobileDeviceIdentity(authStore, {
           appVersion: currentMobileAppVersion(),
           deviceName: Device.deviceName,
           modelId: Device.modelId,
@@ -290,7 +319,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       if (!status.registrationOpen) {
         throw new MobileAuthApiError(403, 'Owner registration is closed');
       }
-      const device = await getMobileDeviceIdentity(SecureStore, {
+      const device = await getMobileDeviceIdentity(authStore, {
         appVersion: currentMobileAppVersion(),
         deviceName: Device.deviceName,
         modelId: Device.modelId,

@@ -55,6 +55,12 @@ export interface HermesSwiftUIModelSnapshot {
   active: boolean;
 }
 
+export interface HermesSwiftUIRouteOperationSnapshot {
+  action: 'model.discover' | 'model.save' | 'model.test';
+  message: string;
+  state: 'error' | 'running' | 'success';
+}
+
 export interface HermesSwiftUILogSnapshot {
   id: string;
   level: string;
@@ -216,6 +222,7 @@ export interface HermesSwiftUIRouteSnapshot {
   analytics?: HermesSwiftUIAnalyticsSnapshot;
   models?: readonly HermesSwiftUIModelSnapshot[];
   detectedModels?: readonly string[];
+  operation?: HermesSwiftUIRouteOperationSnapshot;
   logs?: readonly HermesSwiftUILogSnapshot[];
   cron?: readonly HermesSwiftUICronJobSnapshot[];
   skills?: readonly HermesSwiftUISkillSnapshot[];

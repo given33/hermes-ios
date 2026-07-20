@@ -723,7 +723,10 @@ function CompactDrawerFrame({
     <Drawer
       direction="ltr"
       drawerPosition="left"
-      drawerStyle={{ backgroundColor, width: drawerWidth }}
+      drawerStyle={[
+        styles.compactDrawerPanel,
+        { backgroundColor, width: drawerWidth },
+      ]}
       drawerType="front"
       keyboardDismissMode="on-drag"
       onClose={onClose}
@@ -732,10 +735,7 @@ function CompactDrawerFrame({
       overlayAccessibilityLabel={locale === 'zh' ? '关闭导航' : 'Close navigation'}
       overlayStyle={{ backgroundColor: SHELL_METRICS.overlayColor }}
       renderDrawerContent={() => (
-        <View
-          collapsable={false}
-          style={[styles.compactDrawerSurface, { backgroundColor }]}
-        >
+        <View collapsable={false} style={styles.compactDrawerSurface}>
           {drawerContent}
         </View>
       )}
@@ -923,14 +923,17 @@ function ExpoReferenceSidebar({
       style={[
         styles.referenceSidebar,
         {
-          backgroundColor: opaque(tokens.colors.background),
           paddingBottom: insets.bottom,
           paddingTop: insets.top,
         },
       ]}
     >
       <ScrollView
+        automaticallyAdjustContentInsets={false}
+        automaticallyAdjustsScrollIndicatorInsets={false}
+        bounces={false}
         contentContainerStyle={styles.referenceSidebarContent}
+        contentInsetAdjustmentBehavior="never"
         decelerationRate="normal"
         scrollEventThrottle={8}
         showsVerticalScrollIndicator={false}
@@ -1302,9 +1305,13 @@ const styles = StyleSheet.create({
   compactDrawer: {
     flex: 1,
   },
+  compactDrawerPanel: {
+    overflow: 'hidden',
+  },
   compactDrawerSurface: {
     flex: 1,
     minHeight: 0,
+    backgroundColor: 'transparent',
   },
   swiftUISidebar: {
     flex: 1,
@@ -1328,6 +1335,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   referenceSidebar: {
+    backgroundColor: 'transparent',
     flex: 1,
     minHeight: 0,
     overflow: 'hidden',

@@ -11,6 +11,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let analytics: HermesAnalyticsSnapshot
   let models: [HermesModelSnapshot]
   let detectedModels: [String]
+  let operation: HermesRouteOperationSnapshot?
   let logs: [HermesLogSnapshot]
   let cron: [HermesCronJobSnapshot]
   let skills: [HermesSkillSnapshot]
@@ -32,6 +33,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     case analytics
     case models
     case detectedModels
+    case operation
     case logs
     case cron
     case skills
@@ -54,6 +56,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     analytics: HermesAnalyticsSnapshot = .empty,
     models: [HermesModelSnapshot] = [],
     detectedModels: [String] = [],
+    operation: HermesRouteOperationSnapshot? = nil,
     logs: [HermesLogSnapshot] = [],
     cron: [HermesCronJobSnapshot] = [],
     skills: [HermesSkillSnapshot] = [],
@@ -74,6 +77,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.analytics = analytics
     self.models = models
     self.detectedModels = detectedModels
+    self.operation = operation
     self.logs = logs
     self.cron = cron
     self.skills = skills
@@ -113,6 +117,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [String].self,
       forKey: .detectedModels
     ) ?? []
+    operation = try container.decodeIfPresent(
+      HermesRouteOperationSnapshot.self,
+      forKey: .operation
+    )
     logs = try container.decodeIfPresent(
       [HermesLogSnapshot].self,
       forKey: .logs
@@ -148,6 +156,12 @@ struct HermesRouteSnapshot: Decodable, Equatable {
 // The snapshot is immutable after decoding and is transferred from the
 // background JSON worker to the main actor as one value.
 extension HermesRouteSnapshot: @unchecked Sendable {}
+
+struct HermesRouteOperationSnapshot: Decodable, Equatable {
+  let action: String
+  let message: String
+  let state: String
+}
 
 struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {
   let id: String

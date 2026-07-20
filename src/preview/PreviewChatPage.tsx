@@ -32,6 +32,8 @@ import {
   Text,
   TextInput,
   View,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   useWindowDimensions,
 } from 'react-native';
 import Reanimated, {
@@ -58,7 +60,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   HermesSwiftUIModelToolsView,
-  hasNativeSwiftUIPartialFrontend,
+  hasNativeSwiftUIModelTools,
 } from '../../modules/hermes-ios-controls';
 import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
@@ -85,6 +87,7 @@ import {
 } from '../api/conversation-local-store';
 import {
   activityCategoryLabel,
+  activityDisplayContent,
   attachmentContext,
   chatModelConfigurationError,
   conversationHasRunningWork,
@@ -95,6 +98,7 @@ import {
   formatMessageLocalTime,
   hostedTurnVisibilityFailure,
   messageStatusLabel,
+  messageIsRunning,
   reconcileHostedTurnVisibilityFailures,
   shouldRenderPendingMessage,
   upsertChatMessage,
@@ -207,6 +211,7 @@ export function ChatPreviewPage({
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
   const pendingSendFrame = useRef<number | null>(null);
   const pendingScrollFrame = useRef<number | null>(null);
+  const autoFollowStreamRef = useRef(true);
   const outboxReplayRef = useRef<Promise<void> | null>(null);
   const keyboard = useAnimatedKeyboard();
   const keyboardAvoidanceEnabled = useSharedValue(1);
@@ -221,13 +226,29 @@ export function ChatPreviewPage({
   const attachmentCount = attachments.length;
   const canSend = !sending && Boolean(content.trim() || attachmentCount > 0);
   const canCancelHostedTurn = hostedRunning && Boolean(activeConversationId);
+  const pendingStartedAt = [...messages].reverse().find(({ role }) => role === 'user')
+    ?.createdAt || Date.now();
   const inputFontSize = resolveComposerFontSize(content);
-  const keepLatestVisible = useCallback((animated = false) => {
+  const keepLatestVisible = useCallback((animated = false, force = false) => {
+    if (!force && !autoFollowStreamRef.current) return;
     if (pendingScrollFrame.current !== null) return;
     pendingScrollFrame.current = requestAnimationFrame(() => {
       pendingScrollFrame.current = null;
       streamRef.current?.scrollToEnd({ animated });
     });
+  }, []);
+  const pauseStreamAutoFollow = useCallback(() => {
+    autoFollowStreamRef.current = false;
+    if (pendingScrollFrame.current !== null) {
+      cancelAnimationFrame(pendingScrollFrame.current);
+      pendingScrollFrame.current = null;
+    }
+  }, []);
+  const handleStreamScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    autoFollowStreamRef.current = (
+      contentSize.height - (contentOffset.y + layoutMeasurement.height)
+    ) <= 72;
   }, []);
   const keyboardRootStyle = useAnimatedStyle(() => ({
     paddingBottom: keyboard.height.value * keyboardAvoidanceEnabled.value,
@@ -731,6 +752,7 @@ export function ChatPreviewPage({
   }, [clearOptimisticHostedTurn]);
 
   const createConversation = async () => {
+    autoFollowStreamRef.current = true;
     clearOptimisticHostedTurn();
     if (cloudApi) {
       try {
@@ -766,9 +788,33 @@ export function ChatPreviewPage({
       )?.profile?.trim()
       || profile
     );
+    const userMessageCreatedAt = Date.now();
+    const userMessageId = uniqueTurnId('user');
+    const userMessage: ChatMessage = {
+      avatarRole: 'user',
+      content: trimmed || (isChinese ? `已添加 ${attachmentCount} 个附件` : `${attachmentCount} attachments`),
+      createdAt: userMessageCreatedAt,
+      durationMs: 0,
+      id: userMessageId,
+      name: isChinese ? '你' : 'You',
+      role: 'user',
+      status: 'completed',
+      updatedAt: userMessageCreatedAt,
+    };
+    autoFollowStreamRef.current = true;
+    setMessages((current) => [...current, userMessage]);
+    let composerCleared = false;
+    const clearQueuedComposer = () => {
+      if (composerCleared) return;
+      composerCleared = true;
+      contentRef.current = '';
+      setContent('');
+      setAttachments([]);
+    };
+    clearQueuedComposer();
+    setSending(true);
     const configurationErrorId = `model-configuration-${activeConversationIdRef.current || 'new'}`;
     if (cloudApi && client) {
-      setSending(true);
       try {
         const modelConfiguration = await withDeadline(
           cloudApi.getModels(conversationProfile),
@@ -822,31 +868,7 @@ export function ChatPreviewPage({
         return;
       }
     }
-    const userMessageCreatedAt = Date.now();
-    const userMessageId = uniqueTurnId('user');
-    const userMessage: ChatMessage = {
-      avatarRole: 'user',
-      content: trimmed || (isChinese ? `已添加 ${attachmentCount} 个附件` : `${attachmentCount} attachments`),
-      createdAt: userMessageCreatedAt,
-      durationMs: 0,
-      id: userMessageId,
-      name: isChinese ? '你' : 'You',
-      role: 'user',
-      status: 'completed',
-      updatedAt: userMessageCreatedAt,
-    };
-    setMessages((current) => [...current, userMessage]);
-    let composerCleared = false;
-    const clearQueuedComposer = () => {
-      if (composerCleared) return;
-      composerCleared = true;
-      contentRef.current = '';
-      setContent('');
-      setAttachments([]);
-    };
-    setSending(true);
     if (!cloudApi || !client) {
-      clearQueuedComposer();
       const failedAt = Date.now();
       setMessages((current) => upsertChatMessage(current, {
         avatarRole: 'hermes',
@@ -1086,6 +1108,7 @@ export function ChatPreviewPage({
 
   const selectConversation = async (conversationId: string) => {
     if (!conversationId || conversationId === activeConversationIdRef.current) return;
+    autoFollowStreamRef.current = true;
     activeHostedTurnIdRef.current = '';
     clearOptimisticHostedTurn();
     setActiveHostedTurnId('');
@@ -1439,6 +1462,7 @@ export function ChatPreviewPage({
             keyboardShouldPersistTaps="handled"
             onContentSizeChange={() => keepLatestVisible(true)}
             onLayout={() => keepLatestVisible(false)}
+            onScroll={handleStreamScroll}
             ref={streamRef}
             scrollEventThrottle={8}
             showsVerticalScrollIndicator={false}
@@ -1470,10 +1494,18 @@ export function ChatPreviewPage({
                 key={message.id}
                 message={message}
                 onOpenAttachment={openStoredAttachment}
+                onInspectActivity={pauseStreamAutoFollow}
               />
             ))}
             {shouldRenderPendingMessage(messages, hostedRunning)
-              ? <PendingMessage index={messages.length} />
+              ? (
+                  <PendingMessage
+                    index={messages.length}
+                    isChinese={isChinese}
+                    onInspectActivity={pauseStreamAutoFollow}
+                    startedAt={pendingStartedAt}
+                  />
+                )
               : null}
           </ScrollView>
 
@@ -2052,11 +2084,13 @@ function UnifiedMessage({
   isChinese,
   message,
   onOpenAttachment,
+  onInspectActivity,
 }: {
   index: number;
   isChinese: boolean;
   message: ChatMessage;
   onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
+  onInspectActivity(): void;
 }) {
   const { tokens } = useTheme();
   const isUser = message.role === 'user';
@@ -2105,10 +2139,15 @@ function UnifiedMessage({
         isUser ? styles.userMessageEnvelope : styles.agentMessageEnvelope,
       ]}
     >
-      {!isUser && message.activities?.length ? (
-        <RoleActivityGroup isChinese={isChinese} message={message} />
+      {!isUser && shouldShowMessageTiming(message) ? (
+        <RoleActivityGroup
+          isChinese={isChinese}
+          message={message}
+          onInspectActivity={onInspectActivity}
+        />
       ) : null}
-      <View style={[styles.messageRow, isUser && styles.userMessageRow]}>
+      {isUser || message.content.trim() || message.attachments?.length ? (
+        <View style={[styles.messageRow, isUser && styles.userMessageRow]}>
         <MessageAvatar isUser={isUser} message={message} />
         <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
           <View style={[styles.messageMeta, isUser && styles.userMessageMeta]}>
@@ -2178,7 +2217,8 @@ function UnifiedMessage({
           ) : null}
           </View>
         </View>
-      </View>
+        </View>
+      ) : null}
     </Reanimated.View>
   );
 }
@@ -2256,26 +2296,63 @@ function MessageAvatar({
   );
 }
 
-function PendingMessage({ index }: { index: number }) {
+function PendingMessage({
+  index,
+  isChinese,
+  onInspectActivity,
+  startedAt,
+}: {
+  index: number;
+  isChinese: boolean;
+  onInspectActivity(): void;
+  startedAt: number;
+}) {
   const { tokens } = useTheme();
+  const pendingMessage: ChatMessage = {
+    activities: [{
+      category: 'other',
+      duration: '',
+      id: `pending-status-${startedAt}`,
+      name: isChinese ? '\u8fd0\u884c\u72b6\u6001' : 'Runtime status',
+      output: isChinese ? '\u6a21\u578b\u6b63\u5728\u6267\u884c' : 'The model is running',
+      preview: isChinese ? '\u6a21\u578b\u6b63\u5728\u6267\u884c' : 'The model is running',
+      startedAt,
+      status: 'running',
+    }],
+    avatarRole: 'hermes',
+    content: '',
+    id: `pending-${startedAt}`,
+    name: 'Hermes Agent',
+    role: 'assistant',
+    roleStage: 'chat',
+    startedAt,
+    status: 'running',
+  };
   return (
     <Reanimated.View
       entering={FadeInUp
         .delay(index * 35)
         .duration(IOS_MOTION.duration.content)
         .easing(IOS_DECELERATE_EASING)}
-      style={[styles.message, styles.agentMessage]}
+      style={[styles.messageEnvelope, styles.agentMessageEnvelope]}
     >
-      <View style={[styles.messageAvatar, styles.hermesAvatar]}>
-        <Image resizeMode="contain" source={HERMES_AVATAR} style={styles.avatarImage} />
-      </View>
-      <View style={styles.messageStack}>
-        <View style={styles.messageMeta}>
-          <Text style={[styles.messageName, { color: tokens.colors.textSecondary }]}>Hermes Agent</Text>
+      <RoleActivityGroup
+        isChinese={isChinese}
+        message={pendingMessage}
+        onInspectActivity={onInspectActivity}
+      />
+      <View style={[styles.message, styles.agentMessage]}>
+        <View style={[styles.messageAvatar, styles.hermesAvatar]}>
+          <Image resizeMode="contain" source={HERMES_AVATAR} style={styles.avatarImage} />
         </View>
-        <View style={[styles.messageBody, styles.agentMessageBody, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }]}>
-          <View style={styles.pendingDots}>
-            {[0, 1, 2].map((dot) => <PendingDot delay={dot * 120} key={dot} />)}
+        <View style={styles.messageStack}>
+          <View style={styles.messageMeta}>
+            <Text style={[styles.messageName, { color: tokens.colors.textSecondary }]}>Hermes Agent</Text>
+          </View>
+          <View style={[styles.messageBody, styles.agentMessageBody, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }]}>
+            <View style={styles.pendingDots}>
+              {[0, 1, 2].map((dot) => <PendingDot delay={dot * 120} key={dot} />)}
+            </View>
           </View>
         </View>
       </View>
@@ -2314,39 +2391,53 @@ function PendingDot({ delay }: { delay: number }) {
 function RoleActivityGroup({
   isChinese,
   message,
+  onInspectActivity,
 }: {
   isChinese: boolean;
   message: ChatMessage;
+  onInspectActivity(): void;
 }) {
   const { tokens } = useTheme();
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
   const activities = message.activities || [];
-  const running = ['pending', 'queued', 'running', 'starting', 'streaming'].includes(
-    (message.status || '').toLowerCase(),
-  ) || activities.some(({ status }) => status === 'running');
+  const running = messageIsRunning(message);
   useEffect(() => {
     if (!running) return undefined;
     const interval = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(interval);
   }, [running]);
-  return (
-    <View style={styles.activityGroup}>
-      <IOSPressable
-        accessibilityLabel={formatActivitySummary(message, isChinese, now)}
-        haptic="selection"
-        onPress={() => setOpen((current) => !current)}
-        style={styles.activitySummary}
-      >
-        <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.textSecondary }]}>
-          {formatActivitySummary(message, isChinese, now)}
-        </Text>
+  const summary = (
+    <>
+      <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.textSecondary }]}>
+        {formatActivitySummary(message, isChinese, now)}
+      </Text>
+      {activities.length ? (
         <AnimatedChevron
           color={tokens.colors.textSecondary}
           open={open}
           size={14}
         />
-      </IOSPressable>
+      ) : null}
+    </>
+  );
+  return (
+    <View style={styles.activityGroup}>
+      {activities.length ? (
+        <IOSPressable
+          accessibilityLabel={formatActivitySummary(message, isChinese, now)}
+          haptic="selection"
+          onPress={() => {
+            onInspectActivity();
+            setOpen((current) => !current);
+          }}
+          style={styles.activitySummary}
+        >
+          {summary}
+        </IOSPressable>
+      ) : (
+        <View style={styles.activitySummary}>{summary}</View>
+      )}
       {open ? (
         <Reanimated.View
           entering={FadeIn
@@ -2358,7 +2449,12 @@ function RoleActivityGroup({
           style={styles.activityTimeline}
         >
           {activities.map((activity) => (
-            <ActivityCard activity={activity} isChinese={isChinese} key={activity.id} />
+            <ActivityCard
+              activity={activity}
+              isChinese={isChinese}
+              key={activity.id}
+              onInspectActivity={onInspectActivity}
+            />
           ))}
         </Reanimated.View>
       ) : null}
@@ -2367,12 +2463,24 @@ function RoleActivityGroup({
   );
 }
 
+function shouldShowMessageTiming(message: ChatMessage): boolean {
+  return Boolean(
+    message.startedAt
+    || message.completedAt
+    || message.updatedAt
+    || message.durationMs
+    || message.status,
+  );
+}
+
 function ActivityCard({
   activity,
   isChinese,
+  onInspectActivity,
 }: {
   activity: ChatActivity;
   isChinese: boolean;
+  onInspectActivity(): void;
 }) {
   const { tokens } = useTheme();
   const [open, setOpen] = useState(false);
@@ -2382,14 +2490,17 @@ function ActivityCard({
     : activity.status === 'running' || activity.status === 'queued'
       ? '#D28B22'
       : '#20A879';
-  const runtime = [
-    activity.toolName,
-    [activity.provider, activity.model].filter(Boolean).join(' · '),
-    messageStatusLabel(activity.status, isChinese),
-  ].filter(Boolean).join(' · ');
+  const detailContent = activityDisplayContent(activity);
   return (
     <View style={[styles.activityCard, { backgroundColor: multiplyAlpha(tokens.colors.card, 0.62), borderColor: tokens.colors.border }]}>
-      <IOSPressable haptic="selection" onPress={() => setOpen((current) => !current)} style={styles.activityCardSummary}>
+      <IOSPressable
+        haptic="selection"
+        onPress={() => {
+          onInspectActivity();
+          setOpen((current) => !current);
+        }}
+        style={styles.activityCardSummary}
+      >
         <View style={[styles.activityStatusSmall, { backgroundColor: statusColor }]} />
         <Text style={styles.activityKind}>{label}</Text>
         <Text numberOfLines={1} style={[styles.activityName, { color: tokens.colors.foreground }]}>{activity.name}</Text>
@@ -2406,29 +2517,17 @@ function ActivityCard({
             .easing(IOS_STANDARD_EASING)}
           style={styles.activityDetail}
         >
-          {runtime ? (
-            <Text style={[styles.activityRuntime, { color: tokens.colors.textTertiary }]}>
-              {runtime}
-            </Text>
-          ) : null}
-          {activity.preview && activity.preview !== activity.name ? (
-            <ActivityDetail label={isChinese ? '摘要' : 'Summary'} value={activity.preview} />
-          ) : null}
-          {activity.input ? <ActivityDetail label={isChinese ? '输入' : 'Input'} value={activity.input} /> : null}
-          {activity.output ? <ActivityDetail label={isChinese ? '输出' : 'Output'} value={activity.output} /> : null}
-          {activity.detail ? <ActivityDetail label={isChinese ? '详情' : 'Detail'} value={activity.detail} /> : null}
-          {activity.error ? <ActivityDetail label={isChinese ? '错误' : 'Error'} value={activity.error} /> : null}
+          {detailContent ? <ActivityDetail value={detailContent} /> : null}
         </Reanimated.View>
       ) : null}
     </View>
   );
 }
 
-function ActivityDetail({ label, value }: { label: string; value: string }) {
+function ActivityDetail({ value }: { value: string }) {
   const { tokens } = useTheme();
   return (
     <View style={styles.activityDetailSection}>
-      <Text style={[styles.activityDetailLabel, { color: tokens.colors.textSecondary }]}>{label}</Text>
       <ScrollView
         nestedScrollEnabled
         scrollEventThrottle={8}
@@ -2635,7 +2734,7 @@ function ModelToolsDrawer({
     ),
   }));
 
-  if (Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend) {
+  if (Platform.OS === 'ios' && hasNativeSwiftUIModelTools) {
     return (
       <Modal
         animationType="none"
@@ -2858,9 +2957,7 @@ const styles = StyleSheet.create({
   activityName: { flex: 1, fontFamily: BODY_SEMIBOLD, fontSize: 9 },
   activityDuration: { fontFamily: MONO_REGULAR, fontSize: 8 },
   activityDetail: { gap: 7, paddingBottom: 8, paddingHorizontal: 8, paddingLeft: 22 },
-  activityRuntime: { fontFamily: MONO_REGULAR, fontSize: 8, lineHeight: 12 },
   activityDetailSection: { gap: 3 },
-  activityDetailLabel: { fontFamily: BODY_BOLD, fontSize: 8 },
   activityCodeScroll: { borderRadius: 5, maxHeight: 260 },
   activityCode: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13, padding: 7 },
   composer: { paddingTop: 7 },

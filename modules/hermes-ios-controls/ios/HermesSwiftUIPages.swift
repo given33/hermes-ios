@@ -45,6 +45,7 @@ struct HermesRouteContent: View {
         chinese: chinese,
         detectedModels: data.detectedModels,
         models: data.models,
+        operation: data.operation,
         onAction: onAction
       )
     case .logs:
@@ -1335,11 +1336,13 @@ private struct HermesModelsPage: View {
   let chinese: Bool
   let detectedModels: [String]
   let models: [HermesModelSnapshot]
+  let operation: HermesRouteOperationSnapshot?
   let onAction: HermesRouteActionSink
   @State private var apiKey = ""
   @State private var apiMode = "chat_completions"
   @State private var baseUrl = ""
   @State private var contextLength = "131072"
+  @State private var detectedModelsExpanded = false
   @State private var modelName = ""
   @State private var reasoningEffort = "none"
 
@@ -1373,6 +1376,7 @@ private struct HermesModelsPage: View {
     .onChange(of: configuration) { _, next in apply(next) }
     .onChange(of: detectedModels) { _, next in
       if let first = next.first, !next.contains(modelName) { modelName = first }
+      if !next.isEmpty { detectedModelsExpanded = true }
     }
   }
 
@@ -1456,21 +1460,7 @@ private struct HermesModelsPage: View {
             .font(HermesFonts.body(11))
             .foregroundStyle(appearance.palette.secondary)
         }
-        Button {
-          onAction(
-            .modelDiscover,
-            HermesRouteActionPayload(
-              route: "models",
-              fields: ["apiKey": apiKey, "baseUrl": baseUrl]
-            )
-          )
-        } label: {
-          Label(chinese ? "检测可用模型" : "Detect models", systemImage: "magnifyingglass")
-        }
-        .buttonStyle(.bordered)
-        .disabled(baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        .accessibilityIdentifier("hermes-detect-models")
-
+        detectModelsControl
         modelNameField
         apiProtocolPicker
         modelField(
@@ -1480,33 +1470,105 @@ private struct HermesModelsPage: View {
         )
         reasoningEffortPicker
         modelActionButtons
+        operationStatus
       }
+    }
+  }
+
+  @ViewBuilder private var detectModelsControl: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 6) {
+        Button {
+          if detectedModels.isEmpty {
+            detectModels()
+          } else {
+            withAnimation(.easeInOut(duration: 0.18)) {
+              detectedModelsExpanded.toggle()
+            }
+          }
+        } label: {
+          HStack(spacing: 9) {
+            if isDiscovering {
+              ProgressView().controlSize(.small)
+            } else {
+              Image(systemName: "magnifyingglass")
+            }
+            Text(chinese ? "检测可用模型" : "Detect models")
+              .font(HermesFonts.bodyBold(13))
+            Spacer(minLength: 8)
+            if !detectedModels.isEmpty {
+              Text("\(detectedModels.count)")
+                .font(HermesFonts.mono(11))
+                .foregroundStyle(appearance.palette.secondary)
+              Image(systemName: detectedModelsExpanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(appearance.palette.secondary)
+            }
+          }
+          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!canDiscover || isBusy)
+        .accessibilityIdentifier("hermes-detect-models")
+
+        if !detectedModels.isEmpty {
+          Button { detectModels() } label: {
+            Image(systemName: "arrow.clockwise")
+              .font(.system(size: 14, weight: .semibold))
+              .frame(width: 38, height: 38)
+          }
+          .buttonStyle(.plain)
+          .disabled(!canDiscover || isBusy)
+          .accessibilityLabel(chinese ? "重新检测可用模型" : "Detect models again")
+        }
+      }
+      .padding(.horizontal, 10)
+
+      if detectedModelsExpanded && !detectedModels.isEmpty {
+        Divider()
+        LazyVStack(spacing: 0) {
+          ForEach(detectedModels, id: \.self) { model in
+            Button {
+              modelName = model
+              withAnimation(.easeInOut(duration: 0.18)) {
+                detectedModelsExpanded = false
+              }
+            } label: {
+              HStack(spacing: 10) {
+                Image(systemName: modelName == model ? "checkmark.circle.fill" : "circle")
+                  .foregroundStyle(
+                    modelName == model
+                      ? appearance.palette.success
+                      : appearance.palette.secondary
+                  )
+                Text(model)
+                  .font(HermesFonts.mono(12))
+                  .foregroundStyle(appearance.palette.foreground)
+                  .lineLimit(2)
+                Spacer(minLength: 8)
+              }
+              .padding(.horizontal, 12)
+              .padding(.vertical, 10)
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            if model != detectedModels.last { Divider().padding(.leading, 42) }
+          }
+        }
+      }
+    }
+    .background(appearance.palette.surface)
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    .overlay {
+      RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .stroke(appearance.palette.border, lineWidth: 1)
     }
   }
 
   @ViewBuilder private var modelNameField: some View {
     if detectedModels.isEmpty {
       modelField(chinese ? "模型名称" : "Model", text: $modelName)
-    } else {
-      VStack(alignment: .leading, spacing: 6) {
-        Text(chinese ? "可用模型" : "Available model")
-          .font(HermesFonts.bodyBold(12))
-          .foregroundStyle(appearance.palette.secondary)
-        Picker(chinese ? "可用模型" : "Available model", selection: $modelName) {
-          ForEach(detectedModels, id: \.self) { model in
-            Text(model).tag(model)
-          }
-        }
-        .pickerStyle(.menu)
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.horizontal, 8)
-        .background(appearance.palette.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: 8, style: .continuous)
-            .stroke(appearance.palette.border, lineWidth: 1)
-        }
-      }
     }
   }
 
@@ -1555,7 +1617,7 @@ private struct HermesModelsPage: View {
         )
       }
       .buttonStyle(.bordered)
-      .disabled(!isValid)
+      .disabled(!isValid || isBusy)
 
       Button {
         onAction(
@@ -1567,9 +1629,54 @@ private struct HermesModelsPage: View {
       }
       .buttonStyle(.borderedProminent)
       .tint(appearance.palette.accent)
-      .disabled(!isValid)
+      .disabled(!isValid || isBusy)
     }
     .frame(maxWidth: .infinity, alignment: .trailing)
+  }
+
+  @ViewBuilder private var operationStatus: some View {
+    if let operation {
+      HStack(alignment: .top, spacing: 9) {
+        if operation.state == "running" {
+          ProgressView().controlSize(.small)
+        } else {
+          Image(systemName: operation.state == "success" ? "checkmark.circle.fill" : "xmark.circle.fill")
+            .foregroundStyle(
+              operation.state == "success"
+                ? appearance.palette.success
+                : appearance.palette.destructive
+            )
+        }
+        Text(operation.message)
+          .font(HermesFonts.body(12))
+          .foregroundStyle(appearance.palette.foreground)
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: 0)
+      }
+      .padding(10)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(appearance.palette.surface)
+      .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+      .accessibilityIdentifier("hermes-model-operation-status")
+    }
+  }
+
+  private var isBusy: Bool { operation?.state == "running" }
+  private var isDiscovering: Bool {
+    operation?.action == "model.discover" && operation?.state == "running"
+  }
+  private var canDiscover: Bool {
+    !baseUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private func detectModels() {
+    onAction(
+      .modelDiscover,
+      HermesRouteActionPayload(
+        route: "models",
+        fields: ["apiKey": apiKey, "baseUrl": baseUrl]
+      )
+    )
   }
 
   private var isValid: Bool {

@@ -19,12 +19,14 @@ test('workflow activity preserves the Build 28 order and keeps the summary chevr
   assert.ok(avatarRow > activity, 'activity group stays above its avatar and message row');
   assert.match(source, /const \[open, setOpen\] = useState\(false\)/);
   assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
-  assert.match(source, /formatActivitySummary\(message, isChinese, now\)\}\s*<\/Text>\s*<AnimatedChevron/);
+  assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
   assert.match(source, /activitySummary: \{ alignItems: 'center', flexDirection: 'row', gap: 6,/);
   assert.doesNotMatch(source, /activitySummary: \{[^\n]*justifyContent: 'space-between'/);
   assert.match(source, /activityTitle: \{ flexShrink: 1,/);
   assert.doesNotMatch(source, /activityTitle: \{ flex: 1,/);
   assert.match(source, /activityDivider: \{ height: StyleSheet\.hairlineWidth, marginBottom: 7, marginTop: 6/);
+  assert.match(source, /shouldShowMessageTiming\(message\)/);
+  assert.match(source, /activities\.length \? \(/);
 });
 
 test('message timestamps stay adjacent to sender names and user time precedes the user name', () => {
@@ -72,6 +74,21 @@ test('sending is one durable idempotent enqueue with foreground outbox compensat
   assert.doesNotMatch(source, /new HermesChatStream|createNativeHermesChatStreamRuntime/);
 });
 
+test('the user message is rendered before any model or network request', () => {
+  const sendStart = source.indexOf('const send = async () =>');
+  const sendEnd = source.indexOf('const requestSend = () =>', sendStart);
+  const send = source.slice(sendStart, sendEnd);
+  const optimisticInsert = send.indexOf('setMessages((current) => [...current, userMessage])');
+  const composerClear = send.indexOf('clearQueuedComposer()');
+  const modelRequest = send.indexOf('cloudApi.getModels(conversationProfile)');
+  const enqueueRequest = send.indexOf('cloudApi.enqueueHostedTurn(');
+
+  assert.ok(optimisticInsert >= 0, 'the local user message is inserted');
+  assert.ok(composerClear > optimisticInsert, 'the composer clears after the local insert');
+  assert.ok(modelRequest > composerClear, 'model validation starts after the local UI update');
+  assert.ok(enqueueRequest > modelRequest, 'hosted delivery remains after validation');
+});
+
 test('chat maps gateway failures to bounded native copy instead of proxy documents', () => {
   assert.match(source, /error instanceof HermesApiError/);
   assert.match(source, /error\.status === 429/);
@@ -91,4 +108,21 @@ test('an accepted hosted turn reaches a terminal state even when every poll fail
   assert.match(source, /setTimeout\(\(\) => \{[\s\S]*hostedTurnVisibilityFailure/);
   assert.match(source, /optimisticState === 'running'[\s\S]*clearOptimisticHostedTurn\(\)/);
   assert.match(source, /setHostedRunning\(false\)[\s\S]*setSending\(false\)/);
+});
+
+test('running simple chats expose elapsed time and a runtime-status fold', () => {
+  assert.match(source, /function PendingMessage/);
+  assert.match(source, /status: 'running'/);
+  assert.match(source, /startedAt/);
+  assert.match(source, /<RoleActivityGroup[\s\S]*message=\{pendingMessage\}/);
+});
+
+test('activity inspection pauses stream following and renders one primary body', () => {
+  assert.match(source, /autoFollowStreamRef/);
+  assert.match(source, /onScroll=\{handleStreamScroll\}/);
+  assert.match(source, /onInspectActivity\(\);[\s\S]*setOpen/);
+  assert.match(source, /activityDisplayContent\(activity\)/);
+  assert.match(source, /<ActivityDetail value=\{detailContent\}/);
+  assert.doesNotMatch(source, /<ActivityDetail label=/);
+  assert.doesNotMatch(source, /activityRuntime:/);
 });

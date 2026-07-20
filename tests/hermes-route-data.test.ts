@@ -124,7 +124,15 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
     deleteConversation: async (...args: unknown[]) => { calls.push(['delete', ...args]); },
     discoverCustomModels: async (...args: unknown[]) => {
       calls.push(['model-discover', ...args]);
-      return { baseUrl: 'https://model.example/v1', models: ['model-a', 'model-b'] };
+      return {
+        baseUrl: 'https://model.example/v1',
+        latency_ms: 84,
+        message: 'Model catalog loaded.',
+        models: ['model-a', 'model-b'],
+        ok: true,
+        reachable: true,
+        status: 200,
+      };
     },
     saveCustomModel: async (...args: unknown[]) => { calls.push(['model-save', ...args]); },
     setModel: async (...args: unknown[]) => { calls.push(['model', ...args]); },
@@ -168,11 +176,11 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
 
   assert.equal(deleted, 'reload');
   assert.equal(selected, 'reload');
-  assert.equal(saved, 'reload');
-  assert.deepEqual(tested, { message: '连接成功' });
+  assert.deepEqual(saved, { message: '模型配置已保存', reload: true });
+  assert.deepEqual(tested, { message: '连接成功（HTTP 200，84 ms）' });
   assert.deepEqual(discovered, {
     detectedModels: ['model-a', 'model-b'],
-    message: '检测到 2 个可用模型',
+    message: '检测到 2 个可用模型（84 ms）',
   });
   const custom = {
     apiKey: 'secret',
@@ -187,7 +195,7 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
     ['model', 'provider-a', 'model-a', 'reviewer'],
     ['model-save', custom, 'reviewer'],
     ['model-test', custom, 'reviewer'],
-    ['model-discover', 'https://model.example/v1', 'secret'],
+    ['model-discover', 'https://model.example/v1', 'secret', 'reviewer'],
   ]);
 });
 
@@ -429,7 +437,12 @@ test('custom model discovery returns bounded picker data without persisting conf
       calls.push(args);
       return {
         baseUrl: 'https://models.example/v1',
+        latency_ms: 84,
+        message: 'Model catalog loaded.',
         models: ['model-a', 'model-b'],
+        ok: true,
+        reachable: true,
+        status: 200,
       };
     },
   } as unknown as HermesCloudApi;
@@ -445,10 +458,10 @@ test('custom model discovery returns bounded picker data without persisting conf
     },
   }, 'default');
 
-  assert.deepEqual(calls, [['https://models.example/v1', 'temporary-key']]);
+  assert.deepEqual(calls, [['https://models.example/v1', 'temporary-key', 'default']]);
   assert.deepEqual(result, {
     detectedModels: ['model-a', 'model-b'],
-    message: '检测到 2 个可用模型',
+    message: '检测到 2 个可用模型（84 ms）',
   });
 });
 

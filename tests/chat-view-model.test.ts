@@ -12,6 +12,7 @@ import {
   conversationRunningHostedTurnId,
   formatActivitySummary,
   formatMessageLocalTime,
+  messageDurationMs,
   messageStatusLabel,
   shouldRenderPendingMessage,
   streamEventToActivity,
@@ -236,6 +237,113 @@ test('running state is derived from durable server runs, not client timers', () 
   assert.equal(conversationHostedTurnState(optimistic, 'turn-active', now), 'running');
   assert.equal(conversationHostedTurnState(optimistic, 'turn-done', now), 'terminal');
   assert.equal(conversationHostedTurnState(optimistic, 'turn-not-visible-yet', now), 'missing');
+});
+
+test('terminal chat message stops a stale running hosted record immediately', () => {
+  const now = 1_800_000_000_000;
+  const staleRun = conversation({
+    hosted_turns: {
+      turn: {
+        status: 'running',
+        turn_id: 'turn-failed',
+        updated_at: now - 10_000,
+      },
+    },
+    messages: [{
+      content: '模型服务拒绝了 API 密钥（HTTP 401）。',
+      id: 'failed-message',
+      meta: {
+        message_key: 'turn-failed:chat:completed',
+        role_stage: 'chat',
+      },
+      name: 'Hermes',
+      role: 'assistant',
+      status: 'failed',
+    }],
+  });
+
+  assert.equal(conversationHasRunningWork(staleRun, now), false);
+  assert.equal(conversationRunningHostedTurnId(staleRun, now), '');
+  assert.equal(conversationHostedTurnState(staleRun, 'turn-failed', now), 'terminal');
+});
+
+test('a completed route event does not terminate its still-running hosted turn', () => {
+  const now = 1_800_000_000_000;
+  const pending = conversation({
+    hosted_turns: {
+      turn: {
+        status: 'running',
+        turn_id: 'turn-new',
+        updated_at: now - 1_000,
+      },
+    },
+    messages: [{
+      content: 'chat route selected',
+      id: 'turn-new:route',
+      kind: 'route',
+      meta: { runtime_turn_id: 'turn-new' },
+      name: 'Hermes',
+      role: 'system',
+      status: 'completed',
+    }],
+  });
+
+  assert.equal(conversationHasRunningWork(pending, now), true);
+  assert.equal(conversationHostedTurnState(pending, 'turn-new', now), 'running');
+});
+
+test('hosted terminal state closes stale message activities and duration', () => {
+  const now = 1_800_000_000_000;
+  const [message] = conversationMessagesToView(conversation({
+    hosted_turns: {
+      failed: {
+        completed_at: now - 1_000,
+        status: 'failed',
+        turn_id: 'turn-empty-stream',
+        updated_at: now - 1_000,
+      },
+    },
+    messages: [{
+      activities: [{
+        id: 'provider-call',
+        kind: 'model',
+        started_at: now - 30_000,
+        status: 'running',
+      }],
+      content: 'API call failed after 5 retries: empty stream',
+      created_at: now - 30_000,
+      id: 'empty-stream-failure',
+      meta: { runtime_turn_id: 'turn-empty-stream' },
+      name: 'Hermes',
+      role: 'assistant',
+      status: 'failed',
+      updated_at: now - 1_000,
+    }],
+  }), true, now);
+
+  assert.equal(message.status, 'failed');
+  assert.equal(message.activities?.[0].status, 'failed');
+  assert.match(formatActivitySummary(message, true, now), /^已处理 /);
+  assert.equal(messageDurationMs(message, now + 60_000), 29_000);
+});
+
+test('ordinary model replies expose total duration without tool activities', () => {
+  const now = 1_800_000_000_000;
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      content: '你好，我在。',
+      created_at: now - 2_500,
+      id: 'chat-reply',
+      name: 'Hermes',
+      role: 'assistant',
+      status: 'completed',
+      updated_at: now,
+    }],
+  }), true, now);
+
+  assert.equal(message.activities?.length || 0, 0);
+  assert.equal(messageDurationMs(message, now), 2_500);
+  assert.match(formatActivitySummary(message, true, now), /^已处理 0m 2s$/);
 });
 
 test('abandoned durable runs never keep fresh installs spinning indefinitely', () => {
