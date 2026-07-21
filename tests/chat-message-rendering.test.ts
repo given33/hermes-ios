@@ -57,8 +57,8 @@ test('chat messages expose role avatars, local metadata, and Codex-like Markdown
 });
 
 test('sending is one durable idempotent enqueue with foreground outbox compensation', () => {
-  assert.match(source, /shouldRenderPendingMessage\(messages, hostedRunning \|\| sending\)/);
-  assert.doesNotMatch(source, /shouldRenderPendingMessage\(messages, sending\)/);
+  assert.match(source, /shouldRenderPendingMessage\(displayMessages, hostedRunning \|\| sending\)/);
+  assert.doesNotMatch(source, /shouldRenderPendingMessage\(displayMessages, sending\)/);
   assert.match(source, /requestId: userMessageId/);
   assert.match(source, /turnId: hostedTurnId/);
   assert.match(source, /upsertPendingEnqueue\(cacheOwner,/);

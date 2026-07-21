@@ -96,11 +96,13 @@ import {
   conversationRunningHostedTurnId,
   formatActivitySummary,
   formatMessageLocalTime,
+  hostedTurnFailedRetryably,
   hostedTurnVisibilityFailure,
   messageStatusLabel,
   messageIsRunning,
   reconcileHostedTurnVisibilityFailures,
   shouldRenderPendingMessage,
+  turnErrorCodeRetryable,
   upsertChatMessage,
   type HermesChatActivity as ChatActivity,
   type HermesChatAttachment as StoredChatAttachment,
@@ -132,6 +134,35 @@ const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
 const MODEL_CONFIGURATION_TIMEOUT_MS = 12_000;
 const HOSTED_TURN_VISIBILITY_GRACE_MS = 20_000;
+const RECONNECT_MAX_ATTEMPTS = 5;
+const RECONNECT_WINDOW_MS = 120_000;
+const RECONNECT_RETRY_DELAY_MS = 3_000;
+
+type PendingPhase = 'thinking' | 'reconnecting' | 'executing';
+
+interface HostedTurnRetryState {
+  active: boolean;
+  attempt: number;
+  deadline: number;
+  conversationId: string;
+  profile: string;
+  messageContent: string;
+  attachmentContext: string;
+  attachmentIds: string[];
+  recentMessages: { content: string; role: string }[];
+}
+
+const createIdleRetryState = (): HostedTurnRetryState => ({
+  active: false,
+  attempt: 0,
+  deadline: 0,
+  conversationId: '',
+  profile: '',
+  messageContent: '',
+  attachmentContext: '',
+  attachmentIds: [],
+  recentMessages: [],
+});
 
 interface ChatAttachment {
   id: string;
@@ -187,6 +218,8 @@ export function ChatPreviewPage({
   const [activeHostedTurnId, setActiveHostedTurnId] = useState('');
   const [hostedRunning, setHostedRunning] = useState(false);
   const [sending, setSending] = useState(false);
+  const [pendingPhase, setPendingPhase] = useState<PendingPhase>('thinking');
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [cancellingHostedTurn, setCancellingHostedTurn] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [attachmentsOpen, setAttachmentsOpen] = useState(false);
@@ -213,6 +246,13 @@ export function ChatPreviewPage({
   const pendingScrollFrame = useRef<number | null>(null);
   const autoFollowStreamRef = useRef(true);
   const outboxReplayRef = useRef<Promise<void> | null>(null);
+  const pendingPhaseRef = useRef<PendingPhase>('thinking');
+  const firstTokenAtRef = useRef(0);
+  const retryStateRef = useRef<HostedTurnRetryState>(createIdleRetryState());
+  const retriedTurnIdsRef = useRef<Set<string>>(new Set());
+  const hiddenMessageIdsRef = useRef<Set<string>>(new Set());
+  const retryInFlightRef = useRef(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyboard = useAnimatedKeyboard();
   const keyboardAvoidanceEnabled = useSharedValue(1);
   const isChinese = locale === 'zh';
@@ -226,11 +266,12 @@ export function ChatPreviewPage({
   const attachmentCount = attachments.length;
   const canSend = !sending && Boolean(content.trim() || attachmentCount > 0);
   const canCancelHostedTurn = (hostedRunning || sending) && Boolean(activeConversationId);
-  const pendingStartedAt = hostedRunning
-    ? ([...messages].reverse().find(({ role }) => role === 'assistant')?.startedAt
-      || [...messages].reverse().find(({ role }) => role === 'user')?.createdAt
-      || Date.now())
-    : ([...messages].reverse().find(({ role }) => role === 'user')?.createdAt || Date.now());
+  const pendingStartedAt = pendingPhase === 'executing' && firstTokenAtRef.current > 0
+    ? firstTokenAtRef.current
+    : Date.now();
+  const displayMessages = hiddenMessageIdsRef.current.size > 0
+    ? messages.filter(({ id }) => !hiddenMessageIdsRef.current.has(id))
+    : messages;
   const inputFontSize = resolveComposerFontSize(content);
   const keepLatestVisible = useCallback((animated = false, force = false) => {
     if (!force && !autoFollowStreamRef.current) return;
@@ -302,6 +343,149 @@ export function ChatPreviewPage({
       setSending(false);
     }, HOSTED_TURN_VISIBILITY_GRACE_MS);
   }, [clearOptimisticHostedTurn, isChinese]);
+
+  const updatePendingPhase = useCallback((phase: PendingPhase) => {
+    pendingPhaseRef.current = phase;
+    setPendingPhase(phase);
+  }, []);
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+  }, []);
+
+  const attemptReconnectRef = useRef<() => Promise<void>>(async () => {});
+
+  const scheduleNextReconnect = useCallback(() => {
+    clearReconnectTimer();
+    const retry = retryStateRef.current;
+    if (
+      !retry.active
+      || retry.attempt >= RECONNECT_MAX_ATTEMPTS
+      || Date.now() > retry.deadline
+    ) {
+      retry.active = false;
+      setHostedRunning(false);
+      setSending(false);
+      return;
+    }
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      void attemptReconnectRef.current();
+    }, RECONNECT_RETRY_DELAY_MS);
+  }, [clearReconnectTimer]);
+
+  const attemptReconnect = useCallback(async () => {
+    const retry = retryStateRef.current;
+    if (!retry.active || retryInFlightRef.current) return;
+    if (
+      !cloudApi
+      || !retry.conversationId
+      || retry.attempt >= RECONNECT_MAX_ATTEMPTS
+      || Date.now() > retry.deadline
+    ) {
+      retry.active = false;
+      setHostedRunning(false);
+      setSending(false);
+      return;
+    }
+    retryInFlightRef.current = true;
+    retry.attempt += 1;
+    setReconnectAttempt(retry.attempt);
+    updatePendingPhase('reconnecting');
+    const turnId = uniqueTurnId('hosted');
+    const messageId = uniqueTurnId('user');
+    const now = Date.now();
+    const input: HostedTurnEnqueueInput = {
+      attachmentContext: retry.attachmentContext,
+      attachmentIds: retry.attachmentIds,
+      deliveryContext: '由服务端意图路由判断是否需要交付文件；需要时上传账户云端并在会话中返回。',
+      message: {
+        content: retry.messageContent,
+        created_at: now,
+        id: messageId,
+        kind: 'message',
+        name: isChinese ? '你' : 'You',
+        role: 'user',
+        sender_id: 'account-owner',
+        sender_name: isChinese ? '你' : 'You',
+        status: 'completed',
+        updated_at: now,
+      },
+      profiles: [retry.profile],
+      recentMessages: retry.recentMessages,
+      requestId: messageId,
+      turnId,
+    };
+    try {
+      hiddenMessageIdsRef.current.add(messageId);
+      const response = await cloudApi.enqueueHostedTurn(retry.conversationId, input);
+      if (response.accepted) {
+        clearReconnectTimer();
+        activeHostedTurnIdRef.current = turnId;
+        setActiveHostedTurnId(turnId);
+        beginOptimisticHostedTurn(retry.conversationId, turnId);
+        setHostedRunning(true);
+        setSending(true);
+        updatePendingPhase('thinking');
+      } else if (turnErrorCodeRetryable(
+        response.error?.code ?? '',
+        response.error?.message ?? '',
+      )) {
+        // Rejected but retryable (e.g. model not configured): back off, then try again.
+        scheduleNextReconnect();
+      } else {
+        // Non-retryable rejection: surface the failure and stop the loop.
+        retry.active = false;
+        setHostedRunning(false);
+        setSending(false);
+      }
+    } catch {
+      // Network failure: keep the reconnecting status and back off before the next try.
+      scheduleNextReconnect();
+    } finally {
+      retryInFlightRef.current = false;
+    }
+  }, [
+    beginOptimisticHostedTurn,
+    clearReconnectTimer,
+    cloudApi,
+    isChinese,
+    scheduleNextReconnect,
+    updatePendingPhase,
+  ]);
+
+  attemptReconnectRef.current = attemptReconnect;
+
+  const handleTurnFailure = useCallback((failedMessageId: string) => {
+    const retry = retryStateRef.current;
+    if (!retry.active) return;
+    if (
+      retry.attempt >= RECONNECT_MAX_ATTEMPTS
+      || Date.now() > retry.deadline
+    ) {
+      retry.active = false;
+      setHostedRunning(false);
+      setSending(false);
+      return;
+    }
+    if (failedMessageId) {
+      hiddenMessageIdsRef.current.add(failedMessageId);
+    }
+    void attemptReconnect();
+  }, [attemptReconnect]);
+
+  const resetPendingStateMachine = useCallback(() => {
+    retryStateRef.current.active = false;
+    retryInFlightRef.current = false;
+    firstTokenAtRef.current = 0;
+    clearReconnectTimer();
+    setReconnectAttempt(0);
+    updatePendingPhase('thinking');
+  }, [clearReconnectTimer, updatePendingPhase]);
+
   useAnimatedReaction(
     () => keyboard.height.value * keyboardAvoidanceEnabled.value,
     (height, previousHeight) => {
@@ -380,6 +564,35 @@ export function ChatPreviewPage({
     } else {
       hostedTurnVisibilityFailuresRef.current.delete(conversation.id);
     }
+    const trackedTurnId = activeHostedTurnIdRef.current;
+    if (trackedTurnId && retryStateRef.current.active) {
+      const trackedTurnState = conversationHostedTurnState(conversation, trackedTurnId);
+      if (trackedTurnState === 'terminal') {
+        if (
+          hostedTurnFailedRetryably(conversation, trackedTurnId)
+          && !retriedTurnIdsRef.current.has(trackedTurnId)
+        ) {
+          retriedTurnIdsRef.current.add(trackedTurnId);
+          const failedMessage = [...nextMessages].reverse().find(
+            (message) => message.role === 'assistant' && message.status === 'failed',
+          );
+          handleTurnFailure(failedMessage?.id || '');
+        } else {
+          retryStateRef.current.active = false;
+        }
+      } else if (pendingPhaseRef.current !== 'executing') {
+        const hasAssistantContent = nextMessages.some(
+          (message) => message.role === 'assistant'
+            && Boolean(message.content)
+            && message.status !== 'failed',
+        );
+        if (hasAssistantContent) {
+          firstTokenAtRef.current = Date.now();
+          retryStateRef.current.active = false;
+          updatePendingPhase('executing');
+        }
+      }
+    }
     setMessages(nextMessages);
     activeHostedTurnIdRef.current = runningHostedTurnId;
     setActiveHostedTurnId(runningHostedTurnId);
@@ -389,7 +602,7 @@ export function ChatPreviewPage({
       upsertCachedConversation(conversationIndexRef.current, conversation),
       conversation.id,
     );
-  }, [clearOptimisticHostedTurn, commitConversationIndex, isChinese]);
+  }, [clearOptimisticHostedTurn, commitConversationIndex, handleTurnFailure, isChinese, updatePendingPhase]);
 
   const loadConversation = useCallback(async (
     conversationId: string,
@@ -816,6 +1029,19 @@ export function ChatPreviewPage({
     };
     clearQueuedComposer();
     setSending(true);
+    firstTokenAtRef.current = 0;
+    retriedTurnIdsRef.current = new Set();
+    hiddenMessageIdsRef.current = new Set();
+    retryInFlightRef.current = false;
+    setReconnectAttempt(0);
+    updatePendingPhase('thinking');
+    retryStateRef.current = {
+      ...createIdleRetryState(),
+      active: true,
+      deadline: userMessageCreatedAt + RECONNECT_WINDOW_MS,
+      messageContent: userMessage.content,
+      profile: conversationProfile,
+    };
     const configurationErrorId = `model-configuration-${activeConversationIdRef.current || 'new'}`;
     if (cloudApi && client) {
       try {
@@ -896,6 +1122,8 @@ export function ChatPreviewPage({
     let enqueueAcknowledged = false;
     let hostedAccepted = false;
     let enqueuePersisted = false;
+    let enqueueRejection: { code: string; message: string } | null = null;
+    let enteringReconnect = false;
     const hostedTurnId = uniqueTurnId('hosted');
     let queuedItem: HostedTurnOutboxItem | null = null;
     try {
@@ -955,6 +1183,12 @@ export function ChatPreviewPage({
         conversationId = queuedItem.conversationId;
         enqueueAcknowledged = true;
         hostedAccepted = delivery.response.accepted;
+        if (!hostedAccepted) {
+          enqueueRejection = {
+            code: delivery.response.error?.code ?? '',
+            message: delivery.response.error?.message ?? '',
+          };
+        }
       } else {
         if (conversationPending) {
           await cloudApi.createConversation(
@@ -993,6 +1227,12 @@ export function ChatPreviewPage({
         const response = await cloudApi.enqueueHostedTurn(conversationId, queuedItem.input);
         enqueueAcknowledged = true;
         hostedAccepted = response.accepted;
+        if (!hostedAccepted) {
+          enqueueRejection = {
+            code: response.error?.code ?? '',
+            message: response.error?.message ?? '',
+          };
+        }
       }
       clearQueuedComposer();
       if (enqueuePersisted && localStore && cacheOwner) {
@@ -1007,11 +1247,38 @@ export function ChatPreviewPage({
           beginOptimisticHostedTurn(conversationId, hostedTurnId);
           setActiveHostedTurnId(hostedTurnId);
           setHostedRunning(true);
+          retryStateRef.current = {
+            ...retryStateRef.current,
+            active: true,
+            attachmentContext: enqueueInput.attachmentContext ?? '',
+            attachmentIds: enqueueInput.attachmentIds ?? [],
+            conversationId,
+            recentMessages: enqueueInput.recentMessages,
+          };
         } else {
           activeHostedTurnIdRef.current = '';
           clearOptimisticHostedTurn();
           setActiveHostedTurnId('');
-          setHostedRunning(false);
+          const rejectionRetryable = enqueueRejection !== null
+            && turnErrorCodeRetryable(enqueueRejection.code, enqueueRejection.message);
+          if (rejectionRetryable) {
+            // Transient rejection (e.g. model not configured): enter the reconnect loop.
+            retryStateRef.current = {
+              ...retryStateRef.current,
+              active: true,
+              attachmentContext: enqueueInput.attachmentContext ?? '',
+              attachmentIds: enqueueInput.attachmentIds ?? [],
+              conversationId,
+              recentMessages: enqueueInput.recentMessages,
+            };
+            setHostedRunning(true);
+            setSending(true);
+            enteringReconnect = true;
+            void attemptReconnect();
+          } else {
+            setHostedRunning(false);
+            retryStateRef.current.active = false;
+          }
         }
         const generation = ++conversationSyncGenerationRef.current;
         await loadConversation(conversationId, generation);
@@ -1036,7 +1303,7 @@ export function ChatPreviewPage({
         notify(serverFailure(error, isChinese));
       }
     } finally {
-      if (!hostedAccepted) {
+      if (!hostedAccepted && !enteringReconnect) {
         setHostedRunning(false);
         setSending(false);
       }
@@ -1071,6 +1338,7 @@ export function ChatPreviewPage({
           setActiveHostedTurnId('');
           setHostedRunning(false);
           setSending(false);
+          resetPendingStateMachine();
         }
         return;
       }
@@ -1085,6 +1353,7 @@ export function ChatPreviewPage({
         setActiveHostedTurnId('');
         setHostedRunning(false);
         setSending(false);
+        resetPendingStateMachine();
         const generation = ++conversationSyncGenerationRef.current;
         await loadConversation(conversationId, generation);
       }
@@ -1118,6 +1387,7 @@ export function ChatPreviewPage({
     setCancellingHostedTurn(false);
     setSending(false);
     setHostedRunning(false);
+    resetPendingStateMachine();
     setContent('');
     contentRef.current = '';
     setAttachments([]);
@@ -1471,7 +1741,7 @@ export function ChatPreviewPage({
             showsVerticalScrollIndicator={false}
             style={styles.stream}
           >
-            {messages.length === 0 ? (
+            {displayMessages.length === 0 ? (
               <Reanimated.View
                 entering={FadeIn
                   .duration(IOS_MOTION.duration.content)
@@ -1490,7 +1760,7 @@ export function ChatPreviewPage({
                     : 'Chat uses one profile; execution tasks enter multi-profile collaboration and the official workflow.'}
                 </Text>
               </Reanimated.View>
-            ) : messages.map((message, index) => (
+            ) : displayMessages.map((message, index) => (
               <UnifiedMessage
                 index={index}
                 isChinese={isChinese}
@@ -1500,14 +1770,15 @@ export function ChatPreviewPage({
                 onInspectActivity={pauseStreamAutoFollow}
               />
             ))}
-            {shouldRenderPendingMessage(messages, hostedRunning || sending)
+            {shouldRenderPendingMessage(displayMessages, hostedRunning || sending)
               ? (
                   <PendingMessage
-                    index={messages.length}
+                    index={displayMessages.length}
                     isChinese={isChinese}
                     onInspectActivity={pauseStreamAutoFollow}
+                    phase={pendingPhase}
+                    reconnectAttempt={reconnectAttempt}
                     startedAt={pendingStartedAt}
-                    thinking={!hostedRunning}
                   />
                 )
               : null}
@@ -2304,25 +2575,31 @@ function PendingMessage({
   index,
   isChinese,
   onInspectActivity,
+  phase,
+  reconnectAttempt,
   startedAt,
-  thinking,
 }: {
   index: number;
   isChinese: boolean;
   onInspectActivity(): void;
+  phase: PendingPhase;
+  reconnectAttempt: number;
   startedAt: number;
-  thinking?: boolean;
 }) {
   const { tokens } = useTheme();
-  const statusText = thinking
-    ? (isChinese ? '\u6b63\u5728\u601d\u8003\u4e2d' : 'Thinking')
-    : (isChinese ? '\u6b63\u5728\u6267\u884c' : 'The model is running');
+  const statusText = phase === 'reconnecting'
+    ? (isChinese
+        ? `正在重连 (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`
+        : `Reconnecting (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`)
+    : phase === 'executing'
+      ? (isChinese ? '正在执行' : 'The model is running')
+      : (isChinese ? '正在思考中' : 'Thinking');
   const pendingMessage: ChatMessage = {
     activities: [{
       category: 'other',
       duration: '',
-      id: `pending-status-${startedAt}`,
-      name: isChinese ? '\u8fd0\u884c\u72b6\u6001' : 'Runtime status',
+      id: 'pending-status',
+      name: isChinese ? '运行状态' : 'Runtime status',
       output: statusText,
       preview: statusText,
       startedAt,
@@ -2330,7 +2607,7 @@ function PendingMessage({
     }],
     avatarRole: 'hermes',
     content: '',
-    id: `pending-${startedAt}`,
+    id: 'pending-turn-status',
     name: 'Hermes Agent',
     role: 'assistant',
     roleStage: 'chat',

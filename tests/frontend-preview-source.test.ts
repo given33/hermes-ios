@@ -258,7 +258,19 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /if \(hostedAccepted\) \{[\s\S]{0,320}setHostedRunning\(true\);[\s\S]{0,240}else \{[\s\S]{0,200}setHostedRunning\(false\);/,
+    /if \(hostedAccepted\) \{[\s\S]{0,400}setHostedRunning\(true\);/,
+  );
+  assert.match(
+    chat,
+    /const rejectionRetryable = enqueueRejection !== null\s*&& turnErrorCodeRetryable\(/,
+  );
+  assert.match(
+    chat,
+    /enteringReconnect = true;\s*void attemptReconnect\(\);/,
+  );
+  assert.match(
+    chat,
+    /setHostedRunning\(false\);\s*retryStateRef\.current\.active = false;/,
   );
   assert.match(
     chat,

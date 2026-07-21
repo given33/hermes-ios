@@ -129,11 +129,11 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("requestLocationAuthorization") { (promise: Promise) in
       self.resolveAsync(promise) { await self.location.requestAlwaysAuthorization() }
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("requestPreciseLocation") { (promise: Promise) in
       self.resolveAsync(promise) { await self.location.requestPreciseAuthorization() }
-    }
+    }.runOnQueue(.main)
 
     AsyncFunction("getLocationAuthorizationDetails") { () -> [String: Any] in
       self.location.authorizationSnapshot()

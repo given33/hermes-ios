@@ -556,6 +556,43 @@ export function conversationHostedTurnState(
   return 'missing';
 }
 
+const RETRYABLE_TURN_ERROR_CODES = new Set([
+  'http_500',
+  'http_502',
+  'http_503',
+  'http_504',
+  'http_520',
+  'http_522',
+  'http_524',
+  'model_timeout',
+  'model_empty_response',
+  'model_request_failed',
+  'model_not_configured',
+  'hosted_turn_failed',
+]);
+
+export function turnErrorCodeRetryable(code: string, message: string): boolean {
+  const normalized = code.trim().toLowerCase();
+  if (normalized && RETRYABLE_TURN_ERROR_CODES.has(normalized)) return true;
+  return /50\d|empty stream|timed out|timeout|bad gateway|connection|not configured|未配置|繁忙/i.test(message);
+}
+
+export function hostedTurnFailedRetryably(
+  conversation: SingleConversation,
+  turnId: string,
+): boolean {
+  const normalizedTurnId = turnId.trim();
+  if (!normalizedTurnId) return false;
+  for (const [key, record] of Object.entries(conversation.hosted_turns || {})) {
+    if (!isRecord(record)) continue;
+    const id = stringValue(record.turn_id) || stringValue(record.id) || key;
+    if (id !== normalizedTurnId) continue;
+    if (stringValue(record.status).toLowerCase() !== 'failed') return false;
+    return turnErrorCodeRetryable(stringValue(record.error_code), stringValue(record.error));
+  }
+  return false;
+}
+
 function hostedTurnHasTerminalMessage(
   conversation: SingleConversation,
   turnId: string,

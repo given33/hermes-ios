@@ -14,6 +14,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   static let shared = HermesLocationService()
 
   private let manager = CLLocationManager()
+  private let stateLock = NSLock()
   private var authorizationGate: HermesLocationAuthorizationGate?
   private var locationContinuation: CheckedContinuation<[String: Any]?, Never>?
   private var locationTimeout: DispatchWorkItem?
@@ -49,15 +50,24 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       return HermesAuthorization.location(status)
     }
     return await withCheckedContinuation { continuation in
-      authorizationGate?.resolve(HermesAuthorization.location(status))
       let gate = HermesLocationAuthorizationGate(continuation)
+      stateLock.lock()
+      let previousGate = authorizationGate
       authorizationGate = gate
-      if status == .notDetermined {
-        manager.requestWhenInUseAuthorization()
-      } else {
-        requestedAlwaysUpgrade = true
-        manager.requestAlwaysAuthorization()
-        scheduleAlwaysUpgradeFallback(gate)
+      stateLock.unlock()
+      previousGate?.resolve(HermesAuthorization.location(status))
+      DispatchQueue.main.async { [weak self] in
+        guard let self else {
+          gate.resolve(HermesAuthorization.location(status))
+          return
+        }
+        if status == .notDetermined {
+          self.manager.requestWhenInUseAuthorization()
+        } else {
+          self.requestedAlwaysUpgrade = true
+          self.manager.requestAlwaysAuthorization()
+          self.scheduleAlwaysUpgradeFallback(gate)
+        }
       }
     }
   }
@@ -175,14 +185,21 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     }
     await requestTemporaryFullAccuracyIfNeeded()
     return await withCheckedContinuation { continuation in
-      resolveLocationRequest(with: nil)
+      stateLock.lock()
+      locationTimeout?.cancel()
+      locationTimeout = nil
+      let stale = locationContinuation
       locationContinuation = continuation
       let timeout = DispatchWorkItem { [weak self] in
         self?.resolveLocationRequest(with: nil)
       }
       locationTimeout = timeout
+      stateLock.unlock()
+      stale?.resume(returning: nil)
       DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
-      manager.requestLocation()
+      DispatchQueue.main.async { [weak self] in
+        self?.manager.requestLocation()
+      }
     }
   }
 
@@ -202,8 +219,13 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     if status == .authorizedWhenInUse && !requestedAlwaysUpgrade {
       requestedAlwaysUpgrade = true
       Task { await requestTemporaryFullAccuracyIfNeeded() }
-      manager.requestAlwaysAuthorization()
-      if let authorizationGate { scheduleAlwaysUpgradeFallback(authorizationGate) }
+      DispatchQueue.main.async { [weak self] in
+        self?.manager.requestAlwaysAuthorization()
+      }
+      stateLock.lock()
+      let gate = authorizationGate
+      stateLock.unlock()
+      if let gate { scheduleAlwaysUpgradeFallback(gate) }
       return
     }
     // A user may keep the While-In-Use grant when the Always upgrade prompt
@@ -211,8 +233,11 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     // continuation suspended prevents the entire sync provider from starting.
     if status == .authorizedAlways || status == .authorizedWhenInUse
       || status == .denied || status == .restricted {
-      authorizationGate?.resolve(HermesAuthorization.location(status))
+      stateLock.lock()
+      let gate = authorizationGate
       authorizationGate = nil
+      stateLock.unlock()
+      gate?.resolve(HermesAuthorization.location(status))
       requestedAlwaysUpgrade = false
     }
     // The durable collector requires Always authorization. While-In-Use still
@@ -314,9 +339,13 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
 
   private func scheduleAlwaysUpgradeFallback(_ gate: HermesLocationAuthorizationGate) {
     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self, weak gate] in
-      guard let self, let gate, self.authorizationGate === gate,
-            self.manager.authorizationStatus == .authorizedWhenInUse else { return }
-      self.authorizationGate = nil
+      guard let self, let gate else { return }
+      self.stateLock.lock()
+      let isCurrent = self.authorizationGate === gate
+      if isCurrent { self.authorizationGate = nil }
+      let status = self.manager.authorizationStatus
+      self.stateLock.unlock()
+      guard isCurrent, status == .authorizedWhenInUse else { return }
       // iOS may defer the Always sheet without another authorization callback.
       // Resolve as limited While-In-Use (never invent "notDetermined") so the
       // permission coordinator can continue the remaining chain and surface a
@@ -337,10 +366,12 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   }
 
   private func resolveLocationRequest(with payload: [String: Any]?) {
+    stateLock.lock()
     locationTimeout?.cancel()
     locationTimeout = nil
     let continuation = locationContinuation
     locationContinuation = nil
+    stateLock.unlock()
     continuation?.resume(returning: payload)
   }
 

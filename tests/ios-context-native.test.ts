@@ -197,7 +197,7 @@ test('location authorization resolves when an Always upgrade remains While In Us
   const source = read('ios/HermesLocationService.swift');
   assert.match(
     source,
-    /status == \.authorizedAlways \|\| status == \.authorizedWhenInUse[\s\S]*authorizationGate\?\.resolve/,
+    /status == \.authorizedAlways \|\| status == \.authorizedWhenInUse[\s\S]*let gate = authorizationGate[\s\S]*gate\?\.resolve/,
   );
   assert.match(source, /requestedAlwaysUpgrade = false/);
   assert.match(
