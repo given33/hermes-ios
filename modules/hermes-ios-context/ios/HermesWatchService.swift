@@ -121,7 +121,8 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
     let defaults = UserDefaults.standard
     let generation = (message["accountGeneration"] as? NSNumber)?.intValue
       ?? message["accountGeneration"] as? Int
-    guard generation == defaults.integer(forKey: generationKey),
+    guard let generation,
+          generation == defaults.integer(forKey: generationKey),
           let occurredAt = Self.observedDate(message["observedAt"]),
           occurredAt.timeIntervalSince1970 * 1000 > defaults.double(forKey: resetAtKey) else {
       return

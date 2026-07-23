@@ -245,6 +245,7 @@ test('location collector is adaptive, resumable, and eligible for background del
 
 test('weather map stays a flat standard vector map with native gestures and user location', () => {
   const source = read('ios/HermesMapKitSurface.swift');
+  const amap = read('ios/HermesAMapSurface.swift');
   assert.match(source, /MKStandardMapConfiguration\([\s\S]*elevationStyle: \.flat,[\s\S]*emphasisStyle: \.default/);
   assert.match(source, /isScrollEnabled = true/);
   assert.match(source, /isZoomEnabled = true/);
@@ -260,6 +261,14 @@ test('weather map stays a flat standard vector map with native gestures and user
   assert.match(source, /mapView\.showsUserLocation = shows/);
   assert.match(source, /MKPolyline/);
   assert.doesNotMatch(source, /satellite|hybrid|search/i);
+  assert.match(amap, /mapView\.isShowTraffic = true/);
+  assert.match(amap, /mapView\.isShowsLabels = true/);
+  assert.match(amap, /mapView\.isShowsBuildings = false/);
+  assert.match(amap, /mapView\.isShowsIndoorMap = false/);
+  assert.match(amap, /mapView\.isZoomEnabled = true/);
+  assert.match(amap, /mapView\.isScrollEnabled = true/);
+  assert.match(amap, /mapView\.isRotateEnabled = true/);
+  assert.match(amap, /mapView\.isRotateCameraEnabled = false/);
 });
 
 test('native relay covers durable cursors, background services, health, watch, notifications, and optional capabilities', () => {
@@ -268,6 +277,7 @@ test('native relay covers durable cursors, background services, health, watch, n
   const background = read('ios/HermesBackgroundService.swift');
   const watch = read('ios/HermesWatchService.swift');
   const liveActivity = read('ios/HermesLiveActivityService.swift');
+  assert.match(watch, /guard let generation,[\s\S]*generation == defaults\.integer/);
   for (const operation of [
     'getInstallationIdentifier',
     'getCommandCursor',

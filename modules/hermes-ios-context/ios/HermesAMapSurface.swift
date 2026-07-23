@@ -28,16 +28,16 @@ final class HermesAMapSurface: UIView, HermesMapRendering, MAMapViewDelegate {
     backgroundColor = .systemBackground
     mapView.delegate = self
     mapView.mapType = .standard
-    mapView.showTraffic = true
-    mapView.showsLabels = true
-    mapView.showsBuildings = false
-    mapView.showsIndoorMap = false
-    mapView.showsIndoorMapControl = false
+    mapView.isShowTraffic = true
+    mapView.isShowsLabels = true
+    mapView.isShowsBuildings = false
+    mapView.isShowsIndoorMap = false
+    mapView.isShowsIndoorMapControl = false
     mapView.touchPOIEnabled = true
-    mapView.zoomEnabled = true
-    mapView.scrollEnabled = true
-    mapView.rotateEnabled = true
-    mapView.rotateCameraEnabled = false
+    mapView.isZoomEnabled = true
+    mapView.isScrollEnabled = true
+    mapView.isRotateEnabled = true
+    mapView.isRotateCameraEnabled = false
     mapView.cameraDegree = 0
     // AMap's built-in compass hides itself while the map points north. Keep a
     // dedicated native control visible so the map affordance never disappears.
