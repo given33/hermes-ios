@@ -41,6 +41,13 @@ final class HermesContextEventQueue {
     ioQueue.sync { accountGenerationUnlocked() }
   }
 
+  var hasCurrentOwner: Bool {
+    ioQueue.sync {
+      let scope = loadRelayStateUnlocked()["ownerScope"] as? String ?? ""
+      return !scope.isEmpty
+    }
+  }
+
   func isCurrentOwnerScope(_ scope: String) -> Bool {
     ioQueue.sync {
       !scope.isEmpty && (loadRelayStateUnlocked()["ownerScope"] as? String) == scope
@@ -52,10 +59,18 @@ final class HermesContextEventQueue {
     payload: [String: Any],
     occurredAt: Date = Date(),
     sourceDeviceID: String? = nil,
+    accountGeneration: Int? = nil,
     completion: (() -> Void)? = nil
   ) {
     ioQueue.async { [self] in
-      guard !isCollectionSuspendedUnlocked() else {
+      let relayState = loadRelayStateUnlocked()
+      let ownerScope = relayState["ownerScope"] as? String ?? ""
+      let currentGeneration = relayState["accountGeneration"] as? Int ?? 0
+      let generationStartedAt = relayState["accountGenerationStartedAt"] as? Double ?? 0
+      guard !(relayState["collectionSuspended"] as? Bool ?? false),
+            !ownerScope.isEmpty,
+            accountGeneration == nil || accountGeneration == currentGeneration,
+            occurredAt.timeIntervalSince1970 * 1000 >= generationStartedAt else {
         DispatchQueue.main.async { completion?() }
         return
       }
@@ -76,7 +91,10 @@ final class HermesContextEventQueue {
 
   func enqueueBatch(_ rawEvents: [[String: Any]]) throws -> Int {
     try ioQueue.sync {
-      guard !isCollectionSuspendedUnlocked() else { return 0 }
+      let relayState = loadRelayStateUnlocked()
+      let ownerScope = relayState["ownerScope"] as? String ?? ""
+      guard !(relayState["collectionSuspended"] as? Bool ?? false),
+            !ownerScope.isEmpty else { return 0 }
       flushDeferredUnlocked()
       let persistedIDs = Set(loadUnlocked().compactMap { $0["id"] as? String })
       var seenIDs = persistedIDs
@@ -96,6 +114,14 @@ final class HermesContextEventQueue {
         let timestamp = (raw["timestamp"] as? NSNumber)?.doubleValue
           ?? (raw["observed_at"] as? NSNumber)?.doubleValue
           ?? Date().timeIntervalSince1970 * 1000
+        let expectedGeneration = (raw["account_generation"] as? NSNumber)?.intValue
+          ?? raw["account_generation"] as? Int
+        if let expectedGeneration,
+           expectedGeneration != (relayState["accountGeneration"] as? Int ?? 0) {
+          continue
+        }
+        let generationStartedAt = relayState["accountGenerationStartedAt"] as? Double ?? 0
+        if timestamp < generationStartedAt { continue }
         let occurredAt = Date(
           timeIntervalSince1970: timestamp > 10_000_000_000 ? timestamp / 1000 : timestamp
         )
@@ -258,6 +284,7 @@ final class HermesContextEventQueue {
       state["deletedOwnerScopes"] = Array(deletedScopes).sorted()
       if wasSuspended || previousScope != normalized {
         state["accountGeneration"] = (state["accountGeneration"] as? Int ?? 0) + 1
+        state["accountGenerationStartedAt"] = Date().timeIntervalSince1970 * 1000
       }
       state["collectionSuspended"] = false
       state["ownerScope"] = normalized
@@ -267,9 +294,12 @@ final class HermesContextEventQueue {
     }
   }
 
-  func deleteOwnerScope(_ scope: String) -> HermesOwnerScopeDeletionResult {
+  func deleteOwnerScope(
+    _ scope: String,
+    requestedAt: Double? = nil
+  ) -> HermesOwnerScopeDeletionResult {
     ioQueue.sync {
-      deleteOwnerScopeUnlocked(scope)
+      deleteOwnerScopeUnlocked(scope, requestedAt: requestedAt)
     }
   }
 
@@ -277,11 +307,14 @@ final class HermesContextEventQueue {
     ioQueue.sync {
       let scope = loadRelayStateUnlocked()["ownerScope"] as? String ?? ""
       guard !scope.isEmpty else { return 0 }
-      return deleteOwnerScopeUnlocked(scope).deletedCount
+      return deleteOwnerScopeUnlocked(scope, requestedAt: nil).deletedCount
     }
   }
 
-  private func deleteOwnerScopeUnlocked(_ scope: String) -> HermesOwnerScopeDeletionResult {
+  private func deleteOwnerScopeUnlocked(
+    _ scope: String,
+    requestedAt: Double?
+  ) -> HermesOwnerScopeDeletionResult {
     guard !scope.isEmpty else {
       return HermesOwnerScopeDeletionResult(
         deletedCount: 0,
@@ -290,6 +323,15 @@ final class HermesContextEventQueue {
       )
     }
     var state = loadRelayStateUnlocked()
+    let currentGeneration = state["accountGeneration"] as? Int ?? 0
+    let generationStartedAt = state["accountGenerationStartedAt"] as? Double ?? 0
+    if let requestedAt, requestedAt < generationStartedAt {
+      return HermesOwnerScopeDeletionResult(
+        deletedCount: 0,
+        deletedWasCurrent: false,
+        accountGeneration: currentGeneration
+      )
+    }
     let deletingCurrentScope = (state["ownerScope"] as? String) == scope
     let events = loadUnlocked()
     let remaining = events.filter { event in
@@ -317,6 +359,7 @@ final class HermesContextEventQueue {
     if deletingCurrentScope {
       let generation = (state["accountGeneration"] as? Int ?? 0) + 1
       state["accountGeneration"] = generation
+      state["accountGenerationStartedAt"] = Date().timeIntervalSince1970 * 1000
       state["ownerScope"] = ""
       state["pendingRelayWakes"] = []
       state["collectionSuspended"] = true

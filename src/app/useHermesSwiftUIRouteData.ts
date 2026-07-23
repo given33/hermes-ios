@@ -2,24 +2,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
+import { withAbortableDeadline } from '../api/async-deadline';
 import { expireSystemRouteData } from '../api/managed-node-status';
 import {
   conversationSessionSummary,
   createCollaborationRoomRequestId,
+  createWorkflowStartRequestId,
   HermesCloudApi,
 } from '../api/HermesCloudApi';
 import {
   ConversationLocalStore,
   synchronizeConversationCache,
 } from '../api/conversation-local-store';
+import { WorkflowStartSingleFlight } from '../api/workflow-start-single-flight';
 import {
   decodeHermesSwiftUIRouteAction,
   encodeHermesSwiftUIRouteSnapshot,
   HERMES_SWIFTUI_ROUTE_ACTIONS,
   HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+  type HermesSwiftUIRouteSnapshot,
   type HermesSwiftUIRouteOperationSnapshot,
 } from './swiftui-route-contract';
 import {
+  encodeModelSelection,
   loadHermesSwiftUIRouteSnapshot,
   performHermesSwiftUIRouteAction,
   createHermesSwiftUISessionsSnapshot,
@@ -41,6 +46,29 @@ interface HermesSwiftUIRouteDataController {
 }
 
 const FOREGROUND_REFRESH_MS = 15_000;
+const COLLABORATION_SEND_TIMEOUT_MS = 20_000;
+
+function sendCollaborationRoomMessageWithDeadline(
+  api: HermesCloudApi,
+  item: {
+    content: string;
+    profiles: string[];
+    requestId: string;
+    roomId: string;
+  },
+): Promise<unknown> {
+  return withAbortableDeadline(
+    (signal) => api.sendCollaborationRoomMessage(
+      item.roomId,
+      item.content,
+      item.profiles,
+      item.requestId,
+      signal,
+    ),
+    COLLABORATION_SEND_TIMEOUT_MS,
+    'Hermes collaboration message delivery timed out',
+  );
+}
 
 export function useHermesSwiftUIRouteData({
   cacheOwner = '',
@@ -54,6 +82,10 @@ export function useHermesSwiftUIRouteData({
   const localStore = useMemo(
     () => cacheOwner ? new ConversationLocalStore() : null,
     [cacheOwner],
+  );
+  const workflowStartFlights = useMemo(
+    () => new WorkflowStartSingleFlight(),
+    [cacheOwner, client, profile],
   );
   const requestVersion = useRef(0);
   const lastSuccessfulReloadAt = useRef(0);
@@ -81,12 +113,7 @@ export function useHermesSwiftUIRouteData({
       const pending = await localStore.readPendingRoomMessages(cacheOwner);
       for (const item of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
         try {
-          await api.sendCollaborationRoomMessage(
-            item.roomId,
-            item.content,
-            item.profiles,
-            item.requestId,
-          );
+          await sendCollaborationRoomMessageWithDeadline(api, item);
           await localStore.removePendingRoomMessage(cacheOwner, item.requestId);
           lastAcknowledged = item.requestId;
         } catch (error) {
@@ -112,24 +139,30 @@ export function useHermesSwiftUIRouteData({
     const version = ++requestVersion.current;
     try {
       await replayPendingCollaborationMessages().catch(() => undefined);
-      let snapshot = routeId === 'sessions' && localStore && cacheOwner
-        ? createHermesSwiftUISessionsSnapshot({
-            sessions: (
-              await synchronizeConversationCache(
-                api,
-                localStore,
-                cacheOwner,
-                profile,
-              )
-            ).conversations.map(conversationSessionSummary),
-          })
-        : await loadHermesSwiftUIRouteSnapshot(
-            api,
-            routeId,
-            profile,
-            selectedItemId.current,
-            locale === 'zh',
-          );
+      let snapshot: HermesSwiftUIRouteSnapshot;
+      if (routeId === 'sessions' && localStore && cacheOwner) {
+        const synchronized = await synchronizeConversationCache(
+          api,
+          localStore,
+          cacheOwner,
+          profile,
+        );
+        const sessions = synchronized.conversations.map(conversationSessionSummary);
+        const selectedId = selectedItemId.current;
+        const selected = sessions.find(({ id }) => id === selectedId);
+        const sessionState = selected && !selectedId.startsWith('official:')
+          ? await api.getConversationSessionState(selectedId, selected?.profile || profile)
+          : undefined;
+        snapshot = createHermesSwiftUISessionsSnapshot({ sessions, sessionState });
+      } else {
+        snapshot = await loadHermesSwiftUIRouteSnapshot(
+          api,
+          routeId,
+          profile,
+          selectedItemId.current,
+          locale === 'zh',
+        );
+      }
       if (
         routeId === 'collaboration'
         && acknowledgedRoomRequestId.current
@@ -146,6 +179,12 @@ export function useHermesSwiftUIRouteData({
       if (version !== requestVersion.current) return;
       if (routeId === 'system') lastSuccessfulReloadAt.current = Date.now();
       if (routeId === 'models' && operationRef.current) {
+        snapshot = { ...snapshot, operation: operationRef.current };
+      }
+      if (
+        routeId === 'workflows'
+        && operationRef.current?.action === 'workflow.start'
+      ) {
         snapshot = { ...snapshot, operation: operationRef.current };
       }
       setDataJson(encodeHermesSwiftUIRouteSnapshot(snapshot));
@@ -229,6 +268,12 @@ export function useHermesSwiftUIRouteData({
       return;
     }
     const modelOperation = modelOperationForAction(event.action);
+    if (
+      event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.modelSelect
+      || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.modelSelectCancel
+    ) {
+      setDataJson((current) => mergeModelConfirmation(current));
+    }
     if (modelOperation) {
       updateOperation({
         action: modelOperation,
@@ -239,6 +284,9 @@ export function useHermesSwiftUIRouteData({
     if (
       (
         event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSelect
+        || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.workflowSelect
+        || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.approvalSelect
+        || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.runtimeSelect
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.fileSelect
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionSelect
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.skillSelect
@@ -250,6 +298,49 @@ export function useHermesSwiftUIRouteData({
       return;
     }
     try {
+      if (event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.workflowStart) {
+        const workflowId = event.payload.id?.trim() || '';
+        if (!workflowId) return;
+        const flight = workflowStartFlights.run(
+          workflowId,
+          event.payload.requestId?.trim() || createWorkflowStartRequestId(),
+          (requestId) => api.startWorkflow(workflowId, profile, requestId),
+        );
+        if (!flight.leader) {
+          await flight.promise.catch(() => undefined);
+          return;
+        }
+        updateOperation({
+          action: 'workflow.start',
+          message: locale === 'zh' ? '正在启动工作流…' : 'Starting workflow…',
+          requestId: flight.requestId,
+          state: 'running',
+          targetId: workflowId,
+        });
+        try {
+          await flight.promise;
+        } catch (error) {
+          const message = serverErrorMessage(error);
+          updateOperation({
+            action: 'workflow.start',
+            message,
+            requestId: flight.requestId,
+            state: 'error',
+            targetId: workflowId,
+          });
+          notify(message);
+          return;
+        }
+        updateOperation({
+          action: 'workflow.start',
+          message: locale === 'zh' ? '工作流已启动' : 'Workflow started',
+          requestId: flight.requestId,
+          state: 'success',
+          targetId: workflowId,
+        });
+        await reload();
+        return;
+      }
       if (event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSend) {
         const roomId = event.payload.id?.trim() || '';
         const content = event.payload.value?.trim() || '';
@@ -267,7 +358,7 @@ export function useHermesSwiftUIRouteData({
           await localStore.upsertPendingRoomMessage(cacheOwner, item);
         }
         try {
-          await api.sendCollaborationRoomMessage(roomId, content, item.profiles, requestId);
+          await sendCollaborationRoomMessageWithDeadline(api, item);
         } catch (error) {
           if (localStore && cacheOwner && isPermanentRoomSendError(error)) {
             await localStore.removePendingRoomMessage(cacheOwner, requestId);
@@ -309,6 +400,15 @@ export function useHermesSwiftUIRouteData({
       if (typeof result === 'object' && result.detectedModels) {
         setDataJson((current) => mergeDetectedModels(current, result.detectedModels || []));
       }
+      if (typeof result === 'object' && result.confirmRequired) {
+        setDataJson((current) => mergeModelConfirmation(current, {
+          id: encodeModelSelection(result.provider || '', result.model || ''),
+          message: result.confirmMessage || 'This model has unusually high known pricing.',
+          model: result.model || '',
+          provider: result.provider || '',
+        }));
+        return;
+      }
       const resultMessage = typeof result === 'object' ? result.message : '';
       if (modelOperation) {
         updateOperation({
@@ -328,7 +428,17 @@ export function useHermesSwiftUIRouteData({
       }
       notify(message);
     }
-  }, [api, cacheOwner, localStore, notify, profile, reload, updateOperation]);
+  }, [
+    api,
+    cacheOwner,
+    localStore,
+    locale,
+    notify,
+    profile,
+    reload,
+    updateOperation,
+    workflowStartFlights,
+  ]);
 
   return { dataJson, onAction, reload };
 }
@@ -380,6 +490,27 @@ function mergeDetectedModels(dataJson: string, models: readonly string[]): strin
     if (typeof source !== 'object' || source === null || Array.isArray(source)) return dataJson;
     const detectedModels = [...new Set(models.map((model) => model.trim()).filter(Boolean))];
     return JSON.stringify({ ...source, detectedModels });
+  } catch {
+    return dataJson;
+  }
+}
+
+function mergeModelConfirmation(
+  dataJson: string,
+  confirmation?: {
+    id: string;
+    message: string;
+    model: string;
+    provider: string;
+  },
+): string {
+  try {
+    const source: unknown = JSON.parse(dataJson);
+    if (typeof source !== 'object' || source === null || Array.isArray(source)) return dataJson;
+    const next = { ...source } as Record<string, unknown>;
+    if (confirmation) next.modelConfirmation = confirmation;
+    else delete next.modelConfirmation;
+    return JSON.stringify(next);
   } catch {
     return dataJson;
   }

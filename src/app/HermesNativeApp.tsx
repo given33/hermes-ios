@@ -36,7 +36,7 @@ export function HermesNativeApp() {
               accessibilityLabel="Hermes frontend preview"
               style={styles.nativeContent}
             >
-              <FrontendPreviewApp />
+              <FrontendPreviewApp cacheOwner="expo-frontend-preview" />
             </View>
           </FrontendPreviewThemeProvider>
         ) : (

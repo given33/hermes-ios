@@ -15,11 +15,14 @@ enum HermesAccountLifecycle {
   }
 
   @discardableResult
-  static func deleteOwnerScope(_ ownerScope: String) -> Int {
+  static func deleteOwnerScope(
+    _ ownerScope: String,
+    requestedAt: Double? = nil
+  ) -> Int {
     lifecycleLock.lock()
     defer { lifecycleLock.unlock() }
     let queue = HermesContextEventQueue.shared
-    let deletion = queue.deleteOwnerScope(ownerScope)
+    let deletion = queue.deleteOwnerScope(ownerScope, requestedAt: requestedAt)
     guard deletion.deletedWasCurrent else { return deletion.deletedCount }
 
     HermesLocationService.shared.resetAccountState()
@@ -37,7 +40,8 @@ enum HermesAccountLifecycle {
       guard queue.accountGeneration == deletion.accountGeneration else { return }
       _ = await HermesWatchService.shared.send(payload: [
         "accountGeneration": deletion.accountGeneration,
-        "action": "stop-active-relay",
+        "action": "reset-account-generation",
+        "controlIssuedAt": Date().timeIntervalSince1970 * 1000,
       ])
       guard queue.accountGeneration == deletion.accountGeneration else { return }
       await HermesLiveActivityService.shared.endAll()

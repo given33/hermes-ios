@@ -10,6 +10,40 @@ export interface HermesSwiftUISessionSnapshot {
   detail?: string;
 }
 
+export interface HermesSwiftUISessionLineageSnapshot {
+  id: string;
+  title: string;
+  parentSessionId?: string;
+  source: string;
+  model: string;
+  startedAt?: number;
+  endedAt?: number;
+  messageCount: number;
+  toolCallCount: number;
+  current: boolean;
+}
+
+export interface HermesSwiftUISessionContextSnapshot {
+  conversationId: string;
+  sessionId: string;
+  profile: string;
+  model: string;
+  activeMessages: number;
+  archivedMessages: number;
+  messageTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  compressionLineage: readonly string[];
+  compressionCount: number;
+  compressionInProgress: boolean;
+  parentCount: number;
+  childCount: number;
+  lineage: readonly HermesSwiftUISessionLineageSnapshot[];
+}
+
 export interface HermesSwiftUIFileSnapshot {
   id: string;
   name: string;
@@ -24,6 +58,158 @@ export interface HermesSwiftUIFileSnapshot {
   status?: 'available' | 'failed' | 'uploading';
   previewText?: string;
   children?: readonly HermesSwiftUIFileSnapshot[];
+}
+
+export interface HermesSwiftUIWorkflowSummarySnapshot {
+  id: string;
+  name: string;
+  detail: string;
+  revision: number;
+  state: string;
+  updatedAt?: number;
+  activeRunId?: string;
+}
+
+export interface HermesSwiftUIWorkflowNodeSnapshot {
+  id: string;
+  runNodeId?: string;
+  label: string;
+  kind: string;
+  state: string;
+  detail: string;
+  x?: number;
+  y?: number;
+  requiresApproval: boolean;
+  approvalPending: boolean;
+  revision: number;
+}
+
+export interface HermesSwiftUIWorkflowEdgeSnapshot {
+  id: string;
+  source: string;
+  target: string;
+  label: string;
+  state: string;
+}
+
+export interface HermesSwiftUIWorkflowRunSnapshot {
+  id: string;
+  workflowId: string;
+  state: string;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+  currentNodeId?: string;
+  error?: string;
+  canCancel: boolean;
+  canRetry: boolean;
+  revision: number;
+}
+
+export interface HermesSwiftUIWorkspaceChangeSetSnapshot {
+  id: string;
+  runId: string;
+  turnId: string;
+  summary: string;
+  createdAt?: number;
+  fileCount: number;
+  byteCount: number;
+  addedCount: number;
+  modifiedCount: number;
+  deletedCount: number;
+  renamedCount: number;
+}
+
+export interface HermesSwiftUIWorkspaceAuditSnapshot {
+  nodeRunId: string;
+  runId: string;
+  state: string;
+  reason: string;
+  fileCount: number;
+  byteCount: number;
+  changeSetId?: string;
+  updatedAt?: number;
+  finalizedAt?: number;
+}
+
+export interface HermesSwiftUIWorkspaceChangeFileSnapshot {
+  path: string;
+  changeType: string;
+  sha256: string;
+  byteCount: number;
+  patch: string;
+}
+
+export interface HermesSwiftUIWorkspaceChangeSetDetailSnapshot {
+  id: string;
+  runId: string;
+  turnId: string;
+  summary: string;
+  createdAt?: number;
+  files: readonly HermesSwiftUIWorkspaceChangeFileSnapshot[];
+}
+
+export interface HermesSwiftUIWorkflowSnapshot {
+  selectedWorkflowId?: string;
+  workflows: readonly HermesSwiftUIWorkflowSummarySnapshot[];
+  nodes: readonly HermesSwiftUIWorkflowNodeSnapshot[];
+  edges: readonly HermesSwiftUIWorkflowEdgeSnapshot[];
+  run?: HermesSwiftUIWorkflowRunSnapshot;
+  changeSets: readonly HermesSwiftUIWorkspaceChangeSetSnapshot[];
+  workspaceAudits: readonly HermesSwiftUIWorkspaceAuditSnapshot[];
+  selectedChangeSet?: HermesSwiftUIWorkspaceChangeSetDetailSnapshot;
+}
+
+export interface HermesSwiftUIApprovalItemSnapshot {
+  id: string;
+  title: string;
+  summary: string;
+  subsystem: string;
+  action: string;
+  origin: string;
+  profile: string;
+  state: string;
+  target: string;
+  revision: number;
+  createdAt?: number;
+  expiresAt?: number;
+  diff: string;
+  diffAvailable: boolean;
+}
+
+export interface HermesSwiftUIApprovalsSnapshot {
+  selectedId?: string;
+  items: readonly HermesSwiftUIApprovalItemSnapshot[];
+  selected?: HermesSwiftUIApprovalItemSnapshot;
+}
+
+export interface HermesSwiftUIRuntimeRunSnapshot {
+  id: string;
+  title: string;
+  kind: string;
+  state: string;
+  profile: string;
+  detail: string;
+  startedAt?: number;
+  completedAt?: number;
+  heartbeatAt?: number;
+  observedAt?: number;
+  durationMs?: number;
+  cancelable: boolean;
+  retryable: boolean;
+  conversationId?: string;
+  workflowId?: string;
+  error?: string;
+  artifactCount: number;
+  changeSetId?: string;
+  cancelUrl?: string;
+  retryUrl?: string;
+}
+
+export interface HermesSwiftUIRuntimeSnapshot {
+  selectedRunId?: string;
+  runs: readonly HermesSwiftUIRuntimeRunSnapshot[];
+  selected?: HermesSwiftUIRuntimeRunSnapshot;
 }
 
 export interface HermesSwiftUIAnalyticsPointSnapshot {
@@ -53,12 +239,31 @@ export interface HermesSwiftUIModelSnapshot {
   contextLength: number;
   reasoningEffort: 'high' | 'low' | 'max' | 'medium' | 'minimal' | 'none' | 'ultra' | 'xhigh';
   active: boolean;
+  authenticated: boolean;
+  selectable: boolean;
+  warning: string;
+  priceInput: string;
+  priceOutput: string;
+  priceCache: string;
+  free: boolean;
+  freeTier: boolean;
+  supportsFast: boolean;
+  supportsReasoning: boolean;
+}
+
+export interface HermesSwiftUIModelConfirmationSnapshot {
+  id: string;
+  message: string;
+  model: string;
+  provider: string;
 }
 
 export interface HermesSwiftUIRouteOperationSnapshot {
-  action: 'model.discover' | 'model.save' | 'model.test';
+  action: 'model.discover' | 'model.save' | 'model.test' | 'workflow.start';
   message: string;
+  requestId?: string;
   state: 'error' | 'running' | 'success';
+  targetId?: string;
 }
 
 export interface HermesSwiftUILogSnapshot {
@@ -218,9 +423,14 @@ export interface HermesSwiftUIRouteSnapshot {
   version: typeof HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION;
   route?: string;
   sessions?: readonly HermesSwiftUISessionSnapshot[];
+  sessionContext?: HermesSwiftUISessionContextSnapshot;
   files?: readonly HermesSwiftUIFileSnapshot[];
+  workflows?: HermesSwiftUIWorkflowSnapshot;
+  approvals?: HermesSwiftUIApprovalsSnapshot;
+  runtime?: HermesSwiftUIRuntimeSnapshot;
   analytics?: HermesSwiftUIAnalyticsSnapshot;
   models?: readonly HermesSwiftUIModelSnapshot[];
+  modelConfirmation?: HermesSwiftUIModelConfirmationSnapshot;
   detectedModels?: readonly string[];
   operation?: HermesSwiftUIRouteOperationSnapshot;
   logs?: readonly HermesSwiftUILogSnapshot[];
@@ -243,6 +453,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   sessionOpen: 'session.open',
   sessionDelete: 'session.delete',
   sessionRename: 'session.rename',
+  sessionCompress: 'session.compress',
   fileSelect: 'file.select',
   fileDelete: 'file.delete',
   fileDownload: 'file.download',
@@ -250,6 +461,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   fileImport: 'file.import',
   folderCreate: 'folder.create',
   modelSelect: 'model.select',
+  modelSelectCancel: 'model.select.cancel',
   modelDiscover: 'model.discover',
   modelSave: 'model.save',
   modelTest: 'model.test',
@@ -288,6 +500,17 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   collaborationCreate: 'collaboration.create',
   collaborationDelete: 'collaboration.delete',
   collaborationSend: 'collaboration.send',
+  workflowSelect: 'workflow.select',
+  workflowStart: 'workflow.start',
+  workflowCancel: 'workflow.cancel',
+  workflowRetry: 'workflow.retry',
+  workflowApprove: 'workflow.approve',
+  approvalSelect: 'approval.select',
+  approvalApprove: 'approval.approve',
+  approvalReject: 'approval.reject',
+  runtimeSelect: 'runtime.select',
+  runtimeCancel: 'runtime.cancel',
+  runtimeRetry: 'runtime.retry',
 } as const;
 
 export type HermesSwiftUIRouteAction =

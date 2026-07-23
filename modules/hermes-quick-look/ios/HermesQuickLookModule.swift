@@ -11,16 +11,22 @@ public final class HermesQuickLookModule: Module {
     AsyncFunction("present") { (uri: URL, title: String?) -> Bool in
       guard uri.isFileURL,
             FileManager.default.fileExists(atPath: uri.path),
-            let presenter = Self.topViewController() else {
+            let presenter = Self.topViewController(),
+            self.dataSource == nil else {
         return false
       }
 
-      let source = HermesQuickLookDataSource(url: uri, title: title)
-      let preview = QLPreviewController()
-      preview.dataSource = source
-      self.dataSource = source
-      presenter.present(preview, animated: true)
-      return true
+      return await withCheckedContinuation { continuation in
+        let source = HermesQuickLookDataSource(url: uri, title: title) { [weak self] in
+          self?.dataSource = nil
+          continuation.resume(returning: true)
+        }
+        let preview = QLPreviewController()
+        preview.dataSource = source
+        preview.delegate = source
+        self.dataSource = source
+        presenter.present(preview, animated: true)
+      }
     }.runOnQueue(.main)
   }
 
@@ -47,11 +53,15 @@ public final class HermesQuickLookModule: Module {
   }
 }
 
-private final class HermesQuickLookDataSource: NSObject, QLPreviewControllerDataSource {
+private final class HermesQuickLookDataSource: NSObject,
+  QLPreviewControllerDataSource,
+  QLPreviewControllerDelegate {
   private let item: HermesQuickLookItem
+  private var onDismiss: (() -> Void)?
 
-  init(url: URL, title: String?) {
+  init(url: URL, title: String?, onDismiss: @escaping () -> Void) {
     item = HermesQuickLookItem(url: url, title: title)
+    self.onDismiss = onDismiss
     super.init()
   }
 
@@ -64,6 +74,12 @@ private final class HermesQuickLookDataSource: NSObject, QLPreviewControllerData
     previewItemAt index: Int
   ) -> QLPreviewItem {
     item
+  }
+
+  func previewControllerDidDismiss(_ controller: QLPreviewController) {
+    let completion = onDismiss
+    onDismiss = nil
+    completion?()
   }
 }
 

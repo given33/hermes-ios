@@ -7,9 +7,14 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let version: Int
   let route: String?
   let sessions: [HermesSessionSnapshot]
+  let sessionContext: HermesSessionContextSnapshot?
   let files: [HermesFileSnapshot]
+  let workflows: HermesWorkflowSnapshot
+  let approvals: HermesApprovalsSnapshot
+  let runtime: HermesRuntimeSnapshot
   let analytics: HermesAnalyticsSnapshot
   let models: [HermesModelSnapshot]
+  let modelConfirmation: HermesModelConfirmationSnapshot?
   let detectedModels: [String]
   let operation: HermesRouteOperationSnapshot?
   let logs: [HermesLogSnapshot]
@@ -29,9 +34,14 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     case version
     case route
     case sessions
+    case sessionContext
     case files
+    case workflows
+    case approvals
+    case runtime
     case analytics
     case models
+    case modelConfirmation
     case detectedModels
     case operation
     case logs
@@ -52,9 +62,14 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     version: Int = hermesRouteSnapshotVersion,
     route: String? = nil,
     sessions: [HermesSessionSnapshot] = [],
+    sessionContext: HermesSessionContextSnapshot? = nil,
     files: [HermesFileSnapshot] = [],
+    workflows: HermesWorkflowSnapshot = .empty,
+    approvals: HermesApprovalsSnapshot = .empty,
+    runtime: HermesRuntimeSnapshot = .empty,
     analytics: HermesAnalyticsSnapshot = .empty,
     models: [HermesModelSnapshot] = [],
+    modelConfirmation: HermesModelConfirmationSnapshot? = nil,
     detectedModels: [String] = [],
     operation: HermesRouteOperationSnapshot? = nil,
     logs: [HermesLogSnapshot] = [],
@@ -73,9 +88,14 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.version = version
     self.route = route
     self.sessions = sessions
+    self.sessionContext = sessionContext
     self.files = files
+    self.workflows = workflows
+    self.approvals = approvals
+    self.runtime = runtime
     self.analytics = analytics
     self.models = models
+    self.modelConfirmation = modelConfirmation
     self.detectedModels = detectedModels
     self.operation = operation
     self.logs = logs
@@ -101,10 +121,26 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [HermesSessionSnapshot].self,
       forKey: .sessions
     ) ?? []
+    sessionContext = try container.decodeIfPresent(
+      HermesSessionContextSnapshot.self,
+      forKey: .sessionContext
+    )
     files = try container.decodeIfPresent(
       [HermesFileSnapshot].self,
       forKey: .files
     ) ?? []
+    workflows = try container.decodeIfPresent(
+      HermesWorkflowSnapshot.self,
+      forKey: .workflows
+    ) ?? .empty
+    approvals = try container.decodeIfPresent(
+      HermesApprovalsSnapshot.self,
+      forKey: .approvals
+    ) ?? .empty
+    runtime = try container.decodeIfPresent(
+      HermesRuntimeSnapshot.self,
+      forKey: .runtime
+    ) ?? .empty
     analytics = try container.decodeIfPresent(
       HermesAnalyticsSnapshot.self,
       forKey: .analytics
@@ -113,6 +149,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [HermesModelSnapshot].self,
       forKey: .models
     ) ?? []
+    modelConfirmation = try container.decodeIfPresent(
+      HermesModelConfirmationSnapshot.self,
+      forKey: .modelConfirmation
+    )
     detectedModels = try container.decodeIfPresent(
       [String].self,
       forKey: .detectedModels
@@ -160,7 +200,9 @@ extension HermesRouteSnapshot: @unchecked Sendable {}
 struct HermesRouteOperationSnapshot: Decodable, Equatable {
   let action: String
   let message: String
+  let requestId: String?
   let state: String
+  let targetId: String?
 }
 
 struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {
@@ -171,6 +213,40 @@ struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {
   let running: Bool
   let profile: String?
   let detail: String?
+}
+
+struct HermesSessionLineageSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let title: String
+  let parentSessionId: String?
+  let source: String
+  let model: String
+  let startedAt: Double?
+  let endedAt: Double?
+  let messageCount: Int
+  let toolCallCount: Int
+  let current: Bool
+}
+
+struct HermesSessionContextSnapshot: Decodable, Equatable {
+  let conversationId: String
+  let sessionId: String
+  let profile: String
+  let model: String
+  let activeMessages: Int
+  let archivedMessages: Int
+  let messageTokens: Int
+  let inputTokens: Int
+  let outputTokens: Int
+  let cacheReadTokens: Int
+  let cacheWriteTokens: Int
+  let reasoningTokens: Int
+  let compressionLineage: [String]
+  let compressionCount: Int
+  let compressionInProgress: Bool
+  let parentCount: Int
+  let childCount: Int
+  let lineage: [HermesSessionLineageSnapshot]
 }
 
 struct HermesFileSnapshot: Decodable, Equatable, Identifiable {
@@ -187,6 +263,227 @@ struct HermesFileSnapshot: Decodable, Equatable, Identifiable {
   let status: String?
   let previewText: String?
   let children: [HermesFileSnapshot]?
+}
+
+struct HermesWorkflowSummarySnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let name: String
+  let detail: String
+  let revision: Int
+  let state: String
+  let updatedAt: Double?
+  let activeRunId: String?
+}
+
+struct HermesWorkflowNodeSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let runNodeId: String?
+  let label: String
+  let kind: String
+  let state: String
+  let detail: String
+  let x: Double?
+  let y: Double?
+  let requiresApproval: Bool
+  let approvalPending: Bool
+  let revision: Int
+}
+
+struct HermesWorkflowEdgeSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let source: String
+  let target: String
+  let label: String
+  let state: String
+}
+
+struct HermesWorkflowRunSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let workflowId: String
+  let state: String
+  let startedAt: Double?
+  let completedAt: Double?
+  let durationMs: Double?
+  let currentNodeId: String?
+  let error: String?
+  let canCancel: Bool
+  let canRetry: Bool
+  let revision: Int
+}
+
+struct HermesWorkspaceChangeSetSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let runId: String
+  let turnId: String
+  let summary: String
+  let createdAt: Double?
+  let fileCount: Int
+  let byteCount: Int
+  let addedCount: Int
+  let modifiedCount: Int
+  let deletedCount: Int
+  let renamedCount: Int
+}
+
+struct HermesWorkspaceAuditSnapshot: Decodable, Equatable, Identifiable {
+  var id: String { nodeRunId }
+  let nodeRunId: String
+  let runId: String
+  let state: String
+  let reason: String
+  let fileCount: Int
+  let byteCount: Int
+  let changeSetId: String?
+  let updatedAt: Double?
+  let finalizedAt: Double?
+}
+
+struct HermesWorkspaceChangeFileSnapshot: Decodable, Equatable, Identifiable {
+  var id: String { path }
+  let path: String
+  let changeType: String
+  let sha256: String
+  let byteCount: Int
+  let patch: String
+}
+
+struct HermesWorkspaceChangeSetDetailSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let runId: String
+  let turnId: String
+  let summary: String
+  let createdAt: Double?
+  let files: [HermesWorkspaceChangeFileSnapshot]
+}
+
+struct HermesWorkflowSnapshot: Decodable, Equatable {
+  let selectedWorkflowId: String?
+  let workflows: [HermesWorkflowSummarySnapshot]
+  let nodes: [HermesWorkflowNodeSnapshot]
+  let edges: [HermesWorkflowEdgeSnapshot]
+  let run: HermesWorkflowRunSnapshot?
+  let changeSets: [HermesWorkspaceChangeSetSnapshot]
+  let workspaceAudits: [HermesWorkspaceAuditSnapshot]
+  let selectedChangeSet: HermesWorkspaceChangeSetDetailSnapshot?
+
+  private enum CodingKeys: String, CodingKey {
+    case selectedWorkflowId
+    case workflows
+    case nodes
+    case edges
+    case run
+    case changeSets
+    case workspaceAudits
+    case selectedChangeSet
+  }
+
+  init(
+    selectedWorkflowId: String?,
+    workflows: [HermesWorkflowSummarySnapshot],
+    nodes: [HermesWorkflowNodeSnapshot],
+    edges: [HermesWorkflowEdgeSnapshot],
+    run: HermesWorkflowRunSnapshot?,
+    changeSets: [HermesWorkspaceChangeSetSnapshot] = [],
+    workspaceAudits: [HermesWorkspaceAuditSnapshot] = [],
+    selectedChangeSet: HermesWorkspaceChangeSetDetailSnapshot? = nil
+  ) {
+    self.selectedWorkflowId = selectedWorkflowId
+    self.workflows = workflows
+    self.nodes = nodes
+    self.edges = edges
+    self.run = run
+    self.changeSets = changeSets
+    self.workspaceAudits = workspaceAudits
+    self.selectedChangeSet = selectedChangeSet
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    selectedWorkflowId = try container.decodeIfPresent(String.self, forKey: .selectedWorkflowId)
+    workflows = try container.decodeIfPresent(
+      [HermesWorkflowSummarySnapshot].self,
+      forKey: .workflows
+    ) ?? []
+    nodes = try container.decodeIfPresent([HermesWorkflowNodeSnapshot].self, forKey: .nodes) ?? []
+    edges = try container.decodeIfPresent([HermesWorkflowEdgeSnapshot].self, forKey: .edges) ?? []
+    run = try container.decodeIfPresent(HermesWorkflowRunSnapshot.self, forKey: .run)
+    changeSets = try container.decodeIfPresent(
+      [HermesWorkspaceChangeSetSnapshot].self,
+      forKey: .changeSets
+    ) ?? []
+    workspaceAudits = try container.decodeIfPresent(
+      [HermesWorkspaceAuditSnapshot].self,
+      forKey: .workspaceAudits
+    ) ?? []
+    selectedChangeSet = try container.decodeIfPresent(
+      HermesWorkspaceChangeSetDetailSnapshot.self,
+      forKey: .selectedChangeSet
+    )
+  }
+
+  static let empty = HermesWorkflowSnapshot(
+    selectedWorkflowId: nil,
+    workflows: [],
+    nodes: [],
+    edges: [],
+    run: nil
+  )
+}
+
+struct HermesApprovalItemSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let title: String
+  let summary: String
+  let subsystem: String
+  let action: String
+  let origin: String
+  let profile: String
+  let state: String
+  let target: String
+  let revision: Int
+  let createdAt: Double?
+  let expiresAt: Double?
+  let diff: String
+  let diffAvailable: Bool
+}
+
+struct HermesApprovalsSnapshot: Decodable, Equatable {
+  let selectedId: String?
+  let items: [HermesApprovalItemSnapshot]
+  let selected: HermesApprovalItemSnapshot?
+
+  static let empty = HermesApprovalsSnapshot(selectedId: nil, items: [], selected: nil)
+}
+
+struct HermesRuntimeRunSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let title: String
+  let kind: String
+  let state: String
+  let profile: String
+  let detail: String
+  let startedAt: Double?
+  let completedAt: Double?
+  let heartbeatAt: Double?
+  let observedAt: Double?
+  let durationMs: Double?
+  let cancelable: Bool
+  let retryable: Bool
+  let conversationId: String?
+  let workflowId: String?
+  let error: String?
+  let artifactCount: Int
+  let changeSetId: String?
+  let cancelUrl: String?
+  let retryUrl: String?
+}
+
+struct HermesRuntimeSnapshot: Decodable, Equatable {
+  let selectedRunId: String?
+  let runs: [HermesRuntimeRunSnapshot]
+  let selected: HermesRuntimeRunSnapshot?
+
+  static let empty = HermesRuntimeSnapshot(selectedRunId: nil, runs: [], selected: nil)
 }
 
 struct HermesAnalyticsSnapshot: Decodable, Equatable {
@@ -252,6 +549,23 @@ struct HermesModelSnapshot: Decodable, Equatable, Identifiable {
   let contextLength: Int
   let reasoningEffort: String
   let active: Bool
+  let authenticated: Bool?
+  let selectable: Bool?
+  let warning: String?
+  let priceInput: String?
+  let priceOutput: String?
+  let priceCache: String?
+  let free: Bool?
+  let freeTier: Bool?
+  let supportsFast: Bool?
+  let supportsReasoning: Bool?
+}
+
+struct HermesModelConfirmationSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let message: String
+  let model: String
+  let provider: String
 }
 
 struct HermesLogSnapshot: Decodable, Equatable, Identifiable {
@@ -514,6 +828,7 @@ enum HermesRouteAction: String, CaseIterable {
   case sessionOpen = "session.open"
   case sessionDelete = "session.delete"
   case sessionRename = "session.rename"
+  case sessionCompress = "session.compress"
   case fileSelect = "file.select"
   case fileDelete = "file.delete"
   case fileDownload = "file.download"
@@ -521,6 +836,7 @@ enum HermesRouteAction: String, CaseIterable {
   case fileImport = "file.import"
   case folderCreate = "folder.create"
   case modelSelect = "model.select"
+  case modelSelectCancel = "model.select.cancel"
   case modelDiscover = "model.discover"
   case modelSave = "model.save"
   case modelTest = "model.test"
@@ -559,6 +875,17 @@ enum HermesRouteAction: String, CaseIterable {
   case collaborationCreate = "collaboration.create"
   case collaborationDelete = "collaboration.delete"
   case collaborationSend = "collaboration.send"
+  case workflowSelect = "workflow.select"
+  case workflowStart = "workflow.start"
+  case workflowCancel = "workflow.cancel"
+  case workflowRetry = "workflow.retry"
+  case workflowApprove = "workflow.approve"
+  case approvalSelect = "approval.select"
+  case approvalApprove = "approval.approve"
+  case approvalReject = "approval.reject"
+  case runtimeSelect = "runtime.select"
+  case runtimeCancel = "runtime.cancel"
+  case runtimeRetry = "runtime.retry"
 }
 
 struct HermesRouteActionPayload: Encodable, Equatable {

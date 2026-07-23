@@ -33,8 +33,14 @@ function verifySource(projectRoot) {
   const podspec = read(join(moduleRoot, 'ios', 'HermesIOSContext.podspec'));
   requireMatch(podspec, /s\.name\s*=\s*['"]HermesIOSContext['"]/, 'HermesIOSContext pod name');
   requireMatch(podspec, /s\.source_files\s*=\s*['"]\*\*\/\*\.\{h,m,mm,swift\}['"]/, 'Swift source discovery');
+  requireMatch(
+    podspec,
+    /s\.dependency\s+['"]AMap3DMap-NO-IDFA['"],\s*['"]11\.2\.000['"]/,
+    'pinned AMap iOS SDK dependency',
+  );
 
   const nativeModule = read(join(moduleRoot, 'ios', 'HermesIOSContextModule.swift'));
+  const attachmentVault = read(join(moduleRoot, 'ios', 'HermesAttachmentVault.swift'));
   const mapModule = read(join(moduleRoot, 'ios', 'HermesStandardMapModule.swift'));
   requireMatch(nativeModule, /Function\("getNativeViewContract"\)/, 'native view build contract');
   requireMatch(mapModule, /Name\("HermesStandardMap"\)/, 'standard map module name');
@@ -42,14 +48,25 @@ function verifySource(projectRoot) {
   requireMatch(mapModule, /View\(HermesStandardMapView\.self\)/, 'standard map default view definition');
   requireNoMatch(nativeModule, /View\(HermesStandardMapView\.self\)/, 'named map view in context module');
   requireMatch(nativeModule, /View\(HermesScreenTimeReportView\.self\)/, 'screen time view definition');
-  read(join(moduleRoot, 'ios', 'HermesStandardMapView.swift'));
+  requireMatch(nativeModule, /AsyncFunction\("encryptAttachment"\)/, 'attachment encryption bridge');
+  requireMatch(nativeModule, /AsyncFunction\("decryptAttachmentForUpload"\)/, 'attachment decryption bridge');
+  requireMatch(attachmentVault, /AES\.GCM\.seal/, 'AES-GCM attachment encryption');
+  requireMatch(attachmentVault, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/, 'device-only attachment key');
+  const mapView = read(join(moduleRoot, 'ios', 'HermesStandardMapView.swift'));
+  const mapKitSurface = read(join(moduleRoot, 'ios', 'HermesMapKitSurface.swift'));
+  const amapSurface = read(join(moduleRoot, 'ios', 'HermesAMapSurface.swift'));
+  requireMatch(mapView, /HermesAmapIOSAPIKey/, 'AMap app-bound key lookup');
+  requireMatch(mapView, /amapPrivacyConsentGranted/, 'AMap privacy consent gate');
+  requireMatch(mapKitSurface, /MKStandardMapConfiguration/, 'MapKit fallback');
+  requireMatch(amapSurface, /MAMapView\.updatePrivacyAgree\(\.didAgree\)/, 'AMap privacy API');
+  requireMatch(amapSurface, /AMapCoordinateConvert\(coordinate, \.GPS\)/, 'WGS-84 to GCJ-02 conversion');
   read(join(moduleRoot, 'ios', 'HermesScreenTimeReportView.swift'));
   read(join(moduleRoot, 'ios', 'HermesPermissionCollectionGate.swift'));
 
   const bridge = read(join(moduleRoot, 'index.ts'));
   requireMatch(
     bridge,
-    /requireOptionalNativeModule\('HermesStandardMap'\)/,
+    /requireOptionalNativeModule<[\s\S]*?>\([\s\S]*?'HermesStandardMap'/,
     'standard map native module lookup',
   );
   requireMatch(bridge, /NativeUnimoduleProxy\?\.viewManagersMetadata/, 'native view metadata gate');
@@ -82,6 +99,8 @@ function verifySource(projectRoot) {
 function verifyPods(iosDirectory) {
   const lock = read(join(iosDirectory, 'Podfile.lock'));
   requireMatch(lock, /(?:^|\n)\s*- HermesIOSContext\b/, 'Podfile.lock HermesIOSContext entry');
+  requireMatch(lock, /(?:^|\n)\s*- AMap3DMap-NO-IDFA \(11\.2\.000\)/, 'Podfile.lock AMap 11.2.000 entry');
+  requireMatch(lock, /(?:^|\n)\s*- AMapFoundation-NO-IDFA\b/, 'Podfile.lock AMap foundation entry');
 
   const providers = findFiles(join(iosDirectory, 'Pods'), (path) => (
     basename(path) === 'ExpoModulesProvider.swift'
@@ -100,7 +119,10 @@ function verifyPods(iosDirectory) {
   requireMatch(podsProject, /HermesIOSContextModule\.swift/, 'Pods project native module source');
   requireMatch(podsProject, /HermesStandardMapModule\.swift/, 'Pods project map module source');
   requireMatch(podsProject, /HermesStandardMapView\.swift/, 'Pods project standard map source');
+  requireMatch(podsProject, /HermesMapKitSurface\.swift/, 'Pods project MapKit fallback source');
+  requireMatch(podsProject, /HermesAMapSurface\.swift/, 'Pods project AMap source');
   requireMatch(podsProject, /HermesScreenTimeReportView\.swift/, 'Pods project Screen Time view source');
+  requireMatch(podsProject, /HermesAttachmentVault\.swift/, 'Pods project attachment vault source');
   requireMatch(
     podsProject,
     /HermesPermissionCollectionGate\.swift/,
@@ -128,9 +150,21 @@ function verifyCompiledObjects(derivedRoot) {
       if (!/(?:output-file-map\.json|HermesIOSContext\.SwiftFileList)$/i.test(path)) return false;
       return read(path).includes('HermesStandardMapModule.swift');
     });
-  if (!mapViewEvidence || !mapModuleEvidence) {
-    fail('Xcode did not emit compile evidence for HermesStandardMapView.swift.');
+  const mapKitEvidence = sourceCompileEvidence(buildFiles, 'HermesMapKitSurface.swift');
+  const amapEvidence = sourceCompileEvidence(buildFiles, 'HermesAMapSurface.swift');
+  const attachmentVaultEvidence = sourceCompileEvidence(buildFiles, 'HermesAttachmentVault.swift');
+  if (!mapViewEvidence || !mapModuleEvidence || !mapKitEvidence || !amapEvidence || !attachmentVaultEvidence) {
+    fail('Xcode did not emit compile evidence for every Hermes native map and attachment source.');
   }
+}
+
+function sourceCompileEvidence(buildFiles, sourceName) {
+  const stem = sourceName.replace(/\.swift$/i, '');
+  return buildFiles.some((path) => new RegExp(`${stem}\\.(?:o|d|swiftdeps)$`, 'i').test(path))
+    || buildFiles.some((path) => {
+      if (!/(?:output-file-map\.json|HermesIOSContext\.SwiftFileList)$/i.test(path)) return false;
+      return read(path).includes(sourceName);
+    });
 }
 
 function findFiles(directory, predicate) {

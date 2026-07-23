@@ -215,6 +215,21 @@ export function createSidebarRootState(path: string) {
   };
 }
 
+export function resolveCompactNavigationEvent(
+  activePath: string,
+  reportedPath: string,
+  pendingSidebarPath: string | null,
+): NativeShellEvent | null {
+  // resetRoot can report the route it is replacing before it reports the new
+  // root. The selected sidebar destination owns that transition.
+  if (pendingSidebarPath && reportedPath !== pendingSidebarPath) return null;
+  if (reportedPath === activePath) return null;
+  return {
+    type: pendingSidebarPath === reportedPath ? 'select-route' : 'navigate',
+    path: reportedPath,
+  };
+}
+
 export function resolveNativeShellPath(
   routes: readonly ComposedRoute[],
   requestedPath: string,

@@ -61,18 +61,24 @@ export interface HermesChatViewMessage {
   content: string;
   createdAt?: number;
   durationMs?: number;
+  firstTokenAt?: number;
   handoffTarget?: string;
   id: string;
   model?: string;
   name: string;
+  optimisticConfirmedAt?: number;
   profile?: string;
   provider?: string;
   role: 'assistant' | 'user';
   roleLabel?: string;
   roleStage?: HermesChatRoleStage;
+  runtimeMessageId?: number;
+  runtimeSessionId?: string;
+  runtimeTurnId?: string;
   senderId?: string;
   startedAt?: number;
   status?: string;
+  timingLabel?: string;
   updatedAt?: number;
 }
 
@@ -271,9 +277,11 @@ function isSupersededChatProgress(
   const key = stringValue(meta.message_key).toLowerCase();
   return phase === 'opening'
     || phase === 'progress'
+    || phase === 'milestone'
     || roleStage === 'chat.opening'
     || roleStage === 'chat.progress'
-    || /:chat:(?:opening|progress)$/.test(key);
+    || roleStage.startsWith('chat.milestone')
+    || /:chat:(?:opening|progress|milestone(?:\.\d+)?)$/.test(key);
 }
 
 export function chatModelConfigurationError(
@@ -300,7 +308,10 @@ export function chatModelConfigurationError(
     const slug = stringValue(entry.slug) || stringValue(entry.name);
     return Boolean(provider) && slug.toLowerCase() === provider.toLowerCase();
   });
-  if (isRecord(currentProvider) && currentProvider.authenticated === false) {
+  if (
+    (customActive && custom.apiKeyConfigured === false)
+    || (isRecord(currentProvider) && currentProvider.authenticated === false)
+  ) {
     return chinese
       ? '当前模型没有可用的连接凭据。请在“模型与工具”中检查提供商登录或密钥配置后重试。'
       : 'The current model has no usable credentials. Check the provider sign-in or key in Model & tools.';
@@ -325,6 +336,68 @@ export function upsertChatMessage(
     currentIndex === index ? { ...current, ...message } : current
   ));
 }
+
+export function reconcileOptimisticMessages(
+  serverMessages: HermesChatViewMessage[],
+  optimisticMessages: HermesChatViewMessage[],
+  now = Date.now(),
+  protectedMessageIds: ReadonlySet<string> = new Set(),
+): { messages: HermesChatViewMessage[]; pending: HermesChatViewMessage[] } {
+  const pending = optimisticMessages.flatMap((optimistic) => {
+    const supersededLocalFailure = optimistic.role === 'assistant'
+      && optimistic.status === 'failed'
+      && Boolean(optimistic.runtimeTurnId)
+      && serverMessages.some((serverMessage) => (
+        serverMessage.role === 'assistant'
+        && serverMessage.runtimeTurnId === optimistic.runtimeTurnId
+        && ['completed', 'failed', 'cancelled'].includes(serverMessage.status || '')
+      ));
+    if (supersededLocalFailure) return [];
+    const confirmed = serverMessages.some((serverMessage) => (
+      serverMessage.id === optimistic.id
+      && serverMessage.role === optimistic.role
+      && (
+        optimistic.role !== 'user'
+        || serverMessage.content === optimistic.content
+      )
+      && (
+        optimistic.status !== 'failed'
+        || (
+          serverMessage.status === 'failed'
+          && serverMessage.content === optimistic.content
+        )
+      )
+    ));
+    if (!confirmed) return [optimistic];
+    if (protectedMessageIds.has(optimistic.id)) {
+      return [{
+        ...optimistic,
+        optimisticConfirmedAt: optimistic.optimisticConfirmedAt || now,
+      }];
+    }
+    if (
+      optimistic.optimisticConfirmedAt
+      && now - optimistic.optimisticConfirmedAt >= OPTIMISTIC_CONFIRMATION_GRACE_MS
+    ) return [];
+    return [{
+      ...optimistic,
+      optimisticConfirmedAt: optimistic.optimisticConfirmedAt || now,
+    }];
+  });
+  const pendingIds = new Set(pending.map(({ id }) => id));
+  return {
+    messages: [
+      ...serverMessages.filter(({ id }) => !pendingIds.has(id)),
+      ...pending,
+    ].sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0)),
+    // A server replica can confirm a message and then briefly return an older
+    // snapshot. Require another confirmation after the grace period before
+    // deleting the durable ledger entry.
+    pending,
+  };
+}
+
+const OPTIMISTIC_CONFIRMATION_GRACE_MS = 2 * 60 * 1_000;
 
 export function collaborationMessageToView(
   message: CollaborationMessage,
@@ -384,11 +457,14 @@ export function collaborationMessageToView(
   const model = stringValue(message.model)
     || stringValue(meta.actual_model)
     || stringValue(meta.model);
+  const runtimeTurnId = messageRuntimeTurnId(message, meta);
+  const runtimeSessionId = stringValue(meta.runtime_session_id);
+  const runtimeMessageId = numberValue(meta.runtime_message_id);
   const mappedActivities = mapActivities(message, meta);
   const createdAt = timestampValue(message.created_at)
     || timestampValue(message.timestamp)
     || timestampValue(meta.created_at);
-  const startedAt = timestampValue(message.started_at)
+  let startedAt = timestampValue(message.started_at)
     || timestampValue(meta.started_at)
     || createdAt
     || firstActivityTimestamp(mappedActivities);
@@ -428,6 +504,31 @@ export function collaborationMessageToView(
           : activity
       ))
     : mappedActivities;
+  let timingLabel = '';
+  if (!terminal && roleStage === 'chat') {
+    const firstTokenAt = timestampValue(meta.first_token_at);
+    if (firstTokenAt || message.content) {
+      timingLabel = chinese ? '正在执行' : 'Executing';
+      startedAt = firstTokenAt || startedAt;
+    } else {
+      const runtimeStatusActivity = [...(activities || [])].reverse().find(
+        (activity) => activity.name === '运行状态' || activity.name === 'Runtime status',
+      );
+      const runtimeStatus = runtimeStatusActivity?.output || runtimeStatusActivity?.preview || '';
+      const reconnect = runtimeStatus.match(/(?:正在重连|reconnecting)\s*[（(](\d+)\s*\/\s*5[）)]/i);
+      if (reconnect) {
+        timingLabel = chinese
+          ? `正在重连 (${reconnect[1]}/5)`
+          : `Reconnecting (${reconnect[1]}/5)`;
+        startedAt = runtimeStatusActivity?.startedAt || startedAt;
+      } else if (/正在思考|thinking/i.test(runtimeStatus)) {
+        timingLabel = chinese ? '正在思考' : 'Thinking';
+        startedAt = runtimeStatusActivity?.startedAt || startedAt;
+      } else {
+        timingLabel = chinese ? '正在思考' : 'Thinking';
+      }
+    }
+  }
   const completedAt = timestampValue(message.completed_at)
     || timestampValue(meta.completed_at)
     || (terminal ? serverUpdatedAt : 0)
@@ -457,6 +558,7 @@ export function collaborationMessageToView(
     content: message.content || '',
     createdAt: createdAt || undefined,
     durationMs,
+    firstTokenAt: timestampValue(meta.first_token_at) || undefined,
     handoffTarget: stringListValue(message.handoff_to)
       || stringListValue(meta.handoff_to)
       || stringListValue(meta.handoff_target)
@@ -464,16 +566,21 @@ export function collaborationMessageToView(
     id: message.id,
     model: [provider, model].filter(Boolean).join(' · ') || undefined,
     name,
+    optimisticConfirmedAt: timestampValue(meta.optimistic_confirmed_at) || undefined,
     profile: profile || undefined,
     provider: provider || undefined,
     role: isUser ? 'user' : 'assistant',
     roleLabel,
     roleStage,
+    runtimeMessageId: runtimeMessageId > 0 ? runtimeMessageId : undefined,
+    runtimeSessionId: runtimeSessionId || undefined,
+    runtimeTurnId: runtimeTurnId || undefined,
     senderId: stringValue(message.sender_id)
       || stringValue(meta.sender_id)
       || undefined,
     startedAt: startedAt || undefined,
     status,
+    timingLabel: timingLabel || undefined,
     updatedAt: updatedAt || undefined,
   };
 }
@@ -943,6 +1050,8 @@ function deduplicateByContent(messages: HermesChatViewMessage[]): HermesChatView
     if (message.role === 'assistant' && message.content) {
       const duplicateIndex = result.findIndex(
         (existing) => existing.role === 'assistant'
+          && Boolean(existing.runtimeTurnId)
+          && existing.runtimeTurnId === message.runtimeTurnId
           && existing.content === message.content
           && Math.abs(
             (existing.completedAt || existing.updatedAt || existing.createdAt || 0)
@@ -1138,17 +1247,38 @@ export function activityCategoryLabel(category: string, chinese = true): string 
 export function formatActivitySummary(
   message: Pick<
     HermesChatViewMessage,
-    'activities' | 'completedAt' | 'durationMs' | 'startedAt' | 'status' | 'updatedAt'
+    'activities' | 'completedAt' | 'durationMs' | 'startedAt' | 'status' | 'timingLabel' | 'updatedAt'
   >,
   chinese = true,
   now = Date.now(),
 ): string {
   const running = messageIsRunning(message);
   const durationMs = messageDurationMs(message, now);
-  const prefix = running
+  const prefix = message.timingLabel || (running
     ? chinese ? '处理中' : 'Processing'
-    : chinese ? '已处理' : 'Processed';
+    : chinese ? '已处理' : 'Processed');
+  if (running && /^(?:正在思考|正在重连|Thinking|Reconnecting)/i.test(prefix)) {
+    return prefix;
+  }
   return `${prefix} ${formatCompactDuration(durationMs)}`;
+}
+
+export function messageHasExecutionTiming(
+  message: Pick<
+    HermesChatViewMessage,
+    'completedAt' | 'durationMs' | 'firstTokenAt' | 'roleStage' | 'startedAt' | 'status' | 'updatedAt'
+  >,
+): boolean {
+  if (message.roleStage === 'chat' && message.status === 'failed' && !message.firstTokenAt) {
+    return false;
+  }
+  return Boolean(
+    message.startedAt
+    || message.completedAt
+    || message.updatedAt
+    || message.durationMs
+    || message.status,
+  );
 }
 
 export function messageDurationMs(

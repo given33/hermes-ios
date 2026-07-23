@@ -7,18 +7,30 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_FRONTEND_PREVIEW": "0",
+        "HERMES_DISTRIBUTABLE_BUILD": "1"
+      },
       "ios": {
         "simulator": false
       }
     },
     "preview": {
       "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_FRONTEND_PREVIEW": "0",
+        "HERMES_DISTRIBUTABLE_BUILD": "1"
+      },
       "ios": {
         "simulator": false
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_FRONTEND_PREVIEW": "0",
+        "HERMES_DISTRIBUTABLE_BUILD": "1"
+      }
     }
   }
 }

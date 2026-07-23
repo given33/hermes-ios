@@ -5,6 +5,7 @@ export interface HermesChatStreamRuntime {
   createSocket(url: string): WebSocket;
   now(): number;
   random(): number;
+  scheduleTimer?(callback: () => void, delayMs: number): ReturnType<typeof setTimeout>;
   subscribeAppState(listener: (state: string) => void): () => void;
   subscribeNetwork(listener: (online: boolean) => void): () => void;
 }
@@ -45,9 +46,8 @@ interface RpcWaiter {
   resolve(result: Record<string, unknown>): void;
 }
 
-const RECONNECT_MAX_ATTEMPTS = 12;
-const RECONNECT_BASE_DELAY_MS = 600;
-const RECONNECT_MAX_DELAY_MS = 8_000;
+const RECONNECT_MAX_ATTEMPTS = 5;
+const RECONNECT_DELAY_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 12_000;
 const TURN_TIMEOUT_MS = 30 * 60_000;
 const BACKGROUND_STALE_MS = 30_000;
@@ -67,6 +67,7 @@ export class HermesChatStream {
   private completed = false;
   private connectGeneration = 0;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private eventChain: Promise<void> = Promise.resolve();
   private networkSubscription: (() => void) | null = null;
   private online = true;
   private options: HermesStreamTurnOptions | null = null;
@@ -264,6 +265,7 @@ export class HermesChatStream {
   }
 
   private handleMessage(socket: WebSocket, message: { data: unknown }) {
+    if (this.completed || this.socket !== socket) return;
     let frame: RpcFrame;
     try {
       frame = JSON.parse(String(message.data)) as RpcFrame;
@@ -280,22 +282,27 @@ export class HermesChatStream {
     if (frame.method !== 'event' || !frame.params) return;
     const event = normalizeStreamEvent(frame.params);
     if (this.sessionId && event.session_id && event.session_id !== this.sessionId) return;
-    void this.onEvent(event);
-    if (event.type === 'message.complete') {
-      this.finish({
-        sessionId: this.sessionId,
-        status: stringValue(event.payload.status) || 'completed',
-        storedSessionId: this.storedSessionId,
-        text: structuredText(event.payload.text),
-      });
-    } else if (event.type === 'error') {
-      this.finish({
-        sessionId: this.sessionId,
-        status: 'error',
-        storedSessionId: this.storedSessionId,
-        text: structuredText(event.payload.message) || 'Hermes 执行失败',
-      });
-    }
+    this.eventChain = this.eventChain
+      .then(() => this.onEvent(event))
+      .then(() => {
+        if (this.completed) return;
+        if (event.type === 'message.complete') {
+          this.finish({
+            sessionId: this.sessionId,
+            status: stringValue(event.payload.status) || 'completed',
+            storedSessionId: this.storedSessionId,
+            text: structuredText(event.payload.text),
+          });
+        } else if (event.type === 'error') {
+          this.finish({
+            sessionId: this.sessionId,
+            status: 'error',
+            storedSessionId: this.storedSessionId,
+            text: structuredText(event.payload.message) || 'Hermes 执行失败',
+          });
+        }
+      })
+      .catch((error) => this.fail(toError(error)));
   }
 
   private request(
@@ -332,11 +339,7 @@ export class HermesChatStream {
       return;
     }
     this.reconnectAttempts += 1;
-    const backoff = RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempts - 1);
-    const delay = Math.min(
-      backoff + Math.floor(this.runtime.random() * 250),
-      RECONNECT_MAX_DELAY_MS,
-    );
+    const delay = RECONNECT_DELAY_MS;
     void this.onEvent({
       type: 'connection.reconnecting',
       payload: {
@@ -346,7 +349,8 @@ export class HermesChatStream {
         reason: reason.message,
       },
     });
-    this.reconnectTimer = setTimeout(() => {
+    const scheduleTimer = this.runtime.scheduleTimer ?? setTimeout;
+    this.reconnectTimer = scheduleTimer(() => {
       this.reconnectTimer = null;
       void this.connect(options);
     }, delay);
@@ -386,6 +390,7 @@ export class HermesChatStream {
     const socket = this.socket;
     this.socket = null;
     if (socket) {
+      socket.onmessage = null;
       socket.onerror = null;
       socket.onclose = null;
       try { socket.close(); } catch {}
@@ -427,6 +432,7 @@ export class HermesChatStream {
     const socket = this.socket;
     this.socket = null;
     if (socket) {
+      socket.onmessage = null;
       socket.onerror = null;
       socket.onclose = null;
       try { socket.close(); } catch {}

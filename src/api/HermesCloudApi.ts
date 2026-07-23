@@ -1,5 +1,6 @@
 import type { HermesApiClient, HermesRequestOptions } from './HermesApiClient';
 import { normalizeOfficialSessionMessages } from './official-session-adoption';
+import { MAX_CONVERSATION_ATTACHMENT_BYTES } from './attachment-size-policy';
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -143,6 +144,125 @@ export interface SingleConversation {
   preview?: string;
 }
 
+export interface ConversationSessionContext extends JsonRecord {
+  session_id: string;
+  profile: string;
+  model?: string | null;
+  active_messages: number;
+  archived_messages: number;
+  message_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  tip_message_id?: number | null;
+  compression_lineage: string[];
+  compression_count: number;
+  compression_in_progress: boolean;
+}
+
+export interface ConversationSessionLineageEntry extends JsonRecord {
+  id: string;
+  title?: string | null;
+  parent_session_id?: string | null;
+  source?: string | null;
+  model?: string | null;
+  profile_name?: string | null;
+  started_at?: number | null;
+  ended_at?: number | null;
+  end_reason?: string | null;
+  message_count?: number;
+  tool_call_count?: number;
+}
+
+export interface ConversationSessionState {
+  conversation_id: string;
+  profile: string;
+  session_id: string;
+  context: ConversationSessionContext;
+  lineage: {
+    current_session_id: string;
+    roots: string[];
+    sessions: ConversationSessionLineageEntry[];
+    edges: Array<{ parent_id: string; child_id: string }>;
+  };
+  branchable_messages: Array<{
+    message_id: string;
+    role: string;
+    runtime_session_id: string;
+    runtime_message_id: number;
+  }>;
+}
+
+export interface ConversationForkResponse {
+  conversation: SingleConversation;
+  created: boolean;
+  session: ConversationSessionLineageEntry;
+  replayed: boolean;
+}
+
+export interface ConversationCompressionResponse {
+  conversation_id: string;
+  profile: string;
+  previous_session_id: string;
+  session_id: string;
+  context: ConversationSessionContext;
+  result: string;
+  replayed: boolean;
+}
+
+export interface WorkflowWorkspaceChangeSetSummary extends JsonRecord {
+  id: string;
+  run_id: string;
+  turn_id: string;
+  summary: string;
+  created_at: number;
+  file_count: number;
+  byte_count: number;
+  change_counts: {
+    added: number;
+    modified: number;
+    deleted: number;
+    renamed: number;
+  };
+}
+
+export interface WorkflowWorkspaceAuditSummary extends JsonRecord {
+  node_run_id: string;
+  run_id: string;
+  state: string;
+  reason: string;
+  file_count: number;
+  byte_count: number;
+  change_set_id?: string | null;
+  created_at: number;
+  updated_at: number;
+  finalized_at?: number | null;
+}
+
+export interface WorkflowWorkspaceChangeFile extends JsonRecord {
+  path: string;
+  change_type: string;
+  sha256: string;
+  byte_count: number;
+  patch: string;
+}
+
+export interface WorkflowWorkspaceChangeSetDetail extends JsonRecord {
+  id: string;
+  run_id: string;
+  turn_id: string;
+  summary: string;
+  created_at: number;
+  files: WorkflowWorkspaceChangeFile[];
+}
+
+export interface WorkflowWorkspaceChangesResponse {
+  change_sets: WorkflowWorkspaceChangeSetSummary[];
+  workspace_audits: WorkflowWorkspaceAuditSummary[];
+}
+
 export interface RouteDecision extends JsonRecord {
   mode: 'chat' | 'work';
   label: string;
@@ -223,9 +343,68 @@ export interface CustomModelConnectionResult {
   status: number;
 }
 
+export interface ModelOptionCapabilities {
+  fast?: boolean;
+  reasoning?: boolean;
+}
+
+export interface ModelOptionPricing {
+  cache?: string | null;
+  free?: boolean;
+  input?: string;
+  output?: string;
+}
+
+export interface ModelOptionProvider {
+  authenticated?: boolean;
+  capabilities?: Record<string, ModelOptionCapabilities>;
+  free_tier?: boolean;
+  is_current?: boolean;
+  is_user_defined?: boolean;
+  models?: Array<string | JsonRecord>;
+  name?: string;
+  pricing?: Record<string, ModelOptionPricing>;
+  slug: string;
+  source?: string;
+  total_models?: number;
+  unavailable_models?: string[];
+  warning?: string;
+}
+
+export interface ModelInfoResult extends JsonRecord {
+  capabilities?: JsonRecord;
+  effective_context_length?: number;
+  model?: string;
+  provider?: string;
+}
+
+export interface ModelOptionsResult extends JsonRecord {
+  model?: string;
+  provider?: string;
+  providers?: ModelOptionProvider[];
+}
+
+export interface ModelsResult {
+  custom: CustomModelConfiguration;
+  info: ModelInfoResult;
+  options: ModelOptionsResult;
+}
+
+export interface ModelAssignmentResult {
+  confirmMessage?: string;
+  confirmRequired: boolean;
+  model: string;
+  ok: boolean;
+  provider: string;
+  scope: string;
+}
+
 const COLLABORATION = '/api/plugins/collaboration';
 const KANBAN = '/api/plugins/kanban';
 const ACHIEVEMENTS = '/api/plugins/hermes-achievements';
+const WORKFLOWS = '/api/plugins/workflows';
+const WRITE_APPROVALS = `${COLLABORATION}/mobile/write-approvals`;
+const RUNTIME_RUNS = `${COLLABORATION}/mobile/runtime-runs`;
 
 /**
  * Native facade over the canonical Dashboard and modified Collaboration APIs.
@@ -366,7 +545,7 @@ export class HermesCloudApi {
     ]).then(([usage, models]) => ({ usage, models }));
   }
 
-  getModels(profile = 'default') {
+  getModels(profile = 'default'): Promise<ModelsResult> {
     return Promise.all([
       this.getModelInfo(profile),
       this.getModelOptions(profile),
@@ -375,11 +554,11 @@ export class HermesCloudApi {
   }
 
   getModelInfo(profile = 'default') {
-    return this.request<JsonRecord>('/api/model/info', { profile });
+    return this.request<ModelInfoResult>('/api/model/info', { profile });
   }
 
   getModelOptions(profile = 'default') {
-    return this.request<JsonRecord>('/api/model/options', {
+    return this.request<ModelOptionsResult>('/api/model/options', {
       profile,
       query: { include_unconfigured: 1 },
     });
@@ -440,12 +619,30 @@ export class HermesCloudApi {
     return { ...result, baseUrl: normalizedBaseUrl };
   }
 
-  setModel(provider: string, model: string, profile = 'default') {
-    return this.json<JsonRecord>('/api/model/set', 'POST', {
+  async setModel(
+    provider: string,
+    model: string,
+    profile = 'default',
+    confirmExpensiveModel = false,
+  ): Promise<ModelAssignmentResult> {
+    const value = await this.json<JsonRecord>('/api/model/set', 'POST', {
+      confirm_expensive_model: confirmExpensiveModel,
       scope: 'main',
       provider,
       model,
     }, { profile });
+    const result: ModelAssignmentResult = {
+      confirmMessage: stringValue(value.confirm_message) || undefined,
+      confirmRequired: value.confirm_required === true,
+      model: stringValue(value.model) || model,
+      ok: value.ok === true,
+      provider: stringValue(value.provider) || provider,
+      scope: stringValue(value.scope) || 'main',
+    };
+    if (!result.ok && !result.confirmRequired) {
+      throw new Error(stringValue(value.detail) || 'The server rejected the model assignment');
+    }
+    return result;
   }
 
   getLogs(lines = 500, level = 'ALL', component = 'all') {
@@ -728,6 +925,144 @@ export class HermesCloudApi {
     return this.request<JsonRecord>(`${ACHIEVEMENTS}/rescan`, { method: 'POST' });
   }
 
+  getWorkflows(profile = 'default') {
+    return this.request<JsonRecord>(`${WORKFLOWS}/definitions`, {
+      query: { profile_id: profile },
+    });
+  }
+
+  getWorkflow(id: string, profile = 'default') {
+    return this.request<JsonRecord>(`${WORKFLOWS}/definitions/${encodeURIComponent(id)}`, {
+      query: { profile_id: profile },
+    });
+  }
+
+  getWorkflowRuns(profile = 'default') {
+    return this.request<JsonRecord>(`${WORKFLOWS}/runs`, {
+      query: { limit: 100, profile_id: profile },
+    });
+  }
+
+  getWorkflowWorkspaceChanges(runId: string, profile = 'default', limit = 100) {
+    return this.request<WorkflowWorkspaceChangesResponse>(
+      `${WORKFLOWS}/runs/${encodeURIComponent(runId)}/workspace-changes`,
+      { query: { limit, profile_id: profile } },
+    );
+  }
+
+  getWorkflowWorkspaceChange(
+    runId: string,
+    changeSetId: string,
+    profile = 'default',
+  ) {
+    return this.request<{ change_set: WorkflowWorkspaceChangeSetDetail }>(
+      `${WORKFLOWS}/runs/${encodeURIComponent(runId)}`
+      + `/workspace-changes/${encodeURIComponent(changeSetId)}`,
+      { query: { profile_id: profile } },
+    );
+  }
+
+  startWorkflow(id: string, profile = 'default', requestId = newClientRequestId('workflow-start')) {
+    return this.json<JsonRecord>(`${WORKFLOWS}/definitions/${encodeURIComponent(id)}/runs`, 'POST', {
+      inputs: {},
+      profile_id: profile,
+    }, { headers: { 'Idempotency-Key': requestId } });
+  }
+
+  cancelWorkflowRun(
+    runId: string,
+    expectedRevision: number,
+    profile = 'default',
+    requestId = newClientRequestId('workflow-cancel'),
+  ) {
+    return this.json<JsonRecord>(
+      `${WORKFLOWS}/runs/${encodeURIComponent(runId)}/cancel`,
+      'POST',
+      { expected_revision: expectedRevision, profile_id: profile, reason: 'mobile_user' },
+      { headers: { 'Idempotency-Key': requestId } },
+    );
+  }
+
+  retryWorkflowNode(
+    runId: string,
+    nodeId: string,
+    expectedRevision: number,
+    profile = 'default',
+    requestId = newClientRequestId('workflow-retry'),
+  ) {
+    return this.json<JsonRecord>(
+      `${WORKFLOWS}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/retry`,
+      'POST',
+      { expected_revision: expectedRevision, profile_id: profile },
+      { headers: { 'Idempotency-Key': requestId } },
+    );
+  }
+
+  approveWorkflowNode(
+    runId: string,
+    nodeId: string,
+    expectedRevision: number,
+    profile = 'default',
+    requestId = newClientRequestId('workflow-approve'),
+  ) {
+    return this.json<JsonRecord>(
+      `${WORKFLOWS}/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeId)}/approval`,
+      'POST',
+      { decision: 'approve', expected_revision: expectedRevision, profile_id: profile, request_id: requestId },
+      { headers: { 'Idempotency-Key': requestId } },
+    );
+  }
+
+  getWriteApprovals(profile = 'default') {
+    return this.request<JsonRecord>(WRITE_APPROVALS, {
+      query: { profile, state: 'pending' },
+    });
+  }
+
+  getWriteApproval(id: string, profile = 'default') {
+    return this.request<JsonRecord>(`${WRITE_APPROVALS}/${encodeURIComponent(id)}`, {
+      query: { profile },
+    });
+  }
+
+  decideWriteApproval(
+    id: string,
+    decision: 'approve' | 'reject',
+    revision: number,
+    requestId = newClientRequestId('write-approval'),
+    profile = 'default',
+  ) {
+    return this.json<JsonRecord>(
+      `${WRITE_APPROVALS}/${encodeURIComponent(id)}/decision`,
+      'POST',
+      { decision, expected_revision: revision, profile },
+      { headers: { 'Idempotency-Key': requestId } },
+    );
+  }
+
+  getRuntimeRuns(profile = 'default') {
+    return this.request<JsonRecord>(RUNTIME_RUNS, { query: { limit: 200, profile } });
+  }
+
+  getRuntimeRun(id: string, profile = 'default') {
+    return this.request<JsonRecord>(`${RUNTIME_RUNS}/${encodeURIComponent(id)}`, {
+      query: { profile },
+    });
+  }
+
+  cancelRuntimeRun(actionUrl: string, requestId = newClientRequestId('runtime-cancel')) {
+    return this.json<JsonRecord>(runtimeActionPath(actionUrl), 'POST', {
+      reason: 'mobile_user',
+      request_id: requestId,
+    }, { headers: { 'Idempotency-Key': requestId } });
+  }
+
+  retryRuntimeRun(actionUrl: string, requestId = newClientRequestId('runtime-retry')) {
+    return this.json<JsonRecord>(runtimeActionPath(actionUrl), 'POST', {
+      request_id: requestId,
+    }, { headers: { 'Idempotency-Key': requestId } });
+  }
+
   getKanbanBoard() {
     return this.request<JsonRecord>(`${KANBAN}/board`);
   }
@@ -773,6 +1108,7 @@ export class HermesCloudApi {
     content: string,
     profiles: string[] = [],
     requestId = createCollaborationRoomRequestId(),
+    signal?: AbortSignal,
   ) {
     const stableRequestId = requestId.trim() || createCollaborationRoomRequestId();
     const turnSuffix = stableRequestId.startsWith('room-request-')
@@ -787,6 +1123,7 @@ export class HermesCloudApi {
         request_id: stableRequestId,
         turn_id: `room-turn-${turnSuffix}`,
       },
+      { signal },
     );
   }
 
@@ -865,49 +1202,95 @@ export class HermesCloudApi {
     );
   }
 
-  async uploadAccountFile(upload: NativeUpload) {
-    const body = upload.uri.startsWith('file:')
-      ? await nativeFileBody(upload.uri)
-      : await fetch(upload.uri).then((response) => response.blob());
+  async uploadAccountFile(upload: NativeUpload, uploadId = newClientRequestId('file-upload')) {
+    const body = await boundedUploadBody(upload.uri, upload.name);
     return this.request<{ file: AccountFileEntry }>(`${COLLABORATION}/files`, {
       body,
       headers: {
         'Content-Type': upload.mimeType || 'application/octet-stream',
         'X-Filename': encodeURIComponent(upload.name),
+        'X-Upload-ID': uploadId,
       },
       method: 'POST',
     });
   }
 
-  getConversations() {
+  getConversations(signal?: AbortSignal) {
     return this.request<{ conversations: SingleConversation[] }>(
       `${COLLABORATION}/single/conversations`,
+      { signal },
     );
   }
 
-  async getUnifiedConversations(profile = 'default') {
+  async getUnifiedConversations(profile = 'default', signal?: AbortSignal) {
     // Profile session history is a process-wide server resource and is not
     // account-scoped on older Hermes deployments.  Merging it here leaks
     // other accounts' sessions and produces 404s when adoption is attempted.
     // Account conversations already carry their profile and runtime metadata,
     // so they are the only safe source for the default history surface.
-    const cloud = await this.getConversations();
+    const cloud = await this.getConversations(signal);
     return {
       conversations: cloud.conversations,
     };
   }
 
-  getConversation(id: string) {
+  getConversation(id: string, signal?: AbortSignal) {
     return this.request<{ conversation: SingleConversation }>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
+      { signal },
     );
   }
 
-  createConversation(profile = 'default', title = '新对话', clientId = '') {
+  getConversationSessionState(conversationId: string, profile = '') {
+    return this.request<ConversationSessionState>(
+      `${COLLABORATION}/mobile/conversations/${encodeURIComponent(conversationId)}/session-state`,
+      { query: { profile: profile || undefined } },
+    );
+  }
+
+  forkConversationFromMessage(
+    conversationId: string,
+    messageId: string,
+    input: { idempotencyKey: string; profile?: string; title?: string },
+  ) {
+    return this.json<ConversationForkResponse>(
+      `${COLLABORATION}/mobile/conversations/${encodeURIComponent(conversationId)}`
+      + `/messages/${encodeURIComponent(messageId)}/fork`,
+      'POST',
+      {
+        idempotency_key: input.idempotencyKey,
+        profile: input.profile || '',
+        title: input.title || '',
+      },
+    );
+  }
+
+  compressConversation(
+    conversationId: string,
+    input: { focusTopic?: string; idempotencyKey: string; profile?: string },
+  ) {
+    return this.json<ConversationCompressionResponse>(
+      `${COLLABORATION}/mobile/conversations/${encodeURIComponent(conversationId)}/compress`,
+      'POST',
+      {
+        focus_topic: input.focusTopic || '',
+        idempotency_key: input.idempotencyKey,
+        profile: input.profile || '',
+      },
+    );
+  }
+
+  createConversation(
+    profile = 'default',
+    title = '新对话',
+    clientId = '',
+    signal?: AbortSignal,
+  ) {
     return this.json<{ conversation: SingleConversation }>(
       `${COLLABORATION}/single/conversations`,
       'POST',
       { client_id: clientId || undefined, profile, title },
+      { signal },
     );
   }
 
@@ -1015,7 +1398,11 @@ export class HermesCloudApi {
     );
   }
 
-  enqueueHostedTurn(conversationId: string, input: HostedTurnEnqueueInput) {
+  enqueueHostedTurn(
+    conversationId: string,
+    input: HostedTurnEnqueueInput,
+    signal?: AbortSignal,
+  ) {
     return this.json<HostedTurnEnqueueResponse>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/enqueue`,
       'POST',
@@ -1029,14 +1416,21 @@ export class HermesCloudApi {
         attachment_context: input.attachmentContext || '',
         delivery_context: input.deliveryContext || '',
       },
+      { signal },
     );
   }
 
-  cancelHostedTurn(conversationId: string, turnId: string, reason: string) {
+  cancelHostedTurn(
+    conversationId: string,
+    turnId: string,
+    reason: string,
+    signal?: AbortSignal,
+  ) {
     return this.json<JsonRecord>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-turns/${encodeURIComponent(turnId)}/cancel`,
       'POST',
       { reason },
+      { signal },
     );
   }
 
@@ -1044,10 +1438,9 @@ export class HermesCloudApi {
     conversationId: string,
     upload: NativeUpload,
     context: ConversationAttachmentUploadContext,
+    signal?: AbortSignal,
   ) {
-    const body = upload.uri.startsWith('file:')
-      ? await nativeFileBody(upload.uri)
-      : await fetch(upload.uri).then((response) => response.blob());
+    const body = await boundedUploadBody(upload.uri, upload.name);
     return this.request<JsonRecord>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/attachments`,
       {
@@ -1060,6 +1453,7 @@ export class HermesCloudApi {
           'X-Turn-ID': context.turnId || '',
           'X-Upload-ID': context.uploadId,
         },
+        signal,
         body,
       },
     );
@@ -1072,7 +1466,11 @@ export class HermesCloudApi {
     return this.client.download(downloadUrl);
   }
 
-  async loadRoute(routeId: string, profile = 'default', selectedId = ''): Promise<unknown> {
+  async loadRoute(
+    routeId: string,
+    profile = 'default',
+    selectedId = '',
+  ): Promise<unknown> {
     switch (routeId) {
       case 'sessions': {
         const result = await this.getUnifiedConversations(profile);
@@ -1120,6 +1518,44 @@ export class HermesCloudApi {
           : { room: null };
         return { ...rooms, ...profiles, ...selected };
       });
+      case 'workflows': {
+        const [catalog, runs] = await Promise.all([
+          this.getWorkflows(profile),
+          this.getWorkflowRuns(profile),
+        ]);
+        const selected = selectedId ? await this.getWorkflow(selectedId, profile) : {};
+        const runRows = Array.isArray(runs.runs) ? runs.runs : [];
+        const selectedRun = runRows.find((entry) => (
+          isRecord(entry) && entry.definition_id === selectedId
+        ));
+        const runId = isRecord(selectedRun) && typeof selectedRun.id === 'string'
+          ? selectedRun.id
+          : '';
+        const workspaceChanges = runId
+          ? await this.getWorkflowWorkspaceChanges(runId, profile)
+          : { change_sets: [], workspace_audits: [] };
+        const latestChangeSet = workspaceChanges.change_sets[0];
+        const selectedChangeSet = runId && latestChangeSet?.id
+          ? await this.getWorkflowWorkspaceChange(runId, latestChangeSet.id, profile)
+          : {};
+        return {
+          ...catalog,
+          ...runs,
+          selected_definition: selected,
+          workspace_changes: workspaceChanges,
+          selected_change_set: selectedChangeSet,
+        };
+      }
+      case 'approvals': {
+        const list = await this.getWriteApprovals(profile);
+        const selected = selectedId ? await this.getWriteApproval(selectedId, profile) : {};
+        return { ...list, ...selected };
+      }
+      case 'runtime-center': {
+        const list = await this.getRuntimeRuns(profile);
+        const selected = selectedId ? await this.getRuntimeRun(selectedId, profile) : {};
+        return { ...list, selected_run: selected };
+      }
       default: return Promise.resolve({});
     }
   }
@@ -1186,6 +1622,16 @@ async function nativeFileBody(uri: string): Promise<Blob> {
   const file = new ExpoFile(uri);
   if (!file.exists) throw new Error('Selected attachment is no longer available');
   return file;
+}
+
+async function boundedUploadBody(uri: string, name: string): Promise<Blob> {
+  const body = uri.startsWith('file:')
+    ? await nativeFileBody(uri)
+    : await fetch(uri).then((response) => response.blob());
+  if (body.size > MAX_CONVERSATION_ATTACHMENT_BYTES) {
+    throw new Error(`File must be 64 MB or smaller: ${name}`);
+  }
+  return body;
 }
 
 function headersToObject(headers?: HeadersInit): Record<string, string> {
@@ -1258,6 +1704,10 @@ function decodeURIComponentSafely(value: string): string {
 
 export function createCollaborationRoomRequestId(): string {
   return newClientRequestId('room-request');
+}
+
+export function createWorkflowStartRequestId(): string {
+  return newClientRequestId('workflow-start');
 }
 
 export function conversationSessionSummary(
@@ -1402,6 +1852,18 @@ function isLoopbackHostname(hostname: string): boolean {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function runtimeActionPath(value: string): string {
+  const path = value.trim();
+  const escapedPrefix = COLLABORATION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const actionPattern = new RegExp(
+    `^${escapedPrefix}/single/conversations/[^/?#]+/hosted-turns/[^/?#]+/(cancel|retry)$`,
+  );
+  if (!actionPattern.test(path)) {
+    throw new Error('Runtime action is not available for this run');
+  }
+  return path;
 }
 
 function stringValue(value: unknown): string {

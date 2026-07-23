@@ -26,6 +26,7 @@
         "CFBundleDisplayName": "Hermes Agent",
         "CFBundleAllowMixedLocalizations": true,
         "CFBundleDevelopmentRegion": "zh_CN",
+        "HermesAmapIOSAPIKey": "",
         "CADisableMinimumFrameDurationOnPhone": true,
         "ITSAppUsesNonExemptEncryption": false,
         "NSCalendarsFullAccessUsageDescription": "Hermes 使用日历信息理解日程，并仅在你要求时创建日历事件。",

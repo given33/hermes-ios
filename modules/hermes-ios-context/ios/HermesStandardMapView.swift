@@ -1,5 +1,4 @@
 import ExpoModulesCore
-import MapKit
 import UIKit
 
 struct HermesMapCoordinate: Record {
@@ -17,192 +16,124 @@ struct HermesMapPlace: Record {
   @Field var departedAt: Double?
 }
 
-final class HermesStandardMapView: ExpoView, MKMapViewDelegate {
+protocol HermesMapRendering: AnyObject {
+  var onLocationPress: (() -> Void)? { get set }
+  func requestFreshCenter()
+  func setPlaces(_ places: [HermesMapPlace])
+  func setShowsUserLocation(_ shows: Bool)
+  func setTrack(_ track: [HermesMapCoordinate])
+}
+
+enum HermesNativeMapConfiguration {
+  static let privacyConsentKey = "app.hermes.amap.privacy-consent"
+
+  static var amapAPIKey: String {
+    (Bundle.main.object(forInfoDictionaryKey: "HermesAmapIOSAPIKey") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
+  static var amapConfigured: Bool {
+    #if canImport(MAMapKit)
+    !amapAPIKey.isEmpty
+    #else
+    false
+    #endif
+  }
+
+  static var persistedPrivacyConsent: Bool {
+    get { UserDefaults.standard.bool(forKey: privacyConsentKey) }
+    set { UserDefaults.standard.set(newValue, forKey: privacyConsentKey) }
+  }
+}
+
+final class HermesStandardMapView: ExpoView {
   let onLocationPress = EventDispatcher()
 
-  private let mapView = MKMapView(frame: .zero)
-  private lazy var locationButton = MKUserTrackingButton(mapView: mapView)
-  private var trackOverlay: MKPolyline?
-  private var accuracyOverlay: MKCircle?
-  private var placeAnnotations: [HermesPlaceAnnotation] = []
-  private var hasCenteredOnUser = false
-  private var centerOnNextUserLocation = true
+  private var renderer: HermesMapRendering?
+  private var rendererView: UIView?
+  private var usingAMap = false
+
+  var amapPrivacyConsentGranted = false {
+    didSet {
+      guard oldValue != amapPrivacyConsentGranted else { return }
+      installRendererIfNeeded()
+    }
+  }
 
   var showsUserLocation = false {
-    didSet { mapView.showsUserLocation = showsUserLocation }
+    didSet { renderer?.setShowsUserLocation(showsUserLocation) }
   }
 
   var centerOnUserRequest = 0 {
     didSet {
       guard oldValue != centerOnUserRequest else { return }
-      centerOnUser(animated: true)
+      renderer?.requestFreshCenter()
     }
   }
 
   var track: [HermesMapCoordinate] = [] {
-    didSet { renderTrack() }
+    didSet { renderer?.setTrack(track) }
   }
 
   var places: [HermesMapPlace] = [] {
-    didSet { renderPlaces() }
+    didSet { renderer?.setPlaces(places) }
   }
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
     backgroundColor = .systemBackground
+    installRendererIfNeeded()
+  }
 
-    let configuration = MKStandardMapConfiguration(elevationStyle: .flat)
-    configuration.showsTraffic = false
-    mapView.preferredConfiguration = configuration
-    mapView.delegate = self
-    // The shared permission coordinator owns the system sheet. Starting
-    // MapKit location before its React prop is authorized can race a second
-    // CLLocationManager prompt during first launch.
-    mapView.showsUserLocation = false
-    mapView.showsCompass = true
-    mapView.showsScale = true
-    mapView.showsBuildings = false
-    mapView.isScrollEnabled = true
-    mapView.isZoomEnabled = true
-    mapView.isRotateEnabled = true
-    mapView.isPitchEnabled = false
-    mapView.pointOfInterestFilter = .includingAll
-    mapView.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(mapView)
+  private var shouldUseAMap: Bool {
+    HermesNativeMapConfiguration.amapConfigured && amapPrivacyConsentGranted
+  }
 
-    locationButton.backgroundColor = .secondarySystemBackground
-    locationButton.tintColor = .label
-    locationButton.layer.cornerRadius = 8
-    locationButton.clipsToBounds = true
-    locationButton.accessibilityLabel = "定位到当前位置"
-    locationButton.translatesAutoresizingMaskIntoConstraints = false
-    locationButton.addGestureRecognizer(
-      UITapGestureRecognizer(target: self, action: #selector(refreshCurrentLocation))
-    )
-    // iOS 26 changed MKUserTrackingButton from UIControl; the prior
-    // locationButton.addTarget(self, action: #selector(refreshCurrentLocation), for: .touchUpInside)
-    // path is retained here as the migration contract while the gesture path
-    // provides the equivalent tap behavior.
-    addSubview(locationButton)
+  private func installRendererIfNeeded() {
+    let nextUsesAMap = shouldUseAMap
+    guard renderer == nil || usingAMap != nextUsesAMap else { return }
 
+    rendererView?.removeFromSuperview()
+    renderer = nil
+    rendererView = nil
+
+    let nextRenderer: HermesMapRendering
+    let nextView: UIView
+    #if canImport(MAMapKit)
+    if nextUsesAMap {
+      let amap = HermesAMapSurface(apiKey: HermesNativeMapConfiguration.amapAPIKey)
+      nextRenderer = amap
+      nextView = amap
+    } else {
+      let mapKit = HermesMapKitSurface(frame: .zero)
+      nextRenderer = mapKit
+      nextView = mapKit
+    }
+    #else
+    let mapKit = HermesMapKitSurface(frame: .zero)
+    nextRenderer = mapKit
+    nextView = mapKit
+    #endif
+
+    usingAMap = nextUsesAMap
+    renderer = nextRenderer
+    rendererView = nextView
+    nextRenderer.onLocationPress = { [weak self] in self?.onLocationPress([:]) }
+    nextRenderer.setShowsUserLocation(showsUserLocation)
+    nextRenderer.setTrack(track)
+    nextRenderer.setPlaces(places)
+    nextView.translatesAutoresizingMaskIntoConstraints = false
+    addSubview(nextView)
     NSLayoutConstraint.activate([
-      mapView.leadingAnchor.constraint(equalTo: leadingAnchor),
-      mapView.trailingAnchor.constraint(equalTo: trailingAnchor),
-      mapView.topAnchor.constraint(equalTo: topAnchor),
-      mapView.bottomAnchor.constraint(equalTo: bottomAnchor),
-      locationButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -14),
-      locationButton.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 14),
-      locationButton.widthAnchor.constraint(equalToConstant: 44),
-      locationButton.heightAnchor.constraint(equalToConstant: 44),
+      nextView.leadingAnchor.constraint(equalTo: leadingAnchor),
+      nextView.trailingAnchor.constraint(equalTo: trailingAnchor),
+      nextView.topAnchor.constraint(equalTo: topAnchor),
+      nextView.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
-  }
-
-  @objc private func refreshCurrentLocation() {
-    centerOnNextUserLocation = true
-    onLocationPress([:])
-    Task { @MainActor [weak self] in
-      guard let self else { return }
-      _ = await HermesLocationService.shared.requestPreciseAuthorization()
-      _ = await HermesLocationService.shared.requestCurrent()
-      self.centerOnUser(animated: true)
-    }
-  }
-
-  private func centerOnUser(animated: Bool) {
-    guard let location = mapView.userLocation.location,
-          location.horizontalAccuracy >= 0 else {
-      centerOnNextUserLocation = true
-      return
-    }
-    let region = MKCoordinateRegion(
-      center: location.coordinate,
-      latitudinalMeters: 900,
-      longitudinalMeters: 900
-    )
-    mapView.setRegion(region, animated: animated)
-    hasCenteredOnUser = true
-    centerOnNextUserLocation = false
-  }
-
-  private func renderTrack() {
-    if let trackOverlay { mapView.removeOverlay(trackOverlay) }
-    guard track.count > 1 else {
-      trackOverlay = nil
-      return
-    }
-    let coordinates = track.map {
-      CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
-    }
-    let overlay = MKPolyline(coordinates: coordinates, count: coordinates.count)
-    trackOverlay = overlay
-    mapView.addOverlay(overlay, level: .aboveRoads)
-  }
-
-  private func renderPlaces() {
-    mapView.removeAnnotations(placeAnnotations)
-    placeAnnotations = places.map(HermesPlaceAnnotation.init)
-    mapView.addAnnotations(placeAnnotations)
-  }
-
-  func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
-    if let circle = overlay as? MKCircle {
-      let renderer = MKCircleRenderer(circle: circle)
-      renderer.fillColor = UIColor.systemBlue.withAlphaComponent(0.12)
-      renderer.strokeColor = UIColor.systemBlue.withAlphaComponent(0.4)
-      renderer.lineWidth = 1
-      return renderer
-    }
-    guard let polyline = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
-    let renderer = MKPolylineRenderer(polyline: polyline)
-    renderer.strokeColor = .systemBlue
-    renderer.lineWidth = 4
-    renderer.lineCap = .round
-    renderer.lineJoin = .round
-    return renderer
-  }
-
-  func mapView(_ mapView: MKMapView, didUpdate userLocation: MKUserLocation) {
-    guard let location = userLocation.location, location.horizontalAccuracy >= 0 else { return }
-    if let accuracyOverlay { mapView.removeOverlay(accuracyOverlay) }
-    let circle = MKCircle(center: location.coordinate, radius: location.horizontalAccuracy)
-    accuracyOverlay = circle
-    mapView.addOverlay(circle, level: .aboveRoads)
-    if !hasCenteredOnUser || centerOnNextUserLocation {
-      centerOnUser(animated: hasCenteredOnUser)
-    }
-  }
-
-  func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
-    guard annotation is HermesPlaceAnnotation else { return nil }
-    let identifier = "HermesTodayPlace"
-    let marker = mapView.dequeueReusableAnnotationView(withIdentifier: identifier) as? MKMarkerAnnotationView
-      ?? MKMarkerAnnotationView(annotation: annotation, reuseIdentifier: identifier)
-    marker.annotation = annotation
-    marker.canShowCallout = true
-    marker.markerTintColor = .systemBlue
-    marker.glyphImage = UIImage(systemName: "mappin.and.ellipse")
-    return marker
   }
 }
 
-private final class HermesPlaceAnnotation: NSObject, MKAnnotation {
-  let coordinate: CLLocationCoordinate2D
-  let title: String?
-  let subtitle: String?
-
-  init(_ place: HermesMapPlace) {
-    coordinate = CLLocationCoordinate2D(latitude: place.latitude, longitude: place.longitude)
-    title = place.name
-    let start = Date(timeIntervalSince1970: place.arrivedAt / 1000)
-    if let departedAt = place.departedAt {
-      let end = Date(timeIntervalSince1970: departedAt / 1000)
-      subtitle = Self.rangeText(start: start, end: end)
-    } else {
-      subtitle = Self.rangeText(start: start, end: Date())
-    }
-    super.init()
-  }
-
+enum HermesMapPlaceText {
   private static let timeFormatter: DateFormatter = {
     let formatter = DateFormatter()
     formatter.locale = .autoupdatingCurrent
@@ -211,11 +142,11 @@ private final class HermesPlaceAnnotation: NSObject, MKAnnotation {
     return formatter
   }()
 
-  private static func rangeText(start: Date, end: Date) -> String {
+  static func subtitle(for place: HermesMapPlace) -> String {
+    let start = Date(timeIntervalSince1970: place.arrivedAt / 1000)
+    let end = place.departedAt.map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
     let minutes = max(0, Int((end.timeIntervalSince(start) / 60.0).rounded()))
-    let duration = minutes >= 60
-      ? "\(minutes / 60)h \(minutes % 60)m"
-      : "\(minutes)m"
-    return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end)) · \(duration)"
+    let duration = minutes >= 60 ? "\(minutes / 60)h \(minutes % 60)m" : "\(minutes)m"
+    return "\(timeFormatter.string(from: start)) - \(timeFormatter.string(from: end)) | \(duration)"
   }
 }

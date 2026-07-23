@@ -226,10 +226,39 @@ export interface IOSContextNativeModule {
   scheduleBackgroundTasks(): Promise<void>;
   listPendingRelayWakes(): Promise<Array<{ reason: string; wakeId: string }>>;
   completeBackgroundRelay(wakeId: string, success: boolean): Promise<void>;
+  encryptAttachment(
+    owner: string,
+    sourceUri: string,
+    targetUri: string,
+  ): Promise<{
+    encryptedBytes: number;
+    format: 'aes-gcm-v1';
+    plaintextBytes: number;
+  }>;
+  decryptAttachmentForUpload(
+    owner: string,
+    encryptedUri: string,
+    filename: string,
+  ): Promise<string>;
+  deleteDecryptedAttachment(uri: string): Promise<boolean>;
+  deleteAttachmentEncryptionKey(owner: string): Promise<boolean>;
 }
 
 const nativeModule = requireOptionalNativeModule<IOSContextNativeModule>('HermesIOSContext');
-const nativeMapModule = requireOptionalNativeModule('HermesStandardMap');
+export interface HermesNativeMapProviderStatus {
+  activeProvider: 'amap' | 'mapkit';
+  amapConfigured: boolean;
+  privacyConsent: boolean;
+}
+
+interface HermesStandardMapNativeModule {
+  getProviderStatus?(): HermesNativeMapProviderStatus;
+  setAmapPrivacyConsent?(granted: boolean): Promise<HermesNativeMapProviderStatus>;
+}
+
+const nativeMapModule = requireOptionalNativeModule<HermesStandardMapNativeModule>(
+  'HermesStandardMap',
+);
 
 function requireContextModule(): IOSContextNativeModule {
   if (!nativeModule) {
@@ -337,6 +366,14 @@ export const HermesIOSContext = {
   listPendingRelayWakes: () => requireContextModule().listPendingRelayWakes(),
   completeBackgroundRelay: (wakeId: string, success: boolean) =>
     requireContextModule().completeBackgroundRelay(wakeId, success),
+  encryptAttachment: (owner: string, sourceUri: string, targetUri: string) =>
+    requireContextModule().encryptAttachment(owner, sourceUri, targetUri),
+  decryptAttachmentForUpload: (owner: string, encryptedUri: string, filename: string) =>
+    requireContextModule().decryptAttachmentForUpload(owner, encryptedUri, filename),
+  deleteDecryptedAttachment: (uri: string) =>
+    requireContextModule().deleteDecryptedAttachment(uri),
+  deleteAttachmentEncryptionKey: (owner: string) =>
+    requireContextModule().deleteAttachmentEncryptionKey(owner),
   subscribeLocation: (listener: (event: IOSLocationSnapshot) => void) =>
     requireContextModule().addListener('onLocation', listener),
   subscribeMotion: (listener: (event: IOSMotionSnapshot) => void) =>
@@ -359,6 +396,7 @@ export interface IOSTodayPlace {
 }
 
 export interface HermesStandardMapProps extends ViewProps {
+  amapPrivacyConsentGranted?: boolean;
   centerOnUserRequest?: number;
   onLocationPress?(event: NativeSyntheticEvent<Record<string, never>>): void;
   places: readonly IOSTodayPlace[];
@@ -389,6 +427,24 @@ export const nativeIOSContextViewContractVersion = nativeViewContract.version;
 // metadata alone cannot make an absent view manager available.
 export const hasNativeStandardMapView = NativeMap !== null;
 export const hasNativeScreenTimeReportView = NativeScreenTimeReport !== null;
+
+export function getNativeMapProviderStatus(): HermesNativeMapProviderStatus {
+  return nativeMapModule?.getProviderStatus?.() ?? {
+    activeProvider: 'mapkit',
+    amapConfigured: false,
+    privacyConsent: false,
+  };
+}
+
+export async function setNativeMapPrivacyConsent(
+  granted: boolean,
+): Promise<HermesNativeMapProviderStatus> {
+  return nativeMapModule?.setAmapPrivacyConsent?.(granted) ?? {
+    activeProvider: 'mapkit',
+    amapConfigured: false,
+    privacyConsent: false,
+  };
+}
 
 export const HermesStandardMapView = forwardRef<View, HermesStandardMapProps>(
   function HermesStandardMapView({ places, track, ...props }, ref) {

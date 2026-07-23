@@ -41,11 +41,13 @@ import {
 } from './credential-store';
 import type { RememberedLogin, SavedConnection } from './credential-contract';
 import { getMobileDeviceIdentity } from './device-identity';
+import { LocalAccountCleanupSaga } from './local-account-cleanup-saga';
 import {
   MobileAuthApiClient,
   MobileAuthApiError,
   type MobileAuthSession,
 } from './mobile-auth';
+import { savedSessionFailureInvalidatesCredentials } from './session-restore-policy';
 
 interface AuthContextValue {
   state: AuthState;
@@ -95,8 +97,10 @@ const webSessionStore: SecureStoreAdapter = {
 const authStore: SecureStoreAdapter = Platform.OS === 'web' ? webSessionStore : SecureStore;
 const credentialStore = new CredentialStore(authStore);
 const credentialMutations = new CredentialMutationQueue();
+const localAccountCleanupSaga = new LocalAccountCleanupSaga();
 const APNS_LOGOUT_DEADLINE_MS = 2_500;
 const REMOTE_LOGOUT_DEADLINE_MS = 8_000;
+const SAVED_SESSION_RETRY_DELAY_MS = 5_000;
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
 const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
@@ -127,29 +131,100 @@ export function AuthProvider({ children }: PropsWithChildren) {
   useEffect(() => {
     const bootstrapGeneration = authLifecycle.current.mount();
     let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-    // Legacy biometric entries are never read. Cleanup finishes before the
-    // v2 session is inspected, while cleanup failures remain local and cannot
-    // be misreported as a Hermes server connection failure.
-    void credentialStore.clearLegacySession()
-      .catch(() => undefined)
-      .then(() => Promise.all([
-        credentialStore.readRememberedLogin().catch(() => EMPTY_REMEMBERED_LOGIN),
-        bootstrapSavedConnection(credentialStore),
-      ]))
-      .then(async ([savedLogin, result]) => {
-        if (!active || !authLifecycle.current.isCurrent(bootstrapGeneration)) return;
+    const current = () => active && authLifecycle.current.isCurrent(bootstrapGeneration);
+    const scheduleRetry = () => {
+      if (!current() || retryTimer) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = undefined;
+        void restoreSavedSession(false);
+      }, SAVED_SESSION_RETRY_DELAY_MS);
+    };
+    const restoreSavedSession = async (firstAttempt: boolean) => {
+      let refreshingSavedSession = false;
+      let savedOwnerScope = '';
+      try {
+        if (firstAttempt) {
+          // Legacy biometric entries are deleted without reading them. The v2
+          // refresh token is non-interactive after the first successful login.
+          await credentialStore.clearLegacySession().catch(() => undefined);
+          await localAccountCleanupSaga
+            .resume(localAccountCleanupTasks())
+            .catch(() => []);
+        }
+        const [savedLogin, result] = await Promise.all([
+          credentialStore.readRememberedLogin().catch(() => EMPTY_REMEMBERED_LOGIN),
+          bootstrapSavedConnection(credentialStore),
+        ]);
+        if (!current()) return;
         setRememberedLogin(savedLogin);
         if (result.status === 'authenticated') {
+          refreshingSavedSession = true;
+          savedOwnerScope = `${result.connection.baseUrl}|${result.connection.username}`;
+          const mobileAuth = new MobileAuthApiClient(result.connection.baseUrl);
+          const refreshed = await mobileAuth.refresh(result.connection.refreshToken);
+          if (refreshed.account.username !== result.connection.username) {
+            throw new Error('Hermes refreshed a different account');
+          }
+          // Refresh tokens rotate on every successful exchange. Persist the
+          // successor before the handshake so a transient handshake failure
+          // never retries an already-consumed token and revokes this device.
+          await credentialMutations.run(() => credentialStore.saveSessionTokens(
+            refreshed.accessToken,
+            refreshed.refreshToken,
+            refreshed.expiresAt,
+          ));
+          if (await hasPendingRemoteAccountDeletion(savedOwnerScope)) {
+            const deletionClient = new HermesApiClient(
+              mobileAuth.baseUrl,
+              refreshed.accessToken,
+            );
+            await new IOSIntelligenceApi(deletionClient).deleteAccount(savedOwnerScope);
+            await localAccountCleanupSaga.markRemoteDone(savedOwnerScope);
+            await localAccountCleanupSaga.run(savedOwnerScope, localAccountCleanupTasks());
+            await credentialMutations.run(() => credentialStore.clear());
+            if (current()) {
+              setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
+              dispatch({
+                type: 'BOOTSTRAP_EMPTY',
+                mode: 'login',
+                setupTokenRequired: false,
+              });
+            }
+            return;
+          }
+          const verifiedConnection = await persistVerifiedConnection(
+            {
+              baseUrl: mobileAuth.baseUrl,
+              username: refreshed.account.username,
+              accessToken: refreshed.accessToken,
+              refreshToken: refreshed.refreshToken,
+              expiresAt: refreshed.expiresAt,
+              deviceId: refreshed.deviceId,
+            },
+            {
+              store: {
+                async save(candidate) {
+                  await credentialMutations.run(() => credentialStore.save(candidate));
+                },
+              },
+              async verify(candidate) {
+                const client = new HermesApiClient(candidate.baseUrl, candidate.accessToken);
+                assertMobileHandshake(
+                  await client.request<unknown>('/api/mobile/v1/handshake'),
+                );
+              },
+            },
+          );
+          if (!current()) return;
           if (hasNativeIOSContext) {
-            await runOptionalAuthEffect(
-              () => HermesIOSContext.activateOwnerScope(
-                `${result.connection.baseUrl}|${result.connection.username}`,
-              ),
+            await HermesIOSContext.activateOwnerScope(
+              `${verifiedConnection.baseUrl}|${verifiedConnection.username}`,
             );
           }
-          if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
-            dispatch({ type: 'AUTHENTICATED', connection: result.connection });
+          if (current()) {
+            dispatch({ type: 'AUTHENTICATED', connection: verifiedConnection });
           }
           return;
         }
@@ -158,7 +233,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
         }
 
-        if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
+        if (current()) {
           let error: string | undefined;
           try {
             const status = await new MobileAuthApiClient(HERMES_ORIGIN).getStatus();
@@ -166,7 +241,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           } catch {
             error = CONNECTION_ERROR;
           }
-          if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
+          if (current()) {
             dispatch({
               type: 'BOOTSTRAP_EMPTY',
               mode: 'login',
@@ -175,19 +250,58 @@ export function AuthProvider({ children }: PropsWithChildren) {
             });
           }
         }
-      })
-      .catch(() => {
-        if (active && authLifecycle.current.isCurrent(bootstrapGeneration)) {
+      } catch (error) {
+        const invalidatesSavedSession = savedSessionFailureInvalidatesCredentials(error);
+        if (
+          refreshingSavedSession
+          && invalidatesSavedSession
+          && savedOwnerScope
+          && await hasPendingRemoteAccountDeletion(savedOwnerScope)
+        ) {
+          // A committed server deletion revokes the same refresh token before
+          // the client can persist its local phase transition. The durable
+          // user deletion intent makes that 401/403 sufficient to finish the
+          // local wipe without resurrecting the deleted account.
+          await localAccountCleanupSaga.markRemoteDone(savedOwnerScope).catch(() => undefined);
+          await localAccountCleanupSaga
+            .run(savedOwnerScope, localAccountCleanupTasks())
+            .catch(() => undefined);
+          await credentialMutations.run(() => credentialStore.clear()).catch(() => undefined);
+          if (current()) {
+            setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
+            dispatch({
+              type: 'BOOTSTRAP_EMPTY',
+              mode: 'login',
+              setupTokenRequired: false,
+            });
+          }
+          return;
+        }
+        if (
+          refreshingSavedSession
+          && !invalidatesSavedSession
+        ) {
+          scheduleRetry();
+          return;
+        }
+        await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+        if (current()) {
           dispatch({
             type: 'BOOTSTRAP_EMPTY',
             mode: 'login',
-            error: CONNECTION_ERROR,
+            error: invalidatesSavedSession
+              ? SESSION_EXPIRED_ERROR
+              : CONNECTION_ERROR,
           });
         }
-      });
+      }
+    };
+
+    void restoreSavedSession(true);
 
     return () => {
       active = false;
+      if (retryTimer) clearTimeout(retryTimer);
       authLifecycle.current.unmount();
     };
   }, []);
@@ -209,7 +323,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       {
         store: {
           async save(candidate) {
-            await runOptionalAuthEffect(() => credentialMutations.run(async () => {
+            await credentialMutations.run(async () => {
               if (!authLifecycle.current.isCurrent(operationGeneration)) {
                 throw new Error('Stale Hermes authentication operation');
               }
@@ -218,7 +332,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
                 await credentialStore.clear();
                 throw new Error('Stale Hermes authentication operation');
               }
-            }));
+            });
           },
         },
         async verify(candidate) {
@@ -235,10 +349,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
       throw new Error('Stale Hermes authentication operation');
     }
     if (hasNativeIOSContext) {
-      await runOptionalAuthEffect(
-        () => HermesIOSContext.activateOwnerScope(
-          `${connection.baseUrl}|${connection.username}`,
-        ),
+      await HermesIOSContext.activateOwnerScope(
+        `${connection.baseUrl}|${connection.username}`,
       );
     }
     if (!authLifecycle.current.isCurrent(operationGeneration)) {
@@ -533,15 +645,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
     let serverDeleted = false;
     try {
       const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
-      // Cloud is source of truth: server tombstone first, then stop collectors
-      // and wipe the local owner queue so residual path data does not linger
-      // after the account is gone.
+      // Persist the user's deletion intent before the remote request. If the
+      // server commits and the app exits before the next line, cold-start
+      // recovery uses the revoked refresh token as the terminal phase signal.
+      await localAccountCleanupSaga.begin(ownerScope);
       await new IOSIntelligenceApi(client).deleteAccount(ownerScope);
       serverDeleted = true;
-      await purgeLocalAccountData(ownerScope);
-      if (hasNativeIOSContext) {
-        await HermesIOSContext.deleteOwnerScope(ownerScope);
-      }
+      await localAccountCleanupSaga.markRemoteDone(ownerScope);
+      await localAccountCleanupSaga.run(ownerScope, localAccountCleanupTasks());
       if (authLifecycle.current.isCurrent(operationGeneration)) {
         await credentialMutations.run(() => credentialStore.clear());
         setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
@@ -549,9 +660,12 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
     } catch {
       if (serverDeleted && authLifecycle.current.isCurrent(operationGeneration)) {
-        await purgeLocalAccountData(
-          `${state.connection.baseUrl}|${state.connection.username}`,
-        ).catch(() => undefined);
+        const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
+        await localAccountCleanupSaga.begin(ownerScope).catch(() => undefined);
+        await localAccountCleanupSaga.markRemoteDone(ownerScope).catch(() => undefined);
+        await localAccountCleanupSaga
+          .run(ownerScope, localAccountCleanupTasks())
+          .catch(() => undefined);
         await credentialMutations
           .run(() => credentialStore.clear())
           .catch(() => undefined);
@@ -602,6 +716,24 @@ export function useAuth(): AuthContextValue {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth must be used inside AuthProvider');
   return context;
+}
+
+function localAccountCleanupTasks() {
+  return {
+    async deleteNativeOwner(ownerScope: string) {
+      if (hasNativeIOSContext) await HermesIOSContext.deleteOwnerScope(ownerScope);
+    },
+    async purgeAccountData(ownerScope: string) {
+      await purgeLocalAccountData(ownerScope);
+    },
+  };
+}
+
+async function hasPendingRemoteAccountDeletion(ownerScope: string): Promise<boolean> {
+  const normalized = ownerScope.trim().toLowerCase();
+  if (!normalized) return false;
+  return (await localAccountCleanupSaga.pending())
+    .some((record) => record.owner.toLowerCase() === normalized && !record.remoteDone);
 }
 
 async function unregisterApnsBeforeLogout(

@@ -95,6 +95,7 @@ import {
   createSidebarRootState,
   createNativeShellState,
   reduceNativeShellState,
+  resolveCompactNavigationEvent,
   resolveNativeShellPath,
   resolveShellTypography,
   resolveVisibleSidebarWidth,
@@ -153,6 +154,9 @@ const REFERENCE_SIDEBAR_ROUTES = [
   { labels: { en: 'Achievements', zh: '成就' }, path: '/achievements', symbol: 'trophy' },
   { labels: { en: 'Collaboration', zh: '协作' }, path: '/collaboration', symbol: 'person.3' },
   { labels: { en: 'Kanban', zh: '看板' }, path: '/kanban', symbol: 'rectangle.3.group' },
+  { labels: { en: 'Workflows', zh: '工作流' }, path: '/workflows', symbol: 'arrow.triangle.branch' },
+  { labels: { en: 'Approvals', zh: '审批中心' }, path: '/approvals', symbol: 'checkmark.shield' },
+  { labels: { en: 'Runtime Center', zh: '运行中心' }, path: '/runtime-center', symbol: 'waveform.path.ecg' },
   { labels: { en: 'Agent profiles', zh: '多 Agent 配置' }, path: '/profiles', symbol: 'person.2' },
   { labels: { en: 'Configuration', zh: '配置' }, path: '/config', symbol: 'slider.horizontal.3' },
   { labels: { en: 'Account', zh: '账户' }, path: '/account', symbol: 'person.crop.circle' },
@@ -166,6 +170,9 @@ const REFERENCE_SIDEBAR_ROUTES = [
 }[];
 
 const REFERENCE_SIDEBAR_FALLBACK_ICONS = {
+  '/workflows': 'Zap',
+  '/approvals': 'ShieldCheck',
+  '/runtime-center': 'Activity',
   '/achievements': 'Star',
   '/analytics': 'BarChart3',
   '/smart-weather': 'Globe',
@@ -402,9 +409,15 @@ export function NativeShell({
         pendingSidebarPath.current = resolved;
         compactNavigationRef.resetRoot(createSidebarRootState(resolved));
         dispatch({ type: 'select-route', path: resolved });
-        // The drawer owns the visible transition.  Closing it immediately
-        // avoids waiting on network data, JSON decoding, or layout readiness.
-        dispatch({ type: 'close-mobile' });
+        // Keep the drawer over the route being replaced until the destination
+        // has produced its first layout. This prevents the old chat screen or
+        // an empty native host from flashing during the drawer animation.
+        pendingSidebarFallback.current = setTimeout(() => {
+          if (pendingSidebarPath.current !== resolved) return;
+          pendingSidebarPath.current = null;
+          pendingSidebarFallback.current = null;
+          dispatch({ type: 'close-mobile' });
+        }, 1_500);
         return;
       }
       dispatch({ type: 'navigate', path: resolved });
@@ -423,14 +436,12 @@ export function NativeShell({
     const current = currentRoute?.name;
     if (!current) return;
     const resolved = resolveNativeShellPath(composition.routes, current);
-    if (resolved !== state.activePath) {
-      dispatch({
-        type: pendingSidebarPath.current === resolved
-          ? 'select-route'
-          : 'navigate',
-        path: resolved,
-      });
-    }
+    const event = resolveCompactNavigationEvent(
+      state.activePath,
+      resolved,
+      pendingSidebarPath.current,
+    );
+    if (event) dispatch(event);
   }, [compactNavigationRef, composition.routes, state.activePath]);
   const toggleCollapsed = useCallback(
     () => dispatch({ type: 'toggle-collapsed' }),

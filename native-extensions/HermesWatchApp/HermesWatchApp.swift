@@ -59,9 +59,12 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     return queue
   }()
   private let session = WCSession.default
+  private let accountCollectionEnabledKey = "app.hermes.watch.accountCollectionEnabled"
+  private let accountControlIssuedAtKey = "app.hermes.watch.accountControlIssuedAt"
   private let accountGenerationKey = "app.hermes.watch.accountGeneration"
   private var healthReady = false
   private var latestMotion = "unknown"
+  private var permissionSequenceGeneration: Int?
   private var workoutBuilder: HKLiveWorkoutBuilder?
   private var workoutSession: HKWorkoutSession?
   private lazy var sourceDeviceID: String = {
@@ -88,12 +91,7 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       session.delegate = self
       session.activate()
     }
-    locationManager.requestWhenInUseAuthorization()
-    startMotionUpdates()
-    Task {
-      await requestHealthAuthorization()
-      if session.activationState == .activated { captureContext() }
-    }
+    beginAccountPermissionSequence()
   }
 
   func toggleActiveRelay() {
@@ -105,6 +103,8 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   }
 
   func captureContext() {
+    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
+          UserDefaults.standard.integer(forKey: accountGenerationKey) > 0 else { return }
     let locationStatus = locationManager.authorizationStatus
     if locationStatus == .authorizedWhenInUse || locationStatus == .authorizedAlways {
       locationManager.requestLocation()
@@ -148,12 +148,64 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       read.insert(type)
     }
     let share: Set<HKSampleType> = [HKObjectType.workoutType()]
-    try? await healthStore.requestAuthorization(toShare: share, read: read)
-    healthReady = true
+    do {
+      try await healthStore.requestAuthorization(toShare: share, read: read)
+      healthReady = true
+    } catch {
+      healthReady = false
+    }
+  }
+
+  private func beginAccountPermissionSequence() {
+    let generation = UserDefaults.standard.integer(forKey: accountGenerationKey)
+    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
+          generation > 0,
+          permissionSequenceGeneration != generation else { return }
+    permissionSequenceGeneration = generation
+    let status = locationManager.authorizationStatus
+    if status == .notDetermined {
+      locationManager.requestWhenInUseAuthorization()
+      return
+    }
+    requestMotionAuthorization(for: generation)
+  }
+
+  private func requestMotionAuthorization(for generation: Int) {
+    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
+          generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
+    guard CMMotionActivityManager.isActivityAvailable() else {
+      finishAccountPermissionSequence(generation: generation)
+      return
+    }
+    if CMMotionActivityManager.authorizationStatus() == .notDetermined {
+      activityManager.queryActivityStarting(
+        from: Date().addingTimeInterval(-60),
+        to: Date(),
+        to: motionQueue
+      ) { [weak self] _, _ in
+        Task { @MainActor in self?.finishAccountPermissionSequence(generation: generation) }
+      }
+      return
+    }
+    finishAccountPermissionSequence(generation: generation)
+  }
+
+  private func finishAccountPermissionSequence(generation: Int) {
+    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
+          generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
+    if CMMotionActivityManager.authorizationStatus() == .authorized {
+      startMotionUpdates()
+    }
+    Task {
+      await requestHealthAuthorization()
+      guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
+            generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
+      if session.activationState == .activated { captureContext() }
+    }
   }
 
   private func startMotionUpdates() {
-    guard CMMotionActivityManager.isActivityAvailable() else { return }
+    guard CMMotionActivityManager.authorizationStatus() == .authorized else { return }
     activityManager.startActivityUpdates(to: motionQueue) { [weak self] activity in
       guard let activity else { return }
       let motion = Self.motionName(activity)
@@ -171,8 +223,12 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   }
 
   private func startActiveRelay(activity: String, reason: String) async {
-    guard workoutSession == nil else { return }
-    await requestHealthAuthorization()
+    let status = locationManager.authorizationStatus
+    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
+          UserDefaults.standard.integer(forKey: accountGenerationKey) > 0,
+          healthReady,
+          status == .authorizedWhenInUse || status == .authorizedAlways,
+          workoutSession == nil else { return }
     let configuration = HKWorkoutConfiguration()
     configuration.activityType = Self.workoutType(activity)
     configuration.locationType = .outdoor
@@ -238,9 +294,20 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   private func handle(_ message: [String: Any]) {
     switch message["action"] as? String {
     case "set-account-generation":
-      if let generation = (message["accountGeneration"] as? NSNumber)?.intValue {
-        UserDefaults.standard.set(generation, forKey: accountGenerationKey)
-      }
+      guard let generation = (message["accountGeneration"] as? NSNumber)?.intValue,
+            generation > 0,
+            acceptAccountControl(message) else { return }
+      UserDefaults.standard.set(generation, forKey: accountGenerationKey)
+      UserDefaults.standard.set(true, forKey: accountCollectionEnabledKey)
+      beginAccountPermissionSequence()
+    case "reset-account-generation":
+      guard let generation = (message["accountGeneration"] as? NSNumber)?.intValue,
+            generation > 0,
+            acceptAccountControl(message) else { return }
+      UserDefaults.standard.set(false, forKey: accountCollectionEnabledKey)
+      stopAccountCollection(reason: "account-reset")
+      UserDefaults.standard.set(generation, forKey: accountGenerationKey)
+      permissionSequenceGeneration = nil
     case "refresh-context", "start-active-relay", "start-navigation", "stop-active-relay", "stop-navigation":
       let generation = (message["accountGeneration"] as? NSNumber)?.intValue
       guard generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
@@ -248,6 +315,24 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     default:
       break
     }
+  }
+
+  private func acceptAccountControl(_ message: [String: Any]) -> Bool {
+    guard let issuedAt = message["controlIssuedAt"] as? NSNumber,
+          issuedAt.doubleValue.isFinite,
+          issuedAt.doubleValue > UserDefaults.standard.double(forKey: accountControlIssuedAtKey) else {
+      return false
+    }
+    UserDefaults.standard.set(issuedAt.doubleValue, forKey: accountControlIssuedAtKey)
+    return true
+  }
+
+  private func stopAccountCollection(reason: String) {
+    activityManager.stopActivityUpdates()
+    locationManager.stopUpdatingLocation()
+    if workoutSession != nil { stopActiveRelay(reason: reason) }
+    latestMotion = "unknown"
+    healthReady = false
   }
 
   private func handleAccountCommand(_ message: [String: Any]) {
@@ -266,6 +351,8 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   }
 
   private func send(_ payload: [String: Any]) {
+    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
+          UserDefaults.standard.integer(forKey: accountGenerationKey) > 0 else { return }
     var envelope = payload
     envelope["accountGeneration"] = UserDefaults.standard.integer(forKey: accountGenerationKey)
     envelope["sourceDeviceId"] = sourceDeviceID
@@ -338,6 +425,15 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       payload["kind"] = "watch-location"
       payload["observedAt"] = location.timestamp.timeIntervalSince1970 * 1000
       self.send(payload)
+    }
+  }
+
+  nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    let status = manager.authorizationStatus
+    guard status != .notDetermined else { return }
+    Task { @MainActor in
+      let generation = UserDefaults.standard.integer(forKey: self.accountGenerationKey)
+      self.requestMotionAuthorization(for: generation)
     }
   }
 

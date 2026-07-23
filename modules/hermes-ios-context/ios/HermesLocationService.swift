@@ -13,11 +13,32 @@ enum HermesLocationMode: String {
 final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   static let shared = HermesLocationService()
 
+  private struct LocationManagerConfiguration {
+    let activityType: CLActivityType
+    let desiredAccuracy: CLLocationAccuracy
+    let distanceFilter: CLLocationDistance
+    let pausesLocationUpdatesAutomatically: Bool
+  }
+
+  private enum PendingLocationDisposition {
+    case ignore
+    case resolve(UUID)
+    case retry(UUID)
+  }
+
   private let manager = CLLocationManager()
   private let stateLock = NSLock()
   private var authorizationGate: HermesLocationAuthorizationGate?
+  private var authorizationWaiters: [HermesLocationAuthorizationGate] = []
   private var locationContinuation: CheckedContinuation<[String: Any]?, Never>?
+  private var locationRequestForceFresh = false
+  private var locationRequestBestPayload: [String: Any]?
+  private var locationRequestBestAccuracy = CLLocationAccuracy.greatestFiniteMagnitude
+  private var locationRequestStartedAt: Date?
+  private var locationRequestToken: UUID?
+  private var locationRetry: DispatchWorkItem?
   private var locationTimeout: DispatchWorkItem?
+  private var requestLocationConfiguration: LocationManagerConfiguration?
   private var lastLocation: CLLocation?
   private var stableSamples: [CLLocation] = []
   private var stableRegion: CLCircularRegion?
@@ -52,10 +73,14 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     return await withCheckedContinuation { continuation in
       let gate = HermesLocationAuthorizationGate(continuation)
       stateLock.lock()
-      let previousGate = authorizationGate
-      authorizationGate = gate
+      let shouldStartRequest = authorizationGate == nil
+      if shouldStartRequest {
+        authorizationGate = gate
+      } else {
+        authorizationWaiters.append(gate)
+      }
       stateLock.unlock()
-      previousGate?.resolve(HermesAuthorization.location(status))
+      guard shouldStartRequest else { return }
       DispatchQueue.main.async { [weak self] in
         guard let self else {
           gate.resolve(HermesAuthorization.location(status))
@@ -105,7 +130,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     predictedDepartureReset?.cancel()
     predictedDepartureReset = nil
     predictedDepartureAt = nil
-    resolveLocationRequest(with: nil)
+    resolveLocationRequest(with: nil, restoreConfiguration: false)
     stop()
     lastLocation = nil
     stableSamples.removeAll()
@@ -171,11 +196,11 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     apply(mode: next)
   }
 
-  func requestCurrent() async -> [String: Any]? {
+  func requestCurrent(forceFresh: Bool = false) async -> [String: Any]? {
     guard CLLocationManager.locationServicesEnabled() else { return nil }
     let status = manager.authorizationStatus
     guard status == .authorizedAlways || status == .authorizedWhenInUse else { return nil }
-    if let lastLocation, abs(lastLocation.timestamp.timeIntervalSinceNow) < 20 {
+    if !forceFresh, let lastLocation, abs(lastLocation.timestamp.timeIntervalSinceNow) < 20 {
       return Self.payload(
         lastLocation,
         authorization: status,
@@ -185,20 +210,48 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     }
     await requestTemporaryFullAccuracyIfNeeded()
     return await withCheckedContinuation { continuation in
+      // A second foreground refresh supersedes the first one. Resolve the old
+      // continuation before installing the new token so a late callback or
+      // timeout from the old request cannot finish the replacement request.
+      resolveLocationRequest(with: nil)
+      let token = UUID()
+      let requestedAt = Date()
       stateLock.lock()
-      locationTimeout?.cancel()
-      locationTimeout = nil
-      let stale = locationContinuation
       locationContinuation = continuation
+      locationRequestForceFresh = forceFresh
+      locationRequestBestPayload = nil
+      locationRequestBestAccuracy = .greatestFiniteMagnitude
+      locationRequestStartedAt = requestedAt
+      locationRequestToken = token
       let timeout = DispatchWorkItem { [weak self] in
-        self?.resolveLocationRequest(with: nil)
+        guard let self else { return }
+        self.resolveLocationRequest(
+          with: self.bestLocationPayload(matching: token),
+          matching: token
+        )
       }
       locationTimeout = timeout
       stateLock.unlock()
-      stale?.resume(returning: nil)
       DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
       DispatchQueue.main.async { [weak self] in
-        self?.manager.requestLocation()
+        guard let self, self.isCurrentLocationRequest(token) else { return }
+        if forceFresh {
+          self.stateLock.lock()
+          if self.locationRequestToken == token {
+            self.requestLocationConfiguration = LocationManagerConfiguration(
+              activityType: self.manager.activityType,
+              desiredAccuracy: self.manager.desiredAccuracy,
+              distanceFilter: self.manager.distanceFilter,
+              pausesLocationUpdatesAutomatically: self.manager.pausesLocationUpdatesAutomatically
+            )
+            self.manager.activityType = .otherNavigation
+            self.manager.desiredAccuracy = kCLLocationAccuracyBest
+            self.manager.distanceFilter = kCLDistanceFilterNone
+            self.manager.pausesLocationUpdatesAutomatically = false
+          }
+          self.stateLock.unlock()
+        }
+        self.issueLocationRequest(token)
       }
     }
   }
@@ -235,9 +288,12 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       || status == .denied || status == .restricted {
       stateLock.lock()
       let gate = authorizationGate
+      let waiters = authorizationWaiters
       authorizationGate = nil
+      authorizationWaiters.removeAll()
       stateLock.unlock()
       gate?.resolve(HermesAuthorization.location(status))
+      waiters.forEach { $0.resolve(HermesAuthorization.location(status)) }
       requestedAlwaysUpgrade = false
     }
     // The durable collector requires Always authorization. While-In-Use still
@@ -262,18 +318,34 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       accuracyAuthorization: manager.accuracyAuthorization,
       mode: mode
     )
+    let disposition = pendingLocationDisposition(for: location, payload: payload)
+    if case .retry(let token) = disposition {
+      scheduleLocationRetry(token)
+    }
     HermesContextEventQueue.shared.enqueue(
       type: "location",
       payload: payload,
       occurredAt: location.timestamp
     ) { [weak self] in
       self?.onLocation?(payload)
-      self?.resolveLocationRequest(with: payload)
+      guard let self else { return }
+      if case .resolve(let token) = disposition {
+        self.resolveLocationRequest(with: payload, matching: token)
+      }
     }
   }
 
   func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-    resolveLocationRequest(with: nil)
+    stateLock.lock()
+    let token = locationRequestToken
+    let bestPayload = locationRequestBestPayload
+    stateLock.unlock()
+    guard let token else { return }
+    if (error as? CLError)?.code == .locationUnknown {
+      scheduleLocationRetry(token)
+      return
+    }
+    resolveLocationRequest(with: bestPayload, matching: token)
   }
 
   func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
@@ -342,7 +414,11 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       guard let self, let gate else { return }
       self.stateLock.lock()
       let isCurrent = self.authorizationGate === gate
-      if isCurrent { self.authorizationGate = nil }
+      let waiters = isCurrent ? self.authorizationWaiters : []
+      if isCurrent {
+        self.authorizationGate = nil
+        self.authorizationWaiters.removeAll()
+      }
       let status = self.manager.authorizationStatus
       self.stateLock.unlock()
       guard isCurrent, status == .authorizedWhenInUse else { return }
@@ -351,6 +427,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       // permission coordinator can continue the remaining chain and surface a
       // limited-location state instead of freezing until a foreground cycle.
       gate.resolve(HermesAuthorization.location(.authorizedWhenInUse))
+      waiters.forEach { $0.resolve(HermesAuthorization.location(.authorizedWhenInUse)) }
     }
   }
 
@@ -365,13 +442,90 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     return mode == .stationary ? .stationary : mode
   }
 
-  private func resolveLocationRequest(with payload: [String: Any]?) {
+  private func isCurrentLocationRequest(_ token: UUID) -> Bool {
     stateLock.lock()
+    defer { stateLock.unlock() }
+    return locationRequestToken == token
+  }
+
+  private func pendingLocationDisposition(
+    for location: CLLocation,
+    payload: [String: Any]
+  ) -> PendingLocationDisposition {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard let token = locationRequestToken else { return .ignore }
+    guard locationRequestForceFresh else { return .resolve(token) }
+    guard let requestedAt = locationRequestStartedAt,
+          location.timestamp >= requestedAt.addingTimeInterval(-1) else { return .retry(token) }
+    if location.horizontalAccuracy < locationRequestBestAccuracy {
+      locationRequestBestAccuracy = location.horizontalAccuracy
+      locationRequestBestPayload = payload
+    }
+    return location.horizontalAccuracy <= 50 ? .resolve(token) : .retry(token)
+  }
+
+  private func bestLocationPayload(matching token: UUID) -> [String: Any]? {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    guard locationRequestToken == token else { return nil }
+    return locationRequestBestPayload
+  }
+
+  private func issueLocationRequest(_ token: UUID) {
+    guard isCurrentLocationRequest(token) else { return }
+    manager.requestLocation()
+  }
+
+  private func scheduleLocationRetry(_ token: UUID) {
+    let retry = DispatchWorkItem { [weak self] in
+      guard let self, self.isCurrentLocationRequest(token) else { return }
+      self.issueLocationRequest(token)
+    }
+    stateLock.lock()
+    guard locationRequestToken == token else {
+      stateLock.unlock()
+      return
+    }
+    locationRetry?.cancel()
+    locationRetry = retry
+    stateLock.unlock()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: retry)
+  }
+
+  private func resolveLocationRequest(
+    with payload: [String: Any]?,
+    matching expectedToken: UUID? = nil,
+    restoreConfiguration: Bool = true
+  ) {
+    stateLock.lock()
+    if let expectedToken, locationRequestToken != expectedToken {
+      stateLock.unlock()
+      return
+    }
     locationTimeout?.cancel()
     locationTimeout = nil
+    locationRetry?.cancel()
+    locationRetry = nil
     let continuation = locationContinuation
     locationContinuation = nil
+    locationRequestForceFresh = false
+    locationRequestBestPayload = nil
+    locationRequestBestAccuracy = .greatestFiniteMagnitude
+    locationRequestStartedAt = nil
+    locationRequestToken = nil
+    let configuration = requestLocationConfiguration
+    requestLocationConfiguration = nil
     stateLock.unlock()
+    if restoreConfiguration, let configuration {
+      DispatchQueue.main.async { [weak self] in
+        guard let self else { return }
+        self.manager.activityType = configuration.activityType
+        self.manager.desiredAccuracy = configuration.desiredAccuracy
+        self.manager.distanceFilter = configuration.distanceFilter
+        self.manager.pausesLocationUpdatesAutomatically = configuration.pausesLocationUpdatesAutomatically
+      }
+    }
     continuation?.resume(returning: payload)
   }
 

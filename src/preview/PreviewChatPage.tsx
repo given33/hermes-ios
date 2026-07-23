@@ -62,11 +62,28 @@ import {
   HermesSwiftUIModelToolsView,
   hasNativeSwiftUIModelTools,
 } from '../../modules/hermes-ios-controls';
+import { HermesIOSContext } from '../../modules/hermes-ios-context';
 import { HermesLiveBlurView } from '../../modules/hermes-live-blur';
 import { presentQuickLook } from '../../modules/hermes-quick-look';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
-import { withDeadline } from '../api/async-deadline';
+import { withAbortableDeadline } from '../api/async-deadline';
+import { AsyncSingleFlight } from '../api/async-single-flight';
+import {
+  cleanupOwnedTemporaryAttachments,
+  isUriInsideDirectory,
+} from '../api/attachment-draft-lifecycle';
+import {
+  ATTACHMENT_ENCRYPTION_FORMAT,
+  attachmentOutboxOwnerComponent,
+  encryptedAttachmentUri,
+  withAttachmentPersistenceRollback,
+  withDecryptedAttachment,
+} from '../api/attachment-outbox-crypto';
+import {
+  MAX_CONVERSATION_ATTACHMENT_BYTES,
+  partitionAttachmentsBySize,
+} from '../api/attachment-size-policy';
 import type { SidebarGatewayStatus } from '../app/NativeShell';
 import {
   HermesCloudApi,
@@ -80,29 +97,41 @@ import {
   ConversationLocalStore,
   type HostedTurnOutboxItem,
   type HostedTurnPendingAttachment,
+  type OptimisticConversationLedgerItem,
+  type OptimisticPendingTurn,
   isCompleteConversation,
   mergeDownloadedConversations,
+  mergeOptimisticConversationLedgers,
   reconcileConversationCache,
   upsertCachedConversation,
 } from '../api/conversation-local-store';
 import {
+  decideHostedTurnDeliveryFailure,
+  HOSTED_TURN_RETRY_DELAY_MS,
+  HostedTurnDeliveryClaimRegistry,
+  hostedTurnDeliveryClaimKey,
+  hostedTurnOutboxReady,
+  hostedTurnResponseFailure,
+  hostedTurnTransportFailure,
+  type HostedTurnDeliveryFailure,
+} from '../api/hosted-turn-delivery-state';
+import {
   activityCategoryLabel,
   activityDisplayContent,
   attachmentContext,
-  chatModelConfigurationError,
   conversationHasRunningWork,
   conversationHostedTurnState,
   conversationMessagesToView,
   conversationRunningHostedTurnId,
   formatActivitySummary,
   formatMessageLocalTime,
-  hostedTurnFailedRetryably,
   hostedTurnVisibilityFailure,
   messageStatusLabel,
   messageIsRunning,
+  messageHasExecutionTiming,
+  reconcileOptimisticMessages,
   reconcileHostedTurnVisibilityFailures,
   shouldRenderPendingMessage,
-  turnErrorCodeRetryable,
   upsertChatMessage,
   type HermesChatActivity as ChatActivity,
   type HermesChatAttachment as StoredChatAttachment,
@@ -122,6 +151,7 @@ import {
   PreviewModal,
   PreviewSegmented,
 } from './PreviewPrimitives';
+import { createInFlightActionGate } from './in-flight-action-gate';
 
 const HERMES_AVATAR = require('../../assets/icon.png');
 const BODY_REGULAR = 'HermesGoogle-IBMPlexSans-400-Normal';
@@ -132,43 +162,19 @@ const DISPLAY_BOLD = 'SpaceGrotesk_700Bold';
 const MONO_REGULAR = 'HermesTerminal-JetBrainsMono-400-Normal';
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
-const MODEL_CONFIGURATION_TIMEOUT_MS = 12_000;
 const HOSTED_TURN_VISIBILITY_GRACE_MS = 20_000;
 const RECONNECT_MAX_ATTEMPTS = 5;
-const RECONNECT_WINDOW_MS = 120_000;
-const RECONNECT_RETRY_DELAY_MS = 3_000;
+const HOSTED_TURN_REQUEST_TIMEOUT_MS = 20_000;
+const HOSTED_TURN_CANCEL_TIMEOUT_MS = 5_000;
 
 type PendingPhase = 'thinking' | 'reconnecting' | 'executing';
-
-interface HostedTurnRetryState {
-  active: boolean;
-  attempt: number;
-  deadline: number;
-  conversationId: string;
-  profile: string;
-  messageContent: string;
-  attachmentContext: string;
-  attachmentIds: string[];
-  recentMessages: { content: string; role: string }[];
-}
-
-const createIdleRetryState = (): HostedTurnRetryState => ({
-  active: false,
-  attempt: 0,
-  deadline: 0,
-  conversationId: '',
-  profile: '',
-  messageContent: '',
-  attachmentContext: '',
-  attachmentIds: [],
-  recentMessages: [],
-});
 
 interface ChatAttachment {
   id: string;
   kind: 'file' | 'image';
   mimeType?: string | null;
   name: string;
+  ownedTemporary?: boolean;
   size?: number | null;
   uri: string;
 }
@@ -177,6 +183,23 @@ interface HostedTurnDelivery {
   item: HostedTurnOutboxItem;
   response: HostedTurnEnqueueResponse;
 }
+
+interface PendingChatSend {
+  conversationId: string;
+  key: string;
+  queuedItem?: HostedTurnOutboxItem;
+  userMessage: ChatMessage;
+}
+
+class HostedTurnCancelledDuringDelivery extends Error {
+  constructor() {
+    super('Hosted turn delivery was cancelled');
+    this.name = 'HostedTurnCancelledDuringDelivery';
+  }
+}
+
+const cancelledPendingSendKeys = new Set<string>();
+const hostedTurnDeliveryClaims = new HostedTurnDeliveryClaimRegistry();
 
 interface ChatPreviewPageProps {
   cacheOwner?: string;
@@ -219,6 +242,7 @@ export function ChatPreviewPage({
   const [hostedRunning, setHostedRunning] = useState(false);
   const [sending, setSending] = useState(false);
   const [pendingPhase, setPendingPhase] = useState<PendingPhase>('thinking');
+  const [pendingPhaseStartedAt, setPendingPhaseStartedAt] = useState(Date.now());
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [cancellingHostedTurn, setCancellingHostedTurn] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -230,6 +254,7 @@ export function ChatPreviewPage({
   const activeConversationIdRef = useRef('');
   const activeHostedTurnIdRef = useRef('');
   const optimisticHostedTurnIdRef = useRef('');
+  const optimisticHostedTurnConfirmedRef = useRef(false);
   const optimisticHostedTurnDeadlineRef = useRef(0);
   const optimisticHostedTurnTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hostedTurnVisibilityFailuresRef = useRef(
@@ -238,21 +263,27 @@ export function ChatPreviewPage({
   const cancelHostedTurnInFlightRef = useRef(false);
   const conversationIndexRef = useRef<SingleConversation[]>([]);
   const conversationSyncGenerationRef = useRef(0);
+  const conversationIndexRefreshGateRef = useRef(new AsyncSingleFlight());
   const hydratedCacheOwnerRef = useRef('');
   const cacheWriteRef = useRef<Promise<void>>(Promise.resolve());
   const pendingAttachmentCleanup = useRef<(() => void) | null>(null);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
-  const pendingSendFrame = useRef<number | null>(null);
   const pendingScrollFrame = useRef<number | null>(null);
   const autoFollowStreamRef = useRef(true);
   const outboxReplayRef = useRef<Promise<void> | null>(null);
+  const attachmentsRef = useRef<ChatAttachment[]>([]);
+  const attachmentOwnerRef = useRef(cacheOwner);
+  const sendSubmissionGateRef = useRef(createInFlightActionGate());
   const pendingPhaseRef = useRef<PendingPhase>('thinking');
+  const pendingPhaseStartedAtRef = useRef(Date.now());
   const firstTokenAtRef = useRef(0);
-  const retryStateRef = useRef<HostedTurnRetryState>(createIdleRetryState());
-  const retriedTurnIdsRef = useRef<Set<string>>(new Set());
-  const hiddenMessageIdsRef = useRef<Set<string>>(new Set());
-  const retryInFlightRef = useRef(false);
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingTurnActiveRef = useRef(false);
+  const sendOperationGenerationRef = useRef(0);
+  const pendingChatSendRef = useRef<PendingChatSend | null>(null);
+  const mountedRef = useRef(true);
+  const optimisticMessagesRef = useRef<ChatMessage[]>([]);
+  const optimisticMessagesByConversationRef = useRef(new Map<string, ChatMessage[]>());
+  const optimisticPendingByConversationRef = useRef(new Map<string, OptimisticPendingTurn>());
   const keyboard = useAnimatedKeyboard();
   const keyboardAvoidanceEnabled = useSharedValue(1);
   const isChinese = locale === 'zh';
@@ -265,14 +296,30 @@ export function ChatPreviewPage({
   const safeAreaTop = shellSplit ? 0 : insets.top;
   const attachmentCount = attachments.length;
   const canSend = !sending && Boolean(content.trim() || attachmentCount > 0);
-  const canCancelHostedTurn = (hostedRunning || sending) && Boolean(activeConversationId);
-  const pendingStartedAt = pendingPhase === 'executing' && firstTokenAtRef.current > 0
-    ? firstTokenAtRef.current
-    : Date.now();
-  const displayMessages = hiddenMessageIdsRef.current.size > 0
-    ? messages.filter(({ id }) => !hiddenMessageIdsRef.current.has(id))
-    : messages;
+  const canCancelHostedTurn = hostedRunning || sending;
+  const pendingStartedAt = pendingPhaseStartedAt;
+  const displayMessages = messages;
   const inputFontSize = resolveComposerFontSize(content);
+  const updateAttachments = useCallback((
+    update: ChatAttachment[] | ((current: ChatAttachment[]) => ChatAttachment[]),
+  ) => {
+    setAttachments((current) => {
+      const next = typeof update === 'function' ? update(current) : update;
+      attachmentsRef.current = next;
+      return next;
+    });
+  }, []);
+  const cleanupAttachmentSources = useCallback((
+    items: readonly ChatAttachment[] | readonly HostedTurnPendingAttachment[],
+  ) => {
+    cleanupOwnedTemporaryAttachments(items.flatMap((item) => {
+      const uri = 'sourceUri' in item ? item.sourceUri?.trim() : item.uri;
+      return uri ? [{ ownedTemporary: item.ownedTemporary, uri }] : [];
+    }), Paths.cache.uri, (uri) => {
+      const file = new ExpoFile(uri);
+      if (file.exists) file.delete();
+    });
+  }, []);
   const keepLatestVisible = useCallback((animated = false, force = false) => {
     if (!force && !autoFollowStreamRef.current) return;
     if (pendingScrollFrame.current !== null) return;
@@ -306,8 +353,85 @@ export function ChatPreviewPage({
     ),
   }));
 
+  const replaceOptimisticMessages = useCallback((
+    conversationId: string,
+    nextMessages: readonly ChatMessage[],
+    pendingTurn?: OptimisticPendingTurn | null,
+  ): Promise<void> => {
+    if (!conversationId) return Promise.resolve();
+    const previous = optimisticMessagesByConversationRef.current.get(conversationId) || [];
+    const next = nextMessages.map((message) => ({ ...message }));
+    if (next.length) {
+      optimisticMessagesByConversationRef.current.set(conversationId, next);
+    } else {
+      optimisticMessagesByConversationRef.current.delete(conversationId);
+    }
+    if (activeConversationIdRef.current === conversationId) {
+      optimisticMessagesRef.current = next;
+    }
+    if (pendingTurn !== undefined) {
+      if (pendingTurn) {
+        optimisticPendingByConversationRef.current.set(conversationId, pendingTurn);
+      } else {
+        optimisticPendingByConversationRef.current.delete(conversationId);
+      }
+    }
+    if (!localStore || !cacheOwner) return Promise.resolve();
+    return localStore.replaceOptimisticMessages(
+      cacheOwner,
+      conversationId,
+      next.map(chatMessageToCollaborationMessage),
+      pendingTurn,
+      previous.map(({ id }) => id),
+    ).then(async (committed) => {
+      if (committed) return;
+      // Another mounted page or a background retry worker published a newer
+      // terminal state. Restore that durable state instead of leaving this
+      // component's stale optimistic snapshot in memory.
+      const durableLedgers = await localStore.readOptimisticConversations(cacheOwner);
+      const durable = durableLedgers.find(
+        ({ conversationId: currentId }) => currentId === conversationId,
+      );
+      if (!durable) {
+        optimisticMessagesByConversationRef.current.delete(conversationId);
+        optimisticPendingByConversationRef.current.delete(conversationId);
+        if (activeConversationIdRef.current === conversationId) {
+          optimisticMessagesRef.current = [];
+        }
+        return;
+      }
+      const durableMessages = conversationMessagesToView({
+        id: durable.conversationId,
+        messages: durable.messages,
+        profile,
+        title: optimisticConversationTitle(durable.messages, isChinese),
+      }, isChinese);
+      optimisticMessagesByConversationRef.current.set(conversationId, durableMessages);
+      if (durable.pendingTurn) {
+        optimisticPendingByConversationRef.current.set(conversationId, durable.pendingTurn);
+      } else {
+        optimisticPendingByConversationRef.current.delete(conversationId);
+      }
+      if (activeConversationIdRef.current === conversationId) {
+        optimisticMessagesRef.current = durableMessages;
+        setMessages((current) => durableMessages.reduce(upsertChatMessage, current));
+      }
+    });
+  }, [cacheOwner, isChinese, localStore, profile]);
+
+  const clearOptimisticPendingTurn = useCallback((conversationId: string): Promise<void> => {
+    if (!conversationId) return Promise.resolve();
+    optimisticPendingByConversationRef.current.delete(conversationId);
+    return replaceOptimisticMessages(
+      conversationId,
+      optimisticMessagesByConversationRef.current.get(conversationId) || [],
+      null,
+    );
+  }, [replaceOptimisticMessages]);
+
   const clearOptimisticHostedTurn = useCallback(() => {
     optimisticHostedTurnIdRef.current = '';
+    optimisticHostedTurnConfirmedRef.current = false;
     optimisticHostedTurnDeadlineRef.current = 0;
     if (optimisticHostedTurnTimeoutRef.current) {
       clearTimeout(optimisticHostedTurnTimeoutRef.current);
@@ -318,6 +442,7 @@ export function ChatPreviewPage({
   const beginOptimisticHostedTurn = useCallback((conversationId: string, turnId: string) => {
     clearOptimisticHostedTurn();
     optimisticHostedTurnIdRef.current = turnId;
+    optimisticHostedTurnConfirmedRef.current = false;
     optimisticHostedTurnDeadlineRef.current = Date.now() + HOSTED_TURN_VISIBILITY_GRACE_MS;
     optimisticHostedTurnTimeoutRef.current = setTimeout(() => {
       optimisticHostedTurnTimeoutRef.current = null;
@@ -338,153 +463,271 @@ export function ChatPreviewPage({
       );
       activeHostedTurnIdRef.current = '';
       setActiveHostedTurnId('');
+      const nextMessages = upsertChatMessage(
+        optimisticMessagesByConversationRef.current.get(conversationId) || [],
+        failure.message,
+      );
+      void replaceOptimisticMessages(conversationId, nextMessages);
+      void clearOptimisticPendingTurn(conversationId);
       setMessages((current) => upsertChatMessage(current, failure.message));
       setHostedRunning(false);
       setSending(false);
     }, HOSTED_TURN_VISIBILITY_GRACE_MS);
-  }, [clearOptimisticHostedTurn, isChinese]);
-
-  const updatePendingPhase = useCallback((phase: PendingPhase) => {
-    pendingPhaseRef.current = phase;
-    setPendingPhase(phase);
-  }, []);
-
-  const clearReconnectTimer = useCallback(() => {
-    if (reconnectTimerRef.current !== null) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-  }, []);
-
-  const attemptReconnectRef = useRef<() => Promise<void>>(async () => {});
-
-  const scheduleNextReconnect = useCallback(() => {
-    clearReconnectTimer();
-    const retry = retryStateRef.current;
-    if (
-      !retry.active
-      || retry.attempt >= RECONNECT_MAX_ATTEMPTS
-      || Date.now() > retry.deadline
-    ) {
-      retry.active = false;
-      setHostedRunning(false);
-      setSending(false);
-      return;
-    }
-    reconnectTimerRef.current = setTimeout(() => {
-      reconnectTimerRef.current = null;
-      void attemptReconnectRef.current();
-    }, RECONNECT_RETRY_DELAY_MS);
-  }, [clearReconnectTimer]);
-
-  const attemptReconnect = useCallback(async () => {
-    const retry = retryStateRef.current;
-    if (!retry.active || retryInFlightRef.current) return;
-    if (
-      !cloudApi
-      || !retry.conversationId
-      || retry.attempt >= RECONNECT_MAX_ATTEMPTS
-      || Date.now() > retry.deadline
-    ) {
-      retry.active = false;
-      setHostedRunning(false);
-      setSending(false);
-      return;
-    }
-    retryInFlightRef.current = true;
-    retry.attempt += 1;
-    setReconnectAttempt(retry.attempt);
-    updatePendingPhase('reconnecting');
-    const turnId = uniqueTurnId('hosted');
-    const messageId = uniqueTurnId('user');
-    const now = Date.now();
-    const input: HostedTurnEnqueueInput = {
-      attachmentContext: retry.attachmentContext,
-      attachmentIds: retry.attachmentIds,
-      deliveryContext: '由服务端意图路由判断是否需要交付文件；需要时上传账户云端并在会话中返回。',
-      message: {
-        content: retry.messageContent,
-        created_at: now,
-        id: messageId,
-        kind: 'message',
-        name: isChinese ? '你' : 'You',
-        role: 'user',
-        sender_id: 'account-owner',
-        sender_name: isChinese ? '你' : 'You',
-        status: 'completed',
-        updated_at: now,
-      },
-      profiles: [retry.profile],
-      recentMessages: retry.recentMessages,
-      requestId: messageId,
-      turnId,
-    };
-    try {
-      hiddenMessageIdsRef.current.add(messageId);
-      const response = await cloudApi.enqueueHostedTurn(retry.conversationId, input);
-      if (response.accepted) {
-        clearReconnectTimer();
-        activeHostedTurnIdRef.current = turnId;
-        setActiveHostedTurnId(turnId);
-        beginOptimisticHostedTurn(retry.conversationId, turnId);
-        setHostedRunning(true);
-        setSending(true);
-        updatePendingPhase('thinking');
-      } else if (turnErrorCodeRetryable(
-        response.error?.code ?? '',
-        response.error?.message ?? '',
-      )) {
-        // Rejected but retryable (e.g. model not configured): back off, then try again.
-        scheduleNextReconnect();
-      } else {
-        // Non-retryable rejection: surface the failure and stop the loop.
-        retry.active = false;
-        setHostedRunning(false);
-        setSending(false);
-      }
-    } catch {
-      // Network failure: keep the reconnecting status and back off before the next try.
-      scheduleNextReconnect();
-    } finally {
-      retryInFlightRef.current = false;
-    }
   }, [
-    beginOptimisticHostedTurn,
-    clearReconnectTimer,
-    cloudApi,
+    clearOptimisticHostedTurn,
+    clearOptimisticPendingTurn,
     isChinese,
-    scheduleNextReconnect,
-    updatePendingPhase,
+    replaceOptimisticMessages,
   ]);
 
-  attemptReconnectRef.current = attemptReconnect;
-
-  const handleTurnFailure = useCallback((failedMessageId: string) => {
-    const retry = retryStateRef.current;
-    if (!retry.active) return;
-    if (
-      retry.attempt >= RECONNECT_MAX_ATTEMPTS
-      || Date.now() > retry.deadline
-    ) {
-      retry.active = false;
-      setHostedRunning(false);
-      setSending(false);
-      return;
-    }
-    if (failedMessageId) {
-      hiddenMessageIdsRef.current.add(failedMessageId);
-    }
-    void attemptReconnect();
-  }, [attemptReconnect]);
+  const updatePendingPhase = useCallback((phase: PendingPhase, startedAt = Date.now()) => {
+    pendingPhaseRef.current = phase;
+    pendingPhaseStartedAtRef.current = startedAt;
+    setPendingPhase(phase);
+    setPendingPhaseStartedAt(startedAt);
+  }, []);
 
   const resetPendingStateMachine = useCallback(() => {
-    retryStateRef.current.active = false;
-    retryInFlightRef.current = false;
+    pendingTurnActiveRef.current = false;
     firstTokenAtRef.current = 0;
-    clearReconnectTimer();
     setReconnectAttempt(0);
     updatePendingPhase('thinking');
-  }, [clearReconnectTimer, updatePendingPhase]);
+  }, [updatePendingPhase]);
+
+  const finalizePendingSend = useCallback(async (
+    pending: PendingChatSend,
+    content: string,
+    status: 'cancelled' | 'failed',
+    idPrefix: string,
+    roleLabel: string,
+    terminalOutbox?: HostedTurnOutboxItem,
+  ): Promise<boolean> => {
+    const completedAt = Date.now();
+    const terminalMessage: ChatMessage = {
+      avatarRole: 'hermes',
+      completedAt,
+      content,
+      createdAt: completedAt,
+      durationMs: 0,
+      id: `${idPrefix}-${pending.userMessage.id}`,
+      name: 'Hermes Agent',
+      role: 'assistant',
+      roleLabel,
+      roleStage: 'chat',
+      runtimeTurnId: pending.queuedItem?.input.turnId,
+      status,
+      updatedAt: completedAt,
+    };
+    const current = optimisticMessagesByConversationRef.current.get(pending.conversationId) || [];
+    const finalMessages = upsertChatMessage(
+      upsertChatMessage(current, pending.userMessage),
+      terminalMessage,
+    );
+    if (localStore && cacheOwner) {
+      const terminalMessages = [pending.userMessage, terminalMessage]
+        .map(chatMessageToCollaborationMessage);
+      if (status === 'cancelled') {
+        const cancelled = await localStore.cancelPendingEnqueueAndFinalize(
+          cacheOwner,
+          pending.userMessage.id,
+          pending.queuedItem,
+          terminalMessages,
+        );
+        if (!cancelled?.cancelledAt) return false;
+        pending.queuedItem = cancelled;
+      } else if (terminalOutbox) {
+        const transition = terminalOutbox.deliveryTerminalAt
+          ? await localStore.transitionPendingEnqueueTerminal(
+              cacheOwner,
+              terminalOutbox,
+              terminalMessages,
+            )
+          : await localStore.transitionPendingEnqueueForegroundFailure(
+              cacheOwner,
+              terminalOutbox,
+              terminalMessages,
+            );
+        if (!transition.updated) return false;
+      } else {
+        await localStore.finalizeOptimisticTurn(
+          cacheOwner,
+          pending.conversationId,
+          terminalMessages,
+        );
+      }
+    } else {
+      await replaceOptimisticMessages(pending.conversationId, finalMessages, null);
+    }
+    optimisticMessagesByConversationRef.current.set(pending.conversationId, finalMessages);
+    optimisticPendingByConversationRef.current.delete(pending.conversationId);
+    if (mountedRef.current && activeConversationIdRef.current === pending.conversationId) {
+      optimisticMessagesRef.current = finalMessages;
+      setMessages((messages) => upsertChatMessage(
+        upsertChatMessage(messages, pending.userMessage),
+        terminalMessage,
+      ));
+      resetPendingStateMachine();
+      setHostedRunning(false);
+      setSending(false);
+    }
+    if (pendingChatSendRef.current?.key === pending.key) {
+      pendingChatSendRef.current = null;
+    }
+    return true;
+  }, [cacheOwner, localStore, replaceOptimisticMessages, resetPendingStateMachine]);
+
+  const handleOutboxFailure = useCallback(async (
+    source: HostedTurnOutboxItem,
+    failure: HostedTurnDeliveryFailure,
+  ): Promise<'retry' | 'retry-background' | 'terminal'> => {
+    if (!localStore || !cacheOwner) return 'terminal';
+    const decision = decideHostedTurnDeliveryFailure(source, failure);
+    const pending = pendingChatSendFromOutbox(decision.item, cacheOwner);
+    if (decision.terminal) {
+      const terminalItem = {
+        ...decision.item,
+        deliveryTerminalAt: Date.now(),
+      };
+      const finalized = await finalizePendingSend(
+        pending,
+        decision.failure.message,
+        'failed',
+        'send-failed',
+        isChinese ? '模型连接错误' : 'Model connection error',
+        terminalItem,
+      );
+      if (!finalized) return 'terminal';
+      try {
+        cleanupPendingAttachments(terminalItem);
+        await localStore.removePendingEnqueueIfActive(
+          cacheOwner,
+          source.input.requestId,
+        );
+      } catch {
+        // Keep the terminal row as a cleanup intent. It must never be replayed
+        // as another model request.
+      }
+      return 'terminal';
+    }
+    const foregroundFailed = failure.certainty === 'uncertain'
+      && (decision.item.attempts || 0) >= RECONNECT_MAX_ATTEMPTS;
+    const retryItem = {
+      ...decision.item,
+      ...(foregroundFailed && !decision.item.foregroundFailedAt
+        ? { foregroundFailedAt: Date.now() }
+        : {}),
+    };
+    if (foregroundFailed) {
+      const finalized = await finalizePendingSend(
+        pendingChatSendFromOutbox(retryItem, cacheOwner),
+        decision.failure.message,
+        'failed',
+        'send-failed',
+        isChinese ? '连接错误' : 'Connection error',
+        retryItem,
+      );
+      if (!finalized) return 'terminal';
+      return 'retry-background';
+    }
+    const reconnecting: OptimisticPendingTurn = {
+      attempt: retryItem.attempts || 1,
+      lastError: decision.failure.message,
+      phase: 'reconnecting',
+      phaseStartedAt: Date.now(),
+      updatedAt: Date.now(),
+      userMessageId: retryItem.input.message.id,
+    };
+    const transition = await localStore.transitionPendingEnqueueRetry(
+      cacheOwner,
+      retryItem,
+      reconnecting,
+    );
+    if (!transition.updated || !transition.item) return 'terminal';
+    const claimKey = hostedTurnDeliveryClaimKey(cacheOwner, source.input.requestId);
+    if (cancelledPendingSendKeys.has(claimKey)) return 'terminal';
+    optimisticPendingByConversationRef.current.set(transition.item.conversationId, reconnecting);
+    if (mountedRef.current && activeConversationIdRef.current === transition.item.conversationId) {
+      pendingTurnActiveRef.current = true;
+      setReconnectAttempt(reconnecting.attempt);
+      updatePendingPhase('reconnecting', reconnecting.phaseStartedAt);
+      setHostedRunning(false);
+      setSending(true);
+    }
+    return 'retry';
+  }, [cacheOwner, finalizePendingSend, isChinese, localStore, updatePendingPhase]);
+
+  const deliverPendingCancellation = useCallback(async (
+    item: HostedTurnOutboxItem,
+  ): Promise<boolean> => {
+    if (!localStore || !cacheOwner || !cloudApi || !item.cancelledAt) return false;
+    try {
+      await withAbortableDeadline(
+        (signal) => cloudApi.cancelHostedTurn(
+          item.conversationId,
+          item.input.turnId,
+          'Cancelled before hosted-turn delivery completed',
+          signal,
+        ),
+        HOSTED_TURN_CANCEL_TIMEOUT_MS,
+        'Hermes hosted-turn cancellation timed out',
+      );
+      cleanupPendingAttachments(item);
+      await localStore.removePendingEnqueue(cacheOwner, item.input.requestId);
+      return true;
+    } catch (error) {
+      await localStore.upsertPendingEnqueue(cacheOwner, {
+        ...item,
+        cancelledAt: item.cancelledAt || Date.now(),
+        lastError: serverFailure(error, isChinese),
+        nextAttemptAt: Date.now() + HOSTED_TURN_RETRY_DELAY_MS,
+      }).catch(() => undefined);
+      return false;
+    }
+  }, [cacheOwner, cloudApi, isChinese, localStore]);
+
+  const cancelPendingSend = useCallback(async (): Promise<boolean> => {
+    const conversationId = activeConversationIdRef.current;
+    const persistedPending = optimisticPendingByConversationRef.current.get(conversationId);
+    const userMessageId = pendingChatSendRef.current?.userMessage.id
+      || persistedPending?.userMessageId
+      || '';
+    const userMessage = pendingChatSendRef.current?.userMessage
+      || (optimisticMessagesByConversationRef.current.get(conversationId) || [])
+        .find(({ id, role }) => id === userMessageId && role === 'user');
+    if (!conversationId || !userMessageId || !userMessage) return false;
+    const key = pendingChatSendRef.current?.key
+      || hostedTurnDeliveryClaimKey(cacheOwner, userMessageId);
+    cancelledPendingSendKeys.add(key);
+    let queuedItem = pendingChatSendRef.current?.queuedItem;
+    const pending = { conversationId, key, queuedItem, userMessage };
+    const finalized = await finalizePendingSend(
+      pending,
+      isChinese ? '任务已取消。' : 'Task cancelled.',
+      'cancelled',
+      'cancelled',
+      isChinese ? '已取消' : 'Cancelled',
+    );
+    if (!finalized) {
+      cancelledPendingSendKeys.delete(key);
+      return false;
+    }
+    queuedItem = pending.queuedItem;
+    sendOperationGenerationRef.current += 1;
+    resetPendingStateMachine();
+    if (mountedRef.current && activeConversationIdRef.current === conversationId) {
+      setSending(false);
+      setHostedRunning(false);
+    }
+    if (queuedItem?.cancelledAt) void deliverPendingCancellation(queuedItem);
+    return true;
+  }, [
+    cacheOwner,
+    deliverPendingCancellation,
+    finalizePendingSend,
+    isChinese,
+    localStore,
+    resetPendingStateMachine,
+  ]);
 
   useAnimatedReaction(
     () => keyboard.height.value * keyboardAvoidanceEnabled.value,
@@ -519,9 +762,34 @@ export function ChatPreviewPage({
     persistConversationCache(next, activeId);
   }, [persistConversationCache]);
 
-  const applyConversation = useCallback((conversation: SingleConversation) => {
+  const applyConversation = useCallback((incomingConversation: SingleConversation) => {
+    const conversation = upsertCachedConversation(
+      conversationIndexRef.current,
+      incomingConversation,
+    ).find(({ id }) => id === incomingConversation.id) || incomingConversation;
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
+    const persistedPendingTurn = optimisticPendingByConversationRef.current.get(conversation.id);
+    const persistedTurnState = persistedPendingTurn?.turnId
+      ? conversationHostedTurnState(conversation, persistedPendingTurn.turnId)
+      : 'missing';
+    const activePersistedPendingTurn = persistedTurnState === 'terminal'
+      ? undefined
+      : persistedPendingTurn;
+    if (persistedTurnState === 'terminal') {
+      optimisticPendingByConversationRef.current.delete(conversation.id);
+      void clearOptimisticPendingTurn(conversation.id);
+    }
+    if (activePersistedPendingTurn) {
+      pendingTurnActiveRef.current = true;
+      setReconnectAttempt(activePersistedPendingTurn.attempt);
+      updatePendingPhase(
+        activePersistedPendingTurn.phase,
+        activePersistedPendingTurn.phaseStartedAt,
+      );
+    } else {
+      pendingTurnActiveRef.current = false;
+    }
     let nextMessages = conversationMessagesToView(conversation, isChinese);
     let running = conversationHasRunningWork(conversation);
     let runningHostedTurnId = conversationRunningHostedTurnId(conversation);
@@ -531,7 +799,17 @@ export function ChatPreviewPage({
       if (optimisticState === 'terminal') {
         clearOptimisticHostedTurn();
       } else if (optimisticState === 'running') {
-        clearOptimisticHostedTurn();
+        optimisticHostedTurnConfirmedRef.current = true;
+        optimisticHostedTurnDeadlineRef.current = 0;
+        if (optimisticHostedTurnTimeoutRef.current) {
+          clearTimeout(optimisticHostedTurnTimeoutRef.current);
+          optimisticHostedTurnTimeoutRef.current = null;
+        }
+        running = true;
+        runningHostedTurnId ||= optimisticTurnId;
+      } else if (optimisticHostedTurnConfirmedRef.current) {
+        // A later poll can hit an older replica after the turn was already
+        // observed running. Never regress the UI back to idle/missing.
         running = true;
         runningHostedTurnId ||= optimisticTurnId;
       } else if (Date.now() <= optimisticHostedTurnDeadlineRef.current) {
@@ -564,52 +842,117 @@ export function ChatPreviewPage({
     } else {
       hostedTurnVisibilityFailuresRef.current.delete(conversation.id);
     }
-    const trackedTurnId = activeHostedTurnIdRef.current;
-    if (trackedTurnId && retryStateRef.current.active) {
+    const trackedTurnId = activeHostedTurnIdRef.current
+      || activePersistedPendingTurn?.turnId
+      || runningHostedTurnId;
+    if (trackedTurnId && pendingTurnActiveRef.current) {
       const trackedTurnState = conversationHostedTurnState(conversation, trackedTurnId);
+      const trackedMessages = nextMessages.filter(
+        (message) => message.runtimeTurnId === trackedTurnId,
+      );
       if (trackedTurnState === 'terminal') {
-        if (
-          hostedTurnFailedRetryably(conversation, trackedTurnId)
-          && !retriedTurnIdsRef.current.has(trackedTurnId)
-        ) {
-          retriedTurnIdsRef.current.add(trackedTurnId);
-          const failedMessage = [...nextMessages].reverse().find(
-            (message) => message.role === 'assistant' && message.status === 'failed',
-          );
-          handleTurnFailure(failedMessage?.id || '');
-        } else {
-          retryStateRef.current.active = false;
+        pendingTurnActiveRef.current = false;
+        void clearOptimisticPendingTurn(conversation.id);
+        const tokenStartedAt = firstTokenAtRef.current;
+        if (tokenStartedAt > 0) {
+          nextMessages = nextMessages.map((message) => {
+            if (
+              message.runtimeTurnId !== trackedTurnId
+              || message.role !== 'assistant'
+              || !['completed', 'failed'].includes(message.status || '')
+            ) return message;
+            const completedAt = message.completedAt || message.updatedAt || Date.now();
+            return {
+              ...message,
+              durationMs: Math.max(0, completedAt - tokenStartedAt),
+              startedAt: tokenStartedAt,
+            };
+          });
         }
       } else if (pendingPhaseRef.current !== 'executing') {
-        const hasAssistantContent = nextMessages.some(
+        const latestRuntimeStatus = trackedMessages
+          .flatMap((message) => message.activities || [])
+          .filter((activity) => {
+            const text = `${activity.output || ''} ${activity.preview || ''}`;
+            return activity.name === '运行状态'
+              || activity.name === 'Runtime status'
+              || /(?:正在重连|reconnecting)\s*[（(]\d+\s*\/\s*5[）)]/i.test(text);
+          })
+          .sort((left, right) => (right.startedAt || 0) - (left.startedAt || 0))[0];
+        const runtimeStatus = latestRuntimeStatus?.output || latestRuntimeStatus?.preview || '';
+        const reconnectMatch = runtimeStatus.match(/(?:正在重连|reconnecting)\s*[（(](\d+)\s*\/\s*5[）)]/i);
+        if (reconnectMatch) {
+          const attempt = Number(reconnectMatch[1]);
+          if (pendingPhaseRef.current !== 'reconnecting' || reconnectAttempt !== attempt) {
+            setReconnectAttempt(attempt);
+            updatePendingPhase('reconnecting', latestRuntimeStatus?.startedAt || Date.now());
+          }
+        } else if (/正在思考|thinking/i.test(runtimeStatus) && pendingPhaseRef.current !== 'thinking') {
+          updatePendingPhase('thinking', latestRuntimeStatus?.startedAt || Date.now());
+        }
+        const hasAssistantContent = trackedMessages.some(
           (message) => message.role === 'assistant'
             && Boolean(message.content)
             && message.status !== 'failed',
         );
-        if (hasAssistantContent) {
-          firstTokenAtRef.current = Date.now();
-          retryStateRef.current.active = false;
-          updatePendingPhase('executing');
+        const persistedFirstTokenAt = trackedMessages.reduce((earliest, message) => {
+          const candidate = message.firstTokenAt || 0;
+          if (candidate <= 0) return earliest;
+          return earliest <= 0 ? candidate : Math.min(earliest, candidate);
+        }, 0);
+        if (persistedFirstTokenAt > 0 || hasAssistantContent) {
+          const firstTokenAt = firstTokenAtRef.current || persistedFirstTokenAt || Date.now();
+          firstTokenAtRef.current = firstTokenAt;
+          updatePendingPhase('executing', firstTokenAt);
         }
       }
     }
+    const currentOptimistic = optimisticMessagesByConversationRef.current.get(
+      conversation.id,
+    ) || [];
+    const reconciledOptimistic = reconcileOptimisticMessages(
+      nextMessages,
+      currentOptimistic,
+      Date.now(),
+      activePersistedPendingTurn
+        ? new Set([activePersistedPendingTurn.userMessageId])
+        : new Set(),
+    );
+    if (!sameOptimisticMessages(currentOptimistic, reconciledOptimistic.pending)) {
+      void replaceOptimisticMessages(conversation.id, reconciledOptimistic.pending);
+    } else {
+      optimisticMessagesRef.current = reconciledOptimistic.pending;
+    }
+    nextMessages = reconciledOptimistic.messages;
     setMessages(nextMessages);
     activeHostedTurnIdRef.current = runningHostedTurnId;
     setActiveHostedTurnId(runningHostedTurnId);
     setHostedRunning(running);
-    setSending(running);
+    // A stale conversation snapshot can arrive while the client is still
+    // validating/reconnecting the model. It has no hosted turn yet, so it
+    // must not collapse the pending bubble or re-enable the composer.
+    setSending(running || pendingTurnActiveRef.current);
     commitConversationIndex(
       upsertCachedConversation(conversationIndexRef.current, conversation),
       conversation.id,
     );
-  }, [clearOptimisticHostedTurn, commitConversationIndex, handleTurnFailure, isChinese, updatePendingPhase]);
+  }, [
+    clearOptimisticHostedTurn,
+    clearOptimisticPendingTurn,
+    commitConversationIndex,
+    isChinese,
+    reconnectAttempt,
+    replaceOptimisticMessages,
+    updatePendingPhase,
+  ]);
 
   const loadConversation = useCallback(async (
     conversationId: string,
     expectedGeneration = 0,
+    signal?: AbortSignal,
   ) => {
     if (!cloudApi || !conversationId) return null;
-    const result = await cloudApi.getConversation(conversationId);
+    const result = await cloudApi.getConversation(conversationId, signal);
     if (
       expectedGeneration
       && expectedGeneration !== conversationSyncGenerationRef.current
@@ -630,40 +973,75 @@ export function ChatPreviewPage({
       throw new Error('Durable outbox is unavailable');
     }
     let item = hydrateOutboxInput(source);
+    if (item.cancelledAt) throw new HostedTurnCancelledDuringDelivery();
+    if (item.deliveryAcceptedAt) {
+      throw new Error('Hosted turn was already accepted');
+    }
+    const persistIfActive = async (next: HostedTurnOutboxItem) => {
+      const mutation = await localStore.upsertPendingEnqueueIfActive(cacheOwner, next);
+      if (!mutation.updated || !mutation.item) {
+        throw new HostedTurnCancelledDuringDelivery();
+      }
+      return mutation.item;
+    };
+    if (item.pendingAttachments?.length) {
+      const materialized = await persistPendingAttachments(
+        cacheOwner,
+        item.input.requestId,
+        item.pendingAttachments,
+      );
+      item = await persistIfActive({ ...item, pendingAttachments: materialized });
+    }
     if (!item.conversationId) {
       item = {
         ...item,
         conversationId: `chat_${safeOutboxPathComponent(item.input.requestId).slice(0, 251)}`,
         conversationPending: true,
       };
-      await localStore.upsertPendingEnqueue(cacheOwner, item);
+      item = await persistIfActive(item);
     }
     if (item.conversationPending) {
-      await cloudApi.createConversation(
-        item.conversationProfile || profile,
-        item.conversationTitle || (isChinese ? '新对话' : 'New conversation'),
-        item.conversationId,
+      await withAbortableDeadline(
+        (signal) => cloudApi.createConversation(
+          item.conversationProfile || profile,
+          item.conversationTitle || (isChinese ? '新对话' : 'New conversation'),
+          item.conversationId,
+          signal,
+        ),
+        HOSTED_TURN_REQUEST_TIMEOUT_MS,
+        'Hermes conversation creation timed out',
       );
       item = { ...item, conversationPending: false };
-      await localStore.upsertPendingEnqueue(cacheOwner, item);
+      item = await persistIfActive(item);
     }
     const pendingAttachments = [...(item.pendingAttachments || [])];
     for (let index = 0; index < pendingAttachments.length; index += 1) {
       const attachment = pendingAttachments[index];
       if (attachment.uploaded) continue;
-      const result = await cloudApi.uploadConversationAttachment(
-        item.conversationId,
-        {
-          mimeType: attachment.mimeType,
-          name: attachment.name,
-          uri: attachment.uri,
-        },
-        {
-          messageId: item.input.message.id,
-          profile: item.conversationProfile || profile,
-          turnId: item.input.turnId,
-          uploadId: attachment.id,
-        },
+      const result = await withAbortableDeadline(
+        (signal) => withDecryptedAttachment(
+          HermesIOSContext,
+          cacheOwner,
+          attachment.uri,
+          attachment.name,
+          (plaintextUri) => cloudApi.uploadConversationAttachment(
+            item.conversationId,
+            {
+              mimeType: attachment.mimeType,
+              name: attachment.name,
+              uri: plaintextUri,
+            },
+            {
+              messageId: item.input.message.id,
+              profile: item.conversationProfile || profile,
+              turnId: item.input.turnId,
+              uploadId: attachment.id,
+            },
+            signal,
+          ),
+        ),
+        HOSTED_TURN_REQUEST_TIMEOUT_MS,
+        'Hermes attachment upload timed out',
       );
       if (!isRecord(result.attachment)) {
         throw new Error('Attachment upload was not persisted');
@@ -673,11 +1051,15 @@ export function ChatPreviewPage({
         uploaded: result.attachment,
       };
       item = hydrateOutboxInput({ ...item, pendingAttachments });
-      await localStore.upsertPendingEnqueue(cacheOwner, item);
+      item = await persistIfActive(item);
     }
     item = hydrateOutboxInput({ ...item, pendingAttachments });
-    await localStore.upsertPendingEnqueue(cacheOwner, item);
-    const response = await cloudApi.enqueueHostedTurn(item.conversationId, item.input);
+    item = await persistIfActive(item);
+    const response = await withAbortableDeadline(
+      (signal) => cloudApi.enqueueHostedTurn(item.conversationId, item.input, signal),
+      HOSTED_TURN_REQUEST_TIMEOUT_MS,
+      'Hermes hosted-turn enqueue timed out',
+    );
     return { item, response };
   }, [cacheOwner, cloudApi, isChinese, localStore, profile]);
 
@@ -706,47 +1088,204 @@ export function ChatPreviewPage({
         pendingAttachments: source.pendingAttachments?.map(({ uploaded: _uploaded, ...attachment }) => attachment),
       };
       if (localStore && cacheOwner) {
-        await localStore.upsertPendingEnqueue(cacheOwner, replacement);
+        const mutation = await localStore.upsertPendingEnqueueIfActive(cacheOwner, replacement);
+        if (!mutation.updated || !mutation.item) {
+          throw new HostedTurnCancelledDuringDelivery();
+        }
       }
       return deliverPendingEnqueueOnce(replacement);
     }
   }, [cacheOwner, deliverPendingEnqueueOnce, localStore]);
+
+  const acceptPendingOutboxItem = useCallback(async (
+    item: HostedTurnOutboxItem,
+  ) => {
+    if (!localStore || !cacheOwner) return { item: null, updated: false };
+    const acceptedAt = item.deliveryAcceptedAt || Date.now();
+    const pendingTurn: OptimisticPendingTurn = {
+      attempt: 0,
+      phase: 'thinking',
+      phaseStartedAt: acceptedAt,
+      turnId: item.input.turnId,
+      updatedAt: acceptedAt,
+      userMessageId: item.input.message.id,
+    };
+    const transition = await localStore.acceptPendingEnqueueIfActive(
+      cacheOwner,
+      { ...item, deliveryAcceptedAt: acceptedAt },
+      pendingTurn,
+    );
+    if (!transition.updated || !transition.item) return transition;
+    const failureIds = new Set([
+      `send-failed-${item.input.message.id}`,
+      `connection-unavailable-${item.input.message.id}`,
+    ]);
+    const optimistic = (optimisticMessagesByConversationRef.current.get(item.conversationId) || [])
+      .filter(({ id }) => !failureIds.has(id));
+    optimisticMessagesByConversationRef.current.set(item.conversationId, optimistic);
+    optimisticPendingByConversationRef.current.set(item.conversationId, pendingTurn);
+    if (mountedRef.current && activeConversationIdRef.current === item.conversationId) {
+      optimisticMessagesRef.current = optimistic;
+      setMessages((current) => current.filter(({ id }) => !failureIds.has(id)));
+      pendingTurnActiveRef.current = true;
+      updatePendingPhase('thinking', acceptedAt);
+      setReconnectAttempt(0);
+    }
+    return transition;
+  }, [cacheOwner, localStore, updatePendingPhase]);
+
+  const settleAcceptedOutboxItem = useCallback(async (
+    item: HostedTurnOutboxItem,
+  ): Promise<'cancelled' | 'cleanup-pending' | 'settled'> => {
+    if (!localStore || !cacheOwner) return 'cleanup-pending';
+    try {
+      cleanupPendingAttachments(item);
+    } catch (error) {
+      await localStore.upsertPendingEnqueueIfActive(cacheOwner, {
+        ...item,
+        lastError: serverFailure(error, isChinese),
+        nextAttemptAt: Date.now() + HOSTED_TURN_RETRY_DELAY_MS,
+      });
+      return 'cleanup-pending';
+    }
+    if (await localStore.removePendingEnqueueIfActive(cacheOwner, item.input.requestId)) {
+      return 'settled';
+    }
+    const cancelled = (await localStore.readPendingEnqueues(cacheOwner)).find(
+      ({ input }) => input.requestId === item.input.requestId,
+    );
+    if (cancelled?.cancelledAt) {
+      void deliverPendingCancellation(cancelled);
+      return 'cancelled';
+    }
+    return 'settled';
+  }, [cacheOwner, deliverPendingCancellation, isChinese, localStore]);
 
   const replayPendingEnqueues = useCallback(async () => {
     if (!cloudApi || !localStore || !cacheOwner) return;
     if (outboxReplayRef.current) return outboxReplayRef.current;
     const replay = (async () => {
       const pending = await localStore.readPendingEnqueues(cacheOwner);
-      for (const pendingItem of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
-        try {
-          const { item, response } = await deliverPendingEnqueue(pendingItem);
-          await localStore.removePendingEnqueue(cacheOwner, item.input.requestId);
-          cleanupPendingAttachments(item);
-          if (!activeConversationIdRef.current) {
-            activeConversationIdRef.current = item.conversationId;
-            setActiveConversationId(item.conversationId);
+      try {
+        for (const pendingItem of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
+          if (pendingItem.cancelledAt) {
+            if (!hostedTurnOutboxReady(pendingItem)) break;
+            if (pendingItem.purpose === 'hosted-turn-cancel') {
+              const delivered = await deliverPendingCancellation(pendingItem);
+              if (!delivered) break;
+              continue;
+            }
+            const repaired = await finalizePendingSend(
+              pendingChatSendFromOutbox(pendingItem, cacheOwner),
+              isChinese ? '任务已取消。' : 'Task cancelled.',
+              'cancelled',
+              'cancelled',
+              isChinese ? '已取消' : 'Cancelled',
+            );
+            if (!repaired) continue;
+            const delivered = await deliverPendingCancellation(pendingItem);
+            if (!delivered) break;
+            continue;
           }
-          if (activeConversationIdRef.current === item.conversationId) {
-            if (response.accepted) {
+          if (!hostedTurnOutboxReady(pendingItem)) break;
+          if (pendingItem.deliveryTerminalAt) {
+            await finalizePendingSend(
+              pendingChatSendFromOutbox(pendingItem, cacheOwner),
+              pendingItem.lastError || (isChinese ? '消息发送失败。' : 'Message delivery failed.'),
+              'failed',
+              'send-failed',
+              isChinese ? '连接错误' : 'Connection error',
+              pendingItem,
+            );
+            const settled = await settleAcceptedOutboxItem(pendingItem);
+            if (settled === 'cleanup-pending') break;
+            continue;
+          }
+          if (pendingItem.deliveryAcceptedAt) {
+            const acceptedMutation = await acceptPendingOutboxItem(pendingItem);
+            if (!acceptedMutation.updated || !acceptedMutation.item) {
+              if (acceptedMutation.item?.cancelledAt) {
+                await deliverPendingCancellation(acceptedMutation.item);
+              }
+              continue;
+            }
+            activeHostedTurnIdRef.current = acceptedMutation.item.input.turnId;
+            beginOptimisticHostedTurn(
+              acceptedMutation.item.conversationId,
+              acceptedMutation.item.input.turnId,
+            );
+            setActiveHostedTurnId(acceptedMutation.item.input.turnId);
+            setHostedRunning(true);
+            setSending(true);
+            const settled = await settleAcceptedOutboxItem(acceptedMutation.item);
+            if (settled === 'cleanup-pending') break;
+            continue;
+          }
+          const claimKey = hostedTurnDeliveryClaimKey(cacheOwner, pendingItem.input.requestId);
+          const claim = hostedTurnDeliveryClaims.tryAcquire(claimKey);
+          if (!claim) break;
+          try {
+            const { item, response } = await deliverPendingEnqueue(pendingItem);
+            const responseFailure = hostedTurnResponseFailure(response);
+            if (responseFailure) {
+              const outcome = await handleOutboxFailure(item, responseFailure);
+              if (outcome === 'retry' || outcome === 'retry-background') break;
+              continue;
+            }
+            const acceptedItem = {
+              ...item,
+              deliveryAcceptedAt: Date.now(),
+              lastError: '',
+              nextAttemptAt: 0,
+            };
+            const acceptedMutation = await acceptPendingOutboxItem(acceptedItem);
+            if (!acceptedMutation.updated || !acceptedMutation.item) {
+              const cancelled = acceptedMutation.item;
+              if (cancelled?.cancelledAt) await deliverPendingCancellation(cancelled);
+              continue;
+            }
+            if (!activeConversationIdRef.current) {
+              activeConversationIdRef.current = item.conversationId;
+              setActiveConversationId(item.conversationId);
+            }
+            if (activeConversationIdRef.current === item.conversationId) {
               activeHostedTurnIdRef.current = item.input.turnId;
               beginOptimisticHostedTurn(item.conversationId, item.input.turnId);
               setActiveHostedTurnId(item.input.turnId);
               setHostedRunning(true);
               setSending(true);
-            } else {
-              activeHostedTurnIdRef.current = '';
-              clearOptimisticHostedTurn();
-              setActiveHostedTurnId('');
-              setHostedRunning(false);
-              setSending(false);
+              const generation = ++conversationSyncGenerationRef.current;
+              await loadConversation(item.conversationId, generation);
             }
-            const generation = ++conversationSyncGenerationRef.current;
-            await loadConversation(item.conversationId, generation);
+            const settled = await settleAcceptedOutboxItem(acceptedMutation.item);
+            if (settled === 'cleanup-pending') break;
+          } catch (error) {
+            if (error instanceof HostedTurnCancelledDuringDelivery) {
+              const cancelled = (await localStore.readPendingEnqueues(cacheOwner)).find(
+                ({ input }) => input.requestId === pendingItem.input.requestId,
+              );
+              if (cancelled?.cancelledAt) await deliverPendingCancellation(cancelled);
+              continue;
+            }
+            const failure = hostedTurnTransportFailure(error);
+            const outcome = await handleOutboxFailure(pendingItem, {
+              ...failure,
+              message: serverFailure(error, isChinese),
+            });
+            if (outcome === 'retry' || outcome === 'retry-background') break;
+          } finally {
+            hostedTurnDeliveryClaims.release(claimKey, claim);
           }
-        } catch {
-          // Preserve FIFO ordering; the same idempotency key is retried on the next foreground pass.
-          break;
         }
+      } finally {
+        cleanupUnreferencedPickerCacheFiles([
+          ...attachmentsRef.current,
+          ...pending.flatMap((item) => (item.pendingAttachments || []).flatMap((attachment) => (
+            attachment.sourceUri
+              ? [{ ownedTemporary: attachment.ownedTemporary, uri: attachment.sourceUri }]
+              : []
+          ))),
+        ]);
       }
     })();
     outboxReplayRef.current = replay;
@@ -756,13 +1295,18 @@ export function ChatPreviewPage({
       if (outboxReplayRef.current === replay) outboxReplayRef.current = null;
     }
   }, [
+    acceptPendingOutboxItem,
     beginOptimisticHostedTurn,
     cacheOwner,
     clearOptimisticHostedTurn,
     cloudApi,
     deliverPendingEnqueue,
+    deliverPendingCancellation,
+    handleOutboxFailure,
+    isChinese,
     loadConversation,
     localStore,
+    settleAcceptedOutboxItem,
   ]);
 
   const openConversation = useCallback(async (
@@ -808,17 +1352,64 @@ export function ChatPreviewPage({
     return loadConversation(conversationId, expectedGeneration);
   }, [applyConversation, cloudApi, loadConversation, profile]);
 
-  const loadConversationIndex = useCallback(async (preferredId = '') => {
-    if (!cloudApi) return;
+  const loadConversationIndex = useCallback(async (
+    preferredId = '',
+    signal?: AbortSignal,
+  ) => {
     const syncGeneration = ++conversationSyncGenerationRef.current;
     let localConversations = conversationIndexRef.current;
     let rememberedId = activeConversationIdRef.current;
-    if (localStore && cacheOwner && hydratedCacheOwnerRef.current !== cacheOwner) {
-      const cached = await localStore.read(cacheOwner);
+    const shouldHydrateCache = Boolean(
+      localStore && cacheOwner && hydratedCacheOwnerRef.current !== cacheOwner,
+    );
+    if (localStore && cacheOwner) {
+      const [cached, optimisticLedgers] = await Promise.all([
+        shouldHydrateCache ? localStore.read(cacheOwner) : Promise.resolve(null),
+        localStore.readOptimisticConversations(cacheOwner),
+      ]);
       if (syncGeneration !== conversationSyncGenerationRef.current) return;
-      hydratedCacheOwnerRef.current = cacheOwner;
+      if (shouldHydrateCache) hydratedCacheOwnerRef.current = cacheOwner;
+      const liveOptimisticLedgers = [
+        ...optimisticMessagesByConversationRef.current.entries(),
+      ].map(([conversationId, liveMessages]) => {
+        const pendingTurn = optimisticPendingByConversationRef.current.get(conversationId);
+        return {
+          conversationId,
+          messages: liveMessages.map(chatMessageToCollaborationMessage),
+          ...(pendingTurn ? { pendingTurn } : {}),
+          updatedAt: Math.max(
+            pendingTurn?.updatedAt || 0,
+            ...liveMessages.map((message) => message.updatedAt || message.createdAt || 0),
+          ),
+        };
+      });
+      const mergedOptimisticLedgers = mergeOptimisticConversationLedgers(
+        optimisticLedgers,
+        liveOptimisticLedgers,
+      );
+      optimisticMessagesByConversationRef.current = new Map(
+        mergedOptimisticLedgers.map((entry) => [
+          entry.conversationId,
+          conversationMessagesToView({
+            id: entry.conversationId,
+            messages: entry.messages,
+            profile,
+            title: optimisticConversationTitle(entry.messages, isChinese),
+          }, isChinese),
+        ]),
+      );
+      optimisticPendingByConversationRef.current = new Map(
+        mergedOptimisticLedgers.flatMap((entry) => (
+          entry.pendingTurn ? [[entry.conversationId, entry.pendingTurn] as const] : []
+        )),
+      );
       if (cached) {
-        localConversations = cached.conversations;
+        localConversations = mergeOptimisticConversationSummaries(
+          cached.conversations,
+          mergedOptimisticLedgers,
+          profile,
+          isChinese,
+        );
         rememberedId = cached.activeConversationId;
         conversationIndexRef.current = localConversations;
         setConversations(localConversations);
@@ -828,13 +1419,59 @@ export function ChatPreviewPage({
         );
         const immediate = localConversations.find(({ id }) => id === immediateId);
         if (immediate && isCompleteConversation(immediate)) applyConversation(immediate);
+      } else if (shouldHydrateCache && mergedOptimisticLedgers.length) {
+        localConversations = mergeOptimisticConversationSummaries(
+          [],
+          mergedOptimisticLedgers,
+          profile,
+          isChinese,
+        );
+        rememberedId = localConversations[0]?.id || '';
+        conversationIndexRef.current = localConversations;
+        setConversations(localConversations);
+        const immediate = localConversations[0];
+        if (immediate) applyConversation(immediate);
       }
     }
-    const result = await cloudApi.getUnifiedConversations(profile);
+    if (!cloudApi) {
+      const activeId = resolveConversationId(
+        preferredId || rememberedId || localConversations[0]?.id || '',
+        localConversations,
+      );
+      const active = localConversations.find(({ id }) => id === activeId);
+      if (active) {
+        applyConversation(active);
+      } else {
+        activeConversationIdRef.current = '';
+        activeHostedTurnIdRef.current = '';
+        setActiveConversationId('');
+        setActiveHostedTurnId('');
+        setMessages([]);
+        setHostedRunning(false);
+        setSending(false);
+      }
+      return;
+    }
+    const result = await cloudApi.getUnifiedConversations(profile, signal);
     if (syncGeneration !== conversationSyncGenerationRef.current) return;
     const reconciliation = reconcileConversationCache(
       localConversations,
       result.conversations,
+    );
+    const selectableConversations = mergeOptimisticConversationSummaries(
+      reconciliation.conversations,
+      [...optimisticMessagesByConversationRef.current.entries()].map(
+        ([conversationId, optimisticMessages]) => ({
+          conversationId,
+          messages: optimisticMessages.map(chatMessageToCollaborationMessage),
+          updatedAt: Math.max(
+            0,
+            ...optimisticMessages.map((message) => message.updatedAt || message.createdAt || 0),
+          ),
+        }),
+      ),
+      profile,
+      isChinese,
     );
     const requestedActiveId = resolveConversationId(
       preferredId
@@ -842,7 +1479,7 @@ export function ChatPreviewPage({
         || rememberedId
         || reconciliation.conversations[0]?.id
         || '',
-      reconciliation.conversations,
+      selectableConversations,
     );
     const missingIds = new Set<string>();
     const downloaded = await mapWithConcurrency(
@@ -850,7 +1487,7 @@ export function ChatPreviewPage({
       1,
       async (id) => {
         try {
-          return (await cloudApi.getConversation(id)).conversation;
+          return (await cloudApi.getConversation(id, signal)).conversation;
         } catch (error) {
           // The index and detail endpoints are eventually consistent.  A
           // deleted row must not blank the whole history or trigger a toast.
@@ -863,9 +1500,23 @@ export function ChatPreviewPage({
       },
     );
     if (syncGeneration !== conversationSyncGenerationRef.current) return;
-    const synchronized = mergeDownloadedConversations(
-      reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
-      downloaded.filter((conversation): conversation is SingleConversation => conversation !== null),
+    const synchronized = mergeOptimisticConversationSummaries(
+      mergeDownloadedConversations(
+        reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
+        downloaded.filter((conversation): conversation is SingleConversation => conversation !== null),
+      ),
+      [...optimisticMessagesByConversationRef.current.entries()].map(
+        ([conversationId, optimisticMessages]) => ({
+          conversationId,
+          messages: optimisticMessages.map(chatMessageToCollaborationMessage),
+          updatedAt: Math.max(
+            0,
+            ...optimisticMessages.map((message) => message.updatedAt || message.createdAt || 0),
+          ),
+        }),
+      ),
+      profile,
+      isChinese,
     );
     const activeId = resolveConversationId(
       requestedActiveId || synchronized[0]?.id || '',
@@ -878,9 +1529,9 @@ export function ChatPreviewPage({
       clearOptimisticHostedTurn();
       setActiveConversationId('');
       setActiveHostedTurnId('');
-      setMessages([]);
+      setMessages([...optimisticMessagesRef.current]);
       setHostedRunning(false);
-      setSending(false);
+      if (!pendingTurnActiveRef.current) setSending(false);
       return;
     }
     await openConversation(activeId, syncGeneration);
@@ -890,18 +1541,44 @@ export function ChatPreviewPage({
     clearOptimisticHostedTurn,
     cloudApi,
     commitConversationIndex,
+    isChinese,
     localStore,
     openConversation,
     profile,
   ]);
 
   useEffect(() => {
-    if (!cloudApi) return undefined;
+    conversationSyncGenerationRef.current += 1;
+    hydratedCacheOwnerRef.current = '';
+    conversationIndexRef.current = [];
+    optimisticMessagesByConversationRef.current = new Map();
+    optimisticPendingByConversationRef.current = new Map();
+    optimisticMessagesRef.current = [];
+    activeConversationIdRef.current = '';
+    activeHostedTurnIdRef.current = '';
+    clearOptimisticHostedTurn();
+    resetPendingStateMachine();
+    setConversations([]);
+    setActiveConversationId('');
+    setActiveHostedTurnId('');
+    setMessages([]);
+    setHostedRunning(false);
+    setSending(false);
+  }, [cacheOwner, clearOptimisticHostedTurn, resetPendingStateMachine]);
+
+  useEffect(() => {
     let disposed = false;
     const requestedConversationId = preferredConversationId || notificationTarget?.conversationId;
+    const refreshConversationIndex = (preferredId = '') => (
+      conversationIndexRefreshGateRef.current.run(() => withAbortableDeadline(
+        (signal) => loadConversationIndex(preferredId, signal),
+        HOSTED_TURN_REQUEST_TIMEOUT_MS,
+        'Hermes conversation index refresh timed out',
+      ))
+    );
     void replayPendingEnqueues()
       .catch(() => undefined)
-      .then(() => loadConversationIndex(requestedConversationId))
+      .then(() => refreshConversationIndex(requestedConversationId))
       .then(() => {
         if (!disposed && preferredConversationId) {
           onPreferredConversationConsumed?.(preferredConversationId);
@@ -914,22 +1591,29 @@ export function ChatPreviewPage({
       if (state !== 'active') return;
       void replayPendingEnqueues()
         .catch(() => undefined)
-        .then(() => loadConversationIndex(activeConversationIdRef.current))
+        .then(() => refreshConversationIndex(activeConversationIdRef.current))
         .catch((error) => {
           if (!disposed) notify(serverFailure(error, isChinese));
         });
     });
-    const indexTimer = setInterval(() => {
-      if (AppState.currentState !== 'active') return;
-      void replayPendingEnqueues()
-        .catch(() => undefined)
-        .then(() => loadConversationIndex(activeConversationIdRef.current))
-        .catch(() => {});
-    }, 15_000);
+    let indexTimer: ReturnType<typeof setTimeout> | null = null;
+    let indexRefreshStopped = false;
+    const refreshIndex = async () => {
+      if (indexRefreshStopped) return;
+      if (AppState.currentState === 'active') {
+        await replayPendingEnqueues().catch(() => undefined);
+        await refreshConversationIndex(activeConversationIdRef.current).catch(() => undefined);
+      }
+      if (!indexRefreshStopped) {
+        indexTimer = setTimeout(() => void refreshIndex(), 15_000);
+      }
+    };
+    indexTimer = setTimeout(() => void refreshIndex(), 15_000);
     return () => {
       disposed = true;
+      indexRefreshStopped = true;
       appState.remove();
-      clearInterval(indexTimer);
+      if (indexTimer) clearTimeout(indexTimer);
     };
   }, [
     cloudApi,
@@ -947,29 +1631,59 @@ export function ChatPreviewPage({
     if (!cloudApi || !activeConversationId || !hostedRunning) {
       return undefined;
     }
-    const interval = setInterval(() => {
-      if (AppState.currentState !== 'active') return;
-      const generation = ++conversationSyncGenerationRef.current;
-      void loadConversation(activeConversationId, generation).catch(() => {});
-    }, 1_000);
-    return () => clearInterval(interval);
+    let disposed = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    conversationSyncGenerationRef.current += 1;
+    const poll = async () => {
+      if (disposed) return;
+      if (AppState.currentState === 'active') {
+        const generation = conversationSyncGenerationRef.current;
+        await withAbortableDeadline(
+          (signal) => loadConversation(activeConversationId, generation, signal),
+          HOSTED_TURN_REQUEST_TIMEOUT_MS,
+          'Hermes conversation polling timed out',
+        ).catch(() => undefined);
+      }
+      if (!disposed) timer = setTimeout(() => void poll(), 1_000);
+    };
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [activeConversationId, cloudApi, hostedRunning, loadConversation]);
 
-  useEffect(() => () => {
-    clearOptimisticHostedTurn();
-    if (pendingScrollFrame.current !== null) {
-      cancelAnimationFrame(pendingScrollFrame.current);
-    }
-    if (pendingSendFrame.current !== null) {
-      cancelAnimationFrame(pendingSendFrame.current);
-    }
-    pendingAttachmentCleanup.current?.();
-    pendingNavigationCleanup.current?.();
-  }, [clearOptimisticHostedTurn]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      cleanupAttachmentSources(attachmentsRef.current);
+      attachmentsRef.current = [];
+      clearOptimisticHostedTurn();
+      if (pendingScrollFrame.current !== null) {
+        cancelAnimationFrame(pendingScrollFrame.current);
+      }
+      pendingAttachmentCleanup.current?.();
+      pendingNavigationCleanup.current?.();
+    };
+  }, [cleanupAttachmentSources, clearOptimisticHostedTurn]);
+
+  useEffect(() => {
+    if (attachmentOwnerRef.current === cacheOwner) return;
+    cleanupAttachmentSources(attachmentsRef.current);
+    attachmentOwnerRef.current = cacheOwner;
+    updateAttachments([]);
+  }, [cacheOwner, cleanupAttachmentSources, updateAttachments]);
 
   const createConversation = async () => {
     autoFollowStreamRef.current = true;
     clearOptimisticHostedTurn();
+    optimisticMessagesRef.current = [];
+    resetPendingStateMachine();
+    contentRef.current = '';
+    setContent('');
+    cleanupAttachmentSources(attachmentsRef.current);
+    updateAttachments([]);
     if (cloudApi) {
       try {
         const result = await cloudApi.createConversation(profile, isChinese ? '新对话' : 'New conversation');
@@ -980,9 +1694,6 @@ export function ChatPreviewPage({
       return;
     }
     setMessages([]);
-    contentRef.current = '';
-    setContent('');
-    setAttachments([]);
     notify(isChinese ? '已新建会话' : 'New conversation created');
   };
 
@@ -991,8 +1702,13 @@ export function ChatPreviewPage({
     const trimmed = currentContent.trim();
     if ((!trimmed && attachmentCount === 0) || sending) return;
     const pendingAttachments = [...attachments];
-    const sendingConversationId = activeConversationIdRef.current;
-    if (sendingConversationId) {
+    const hadActiveConversation = Boolean(activeConversationIdRef.current);
+    const userMessageCreatedAt = Date.now();
+    const userMessageId = uniqueTurnId('user');
+    const hostedTurnId = uniqueTurnId('hosted');
+    const sendingConversationId = activeConversationIdRef.current
+      || `chat_${safeOutboxPathComponent(userMessageId).slice(0, 251)}`;
+    if (hadActiveConversation) {
       hostedTurnVisibilityFailuresRef.current.delete(sendingConversationId);
       setMessages((current) => current.filter(
         ({ id }) => !id.startsWith('hosted-sync-failed-'),
@@ -1004,8 +1720,6 @@ export function ChatPreviewPage({
       )?.profile?.trim()
       || profile
     );
-    const userMessageCreatedAt = Date.now();
-    const userMessageId = uniqueTurnId('user');
     const userMessage: ChatMessage = {
       avatarRole: 'user',
       content: trimmed || (isChinese ? `已添加 ${attachmentCount} 个附件` : `${attachmentCount} attachments`),
@@ -1017,7 +1731,51 @@ export function ChatPreviewPage({
       status: 'completed',
       updatedAt: userMessageCreatedAt,
     };
+    const sendGeneration = ++sendOperationGenerationRef.current;
+    const sendKey = hostedTurnDeliveryClaimKey(cacheOwner, userMessageId);
+    cancelledPendingSendKeys.delete(sendKey);
+    const isCurrentSend = () => (
+      pendingTurnActiveRef.current
+      && sendOperationGenerationRef.current === sendGeneration
+      && !cancelledPendingSendKeys.has(sendKey)
+    );
+    pendingChatSendRef.current = {
+      conversationId: sendingConversationId,
+      key: sendKey,
+      userMessage,
+    };
     autoFollowStreamRef.current = true;
+    activeConversationIdRef.current = sendingConversationId;
+    setActiveConversationId(sendingConversationId);
+    const durableOptimisticMessages = upsertChatMessage(
+      optimisticMessagesByConversationRef.current.get(sendingConversationId) || [],
+      userMessage,
+    );
+    const pendingTurnState = (
+      phase: PendingPhase,
+      attempt: number,
+      phaseStartedAt: number,
+      lastError = '',
+    ): OptimisticPendingTurn => ({
+      attempt,
+      ...(lastError ? { lastError } : {}),
+      phase,
+      phaseStartedAt,
+      turnId: hostedTurnId,
+      updatedAt: Date.now(),
+      userMessageId,
+    });
+    if (!hadActiveConversation) {
+      commitConversationIndex([{
+        created_at: userMessageCreatedAt,
+        id: sendingConversationId,
+        message_count: 1,
+        messages: [chatMessageToCollaborationMessage(userMessage)],
+        profile: conversationProfile,
+        title: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
+        updated_at: userMessageCreatedAt,
+      }, ...conversationIndexRef.current], sendingConversationId);
+    }
     setMessages((current) => [...current, userMessage]);
     let composerCleared = false;
     const clearQueuedComposer = () => {
@@ -1025,309 +1783,290 @@ export function ChatPreviewPage({
       composerCleared = true;
       contentRef.current = '';
       setContent('');
-      setAttachments([]);
+      updateAttachments([]);
     };
     clearQueuedComposer();
     setSending(true);
+    pendingTurnActiveRef.current = true;
     firstTokenAtRef.current = 0;
-    retriedTurnIdsRef.current = new Set();
-    hiddenMessageIdsRef.current = new Set();
-    retryInFlightRef.current = false;
     setReconnectAttempt(0);
-    updatePendingPhase('thinking');
-    retryStateRef.current = {
-      ...createIdleRetryState(),
-      active: true,
-      deadline: userMessageCreatedAt + RECONNECT_WINDOW_MS,
-      messageContent: userMessage.content,
-      profile: conversationProfile,
+    updatePendingPhase('thinking', userMessageCreatedAt);
+    const plannedAttachments = planPendingAttachments(
+      cacheOwner,
+      userMessageId,
+      pendingAttachments,
+    );
+    const serverUserMessage: CollaborationMessage = {
+      content: userMessage.content,
+      created_at: userMessageCreatedAt,
+      id: userMessageId,
+      kind: 'message',
+      meta: { attachments: [] },
+      name: isChinese ? '你' : 'You',
+      role: 'user',
+      sender_id: 'account-owner',
+      sender_name: isChinese ? '你' : 'You',
+      status: 'completed',
+      updated_at: userMessageCreatedAt,
     };
-    const configurationErrorId = `model-configuration-${activeConversationIdRef.current || 'new'}`;
-    if (cloudApi && client) {
-      try {
-        const modelConfiguration = await withDeadline(
-          cloudApi.getModels(conversationProfile),
-          MODEL_CONFIGURATION_TIMEOUT_MS,
-          isChinese
-            ? '模型配置检查超时，请检查网络后重试。'
-            : 'The model configuration check timed out. Check the network and try again.',
-        );
-        const configurationError = chatModelConfigurationError(
-          modelConfiguration,
-          isChinese,
-        );
-        if (configurationError) {
-          const failedAt = Date.now();
-          setMessages((current) => upsertChatMessage(current, {
-            avatarRole: 'hermes',
-            content: configurationError,
-            createdAt: failedAt,
-            durationMs: 0,
-            id: configurationErrorId,
-            name: 'Hermes Agent',
-            role: 'assistant',
-            roleLabel: isChinese ? '配置错误' : 'Configuration error',
-            roleStage: 'chat',
-            status: 'failed',
-            updatedAt: failedAt,
-          }));
-          notify(configurationError);
-          setSending(false);
-          return;
-        }
-        setMessages((current) => current.filter(({ id }) => id !== configurationErrorId));
-      } catch (error) {
-        const failure = serverFailure(error, isChinese);
-        const failedAt = Date.now();
-        setMessages((current) => upsertChatMessage(current, {
-          avatarRole: 'hermes',
-          content: failure,
-          createdAt: failedAt,
-          durationMs: 0,
-          id: configurationErrorId,
-          name: 'Hermes Agent',
-          role: 'assistant',
-          roleLabel: isChinese ? '配置检查失败' : 'Configuration check failed',
-          roleStage: 'chat',
-          status: 'failed',
-          updatedAt: failedAt,
-        }));
-        notify(failure);
-        setSending(false);
-        return;
-      }
-    }
-    if (!cloudApi || !client) {
-      const failedAt = Date.now();
-      setMessages((current) => upsertChatMessage(current, {
-        avatarRole: 'hermes',
-        completedAt: failedAt,
-        content: isChinese
-          ? '当前没有可用的 Hermes 服务器连接，请重新登录后重试。'
-          : 'No Hermes server connection is available. Sign in again and try again.',
-        createdAt: failedAt,
-        durationMs: 0,
-        id: `connection-unavailable-${userMessageId}`,
-        name: 'Hermes Agent',
-        role: 'assistant',
-        roleLabel: isChinese ? '连接错误' : 'Connection error',
-        roleStage: 'chat',
-        status: 'failed',
-        updatedAt: failedAt,
-      }));
-      setSending(false);
-      return;
-    }
-
+    const enqueueInput: HostedTurnEnqueueInput = {
+      attachmentContext: '',
+      attachmentIds: [],
+      deliveryContext: '由服务端意图路由判断是否需要交付文件；需要时上传账户云端并在会话中返回。',
+      message: serverUserMessage,
+      profiles: [conversationProfile],
+      recentMessages: [...messages, userMessage].slice(-12).map((message) => ({
+        content: message.content,
+        role: message.role,
+      })),
+      requestId: userMessageId,
+      turnId: hostedTurnId,
+    };
     let enqueueAcknowledged = false;
     let hostedAccepted = false;
     let enqueuePersisted = false;
-    let enqueueRejection: { code: string; message: string } | null = null;
-    let enteringReconnect = false;
-    const hostedTurnId = uniqueTurnId('hosted');
-    let queuedItem: HostedTurnOutboxItem | null = null;
+    let deliveryRetryScheduled = false;
+    let attachmentSourcesReleased = false;
+    let queuedItem: HostedTurnOutboxItem | null = {
+      attempts: 0,
+      conversationId: sendingConversationId,
+      conversationPending: !hadActiveConversation,
+      conversationProfile,
+      conversationTitle: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
+      input: enqueueInput,
+      pendingAttachments: plannedAttachments,
+      queuedAt: userMessageCreatedAt,
+    };
+    let deliveryClaim: symbol | null = null;
+    pendingChatSendRef.current = {
+      conversationId: sendingConversationId,
+      key: sendKey,
+      queuedItem,
+      userMessage,
+    };
     try {
-      let conversationId = activeConversationIdRef.current
-        || `chat_${safeOutboxPathComponent(userMessageId).slice(0, 251)}`;
-      const conversationPending = !activeConversationIdRef.current;
-      const durableAttachments = await persistPendingAttachments(
-        userMessageId,
-        pendingAttachments,
+      if (!localStore || !cacheOwner) {
+        throw new Error('Durable hosted-turn outbox is unavailable');
+      }
+      // The outbox intent is the first awaited write. A process kill at any
+      // later point can therefore reconstruct both the user message and every
+      // planned attachment path without inventing a second request id.
+      const initialPendingTurn = pendingTurnState('thinking', 0, userMessageCreatedAt);
+      const initialization = await localStore.initializePendingEnqueue(
+        cacheOwner,
+        queuedItem,
+        durableOptimisticMessages.map(chatMessageToCollaborationMessage),
+        initialPendingTurn,
       );
-
-      const uploaded: Record<string, unknown>[] = [];
-      const filesContext = attachmentContext(uploaded);
-      const serverUserMessage: CollaborationMessage = {
-        content: userMessage.content,
-        created_at: userMessageCreatedAt,
-        id: userMessageId,
-        kind: 'message',
-        meta: { attachments: uploaded },
-        name: isChinese ? '你' : 'You',
-        role: 'user',
-        sender_id: 'account-owner',
-        sender_name: isChinese ? '你' : 'You',
-        status: 'completed',
-        updated_at: userMessageCreatedAt,
-      };
-      const enqueueInput: HostedTurnEnqueueInput = {
-        attachmentContext: filesContext,
-        attachmentIds: uploaded.flatMap((attachment) => (
-          typeof attachment.id === 'string' ? [attachment.id] : []
-        )),
-        deliveryContext: '由服务端意图路由判断是否需要交付文件；需要时上传账户云端并在会话中返回。',
-        message: serverUserMessage,
-        profiles: [conversationProfile],
-        recentMessages: [...messages, userMessage].slice(-12).map((message) => ({
-          content: message.content,
-          role: message.role,
-        })),
-        requestId: userMessageId,
-        turnId: hostedTurnId,
-      };
-      queuedItem = {
-        conversationId,
-        conversationPending,
-        conversationProfile,
-        conversationTitle: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
-        input: enqueueInput,
+      if (!initialization.updated || !initialization.item) return;
+      queuedItem = initialization.item;
+      enqueuePersisted = true;
+      if (!isCurrentSend()) return;
+      optimisticMessagesByConversationRef.current.set(
+        sendingConversationId,
+        durableOptimisticMessages,
+      );
+      optimisticPendingByConversationRef.current.set(sendingConversationId, initialPendingTurn);
+      optimisticMessagesRef.current = durableOptimisticMessages;
+      if (!cloudApi || !client) {
+        await handleOutboxFailure(queuedItem, {
+          certainty: 'definitive',
+          code: 'HERMES_CONNECTION_UNAVAILABLE',
+          message: isChinese
+            ? '当前没有可用的 Hermes 服务器连接，请重新登录后重试。'
+            : 'No Hermes server connection is available. Sign in again and try again.',
+          retryable: false,
+        });
+        return;
+      }
+      let conversationId = sendingConversationId;
+      const durableAttachments = await persistPendingAttachments(
+        cacheOwner,
+        userMessageId,
+        plannedAttachments,
+      );
+      const durableMutation = await localStore.upsertPendingEnqueueIfActive(cacheOwner, {
+        ...queuedItem,
         pendingAttachments: durableAttachments,
-        queuedAt: userMessageCreatedAt,
-      };
+      });
+      if (!durableMutation.updated || !durableMutation.item) return;
+      queuedItem = durableMutation.item;
+      cleanupAttachmentSources(pendingAttachments);
+      attachmentSourcesReleased = true;
+      deliveryClaim = hostedTurnDeliveryClaims.tryAcquire(sendKey);
+      if (!deliveryClaim) {
+        deliveryRetryScheduled = true;
+        return;
+      }
+      pendingChatSendRef.current = { conversationId, key: sendKey, queuedItem, userMessage };
       if (localStore && cacheOwner) {
-        await localStore.upsertPendingEnqueue(cacheOwner, queuedItem);
-        enqueuePersisted = true;
         clearQueuedComposer();
         const delivery = await deliverPendingEnqueue(queuedItem);
         queuedItem = delivery.item;
         conversationId = queuedItem.conversationId;
         enqueueAcknowledged = true;
         hostedAccepted = delivery.response.accepted;
-        if (!hostedAccepted) {
-          enqueueRejection = {
-            code: delivery.response.error?.code ?? '',
-            message: delivery.response.error?.message ?? '',
-          };
-        }
-      } else {
-        if (conversationPending) {
-          await cloudApi.createConversation(
-            conversationProfile,
-            queuedItem.conversationTitle,
-            conversationId,
+        if (!isCurrentSend()) {
+          const cancelled = await localStore.cancelPendingEnqueue(
+            cacheOwner,
+            userMessageId,
+            queuedItem,
           );
+          if (cancelled) void deliverPendingCancellation(cancelled);
+          return;
         }
-        const fallbackAttachments = [...durableAttachments];
-        for (let index = 0; index < fallbackAttachments.length; index += 1) {
-          const attachment = fallbackAttachments[index];
-          const result = await cloudApi.uploadConversationAttachment(
-            conversationId,
-            {
-              mimeType: attachment.mimeType,
-              name: attachment.name,
-              uri: attachment.uri,
-            },
-            {
-              messageId: userMessageId,
-              profile: conversationProfile,
-              turnId: hostedTurnId,
-              uploadId: attachment.id,
-            },
-          );
-          if (!isRecord(result.attachment)) {
-            throw new Error('Attachment upload was not persisted');
+        const responseFailure = hostedTurnResponseFailure(delivery.response);
+        if (responseFailure) {
+          const outcome = await handleOutboxFailure(queuedItem, responseFailure);
+          deliveryRetryScheduled = outcome === 'retry';
+          if (deliveryRetryScheduled) {
+            setSending(true);
           }
-          fallbackAttachments[index] = { ...attachment, uploaded: result.attachment };
-        }
-        queuedItem = hydrateOutboxInput({
-          ...queuedItem,
-          conversationPending: false,
-          pendingAttachments: fallbackAttachments,
-        });
-        const response = await cloudApi.enqueueHostedTurn(conversationId, queuedItem.input);
-        enqueueAcknowledged = true;
-        hostedAccepted = response.accepted;
-        if (!hostedAccepted) {
-          enqueueRejection = {
-            code: response.error?.code ?? '',
-            message: response.error?.message ?? '',
-          };
+          return;
         }
       }
       clearQueuedComposer();
-      if (enqueuePersisted && localStore && cacheOwner) {
-        await localStore.removePendingEnqueue(cacheOwner, userMessageId).catch(() => undefined);
+      queuedItem = {
+        ...queuedItem,
+        deliveryAcceptedAt: Date.now(),
+        lastError: '',
+        nextAttemptAt: 0,
+      };
+      const acceptedMutation = await acceptPendingOutboxItem(queuedItem);
+      if (!acceptedMutation.updated || !acceptedMutation.item) {
+        if (acceptedMutation.item?.cancelledAt) {
+          void deliverPendingCancellation(acceptedMutation.item);
+        }
+        return;
       }
-      if (queuedItem) cleanupPendingAttachments(queuedItem);
+      queuedItem = acceptedMutation.item;
       activeConversationIdRef.current = conversationId;
       setActiveConversationId(conversationId);
       if (activeConversationIdRef.current === conversationId) {
-        if (hostedAccepted) {
-          activeHostedTurnIdRef.current = hostedTurnId;
-          beginOptimisticHostedTurn(conversationId, hostedTurnId);
-          setActiveHostedTurnId(hostedTurnId);
-          setHostedRunning(true);
-          retryStateRef.current = {
-            ...retryStateRef.current,
-            active: true,
-            attachmentContext: enqueueInput.attachmentContext ?? '',
-            attachmentIds: enqueueInput.attachmentIds ?? [],
-            conversationId,
-            recentMessages: enqueueInput.recentMessages,
-          };
-        } else {
-          activeHostedTurnIdRef.current = '';
-          clearOptimisticHostedTurn();
-          setActiveHostedTurnId('');
-          const rejectionRetryable = enqueueRejection !== null
-            && turnErrorCodeRetryable(enqueueRejection.code, enqueueRejection.message);
-          if (rejectionRetryable) {
-            // Transient rejection (e.g. model not configured): enter the reconnect loop.
-            retryStateRef.current = {
-              ...retryStateRef.current,
-              active: true,
-              attachmentContext: enqueueInput.attachmentContext ?? '',
-              attachmentIds: enqueueInput.attachmentIds ?? [],
-              conversationId,
-              recentMessages: enqueueInput.recentMessages,
-            };
-            setHostedRunning(true);
-            setSending(true);
-            enteringReconnect = true;
-            void attemptReconnect();
-          } else {
-            setHostedRunning(false);
-            retryStateRef.current.active = false;
-          }
-        }
+        activeHostedTurnIdRef.current = hostedTurnId;
+        beginOptimisticHostedTurn(conversationId, hostedTurnId);
+        setActiveHostedTurnId(hostedTurnId);
+        setHostedRunning(true);
+        pendingTurnActiveRef.current = true;
+        pendingChatSendRef.current = null;
+        cancelledPendingSendKeys.delete(sendKey);
+        await settleAcceptedOutboxItem(queuedItem);
         const generation = ++conversationSyncGenerationRef.current;
         await loadConversation(conversationId, generation);
       }
     } catch (error) {
+      if (!isCurrentSend() || error instanceof HostedTurnCancelledDuringDelivery) {
+        if (localStore && cacheOwner && queuedItem) {
+          const cancelled = await localStore.cancelPendingEnqueue(
+            cacheOwner,
+            userMessageId,
+            queuedItem,
+          );
+          if (cancelled) void deliverPendingCancellation(cancelled);
+        }
+        return;
+      }
       if (enqueuePersisted && !enqueueAcknowledged) {
-        notify(isChinese
-          ? '消息已保存在待发送队列，连接恢复后会自动继续。'
-          : 'Message queued and will continue automatically when the connection returns.');
-        void replayPendingEnqueues();
+        const transportFailure = hostedTurnTransportFailure(error);
+        const outcome = await handleOutboxFailure(
+          queuedItem || pendingChatSendRef.current?.queuedItem || {
+            conversationId: sendingConversationId,
+            input: {
+              message: chatMessageToCollaborationMessage(userMessage),
+              recentMessages: [],
+              requestId: userMessageId,
+              turnId: hostedTurnId,
+            },
+            queuedAt: userMessageCreatedAt,
+          },
+          {
+            ...transportFailure,
+            message: serverFailure(error, isChinese),
+          },
+        );
+        deliveryRetryScheduled = outcome === 'retry';
+        if (deliveryRetryScheduled) {
+          notify(isChinese
+            ? '消息已保存在待发送队列，将在一分钟后自动重连。'
+            : 'Message queued. Hermes will retry in one minute.');
+        }
       } else if (!enqueueAcknowledged) {
-        if (queuedItem) cleanupPendingAttachments(queuedItem);
+        if (queuedItem) {
+          try {
+            cleanupPendingAttachments(queuedItem);
+          } catch {
+            // The user-visible terminal state must not depend on best-effort
+            // attachment garbage collection.
+          }
+        }
         const failure = serverFailure(error, isChinese);
-        notify(failure);
-        const failedAt = Date.now();
-        setMessages((current) => upsertChatMessage(current, {
-          ...userMessage,
-          status: 'failed',
-          updatedAt: failedAt,
-        }));
+        await finalizePendingSend(
+          pendingChatSendRef.current || {
+            conversationId: sendingConversationId,
+            key: sendKey,
+            queuedItem: queuedItem || undefined,
+            userMessage,
+          },
+          failure,
+          'failed',
+          'send-failed',
+          enqueuePersisted
+            ? (isChinese ? '连接错误' : 'Connection error')
+            : (isChinese ? '本地存储错误' : 'Local storage error'),
+        );
       } else {
-        notify(serverFailure(error, isChinese));
+        const failure = serverFailure(error, isChinese);
+        notify(isChinese
+          ? `任务已由服务器接管，当前同步暂时失败：${failure}`
+          : `The server is still running the task. Conversation sync failed temporarily: ${failure}`);
       }
     } finally {
-      if (!hostedAccepted && !enteringReconnect) {
+      if (!enqueuePersisted || attachmentSourcesReleased) {
+        cleanupAttachmentSources(pendingAttachments);
+      }
+      if (deliveryClaim) hostedTurnDeliveryClaims.release(sendKey, deliveryClaim);
+      if (!hostedAccepted && !deliveryRetryScheduled && isCurrentSend()) {
+        pendingTurnActiveRef.current = false;
         setHostedRunning(false);
         setSending(false);
       }
     }
   };
   const requestSend = () => {
-    if (pendingSendFrame.current !== null) {
-      cancelAnimationFrame(pendingSendFrame.current);
-    }
-    pendingSendFrame.current = requestAnimationFrame(() => {
-      pendingSendFrame.current = null;
-      void send();
-    });
+    if (
+      sending
+      || (!contentRef.current.trim() && attachmentsRef.current.length === 0)
+      || !sendSubmissionGateRef.current.tryAcquire()
+    ) return;
+    setSending(true);
+    void send().finally(() => sendSubmissionGateRef.current.release());
   };
 
   const cancelActiveHostedTurn = async () => {
     const conversationId = activeConversationIdRef.current;
-    if (!cloudApi || !conversationId || cancelHostedTurnInFlightRef.current) return;
+    if (cancelHostedTurnInFlightRef.current) return;
+    if (
+      pendingTurnActiveRef.current
+      && !hostedRunning
+      && !activeHostedTurnIdRef.current
+    ) {
+      await cancelPendingSend();
+      notify(isChinese ? '已取消任务' : 'Task cancelled');
+      return;
+    }
+    if (!cloudApi || !conversationId) return;
     cancelHostedTurnInFlightRef.current = true;
     setCancellingHostedTurn(true);
     try {
-      let turnId = activeHostedTurnIdRef.current;
+      let turnId = activeHostedTurnIdRef.current
+        || optimisticPendingByConversationRef.current.get(conversationId)?.turnId
+        || '';
       if (!turnId) {
-        const refreshed = await cloudApi.getConversation(conversationId);
+        const refreshed = await withAbortableDeadline(
+          (signal) => cloudApi.getConversation(conversationId, signal),
+          HOSTED_TURN_CANCEL_TIMEOUT_MS,
+          'Hermes hosted-turn lookup timed out',
+        );
         turnId = conversationRunningHostedTurnId(refreshed.conversation);
       }
       if (!turnId) {
@@ -1339,14 +2078,36 @@ export function ChatPreviewPage({
           setHostedRunning(false);
           setSending(false);
           resetPendingStateMachine();
+          await clearOptimisticPendingTurn(conversationId);
         }
         return;
       }
-      await cloudApi.cancelHostedTurn(
+      const cancelledAt = Date.now();
+      const cancellationItem: HostedTurnOutboxItem = {
+        attempts: 0,
+        cancelledAt,
         conversationId,
-        turnId,
-        isChinese ? '用户在 iOS 会话中取消任务' : 'Cancelled by the user in the iOS chat',
-      );
+        conversationPending: false,
+        conversationProfile: profile,
+        input: {
+          message: {
+            content: isChinese ? '取消任务' : 'Cancel task',
+            created_at: cancelledAt,
+            id: `cancel-${turnId}`,
+            name: isChinese ? '你' : 'You',
+            role: 'user',
+            status: 'completed',
+          },
+          recentMessages: [],
+          requestId: `cancel-${turnId}`,
+          turnId,
+        },
+        purpose: 'hosted-turn-cancel',
+        queuedAt: cancelledAt,
+      };
+      if (localStore && cacheOwner) {
+        await localStore.upsertPendingEnqueue(cacheOwner, cancellationItem);
+      }
       if (activeConversationIdRef.current === conversationId) {
         activeHostedTurnIdRef.current = '';
         clearOptimisticHostedTurn();
@@ -1354,13 +2115,17 @@ export function ChatPreviewPage({
         setHostedRunning(false);
         setSending(false);
         resetPendingStateMachine();
-        const generation = ++conversationSyncGenerationRef.current;
-        await loadConversation(conversationId, generation);
+        await clearOptimisticPendingTurn(conversationId);
       }
       notify(isChinese ? '已取消任务' : 'Task cancelled');
+      void deliverPendingCancellation(cancellationItem);
     } catch (error) {
       try {
-        const refreshed = await cloudApi.getConversation(conversationId);
+        const refreshed = await withAbortableDeadline(
+          (signal) => cloudApi.getConversation(conversationId, signal),
+          HOSTED_TURN_CANCEL_TIMEOUT_MS,
+          'Hermes hosted-turn reconciliation timed out',
+        );
         if (activeConversationIdRef.current === conversationId) {
           applyConversation(refreshed.conversation);
         }
@@ -1380,6 +2145,13 @@ export function ChatPreviewPage({
 
   const selectConversation = async (conversationId: string) => {
     if (!conversationId || conversationId === activeConversationIdRef.current) return;
+    if (
+      pendingTurnActiveRef.current
+      && !hostedRunning
+      && !activeHostedTurnIdRef.current
+    ) {
+      await cancelPendingSend();
+    }
     autoFollowStreamRef.current = true;
     activeHostedTurnIdRef.current = '';
     clearOptimisticHostedTurn();
@@ -1388,9 +2160,13 @@ export function ChatPreviewPage({
     setSending(false);
     setHostedRunning(false);
     resetPendingStateMachine();
+    optimisticMessagesRef.current = [
+      ...(optimisticMessagesByConversationRef.current.get(conversationId) || []),
+    ];
     setContent('');
     contentRef.current = '';
-    setAttachments([]);
+    cleanupAttachmentSources(attachmentsRef.current);
+    updateAttachments([]);
     const generation = ++conversationSyncGenerationRef.current;
     try {
       await openConversation(conversationId, generation);
@@ -1414,6 +2190,42 @@ export function ChatPreviewPage({
     }
   };
 
+  const branchFromMessage = useCallback(async (message: ChatMessage) => {
+    const conversationId = activeConversationIdRef.current;
+    if (
+      !cloudApi
+      || !conversationId
+      || !message.runtimeMessageId
+      || !message.runtimeSessionId
+    ) return;
+    if (sending || hostedRunning) {
+      notify(isChinese ? '当前任务结束后再创建分支。' : 'Wait for the current run before branching.');
+      return;
+    }
+    try {
+      const response = await cloudApi.forkConversationFromMessage(
+        conversationId,
+        message.id,
+        {
+          idempotencyKey: `ios-branch-${Date.now().toString(36)}-${message.id}`,
+          profile: message.profile || profile,
+        },
+      );
+      applyConversation(response.conversation);
+      notify(isChinese ? '已从所选消息创建分支。' : 'Created a branch from this message.');
+    } catch (error) {
+      notify(serverFailure(error, isChinese));
+    }
+  }, [
+    applyConversation,
+    cloudApi,
+    hostedRunning,
+    isChinese,
+    notify,
+    profile,
+    sending,
+  ]);
+
   const pickPhoto = async (camera: boolean) => {
     const result = camera
       ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1 })
@@ -1425,40 +2237,64 @@ export function ChatPreviewPage({
         });
     if (!result.canceled) {
       const stamp = Date.now();
-      setAttachments((current) => [
-        ...current,
-        ...result.assets.map((asset, index): ChatAttachment => ({
+      appendPickedAttachments(
+        result.assets.map((asset, index): ChatAttachment => ({
           id: `image-${stamp}-${index}-${asset.assetId ?? asset.uri}`,
           kind: 'image',
           mimeType: asset.mimeType,
-          name: asset.fileName ?? (isChinese ? `照片 ${current.length + index + 1}` : `Photo ${current.length + index + 1}`),
+          ownedTemporary: isUriInsideDirectory(asset.uri, Paths.cache.uri),
+          name: asset.fileName ?? (isChinese ? `照片 ${index + 1}` : `Photo ${index + 1}`),
           size: asset.fileSize,
           uri: asset.uri,
         })),
-      ]);
+      );
       setAttachmentsOpen(false);
     }
     keepLatestVisible(false);
   };
 
   const pickFile = async () => {
-    const result = await DocumentPicker.getDocumentAsync({ multiple: true });
+    const result = await DocumentPicker.getDocumentAsync({
+      copyToCacheDirectory: false,
+      multiple: true,
+    });
     if (!result.canceled) {
       const stamp = Date.now();
-      setAttachments((current) => [
-        ...current,
-        ...result.assets.map((asset, index): ChatAttachment => ({
+      appendPickedAttachments(
+        result.assets.map((asset, index): ChatAttachment => ({
           id: `file-${stamp}-${index}-${asset.uri}`,
           kind: asset.mimeType?.startsWith('image/') ? 'image' : 'file',
           mimeType: asset.mimeType,
+          ownedTemporary: isUriInsideDirectory(asset.uri, Paths.cache.uri),
           name: asset.name,
           size: asset.size,
           uri: asset.uri,
         })),
-      ]);
+      );
       setAttachmentsOpen(false);
     }
     keepLatestVisible(false);
+  };
+
+  const appendPickedAttachments = (candidates: readonly ChatAttachment[]) => {
+    const { accepted, rejected } = partitionAttachmentsBySize(
+      candidates,
+      (attachment) => {
+        try {
+          return new ExpoFile(attachment.uri).size;
+        } catch {
+          return 0;
+        }
+      },
+    );
+    if (accepted.length) updateAttachments((current) => [...current, ...accepted]);
+    if (rejected.length) {
+      cleanupAttachmentSources(rejected);
+      const limit = Math.floor(MAX_CONVERSATION_ATTACHMENT_BYTES / (1024 * 1024));
+      notify(isChinese
+        ? `单个附件不能超过 ${limit} MB：${rejected.map(({ name }) => name).join('、')}`
+        : `Each attachment must be ${limit} MB or smaller: ${rejected.map(({ name }) => name).join(', ')}`);
+    }
   };
 
   const showIOSAttachmentPicker = () => {
@@ -1532,7 +2368,8 @@ export function ChatPreviewPage({
   };
 
   const removeAttachment = (attachment: ChatAttachment) => {
-    setAttachments((current) => (
+    cleanupAttachmentSources([attachment]);
+    updateAttachments((current) => (
       current.filter((item) => item.id !== attachment.id)
     ));
   };
@@ -1578,16 +2415,20 @@ export function ChatPreviewPage({
         Paths.cache,
         `${stableStringHash(attachment.downloadUrl)}-${attachment.name.replace(/[\\/:*?"<>|]+/g, '_')}`,
       );
-      if (!target.exists) {
-        const blob = await cloudApi.downloadConversationAttachment(attachment.downloadUrl);
-        target.write(new Uint8Array(await blob.arrayBuffer()));
-      }
-      if (!share && await presentQuickLook(target.uri, attachment.name)) return;
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(target.uri, {
-          dialogTitle: attachment.name,
-          mimeType: attachment.mimeType,
-        });
+      try {
+        if (!target.exists) {
+          const blob = await cloudApi.downloadConversationAttachment(attachment.downloadUrl);
+          target.write(new Uint8Array(await blob.arrayBuffer()));
+        }
+        if (!share && await presentQuickLook(target.uri, attachment.name)) return;
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(target.uri, {
+            dialogTitle: attachment.name,
+            mimeType: attachment.mimeType,
+          });
+        }
+      } finally {
+        if (target.exists) target.delete();
       }
     } catch (error) {
       notify(serverFailure(error, isChinese));
@@ -1644,7 +2485,12 @@ export function ChatPreviewPage({
                 <Menu color={tokens.colors.foreground} size={compact ? 14 : 16} strokeWidth={1.7} />
               </IOSPressable>
               <View style={[styles.headerAvatar, compact && styles.headerAvatarCompact]}>
-                <Image resizeMode="contain" source={HERMES_AVATAR} style={styles.avatarImage} />
+                <Image
+                  defaultSource={HERMES_AVATAR}
+                  resizeMode="contain"
+                  source={HERMES_AVATAR}
+                  style={styles.avatarImage}
+                />
               </View>
               <View style={styles.headingCopy}>
                 <Text
@@ -1768,6 +2614,7 @@ export function ChatPreviewPage({
                 message={message}
                 onOpenAttachment={openStoredAttachment}
                 onInspectActivity={pauseStreamAutoFollow}
+                onBranch={branchFromMessage}
               />
             ))}
             {shouldRenderPendingMessage(displayMessages, hostedRunning || sending)
@@ -2126,57 +2973,151 @@ function formatAttachmentSize(size?: number | null): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function cleanupUnreferencedPickerCacheFiles(
+  protectedSources: readonly { ownedTemporary?: boolean; uri: string }[],
+): void {
+  const protectedUris = new Set(protectedSources.flatMap((source) => {
+    if (
+      !source.ownedTemporary
+      || !isUriInsideDirectory(source.uri, Paths.cache.uri)
+    ) return [];
+    try {
+      return [new URL(source.uri).href];
+    } catch {
+      return [];
+    }
+  }));
+  const sweep = (directory: ExpoDirectory) => {
+    if (!directory.exists) return;
+    for (const entry of directory.list()) {
+      try {
+        if (entry instanceof ExpoDirectory) {
+          sweep(entry);
+          if (entry.exists && entry.list().length === 0) entry.delete();
+          continue;
+        }
+        const normalized = new URL(entry.uri).href;
+        if (!protectedUris.has(normalized) && entry.exists) entry.delete();
+      } catch {
+        // A later replay or account cleanup will retry inaccessible entries.
+      }
+    }
+  };
+  for (const name of ['DocumentPicker', 'ImagePicker']) {
+    try {
+      sweep(new ExpoDirectory(Paths.cache, name));
+    } catch {
+      // Picker caches are ephemeral; cleanup remains best-effort.
+    }
+  }
+}
+
 function resolveComposerFontSize(value: string): number {
   const glyphCount = Array.from(value).length;
   if (glyphCount <= 28 || /\s/u.test(value)) return 16;
   return Math.max(12, 16 - (Math.min(glyphCount, 40) - 28) / 3);
 }
 
-async function persistPendingAttachments(
+function planPendingAttachments(
+  owner: string,
   requestId: string,
   attachments: readonly ChatAttachment[],
+): HostedTurnPendingAttachment[] {
+  if (!attachments.length) return [];
+  const directory = new ExpoDirectory(
+    Paths.document,
+    'hermes-outbox',
+    attachmentOutboxOwnerComponent(owner),
+    safeOutboxPathComponent(requestId),
+  );
+  return attachments.map((attachment, index) => ({
+    encryption: ATTACHMENT_ENCRYPTION_FORMAT,
+    id: uniqueTurnId(`upload-${index}`),
+    kind: attachment.kind,
+    mimeType: attachment.mimeType,
+    name: attachment.name,
+    ownedTemporary: attachment.ownedTemporary,
+    size: attachment.size,
+    sourceUri: attachment.uri,
+    uri: new ExpoFile(
+      directory,
+      `${index}-${safeOutboxPathComponent(attachment.name)}.hermes-encrypted`,
+    ).uri,
+  }));
+}
+
+async function persistPendingAttachments(
+  owner: string,
+  requestId: string,
+  attachments: readonly HostedTurnPendingAttachment[],
 ): Promise<HostedTurnPendingAttachment[]> {
   if (!attachments.length) return [];
   const directory = new ExpoDirectory(
     Paths.document,
     'hermes-outbox',
+    attachmentOutboxOwnerComponent(owner),
     safeOutboxPathComponent(requestId),
   );
   directory.create({ idempotent: true, intermediates: true });
-  try {
-    return attachments.map((attachment, index) => {
-      const uploadId = uniqueTurnId(`upload-${index}`);
-      const target = new ExpoFile(
-        directory,
-        `${index}-${safeOutboxPathComponent(attachment.name)}`,
-      );
-      if (target.exists) target.delete();
-      new ExpoFile(attachment.uri).copy(target);
-      return {
-        id: uploadId,
-        kind: attachment.kind,
-        mimeType: attachment.mimeType,
-        name: attachment.name,
-        size: attachment.size,
-        uri: target.uri,
-      };
-    });
-  } catch (error) {
-    if (directory.exists) directory.delete();
-    throw error;
-  }
+  const installedTargets = new Set<string>();
+  return withAttachmentPersistenceRollback(async () => {
+    const persisted: HostedTurnPendingAttachment[] = [];
+    for (const attachment of attachments) {
+      const targetUri = attachment.encryption === ATTACHMENT_ENCRYPTION_FORMAT
+        ? attachment.uri
+        : encryptedAttachmentUri(attachment.uri);
+      const target = new ExpoFile(targetUri);
+      const legacyPlaintext = attachment.encryption ? null : new ExpoFile(attachment.uri);
+      const sourceUri = legacyPlaintext?.exists
+          ? legacyPlaintext.uri
+          : attachment.sourceUri?.trim();
+      if (!target.exists) {
+        if (!sourceUri) throw new Error(`Attachment source is unavailable: ${attachment.name}`);
+        await HermesIOSContext.encryptAttachment(owner, sourceUri, targetUri);
+        installedTargets.add(targetUri);
+      }
+      persisted.push({
+        ...attachment,
+        encryption: ATTACHMENT_ENCRYPTION_FORMAT,
+        sourceUri: sourceUri || '',
+        uri: targetUri,
+      });
+    }
+    return persisted;
+  }, () => {
+    for (const uri of installedTargets) {
+      const file = new ExpoFile(uri);
+      if (file.exists) file.delete();
+    }
+  });
 }
 
 function cleanupPendingAttachments(item: HostedTurnOutboxItem): void {
   const root = new ExpoDirectory(Paths.document, 'hermes-outbox');
   const rootUri = root.uri.endsWith('/') ? root.uri : `${root.uri}/`;
+  cleanupOwnedTemporaryAttachments(
+    (item.pendingAttachments || []).flatMap((attachment) => (
+      attachment.sourceUri
+        ? [{ ownedTemporary: attachment.ownedTemporary, uri: attachment.sourceUri }]
+        : []
+    )),
+    Paths.cache.uri,
+    (uri) => {
+      const source = new ExpoFile(uri);
+      if (source.exists) source.delete();
+    },
+  );
   for (const attachment of item.pendingAttachments || []) {
     if (!attachment.uri.startsWith(rootUri)) continue;
     const file = new ExpoFile(attachment.uri);
     if (file.exists) file.delete();
   }
-  const directory = new ExpoDirectory(root, safeOutboxPathComponent(item.input.requestId));
-  if (directory.exists) directory.delete();
+  const firstTarget = item.pendingAttachments?.find(({ uri }) => uri.startsWith(rootUri));
+  if (firstTarget) {
+    const requestDirectoryUri = firstTarget.uri.slice(0, firstTarget.uri.lastIndexOf('/') + 1);
+    const requestDirectory = new ExpoDirectory(requestDirectoryUri);
+    if (requestDirectory.exists) requestDirectory.delete();
+  }
 }
 
 function hydrateOutboxInput(item: HostedTurnOutboxItem): HostedTurnOutboxItem {
@@ -2205,6 +3146,123 @@ function hydrateOutboxInput(item: HostedTurnOutboxItem): HostedTurnOutboxItem {
 function safeOutboxPathComponent(value: string): string {
   const safe = value.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^\.+|\.+$/g, '');
   return safe.slice(0, 120) || 'pending';
+}
+
+function pendingChatSendFromOutbox(
+  item: HostedTurnOutboxItem,
+  owner: string,
+): PendingChatSend {
+  const source = item.input.message;
+  const createdAt = typeof source.created_at === 'number' ? source.created_at : item.queuedAt;
+  const userMessage: ChatMessage = {
+    avatarRole: 'user',
+    content: source.content,
+    createdAt,
+    durationMs: 0,
+    id: source.id,
+    name: source.name || 'You',
+    role: 'user',
+    status: source.status || 'completed',
+    updatedAt: typeof source.updated_at === 'number' ? source.updated_at : createdAt,
+  };
+  return {
+    conversationId: item.conversationId,
+    key: hostedTurnDeliveryClaimKey(owner, source.id),
+    queuedItem: item,
+    userMessage,
+  };
+}
+
+function chatMessageToCollaborationMessage(message: ChatMessage): CollaborationMessage {
+  return {
+    completed_at: message.completedAt,
+    content: message.content,
+    created_at: message.createdAt,
+    id: message.id,
+    meta: {
+      client_optimistic: true,
+      ...(message.optimisticConfirmedAt
+        ? { optimistic_confirmed_at: message.optimisticConfirmedAt }
+        : {}),
+      ...(message.roleStage ? { role_stage: message.roleStage } : {}),
+      ...(message.runtimeTurnId ? { runtime_turn_id: message.runtimeTurnId } : {}),
+    },
+    model: message.model,
+    name: message.name,
+    profile: message.profile,
+    provider: message.provider,
+    role: message.role,
+    role_label: message.roleLabel,
+    sender_id: message.senderId,
+    sender_role: message.avatarRole,
+    started_at: message.startedAt,
+    status: message.status,
+    updated_at: message.updatedAt,
+  };
+}
+
+function sameOptimisticMessages(
+  left: readonly ChatMessage[],
+  right: readonly ChatMessage[],
+): boolean {
+  return left.length === right.length && left.every((message, index) => {
+    const other = right[index];
+    return Boolean(other)
+      && message.id === other.id
+      && message.content === other.content
+      && message.status === other.status
+      && message.optimisticConfirmedAt === other.optimisticConfirmedAt
+      && message.updatedAt === other.updatedAt;
+  });
+}
+
+function optimisticConversationTitle(
+  messages: readonly CollaborationMessage[],
+  chinese: boolean,
+): string {
+  const firstUserContent = messages.find(({ role }) => role === 'user')?.content?.trim();
+  return firstUserContent?.slice(0, 36) || (chinese ? '新对话' : 'New conversation');
+}
+
+function numericTimestamp(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function mergeOptimisticConversationSummaries(
+  conversations: readonly SingleConversation[],
+  ledgers: readonly OptimisticConversationLedgerItem[],
+  profile: string,
+  chinese: boolean,
+): SingleConversation[] {
+  const existingIds = new Set(conversations.map(({ id }) => id));
+  const optimisticOnly = ledgers.flatMap((entry) => {
+    if (existingIds.has(entry.conversationId) || !entry.messages.length) return [];
+    const createdAt = Math.min(
+      ...entry.messages.map((message) => numericTimestamp(message.created_at) || entry.updatedAt),
+    );
+    return [{
+      created_at: createdAt,
+      id: entry.conversationId,
+      message_count: entry.messages.length,
+      messages: entry.messages.map((message) => ({
+        ...message,
+        ...(message.meta ? { meta: { ...message.meta } } : {}),
+      })),
+      profile,
+      title: optimisticConversationTitle(entry.messages, chinese),
+      updated_at: entry.updatedAt,
+    } as SingleConversation];
+  });
+  return [...conversations, ...optimisticOnly].sort(
+    (left, right) => (right.updated_at || 0) - (left.updated_at || 0),
+  );
 }
 
 function uniqueTurnId(prefix: string): string {
@@ -2282,18 +3340,18 @@ function serverFailure(error: unknown, chinese: boolean): string {
   if (error instanceof HermesApiError) {
     if (error.status === 401 || error.status === 403) {
       return chinese
-        ? 'Hermes 登录状态已失效，请重新登录。'
-        : 'Your Hermes session has expired. Sign in again.';
+        ? `HTTP ${error.status}：Hermes 登录状态已失效，请重新登录。`
+        : `HTTP ${error.status}: Your Hermes session has expired. Sign in again.`;
     }
     if (error.status === 429) {
       return chinese
-        ? '服务器请求过于频繁，请稍后重试。'
-        : 'The server is receiving too many requests. Try again shortly.';
+        ? 'HTTP 429：服务器请求过于频繁，请稍后重试。'
+        : 'HTTP 429: The server is receiving too many requests. Try again shortly.';
     }
     if (error.status >= 500) {
       return chinese
-        ? 'Hermes 服务暂时不可用，请稍后重试。'
-        : 'Hermes is temporarily unavailable. Try again shortly.';
+        ? `HTTP ${error.status}：Hermes 服务暂时不可用，请稍后重试。`
+        : `HTTP ${error.status}: Hermes is temporarily unavailable. Try again shortly.`;
     }
   }
   if (error instanceof Error && error.message) {
@@ -2358,12 +3416,14 @@ function UnifiedMessage({
   index,
   isChinese,
   message,
+  onBranch,
   onOpenAttachment,
   onInspectActivity,
 }: {
   index: number;
   isChinese: boolean;
   message: ChatMessage;
+  onBranch(message: ChatMessage): void;
   onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
   onInspectActivity(): void;
 }) {
@@ -2400,6 +3460,60 @@ function UnifiedMessage({
       {metadata}
     </Text>
   ) : null;
+  const messageBody = (
+    <View
+      style={[
+        styles.messageBody,
+        isUser ? styles.userMessageBody : styles.agentMessageBody,
+        {
+          backgroundColor: tokens.colors.card,
+          borderColor: multiplyAlpha('#192320', 0.11),
+        },
+      ]}
+    >
+      <Markdown style={markdownStyles}>{message.content || ' '}</Markdown>
+      {message.attachments?.length ? (
+        <View style={styles.storedAttachments}>
+          {message.attachments.map((attachment) => (
+            <IOSContextMenu
+              accessibilityLabel={`Open attachment ${attachment.name}`}
+              actions={[
+                {
+                  id: 'preview',
+                  onPress: () => onOpenAttachment(attachment),
+                  systemImage: 'doc.text.magnifyingglass',
+                  title: isChinese ? '快速查看' : 'Quick Look',
+                },
+                {
+                  id: 'share',
+                  onPress: () => onOpenAttachment(attachment, true),
+                  systemImage: 'square.and.arrow.up',
+                  title: isChinese ? '分享' : 'Share',
+                },
+              ]}
+              key={attachment.id}
+              onPress={() => onOpenAttachment(attachment)}
+              style={styles.storedAttachment}
+            >
+              <File color={tokens.colors.primary} size={18} strokeWidth={1.7} />
+              <View style={styles.storedAttachmentCopy}>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.storedAttachmentName, { color: messageForeground }]}
+                >
+                  {attachment.name}
+                </Text>
+                <Text style={[styles.storedAttachmentSize, { color: tokens.colors.textSecondary }]}>
+                  {formatAttachmentSize(attachment.size)}
+                </Text>
+              </View>
+            </IOSContextMenu>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+  const canBranch = Boolean(message.runtimeSessionId && message.runtimeMessageId);
   return (
     <Reanimated.View
       entering={FadeInUp
@@ -2440,57 +3554,21 @@ function UnifiedMessage({
               {runtime}
             </Text>
           ) : null}
-          <View
-          style={[
-            styles.messageBody,
-            isUser ? styles.userMessageBody : styles.agentMessageBody,
-            {
-              backgroundColor: tokens.colors.card,
-              borderColor: multiplyAlpha('#192320', 0.11),
-            },
-          ]}
-        >
-          <Markdown style={markdownStyles}>{message.content || ' '}</Markdown>
-          {message.attachments?.length ? (
-            <View style={styles.storedAttachments}>
-              {message.attachments.map((attachment) => (
-                <IOSContextMenu
-                  accessibilityLabel={`打开附件 ${attachment.name}`}
-                  actions={[
-                    {
-                      id: 'preview',
-                      onPress: () => onOpenAttachment(attachment),
-                      systemImage: 'doc.text.magnifyingglass',
-                      title: '快速查看',
-                    },
-                    {
-                      id: 'share',
-                      onPress: () => onOpenAttachment(attachment, true),
-                      systemImage: 'square.and.arrow.up',
-                      title: '分享',
-                    },
-                  ]}
-                  key={attachment.id}
-                  onPress={() => onOpenAttachment(attachment)}
-                  style={styles.storedAttachment}
-                >
-                  <File color={tokens.colors.primary} size={18} strokeWidth={1.7} />
-                  <View style={styles.storedAttachmentCopy}>
-                    <Text
-                      numberOfLines={1}
-                      style={[styles.storedAttachmentName, { color: messageForeground }]}
-                    >
-                      {attachment.name}
-                    </Text>
-                    <Text style={[styles.storedAttachmentSize, { color: tokens.colors.textSecondary }]}>
-                      {formatAttachmentSize(attachment.size)}
-                    </Text>
-                  </View>
-                </IOSContextMenu>
-              ))}
-            </View>
-          ) : null}
-          </View>
+          {canBranch ? (
+            <IOSContextMenu
+              accessibilityLabel={isChinese ? '会话消息操作' : 'Conversation message actions'}
+              actions={[
+                {
+                  id: 'branch',
+                  onPress: () => onBranch(message),
+                  systemImage: 'arrow.triangle.branch',
+                  title: isChinese ? '从这里分支' : 'Branch from here',
+                },
+              ]}
+            >
+              {messageBody}
+            </IOSContextMenu>
+          ) : messageBody}
         </View>
         </View>
       ) : null}
@@ -2542,10 +3620,15 @@ function MessageAvatar({
     >
       {isUser ? (
         <Text style={styles.userAvatarText}>{'你'}</Text>
+      ) : officialHermes ? (
+        <Image
+          defaultSource={HERMES_AVATAR}
+          resizeMode="contain"
+          source={HERMES_AVATAR}
+          style={styles.avatarImage}
+        />
       ) : remoteAvatar ? (
         <Image resizeMode="cover" source={{ uri: message.avatarUrl }} style={styles.avatarImage} />
-      ) : officialHermes ? (
-        <Image resizeMode="contain" source={HERMES_AVATAR} style={styles.avatarImage} />
       ) : (
         <SymbolView
           fallback={<Text style={styles.roleAvatarFallback}>{fallback}</Text>}
@@ -2593,7 +3676,7 @@ function PendingMessage({
         : `Reconnecting (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`)
     : phase === 'executing'
       ? (isChinese ? '正在执行' : 'The model is running')
-      : (isChinese ? '正在思考中' : 'Thinking');
+      : (isChinese ? '正在思考' : 'Thinking');
   const pendingMessage: ChatMessage = {
     activities: [{
       category: 'other',
@@ -2613,6 +3696,7 @@ function PendingMessage({
     roleStage: 'chat',
     startedAt,
     status: 'running',
+    timingLabel: statusText,
   };
   return (
     <Reanimated.View
@@ -2629,7 +3713,12 @@ function PendingMessage({
       />
       <View style={[styles.message, styles.agentMessage]}>
         <View style={[styles.messageAvatar, styles.hermesAvatar]}>
-          <Image resizeMode="contain" source={HERMES_AVATAR} style={styles.avatarImage} />
+          <Image
+            defaultSource={HERMES_AVATAR}
+            resizeMode="contain"
+            source={HERMES_AVATAR}
+            style={styles.avatarImage}
+          />
         </View>
         <View style={styles.messageStack}>
           <View style={styles.messageMeta}>
@@ -2750,13 +3839,7 @@ function RoleActivityGroup({
 }
 
 function shouldShowMessageTiming(message: ChatMessage): boolean {
-  return Boolean(
-    message.startedAt
-    || message.completedAt
-    || message.updatedAt
-    || message.durationMs
-    || message.status,
-  );
+  return messageHasExecutionTiming(message);
 }
 
 function ActivityCard({

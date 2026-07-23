@@ -63,62 +63,62 @@ final class HermesHealthService {
     let rangeStart = min(start, end)
     let rangeEnd = max(start, end)
     let authorization = await authorizationStatus()
-    async let heartRate = averageQuantity(
+    async let heartRate = optionalAverageQuantity(
       .heartRate,
       unit: HKUnit.count().unitDivided(by: .minute()),
       start: rangeStart,
       end: rangeEnd
     )
-    async let restingHeartRate = averageQuantity(
+    async let restingHeartRate = optionalAverageQuantity(
       .restingHeartRate,
       unit: HKUnit.count().unitDivided(by: .minute()),
       start: rangeStart,
       end: rangeEnd
     )
-    async let oxygen = averageQuantity(
+    async let oxygen = optionalAverageQuantity(
       .oxygenSaturation,
       unit: .percent(),
       start: rangeStart,
       end: rangeEnd
     )
-    async let steps = cumulativeQuantity(
+    async let steps = optionalCumulativeQuantity(
       .stepCount,
       unit: .count(),
       start: rangeStart,
       end: rangeEnd
     )
-    async let activeEnergy = cumulativeQuantity(
+    async let activeEnergy = optionalCumulativeQuantity(
       .activeEnergyBurned,
       unit: .kilocalorie(),
       start: rangeStart,
       end: rangeEnd
     )
-    async let exerciseMinutes = cumulativeQuantity(
+    async let exerciseMinutes = optionalCumulativeQuantity(
       .appleExerciseTime,
       unit: .minute(),
       start: rangeStart,
       end: rangeEnd
     )
-    async let distance = cumulativeQuantity(
+    async let distance = optionalCumulativeQuantity(
       .distanceWalkingRunning,
       unit: .meter(),
       start: rangeStart,
       end: rangeEnd
     )
-    async let sleep = sleepMinutes(start: rangeStart, end: rangeEnd)
-    async let workouts = workoutSummary(start: rangeStart, end: rangeEnd)
+    async let sleep = optionalSleepMinutes(start: rangeStart, end: rangeEnd)
+    async let workouts = optionalWorkoutSummary(start: rangeStart, end: rangeEnd)
 
     return [
       "authorization": authorization,
-      "activeEnergyKcal": hermesNullable(try await activeEnergy),
-      "distanceWalkingRunningMeters": hermesNullable(try await distance),
-      "exerciseMinutes": hermesNullable(try await exerciseMinutes),
-      "heartRateBpm": hermesNullable(try await heartRate),
-      "oxygenSaturation": hermesNullable(try await oxygen),
-      "restingHeartRateBpm": hermesNullable(try await restingHeartRate),
-      "sleepMinutes": hermesNullable(try await sleep),
-      "steps": hermesNullable(try await steps),
-      "workouts": try await workouts,
+      "activeEnergyKcal": hermesNullable(await activeEnergy),
+      "distanceWalkingRunningMeters": hermesNullable(await distance),
+      "exerciseMinutes": hermesNullable(await exerciseMinutes),
+      "heartRateBpm": hermesNullable(await heartRate),
+      "oxygenSaturation": hermesNullable(await oxygen),
+      "restingHeartRateBpm": hermesNullable(await restingHeartRate),
+      "sleepMinutes": hermesNullable(await sleep),
+      "steps": hermesNullable(await steps),
+      "workouts": await workouts,
     ]
   }
 
@@ -148,6 +148,16 @@ final class HermesHealthService {
     return statistics?.averageQuantity()?.doubleValue(for: unit)
   }
 
+  private func optionalAverageQuantity(
+    _ identifier: HKQuantityTypeIdentifier,
+    unit: HKUnit,
+    start: Date,
+    end: Date
+  ) async -> Double? {
+    do { return try await averageQuantity(identifier, unit: unit, start: start, end: end) }
+    catch { return nil }
+  }
+
   private func cumulativeQuantity(
     _ identifier: HKQuantityTypeIdentifier,
     unit: HKUnit,
@@ -157,6 +167,16 @@ final class HermesHealthService {
     guard let type = HKQuantityType.quantityType(forIdentifier: identifier) else { return nil }
     let statistics = try await statistics(type: type, option: .cumulativeSum, start: start, end: end)
     return statistics?.sumQuantity()?.doubleValue(for: unit)
+  }
+
+  private func optionalCumulativeQuantity(
+    _ identifier: HKQuantityTypeIdentifier,
+    unit: HKUnit,
+    start: Date,
+    end: Date
+  ) async -> Double? {
+    do { return try await cumulativeQuantity(identifier, unit: unit, start: start, end: end) }
+    catch { return nil }
   }
 
   private func statistics(
@@ -217,6 +237,11 @@ final class HermesHealthService {
     return total / 60
   }
 
+  private func optionalSleepMinutes(start: Date, end: Date) async -> Double? {
+    do { return try await sleepMinutes(start: start, end: end) }
+    catch { return nil }
+  }
+
   private func workoutSummary(start: Date, end: Date) async throws -> [[String: Any]] {
     let type = HKObjectType.workoutType()
     return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[[String: Any]], Error>) in
@@ -241,6 +266,11 @@ final class HermesHealthService {
       }
       store.execute(query)
     }
+  }
+
+  private func optionalWorkoutSummary(start: Date, end: Date) async -> [[String: Any]] {
+    do { return try await workoutSummary(start: start, end: end) }
+    catch { return [] }
   }
 
   private func workoutPayload(_ workout: HKWorkout) -> [String: Any] {

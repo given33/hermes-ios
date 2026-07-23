@@ -44,6 +44,7 @@ struct HermesActivityReportScene: DeviceActivityReportScene {
     suite?.set([
       "accountGeneration": accountGeneration,
       "durationSeconds": max(0, seconds),
+      "eventId": UUID().uuidString.lowercased(),
       "observedAt": Date().timeIntervalSince1970 * 1000,
       "state": "activity-summary",
     ], forKey: "device-activity-summary-latest")

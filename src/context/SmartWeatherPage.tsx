@@ -1,3 +1,4 @@
+import * as Location from 'expo-location';
 import { MapPin, RefreshCw, Settings } from 'lucide-react-native';
 import {
   Component,
@@ -9,12 +10,14 @@ import {
   type ErrorInfo,
   type ReactNode,
 } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   HermesStandardMapView,
+  getNativeMapProviderStatus,
   hasNativeStandardMapView,
+  setNativeMapPrivacyConsent,
   type IOSCoordinate,
   type IOSTodayPlace,
 } from '../../modules/hermes-ios-context';
@@ -37,6 +40,7 @@ import {
   smartWeatherRetryDelayMs,
 } from './smart-weather-load';
 import { useIOSPermissionCoordinator } from './IOSContextProvider';
+import { ExpoStandardMap } from './ExpoStandardMap';
 
 interface SmartWeatherPageProps {
   client?: HermesApiClient;
@@ -62,9 +66,19 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
   const [snapshotStale, setSnapshotStale] = useState(false);
   const [mapError, setMapError] = useState('');
   const [mapAttempt, setMapAttempt] = useState(0);
+  const [nativeMapProvider, setNativeMapProvider] = useState(
+    getNativeMapProviderStatus,
+  );
   const [centerRequest, setCenterRequest] = useState(0);
+  const [previewLocation, setPreviewLocation] = useState<Location.LocationObject | null>(null);
+  const [previewLocationError, setPreviewLocationError] = useState('');
+  const [previewLocationState, setPreviewLocationState] = useState<
+    'authorized' | 'denied' | 'notDetermined' | 'restricted'
+  >('notDetermined');
+  const [previewLocationLoading, setPreviewLocationLoading] = useState(false);
   const reloadGenerationRef = useRef(0);
   const reloadInFlightRef = useRef(false);
+  const previewLocationInFlightRef = useRef(false);
   const nextAutomaticReloadAtRef = useRef(0);
   const onReadyRef = useRef(onReady);
   const readyReportedRef = useRef(false);
@@ -76,6 +90,43 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
     readyReportedRef.current = true;
     onReadyRef.current?.();
   }, []);
+
+  const requestPreviewLocation = useCallback(async () => {
+    if (hasNativeStandardMapView || previewLocationInFlightRef.current) return;
+    previewLocationInFlightRef.current = true;
+    setPreviewLocationLoading(true);
+    try {
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (permission.status === Location.PermissionStatus.UNDETERMINED) {
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
+      const normalized = permission.status === Location.PermissionStatus.GRANTED
+        ? 'authorized'
+        : permission.status === Location.PermissionStatus.DENIED
+          ? 'denied'
+          : 'restricted';
+      setPreviewLocationState(normalized);
+      if (normalized !== 'authorized') return;
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+        mayShowUserSettingsDialog: true,
+      });
+      setPreviewLocation(location);
+      setPreviewLocationError('');
+      setCenterRequest((value) => value + 1);
+    } catch (error) {
+      setPreviewLocationError(locale === 'zh'
+        ? `当前位置获取失败：${error instanceof Error ? error.message : String(error)}`
+        : `Current location failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      previewLocationInFlightRef.current = false;
+      setPreviewLocationLoading(false);
+    }
+  }, [locale]);
+
+  useEffect(() => {
+    if (!hasNativeStandardMapView) void requestPreviewLocation();
+  }, [requestPreviewLocation]);
 
   const reload = useCallback(async (manual = false) => {
     if (reloadInFlightRef.current) return;
@@ -193,26 +244,40 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
   ));
   const foreground = tokens.colors.foreground;
   const secondary = tokens.colors.textSecondary;
-  const locationState = permissions.snapshot.permissions.location;
-  const locationMessage = permissionMessage(
-    permissions.snapshot.phase,
-    permissions.snapshot.current,
-    locationState,
-    permissions.snapshot.locationAlways,
-    permissions.snapshot.locationPrecise,
-    locale,
-  );
+  const locationState = hasNativeStandardMapView
+    ? permissions.snapshot.permissions.location
+    : previewLocationState;
+  const locationMessage = hasNativeStandardMapView
+    ? permissionMessage(
+        permissions.snapshot.phase,
+        permissions.snapshot.current,
+        locationState,
+        permissions.snapshot.locationAlways,
+        permissions.snapshot.locationPrecise,
+        locale,
+      )
+    : previewPermissionMessage(
+        previewLocationState,
+        previewLocationLoading,
+        previewLocationError,
+        locale,
+      );
   const retry = useCallback(() => {
     setMapError('');
+    setPreviewLocationError('');
     setMapAttempt((value) => value + 1);
-    permissions.retry();
+    if (hasNativeStandardMapView) permissions.retry();
+    else void requestPreviewLocation();
     void reload(true);
-  }, [permissions, reload]);
-  const mapUnavailableMessage = mapError || (!hasNativeStandardMapView
-    ? (locale === 'zh'
-      ? '当前安装包缺少智能天气原生地图组件，请安装最新构建后重试。'
-      : 'This build is missing the native Smart Weather map. Install the latest build and retry.')
-    : '');
+  }, [permissions, reload, requestPreviewLocation]);
+  const mapUnavailableMessage = mapError;
+  const needsAMapPrivacyConsent = hasNativeStandardMapView
+    && nativeMapProvider.amapConfigured
+    && !nativeMapProvider.privacyConsent;
+  const enableAMap = useCallback(async () => {
+    const next = await setNativeMapPrivacyConsent(true);
+    setNativeMapProvider(next);
+  }, []);
 
   return (
     <View style={[styles.root, { backgroundColor: tokens.colors.background }]}>
@@ -238,25 +303,68 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
             onError={(error) => setMapError(error.message)}
             resetKey={mapAttempt}
           >
-            <HermesStandardMapView
-              centerOnUserRequest={centerRequest}
-              onLocationPress={() => {
-                setCenterRequest((value) => value + 1);
-                if (
-                  permissions.snapshot.phase !== 'requesting'
-                  && (locationState === 'notDetermined' || locationState === 'limited')
-                ) permissions.retry();
-              }}
-              places={places}
-              showsUserLocation={locationState === 'authorized' || locationState === 'limited'}
-              style={StyleSheet.absoluteFill}
-              track={track}
-            />
+            {hasNativeStandardMapView ? (
+              <HermesStandardMapView
+                amapPrivacyConsentGranted={nativeMapProvider.privacyConsent}
+                centerOnUserRequest={centerRequest}
+                onLocationPress={() => {
+                  if (
+                    permissions.snapshot.phase !== 'requesting'
+                    && (locationState === 'notDetermined' || locationState === 'limited')
+                  ) permissions.retry();
+                }}
+                places={places}
+                showsUserLocation={locationState === 'authorized' || locationState === 'limited'}
+                style={StyleSheet.absoluteFill}
+                track={track}
+              />
+            ) : (
+              <ExpoStandardMap
+                centerRequest={centerRequest}
+                location={previewLocation}
+                locale={locale}
+                onLocate={() => { void requestPreviewLocation(); }}
+                places={places}
+                track={track}
+              />
+            )}
           </NativeMapErrorBoundary>
         )}
 
-        {(locationMessage || loadError) && !mapUnavailableMessage ? (
+        {(needsAMapPrivacyConsent || locationMessage || loadError) && !mapUnavailableMessage ? (
           <View style={[styles.bannerStack, { top: insets.top + 12 }]}>
+            {needsAMapPrivacyConsent ? (
+              <View
+                style={[
+                  styles.permissionBanner,
+                  { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border },
+                ]}
+                testID="smart-weather-amap-consent"
+              >
+                <Text style={[styles.permissionText, { color: secondary }]}>
+                  {locale === 'zh'
+                    ? '高德地图需要处理设备、网络和位置信息来加载中文地图与实时路况。'
+                    : 'AMap processes device, network, and location data to load the map and live traffic.'}
+                </Text>
+                <View style={styles.permissionActions}>
+                  <NativeButton
+                    accessibilityLabel={locale === 'zh' ? '查看高德隐私政策' : 'View AMap privacy policy'}
+                    onPress={() => { void Linking.openURL('https://lbs.amap.com/pages/privacy/'); }}
+                    outlined
+                    size="sm"
+                  >
+                    {locale === 'zh' ? '隐私政策' : 'Privacy policy'}
+                  </NativeButton>
+                  <NativeButton
+                    accessibilityLabel={locale === 'zh' ? '同意并启用高德地图' : 'Accept and enable AMap'}
+                    onPress={() => { void enableAMap(); }}
+                    size="sm"
+                  >
+                    {locale === 'zh' ? '同意并启用' : 'Accept and enable'}
+                  </NativeButton>
+                </View>
+              </View>
+            ) : null}
             {locationMessage ? (
               <View
                 style={[
@@ -279,7 +387,11 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
                   {(locationState === 'denied' || locationState === 'restricted') ? (
                     <NativeButton
                       accessibilityLabel={locale === 'zh' ? '打开系统设置' : 'Open system settings'}
-                      onPress={() => { void permissions.openSettings(); }}
+                      onPress={() => {
+                        void (hasNativeStandardMapView
+                          ? permissions.openSettings()
+                          : Linking.openSettings());
+                      }}
                       outlined
                       prefix={<Settings color={foreground} size={15} />}
                       size="sm"
@@ -399,6 +511,24 @@ class NativeMapErrorBoundary extends Component<NativeMapErrorBoundaryProps, { fa
   }
 }
 
+function previewPermissionMessage(
+  state: 'authorized' | 'denied' | 'notDetermined' | 'restricted',
+  loading: boolean,
+  error: string,
+  locale: 'en' | 'zh',
+): string {
+  if (error) return error;
+  if (state === 'denied' || state === 'restricted') {
+    return locale === 'zh'
+      ? '定位权限未开启，请允许访问位置后重试。'
+      : 'Location permission is off. Allow location access, then retry.';
+  }
+  if (loading || state === 'notDetermined') {
+    return locale === 'zh' ? '正在请求定位权限并获取当前位置' : 'Requesting location and finding your position';
+  }
+  return '';
+}
+
 function permissionMessage(
   phase: string,
   current: string | null,
@@ -469,7 +599,10 @@ const styles = StyleSheet.create({
     gap: 8,
     left: 0,
     position: 'absolute',
-    right: 0,
+    // Keep the persistent compass and locate controls unobstructed. The
+    // banners render above the native map, so a full-width banner would cover
+    // the compass even though the native control remained mounted.
+    right: 58,
   },
   permissionBanner: {
     alignItems: 'stretch',

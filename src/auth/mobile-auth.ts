@@ -220,26 +220,33 @@ export class MobileAuthApiClient {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
-        abortController.abort();
         reject(new Error('Hermes authentication request timed out'));
+        // Settle with the stable timeout first. Some transports synchronously
+        // reject from their abort listener and would otherwise leak AbortError.
+        abortController.abort();
       }, this.requestTimeoutMs);
     });
     let response: Response;
+    let text: string;
     try {
-      response = await Promise.race([
-        this.fetchImpl(url.toString(), {
-          ...init,
-          headers,
-          signal: abortController.signal,
-        }),
+      const result = await Promise.race([
+        (async () => {
+          const fetched = await this.fetchImpl(url.toString(), {
+            ...init,
+            headers,
+            signal: abortController.signal,
+          });
+          assertSameOriginResponse(fetched, this.baseUrl);
+          return { response: fetched, text: await fetched.text() };
+        })(),
         deadline,
       ]);
+      response = result.response;
+      text = result.text;
     } finally {
       if (timeout) clearTimeout(timeout);
       callerSignal?.removeEventListener('abort', abortFromCaller);
     }
-    assertSameOriginResponse(response, this.baseUrl);
-    const text = await response.text();
     if (!response.ok) {
       throw new MobileAuthApiError(
         response.status,

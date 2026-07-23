@@ -22,6 +22,7 @@ final class HermesDeviceActivityMonitor: DeviceActivityMonitor {
     var payload: [String: Any] = [
       "accountGeneration": suite?.integer(forKey: accountGenerationKey) ?? 0,
       "activity": activity.rawValue,
+      "eventId": UUID().uuidString.lowercased(),
       "observedAt": Date().timeIntervalSince1970 * 1000,
       "state": state,
     ]

@@ -2,12 +2,6 @@ name: Build unsigned iOS IPA
 
 on:
   workflow_dispatch:
-    inputs:
-      frontend_preview:
-        description: Build the standalone frontend preview without login
-        required: true
-        default: false
-        type: boolean
   push:
     tags:
       - 'v*.*.*'
@@ -15,12 +9,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: macos-15
     timeout-minutes: 60
     env:
-      EXPO_PUBLIC_FRONTEND_PREVIEW: ${{ github.event_name == 'workflow_dispatch' && inputs.frontend_preview && '1' || '0' }}
+      EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
+      HERMES_DISTRIBUTABLE_BUILD: '1'
+      HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -30,17 +30,25 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      - name: Require the production AMap key
+        shell: bash
+        run: |
+          if [ -z "$HERMES_AMAP_IOS_API_KEY" ]; then
+            echo 'HERMES_AMAP_IOS_API_KEY is required for every distributable IPA.' >&2
+            exit 1
+          fi
       - run: pnpm install --frozen-lockfile
+      - run: pnpm doctor
       - run: pnpm test
       - run: pnpm typecheck
+      - name: Verify the production source graph
+        run: node scripts/verify-production-source-graph.mjs .
       - name: Generate and verify the iOS asset export
         shell: bash
         run: |
           pnpm exec expo export --platform ios --output-dir "$RUNNER_TEMP/hermes-font-export"
           node scripts/verify-native-font-export.mjs "$RUNNER_TEMP/hermes-font-export"
-          if [ "$EXPO_PUBLIC_FRONTEND_PREVIEW" = "0" ]; then
-            node scripts/verify-production-bundle.mjs "$RUNNER_TEMP/hermes-font-export"
-          fi
+          node scripts/verify-production-bundle.mjs "$RUNNER_TEMP/hermes-font-export"
       - name: Select Xcode with Swift 6.2
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
@@ -48,6 +56,19 @@ jobs:
           swift --version
       - name: Generate the native iOS project
         run: pnpm exec expo prebuild --platform ios --clean --no-install
+      - name: Verify the generated AMap configuration
+        shell: bash
+        run: |
+          MAP_PLIST="$(grep -rl --include='Info.plist' '<key>HermesAmapIOSAPIKey</key>' ios | head -n 1)"
+          if [ -z "$MAP_PLIST" ]; then
+            echo 'Generated iOS project is missing HermesAmapIOSAPIKey.' >&2
+            exit 1
+          fi
+          GENERATED_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$MAP_PLIST")"
+          if [ "$GENERATED_KEY" != "$HERMES_AMAP_IOS_API_KEY" ]; then
+            echo 'Generated HermesAmapIOSAPIKey does not match the protected build secret.' >&2
+            exit 1
+          fi
       - name: Verify native extension targets
         shell: bash
         run: |
@@ -85,6 +106,15 @@ jobs:
           node scripts/verify-ios-native-context.mjs \
             --ios ios \
             --derived-data "$RUNNER_TEMP/hermes-build"
+      - name: Verify the compiled production app
+        shell: bash
+        run: |
+          APP_PATH="$(find "$RUNNER_TEMP/hermes-build/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo 'The unsigned .app bundle was not produced.' >&2
+            exit 1
+          fi
+          node scripts/verify-production-app.mjs "$APP_PATH"
       - name: Package the IPA
         id: package
         shell: bash
@@ -92,6 +122,11 @@ jobs:
           APP_PATH="$(find "$RUNNER_TEMP/hermes-build/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
           if [ -z "$APP_PATH" ]; then
             echo 'The unsigned .app bundle was not produced.' >&2
+            exit 1
+          fi
+          BUNDLED_AMAP_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$APP_PATH/Info.plist")"
+          if [ "$BUNDLED_AMAP_KEY" != "$HERMES_AMAP_IOS_API_KEY" ]; then
+            echo 'Compiled app is missing the protected AMap key.' >&2
             exit 1
           fi
           APP_BUILD_NUMBER="$(plutil -extract CFBundleVersion raw "$APP_PATH/Info.plist")"
@@ -122,18 +157,25 @@ jobs:
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
           ditto -c -k --sequesterRsrc --keepParent Payload "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
-          shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" > "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256"
+          unzip -t "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
+          IPA_SHA256="$(shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" | awk '{print $1}')"
+          printf '%s  %s\n' "$IPA_SHA256" 'Hermes-Agent-unsigned.ipa' \
+            > "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256"
+          cd "$RUNNER_TEMP"
+          shasum -a 256 -c Hermes-Agent-unsigned.ipa.sha256
           SHORT_SHA="${GITHUB_SHA:0:7}"
           ARTIFACT_NAME="Hermes-Agent-build-${APP_BUILD_NUMBER}-${SHORT_SHA}"
-          printf '{"build":"%s","commit":"%s","frontend_preview":%s}\n' \
+          printf '{"build":"%s","commit":"%s","frontend_preview":%s,"sha256":"%s"}\n' \
             "$APP_BUILD_NUMBER" \
             "$GITHUB_SHA" \
             "$([ "$EXPO_PUBLIC_FRONTEND_PREVIEW" = "1" ] && printf true || printf false)" \
+            "$IPA_SHA256" \
             > "$RUNNER_TEMP/Hermes-Agent-build.json"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.artifact_name }}
+          if-no-files-found: error
           path: |
             ${{ runner.temp }}/Hermes-Agent-unsigned.ipa
             ${{ runner.temp }}/Hermes-Agent-unsigned.ipa.sha256

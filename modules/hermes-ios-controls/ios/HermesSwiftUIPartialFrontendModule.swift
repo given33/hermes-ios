@@ -30,6 +30,9 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
   case achievements
   case collaboration
   case kanban
+  case workflows
+  case approvals
+  case runtimeCenter = "runtime-center"
   case profiles
   case config
   case account
@@ -60,6 +63,9 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .achievements: return "trophy"
     case .collaboration: return "person.3"
     case .kanban: return "rectangle.3.group"
+    case .workflows: return "arrow.triangle.branch"
+    case .approvals: return "checkmark.shield"
+    case .runtimeCenter: return "waveform.path.ecg"
     case .profiles: return "person.2"
     case .config: return "slider.horizontal.3"
     case .account: return "person.crop.circle"
@@ -89,6 +95,9 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .achievements: return "成就"
     case .collaboration: return "协作"
     case .kanban: return "看板"
+    case .workflows: return "工作流"
+    case .approvals: return "审批中心"
+    case .runtimeCenter: return "运行中心"
     case .profiles: return "多 Agent 配置"
     case .config: return "配置"
     case .account: return "账户"
@@ -102,7 +111,8 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     switch self {
     case .chat, .sessions, .files, .analytics, .smartWeather, .models, .logs: return 0
     case .cron, .skills, .plugins, .mcp, .pairing, .channels, .webhooks: return 1
-    case .achievements, .collaboration, .kanban: return 2
+    case .achievements, .collaboration, .kanban, .workflows: return 2
+    case .approvals, .runtimeCenter: return 3
     case .profiles, .config, .account, .env, .system, .docs: return 3
     }
   }
@@ -113,6 +123,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case "hermes-achievements": return .achievements
     case "collaboration": return .collaboration
     case "kanban": return .kanban
+    case "workflows": return .workflows
     default: break
     }
     if path == "/profiles/new" { return .profiles }
@@ -440,10 +451,21 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     navigationBar.shadowImage = UIImage()
     var standard = navigationBar.standardAppearance
     standard.shadowColor = .clear
+    standard.shadowImage = UIImage()
     navigationBar.standardAppearance = standard
-    if let scrollEdge = navigationBar.scrollEdgeAppearance {
-      scrollEdge.shadowColor = .clear
-      navigationBar.scrollEdgeAppearance = scrollEdge
+    var scrollEdge = navigationBar.scrollEdgeAppearance ?? standard
+    scrollEdge.shadowColor = .clear
+    scrollEdge.shadowImage = UIImage()
+    navigationBar.scrollEdgeAppearance = scrollEdge
+    var compact = navigationBar.compactAppearance ?? standard
+    compact.shadowColor = .clear
+    compact.shadowImage = UIImage()
+    navigationBar.compactAppearance = compact
+    if #available(iOS 15.0, *) {
+      var compactScrollEdge = navigationBar.compactScrollEdgeAppearance ?? compact
+      compactScrollEdge.shadowColor = .clear
+      compactScrollEdge.shadowImage = UIImage()
+      navigationBar.compactScrollEdgeAppearance = compactScrollEdge
     }
   }
 
@@ -505,6 +527,7 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     }
     .tint(appearance.palette.accent)
     .background(appearance.palette.background.ignoresSafeArea())
+    .scrollDismissesKeyboard(.interactively)
     .background {
       HermesRouteReadinessProbe(
         enabled: routeContentReady,
@@ -513,6 +536,7 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       )
     }
     .onAppear { prepareDeferredContent() }
+    .onDisappear { dismissHermesKeyboard() }
     .onChange(of: props.dataJson) { next in routeData.update(dataJson: next) }
     .onChange(of: props.path) { _ in
       dismissHermesKeyboard()

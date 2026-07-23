@@ -23,7 +23,7 @@ FONT_OUTPUT = PROJECT_ROOT / "assets" / "fonts"
 PROVENANCE_FILE = FONT_OUTPUT / "PROVENANCE.json"
 CATALOG_OUTPUT = PROJECT_ROOT / "src" / "design" / "native-font-faces.generated.ts"
 ASSET_MAP_OUTPUT = PROJECT_ROOT / "src" / "app" / "native-font-assets.generated.ts"
-APP_CONFIG = PROJECT_ROOT / "app.json"
+APP_CONFIG = PROJECT_ROOT / "app.base.json"
 PRESERVED_TABLES = ("cmap", "GSUB", "GPOS")
 
 

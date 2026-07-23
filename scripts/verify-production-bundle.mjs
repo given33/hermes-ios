@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { lstatSync, readFileSync, readdirSync } from 'node:fs';
+import { isAbsolute, relative, resolve } from 'node:path';
+
+import { verifyProductionBuffers } from './production-artifact-contract.mjs';
 
 const exportRoot = resolve(process.argv[2] || '');
 if (!process.argv[2]) fail('usage: verify-production-bundle.mjs <expo-export-dir>');
@@ -10,36 +12,37 @@ const relativeBundle = metadata?.fileMetadata?.ios?.bundle;
 if (typeof relativeBundle !== 'string' || !relativeBundle) {
   fail('iOS bundle metadata is missing');
 }
-const bundle = readFileSync(resolve(exportRoot, relativeBundle));
-const forbidden = [
-  'Mapped the customized WebUI route ownership',
-  'Deployment is healthy. The gateway is listening',
-  'HMS-138',
-  'HMS-142',
-  'Complete frontend fixture routes',
-  'Given iPhone 16 Pro',
-  'Gateway deployment audit',
-  'Research digest automation',
-  'Workspace backup',
-  'Tasks Completed',
-  'native-ios',
-  'HERMES AGENT  v0.9.3',
-];
-for (const marker of forbidden) {
-  if (bundle.includes(Buffer.from(marker))) {
-    fail(`preview fixture leaked into the production bundle: ${marker}`);
-  }
+if (isAbsolute(relativeBundle)) fail('iOS bundle metadata contains an absolute path');
+const bundlePath = resolve(exportRoot, relativeBundle);
+const relativePath = relative(exportRoot, bundlePath);
+if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+  fail('iOS bundle metadata escapes the export directory');
 }
-for (const required of [
-  '/single/conversations',
-  'HermesStandardMap',
-  'hermes.native.conversations.v3',
-]) {
-  if (!bundle.includes(Buffer.from(required))) {
-    fail(`required production marker is missing: ${required}`);
-  }
-}
+const files = findFiles(exportRoot);
+if (!files.includes(bundlePath)) fail('iOS bundle metadata points to a missing export file');
+verifyProductionBuffers(readEntries(files), fail, {
+  allowedSecrets: [process.env.HERMES_AMAP_IOS_API_KEY],
+});
 console.log('Hermes production bundle contains live sources and no preview records.');
+
+function findFiles(directory) {
+  const result = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isSymbolicLink() || lstatSync(path).isSymbolicLink()) {
+      fail(`symbolic link found in production export: ${relative(exportRoot, path)}`);
+    }
+    if (entry.isDirectory()) result.push(...findFiles(path));
+    else if (entry.isFile()) result.push(path);
+  }
+  return result;
+}
+
+function* readEntries(files) {
+  for (const path of files) {
+    yield { bytes: readFileSync(path), name: relative(exportRoot, path) };
+  }
+}
 
 function fail(message) {
   console.error(`production-bundle verification failed: ${message}`);

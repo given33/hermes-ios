@@ -23,6 +23,7 @@ struct HermesRouteContent: View {
       HermesSessionsPage(
         chinese: chinese,
         sessions: data.sessions,
+        sessionContext: data.sessionContext,
         onAction: onAction
       )
     case .files:
@@ -45,6 +46,7 @@ struct HermesRouteContent: View {
         chinese: chinese,
         detectedModels: data.detectedModels,
         models: data.models,
+        confirmation: data.modelConfirmation,
         operation: data.operation,
         onAction: onAction
       )
@@ -74,6 +76,17 @@ struct HermesRouteContent: View {
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .kanban:
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
+    case .workflows:
+      HermesWorkflowsPage(
+        data: data.workflows,
+        operation: data.operation,
+        chinese: chinese,
+        onAction: onAction
+      )
+    case .approvals:
+      HermesApprovalsPage(data: data.approvals, chinese: chinese, onAction: onAction)
+    case .runtimeCenter:
+      HermesRuntimeCenterPage(data: data.runtime, chinese: chinese, onAction: onAction)
     case .profiles:
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .config:
@@ -86,6 +99,442 @@ struct HermesRouteContent: View {
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .docs:
       HermesDocsPage(chinese: chinese)
+    }
+  }
+}
+
+private struct HermesWorkflowsPage: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  @State private var locallyPendingWorkflowIds: Set<String> = []
+  @State private var workflowRequestIds: [String: String] = [:]
+  let data: HermesWorkflowSnapshot
+  let operation: HermesRouteOperationSnapshot?
+  let chinese: Bool
+  let onAction: HermesRouteActionSink
+
+  var body: some View {
+    List {
+      if data.workflows.isEmpty {
+        ContentUnavailableView(
+          chinese ? "暂无工作流" : "No workflows",
+          systemImage: "arrow.triangle.branch",
+          description: Text(chinese ? "工作流定义由 Hermes 服务器管理。" : "Workflow definitions are managed by the Hermes server.")
+        )
+      } else {
+        Section(chinese ? "工作流" : "Workflows") {
+          ForEach(data.workflows) { workflow in
+            Button {
+              onAction(.workflowSelect, HermesRouteActionPayload(route: "workflows", id: workflow.id))
+            } label: {
+              HStack(spacing: 12) {
+                Image(systemName: workflow.id == data.selectedWorkflowId ? "checkmark.circle.fill" : "arrow.triangle.branch")
+                  .foregroundStyle(appearance.palette.accent)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(workflow.name).font(HermesFonts.bodyBold(15))
+                  if !workflow.detail.isEmpty {
+                    Text(workflow.detail).font(HermesFonts.body(12)).foregroundStyle(appearance.palette.secondary)
+                  }
+                }
+                Spacer()
+                if !workflow.state.isEmpty { HermesStatusPill(text: workflow.state) }
+              }
+            }
+            .buttonStyle(.plain)
+          }
+        }
+      }
+      if let selectedId = data.selectedWorkflowId {
+        Section(chinese ? "执行" : "Execution") {
+          if let run = data.run {
+            HStack {
+              VStack(alignment: .leading, spacing: 4) {
+                Text(run.state).font(HermesFonts.bodyBold(14))
+                if let current = run.currentNodeId {
+                  Text(current).font(HermesFonts.body(12)).foregroundStyle(appearance.palette.secondary)
+                }
+              }
+              Spacer()
+              if run.canCancel {
+                Button(role: .destructive) {
+                  onAction(
+                    .workflowCancel,
+                    HermesRouteActionPayload(
+                      route: "workflows",
+                      id: run.id,
+                      requestId: "workflow-cancel-\(UUID().uuidString.lowercased())",
+                      fields: ["revision": String(run.revision)]
+                    )
+                  )
+                } label: { Image(systemName: "stop.circle") }
+              }
+            }
+            if let error = run.error, !error.isEmpty {
+              Text(error).font(HermesFonts.body(12)).foregroundStyle(appearance.palette.destructive).textSelection(.enabled)
+            }
+            if !run.canCancel {
+              workflowStartButton(
+                workflowId: selectedId,
+                title: chinese ? "再次启动" : "Start again"
+              )
+            }
+          } else {
+            workflowStartButton(
+              workflowId: selectedId,
+              title: chinese ? "启动工作流" : "Start workflow"
+            )
+          }
+        }
+        if !data.nodes.isEmpty {
+          Section(chinese ? "节点" : "Nodes") {
+            ForEach(data.nodes) { node in
+              VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                  Text(node.label).font(HermesFonts.bodyBold(14))
+                  Spacer()
+                  HermesStatusPill(text: node.state)
+                }
+                if !node.detail.isEmpty {
+                  Text(node.detail).font(HermesFonts.body(12)).foregroundStyle(appearance.palette.secondary)
+                }
+                if let run = data.run, let runNodeId = node.runNodeId, node.revision > 0 {
+                  HStack {
+                    if node.state == "failed" {
+                      Button(chinese ? "重试" : "Retry") {
+                        onAction(
+                          .workflowRetry,
+                          HermesRouteActionPayload(
+                            route: "workflows",
+                            id: run.id,
+                            targetId: runNodeId,
+                            requestId: "workflow-retry-\(UUID().uuidString.lowercased())",
+                            fields: ["revision": String(node.revision)]
+                          )
+                        )
+                      }
+                    }
+                    if node.approvalPending {
+                      Button(chinese ? "单次批准" : "Approve once") {
+                        onAction(
+                          .workflowApprove,
+                          HermesRouteActionPayload(
+                            route: "workflows",
+                            id: run.id,
+                            targetId: runNodeId,
+                            requestId: "workflow-approve-\(UUID().uuidString.lowercased())",
+                            fields: ["revision": String(node.revision)]
+                          )
+                        )
+                      }
+                    }
+                  }.buttonStyle(.bordered)
+                }
+              }.padding(.vertical, 3)
+            }
+          }
+        }
+        if !data.workspaceAudits.isEmpty {
+          Section(chinese ? "工作区审计" : "Workspace audit") {
+            ForEach(data.workspaceAudits) { audit in
+              VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                  Text(audit.nodeRunId)
+                    .font(HermesFonts.mono(10))
+                    .lineLimit(1)
+                  Spacer()
+                  HermesStatusPill(text: audit.state)
+                }
+                Text(
+                  chinese
+                    ? "\(audit.fileCount) 个文件 · \(audit.byteCount.formatted()) 字节"
+                    : "\(audit.fileCount) files · \(audit.byteCount.formatted()) bytes"
+                )
+                .font(HermesFonts.body(11))
+                .foregroundStyle(appearance.palette.secondary)
+                if !audit.reason.isEmpty {
+                  Text(audit.reason)
+                    .font(HermesFonts.body(11))
+                    .foregroundStyle(appearance.palette.destructive)
+                    .textSelection(.enabled)
+                }
+              }
+              .padding(.vertical, 2)
+            }
+          }
+        }
+        if !data.changeSets.isEmpty {
+          Section(chinese ? "运行变更" : "Run changes") {
+            ForEach(data.changeSets) { changeSet in
+              VStack(alignment: .leading, spacing: 5) {
+                Text(changeSet.summary.isEmpty ? changeSet.id : changeSet.summary)
+                  .font(HermesFonts.bodyBold(13))
+                Text(
+                  "+\(changeSet.addedCount)  ~\(changeSet.modifiedCount)  -\(changeSet.deletedCount)"
+                  + "  ·  \(changeSet.fileCount) files  ·  \(changeSet.byteCount.formatted()) bytes"
+                )
+                .font(HermesFonts.mono(10))
+                .foregroundStyle(appearance.palette.secondary)
+              }
+              .padding(.vertical, 2)
+            }
+          }
+        }
+        if let changeSet = data.selectedChangeSet {
+          Section(chinese ? "最新 Workspace Diff" : "Latest Workspace Diff") {
+            ForEach(changeSet.files) { file in
+              DisclosureGroup {
+                if file.patch.isEmpty {
+                  Text(chinese ? "没有可显示的文本 Patch" : "No textual patch is available.")
+                    .font(HermesFonts.body(11))
+                    .foregroundStyle(appearance.palette.secondary)
+                } else {
+                  ScrollView(.horizontal) {
+                    Text(file.patch)
+                      .font(.system(size: 11, design: .monospaced))
+                      .textSelection(.enabled)
+                      .fixedSize(horizontal: true, vertical: false)
+                  }
+                }
+              } label: {
+                HStack(spacing: 9) {
+                  HermesStatusPill(text: file.changeType)
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text(file.path)
+                      .font(HermesFonts.mono(10))
+                      .lineLimit(2)
+                    Text("\(file.byteCount.formatted()) bytes")
+                      .font(HermesFonts.body(10))
+                      .foregroundStyle(appearance.palette.secondary)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    .hermesListStyle()
+    .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "workflows")) }
+    .onAppear { applyWorkflowOperation(operation) }
+    .onChange(of: operation) { next in applyWorkflowOperation(next) }
+  }
+
+  @ViewBuilder private func workflowStartButton(workflowId: String, title: String) -> some View {
+    let pending = isWorkflowStartPending(workflowId)
+    Button {
+      startWorkflow(workflowId)
+    } label: {
+      if pending {
+        HStack(spacing: 8) {
+          ProgressView().controlSize(.small)
+          Text(chinese ? "启动中…" : "Starting…")
+        }
+      } else {
+        Label(title, systemImage: "play.fill")
+      }
+    }
+    .disabled(pending)
+  }
+
+  private func isWorkflowStartPending(_ workflowId: String) -> Bool {
+    locallyPendingWorkflowIds.contains(workflowId)
+      || (
+        operation?.action == HermesRouteAction.workflowStart.rawValue
+          && operation?.state == "running"
+          && operation?.targetId == workflowId
+      )
+  }
+
+  private func startWorkflow(_ workflowId: String) {
+    guard !isWorkflowStartPending(workflowId) else { return }
+    let requestId = workflowRequestIds[workflowId]
+      ?? "workflow-start-\(UUID().uuidString.lowercased())"
+    workflowRequestIds[workflowId] = requestId
+    locallyPendingWorkflowIds.insert(workflowId)
+    onAction(
+      .workflowStart,
+      HermesRouteActionPayload(
+        route: "workflows",
+        id: workflowId,
+        requestId: requestId
+      )
+    )
+  }
+
+  private func applyWorkflowOperation(_ next: HermesRouteOperationSnapshot?) {
+    guard
+      next?.action == HermesRouteAction.workflowStart.rawValue,
+      let workflowId = next?.targetId
+    else { return }
+    if let requestId = next?.requestId, !requestId.isEmpty {
+      workflowRequestIds[workflowId] = requestId
+    }
+    if next?.state == "running" {
+      locallyPendingWorkflowIds.insert(workflowId)
+      return
+    }
+    locallyPendingWorkflowIds.remove(workflowId)
+    if next?.state == "success" {
+      workflowRequestIds.removeValue(forKey: workflowId)
+    }
+  }
+}
+
+private struct HermesApprovalsPage: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let data: HermesApprovalsSnapshot
+  let chinese: Bool
+  let onAction: HermesRouteActionSink
+
+  var body: some View {
+    List {
+      if data.items.isEmpty {
+        ContentUnavailableView(
+          chinese ? "暂无待审批写入" : "No pending approvals",
+          systemImage: "checkmark.shield"
+        )
+      } else {
+        Section(chinese ? "待审批" : "Pending") {
+          ForEach(data.items) { item in
+            Button {
+              onAction(.approvalSelect, HermesRouteActionPayload(route: "approvals", id: item.id))
+            } label: {
+              HStack(spacing: 12) {
+                Image(systemName: item.subsystem == "skills" ? "shippingbox" : "brain.head.profile")
+                  .foregroundStyle(appearance.palette.accent)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(item.title).font(HermesFonts.bodyBold(14))
+                  Text(item.origin).font(HermesFonts.body(12)).foregroundStyle(appearance.palette.secondary)
+                }
+                Spacer()
+                HermesStatusPill(text: item.state)
+              }
+            }.buttonStyle(.plain)
+          }
+        }
+      }
+      if let selected = data.selected {
+        Section(chinese ? "变更内容" : "Changes") {
+          if selected.diffAvailable {
+            ScrollView(.horizontal) {
+              Text(selected.diff)
+                .font(.system(size: 12, design: .monospaced))
+                .textSelection(.enabled)
+            }
+          } else {
+            Text(chinese ? "服务器未返回可展示的 Diff。" : "The server returned no displayable diff.")
+              .foregroundStyle(appearance.palette.secondary)
+          }
+        }
+        if selected.state == "pending" {
+          Section {
+          HStack {
+            Button(role: .destructive) {
+              decide(selected, action: .approvalReject)
+            } label: { Label(chinese ? "拒绝" : "Reject", systemImage: "xmark") }
+            Spacer()
+            Button {
+              decide(selected, action: .approvalApprove)
+            } label: { Label(chinese ? "批准" : "Approve", systemImage: "checkmark") }
+              .buttonStyle(.borderedProminent)
+          }
+          }
+        }
+      }
+    }
+    .hermesListStyle()
+    .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "approvals")) }
+  }
+
+  private func decide(_ item: HermesApprovalItemSnapshot, action: HermesRouteAction) {
+    onAction(
+      action,
+      HermesRouteActionPayload(
+        route: "approvals",
+        id: item.id,
+        requestId: "approval-\(UUID().uuidString.lowercased())",
+        fields: ["revision": String(item.revision)]
+      )
+    )
+  }
+}
+
+private struct HermesRuntimeCenterPage: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let data: HermesRuntimeSnapshot
+  let chinese: Bool
+  let onAction: HermesRouteActionSink
+
+  var body: some View {
+    List {
+      if data.runs.isEmpty {
+        ContentUnavailableView(
+          chinese ? "暂无运行记录" : "No runtime records",
+          systemImage: "waveform.path.ecg"
+        )
+      } else {
+        Section(chinese ? "真实运行" : "Authoritative runs") {
+          ForEach(data.runs) { run in
+            Button {
+              onAction(.runtimeSelect, HermesRouteActionPayload(route: "runtime-center", id: run.id))
+            } label: {
+              HStack(spacing: 12) {
+                Image(systemName: runtimeSymbol(run.kind)).foregroundStyle(appearance.palette.accent)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(run.title.isEmpty ? run.id : run.title).font(HermesFonts.bodyBold(14))
+                  Text([run.kind, run.profile, run.detail].filter { !$0.isEmpty }.joined(separator: " · "))
+                    .font(HermesFonts.body(12)).foregroundStyle(appearance.palette.secondary)
+                }
+                Spacer()
+                HermesStatusPill(text: run.state)
+              }
+            }.buttonStyle(.plain)
+          }
+        }
+      }
+      if let run = data.selected {
+        Section(chinese ? "运行详情" : "Run details") {
+          LabeledContent(chinese ? "状态" : "State", value: run.state)
+          LabeledContent(chinese ? "产物" : "Artifacts", value: String(run.artifactCount))
+          if let error = run.error, !error.isEmpty {
+            Text(error).font(HermesFonts.body(12)).foregroundStyle(appearance.palette.destructive).textSelection(.enabled)
+          }
+          HStack {
+            if run.cancelable, let actionUrl = run.cancelUrl {
+              Button(role: .destructive) {
+                runtimeAction(.runtimeCancel, run: run, actionUrl: actionUrl)
+              } label: { Label(chinese ? "取消" : "Cancel", systemImage: "stop.circle") }
+            }
+            if run.retryable, let actionUrl = run.retryUrl {
+              Button {
+                runtimeAction(.runtimeRetry, run: run, actionUrl: actionUrl)
+              } label: { Label(chinese ? "重试" : "Retry", systemImage: "arrow.clockwise") }
+            }
+          }.buttonStyle(.bordered)
+        }
+      }
+    }
+    .hermesListStyle()
+    .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "runtime-center")) }
+  }
+
+  private func runtimeAction(_ action: HermesRouteAction, run: HermesRuntimeRunSnapshot, actionUrl: String) {
+    onAction(
+      action,
+      HermesRouteActionPayload(
+        route: "runtime-center",
+        id: run.id,
+        requestId: "runtime-\(UUID().uuidString.lowercased())",
+        fields: ["actionUrl": actionUrl]
+      )
+    )
+  }
+
+  private func runtimeSymbol(_ kind: String) -> String {
+    switch kind {
+    case "hosted": return "icloud.and.arrow.up"
+    case "delegation": return "person.2.wave.2"
+    case "workflow": return "arrow.triangle.branch"
+    default: return "message"
     }
   }
 }
@@ -834,6 +1283,7 @@ private struct HermesSessionsPage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let chinese: Bool
   let sessions: [HermesSessionSnapshot]
+  let sessionContext: HermesSessionContextSnapshot?
   let onAction: HermesRouteActionSink
   @State private var search = ""
   @State private var renameTarget: HermesSessionSnapshot?
@@ -846,6 +1296,115 @@ private struct HermesSessionsPage: View {
 
   var body: some View {
     List {
+      if let context = sessionContext {
+        Section {
+          LabeledContent(chinese ? "当前会话" : "Current session") {
+            Text(context.sessionId)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+              .lineLimit(1)
+          }
+          LabeledContent(chinese ? "上下文 Token" : "Context tokens") {
+            Text(context.messageTokens.formatted())
+              .font(HermesFonts.mono(12))
+          }
+          VStack(alignment: .leading, spacing: 5) {
+            Text(chinese ? "Token 明细" : "Token breakdown")
+              .font(HermesFonts.bodyBold(13))
+            Text(
+              "in \(context.inputTokens.formatted())  ·  out \(context.outputTokens.formatted())"
+              + "  ·  cache \((context.cacheReadTokens + context.cacheWriteTokens).formatted())"
+              + "  ·  reasoning \(context.reasoningTokens.formatted())"
+            )
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+          }
+          LabeledContent(chinese ? "消息" : "Messages") {
+            Text("\(context.activeMessages) / \(context.archivedMessages)")
+              .font(HermesFonts.mono(12))
+          }
+          LabeledContent(chinese ? "谱系" : "Lineage") {
+            Text(
+              chinese
+                ? "父 \(context.parentCount) · 子 \(context.childCount)"
+                : "\(context.parentCount) parent · \(context.childCount) children"
+            )
+            .font(HermesFonts.mono(11))
+          }
+          LabeledContent(chinese ? "上下文压缩" : "Compaction") {
+            Text(
+              context.compressionInProgress
+                ? (chinese ? "进行中" : "In progress")
+                : "\(context.compressionCount)"
+            )
+            .font(HermesFonts.mono(11))
+            .foregroundStyle(
+              context.compressionInProgress
+                ? appearance.palette.accent
+                : appearance.palette.secondary
+            )
+          }
+          Button {
+            onAction(
+              .sessionCompress,
+              HermesRouteActionPayload(
+                route: "sessions",
+                id: context.conversationId,
+                requestId: "session-compress-\(UUID().uuidString.lowercased())",
+                fields: ["profile": context.profile]
+              )
+            )
+          } label: {
+            Label(chinese ? "手动压缩上下文" : "Compact context", systemImage: "rectangle.compress.vertical")
+          }
+          .disabled(context.compressionInProgress)
+        } header: {
+          Text(chinese ? "上下文状态" : "Context status")
+            .font(HermesFonts.condensed(12))
+        }
+
+        if !context.compressionLineage.isEmpty {
+          Section(chinese ? "压缩边界" : "Compaction boundaries") {
+            ForEach(Array(context.compressionLineage.enumerated()), id: \.offset) { _, boundary in
+              Label {
+                Text(boundary)
+                  .font(HermesFonts.mono(10))
+                  .textSelection(.enabled)
+                  .lineLimit(1)
+              } icon: {
+                Image(systemName: "rectangle.compress.vertical")
+                  .foregroundStyle(appearance.palette.accent)
+              }
+            }
+          }
+        }
+
+        if !context.lineage.isEmpty {
+          Section(chinese ? "会话谱系" : "Session lineage") {
+            ForEach(context.lineage) { item in
+              HStack(spacing: 10) {
+                Image(systemName: item.current ? "scope" : "point.3.connected.trianglepath.dotted")
+                  .foregroundStyle(item.current ? appearance.palette.accent : appearance.palette.secondary)
+                  .frame(width: 24)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(item.title)
+                    .font(HermesFonts.bodyBold(13))
+                    .lineLimit(1)
+                  Text("\(item.model) · \(item.messageCount) msg · \(item.toolCallCount) tools")
+                    .font(HermesFonts.mono(10))
+                    .foregroundStyle(appearance.palette.secondary)
+                }
+                Spacer()
+                if item.current {
+                  HermesStatusPill(text: chinese ? "当前" : "Current")
+                }
+              }
+            }
+          }
+        }
+      }
+
       Section {
         ForEach(filtered) { session in
           Button {
@@ -899,6 +1458,18 @@ private struct HermesSessionsPage: View {
             .tint(appearance.palette.accent)
           }
           .contextMenu {
+            Button {
+              onAction(
+                .sessionSelect,
+                HermesRouteActionPayload(
+                  route: "sessions",
+                  id: session.id,
+                  fields: session.profile.map { ["profile": $0] }
+                )
+              )
+            } label: {
+              Label(chinese ? "上下文与谱系" : "Context & Lineage", systemImage: "point.3.connected.trianglepath.dotted")
+            }
             Button {
               renameText = session.title
               renameTarget = session
@@ -983,6 +1554,7 @@ private struct HermesFileSection: Identifiable {
 
 private enum HermesFileImportStaging {
   private static let directoryName = "HermesFileImports"
+  private static let maximumFileBytes = 64 * 1024 * 1024
   private static let maximumAge: TimeInterval = 24 * 60 * 60
 
   static func stage(_ sourceURLs: [URL]) -> [URL] {
@@ -1010,6 +1582,11 @@ private enum HermesFileImportStaging {
     let hasSecurityScope = sourceURL.startAccessingSecurityScopedResource()
     defer {
       if hasSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
+    }
+    if let values = try? sourceURL.resourceValues(forKeys: [.fileSizeKey]),
+       let size = values.fileSize,
+       size > maximumFileBytes {
+      return nil
     }
 
     let requestedName = sourceURL.lastPathComponent
@@ -1257,7 +1834,8 @@ private struct HermesFilesPage: View {
           HermesRouteActionPayload(
             route: "files",
             fields: ["stagedImport": "true"],
-            uris: stagedURLs.map(\.absoluteString)
+            uris: stagedURLs.map(\.absoluteString),
+            requestId: "file-import-\(UUID().uuidString.lowercased())"
           )
         )
       }
@@ -1336,15 +1914,18 @@ private struct HermesModelsPage: View {
   let chinese: Bool
   let detectedModels: [String]
   let models: [HermesModelSnapshot]
+  let confirmation: HermesModelConfirmationSnapshot?
   let operation: HermesRouteOperationSnapshot?
   let onAction: HermesRouteActionSink
   @State private var apiKey = ""
   @State private var apiMode = "chat_completions"
   @State private var baseUrl = ""
   @State private var contextLength = "131072"
+  @State private var displayedDetectedModels: [String] = []
   @State private var detectedModelsExpanded = false
   @State private var modelName = ""
   @State private var reasoningEffort = "none"
+  @State private var presentedConfirmation: HermesModelConfirmationSnapshot?
 
   private var configuration: HermesModelSnapshot? {
     models.first { $0.provider == "custom" && !$0.baseUrl.isEmpty }
@@ -1372,11 +1953,60 @@ private struct HermesModelsPage: View {
     .refreshable {
       onAction(.refresh, HermesRouteActionPayload(route: "models"))
     }
-    .onAppear { apply(configuration) }
+    .onAppear {
+      apply(configuration)
+      displayedDetectedModels = detectedModels
+    }
+    .onAppear { presentedConfirmation = confirmation }
     .onChange(of: configuration) { _, next in apply(next) }
     .onChange(of: detectedModels) { _, next in
+      displayedDetectedModels = next
       if let first = next.first, !next.contains(modelName) { modelName = first }
       if !next.isEmpty { detectedModelsExpanded = true }
+    }
+    .onChange(of: baseUrl) { _, next in
+      if next != (configuration?.baseUrl ?? "") { invalidateDetectedModels() }
+    }
+    .onChange(of: apiKey) { _, next in
+      if !next.isEmpty { invalidateDetectedModels() }
+    }
+    .onChange(of: operation) { _, next in
+      guard next?.action == "model.discover", next?.state == "success" else { return }
+      displayedDetectedModels = detectedModels
+      if let first = detectedModels.first, !detectedModels.contains(modelName) {
+        modelName = first
+      }
+      detectedModelsExpanded = !detectedModels.isEmpty
+    }
+    .onChange(of: confirmation) { _, next in presentedConfirmation = next }
+    .alert(
+      chinese ? "确认模型费用" : "Confirm model pricing",
+      isPresented: Binding(
+        get: { presentedConfirmation != nil },
+        set: { if !$0 { presentedConfirmation = nil } }
+      ),
+      presenting: presentedConfirmation
+    ) { pending in
+      Button(chinese ? "取消" : "Cancel", role: .cancel) {
+        onAction(
+          .modelSelectCancel,
+          HermesRouteActionPayload(route: "models", id: pending.id)
+        )
+        presentedConfirmation = nil
+      }
+      Button(chinese ? "仍然切换" : "Switch anyway", role: .destructive) {
+        onAction(
+          .modelSelect,
+          HermesRouteActionPayload(
+            route: "models",
+            id: pending.id,
+            fields: ["confirmExpensiveModel": "true"]
+          )
+        )
+        presentedConfirmation = nil
+      }
+    } message: { pending in
+      Text(pending.message)
     }
   }
 
@@ -1406,7 +2036,7 @@ private struct HermesModelsPage: View {
 
   @ViewBuilder private func modelRow(_ model: HermesModelSnapshot) -> some View {
     Button {
-      if !model.active {
+      if !model.active && model.selectable != false {
         onAction(
           .modelSelect,
           HermesRouteActionPayload(route: "models", id: model.id)
@@ -1434,6 +2064,25 @@ private struct HermesModelsPage: View {
           }
           .font(HermesFonts.body(11))
           .foregroundStyle(appearance.palette.secondary)
+          if let warning = model.warning, !warning.isEmpty {
+            Text(warning)
+              .font(HermesFonts.body(11))
+              .foregroundStyle(appearance.palette.destructive)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+          HStack(spacing: 8) {
+            if model.free == true { Text(chinese ? "免费" : "Free") }
+            if let input = model.priceInput, !input.isEmpty {
+              Text("in \(input)")
+            }
+            if let output = model.priceOutput, !output.isEmpty {
+              Text("out \(output)")
+            }
+            if model.supportsFast == true { Text("Fast") }
+            if model.supportsReasoning == true { Text(chinese ? "推理" : "Reasoning") }
+          }
+          .font(HermesFonts.body(10))
+          .foregroundStyle(appearance.palette.secondary)
         }
 
         Spacer(minLength: 8)
@@ -1442,6 +2091,8 @@ private struct HermesModelsPage: View {
       .padding(.vertical, 11)
     }
     .buttonStyle(.plain)
+    .disabled(model.selectable == false)
+    .opacity(model.selectable == false ? 0.55 : 1)
     .accessibilityIdentifier("hermes-model-\(model.provider)-\(model.model)")
   }
 
@@ -1479,7 +2130,7 @@ private struct HermesModelsPage: View {
     VStack(spacing: 0) {
       HStack(spacing: 6) {
         Button {
-          if detectedModels.isEmpty {
+          if displayedDetectedModels.isEmpty {
             detectModels()
           } else {
             withAnimation(.easeInOut(duration: 0.18)) {
@@ -1496,8 +2147,8 @@ private struct HermesModelsPage: View {
             Text(chinese ? "检测可用模型" : "Detect models")
               .font(HermesFonts.bodyBold(13))
             Spacer(minLength: 8)
-            if !detectedModels.isEmpty {
-              Text("\(detectedModels.count)")
+            if !displayedDetectedModels.isEmpty {
+              Text("\(displayedDetectedModels.count)")
                 .font(HermesFonts.mono(11))
                 .foregroundStyle(appearance.palette.secondary)
               Image(systemName: detectedModelsExpanded ? "chevron.up" : "chevron.down")
@@ -1512,7 +2163,7 @@ private struct HermesModelsPage: View {
         .disabled(!canDiscover || isBusy)
         .accessibilityIdentifier("hermes-detect-models")
 
-        if !detectedModels.isEmpty {
+        if !displayedDetectedModels.isEmpty {
           Button { detectModels() } label: {
             Image(systemName: "arrow.clockwise")
               .font(.system(size: 14, weight: .semibold))
@@ -1525,10 +2176,10 @@ private struct HermesModelsPage: View {
       }
       .padding(.horizontal, 10)
 
-      if detectedModelsExpanded && !detectedModels.isEmpty {
+      if detectedModelsExpanded && !displayedDetectedModels.isEmpty {
         Divider()
         LazyVStack(spacing: 0) {
-          ForEach(detectedModels, id: \.self) { model in
+          ForEach(displayedDetectedModels, id: \.self) { model in
             Button {
               modelName = model
               withAnimation(.easeInOut(duration: 0.18)) {
@@ -1553,7 +2204,7 @@ private struct HermesModelsPage: View {
               .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            if model != detectedModels.last { Divider().padding(.leading, 42) }
+            if model != displayedDetectedModels.last { Divider().padding(.leading, 42) }
           }
         }
       }
@@ -1567,7 +2218,7 @@ private struct HermesModelsPage: View {
   }
 
   @ViewBuilder private var modelNameField: some View {
-    if detectedModels.isEmpty {
+    if displayedDetectedModels.isEmpty {
       modelField(chinese ? "模型名称" : "Model", text: $modelName)
     }
   }
@@ -1670,6 +2321,7 @@ private struct HermesModelsPage: View {
   }
 
   private func detectModels() {
+    invalidateDetectedModels()
     onAction(
       .modelDiscover,
       HermesRouteActionPayload(
@@ -1677,6 +2329,11 @@ private struct HermesModelsPage: View {
         fields: ["apiKey": apiKey, "baseUrl": baseUrl]
       )
     )
+  }
+
+  private func invalidateDetectedModels() {
+    displayedDetectedModels = []
+    detectedModelsExpanded = false
   }
 
   private var isValid: Bool {

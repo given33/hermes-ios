@@ -16,7 +16,11 @@ import type {
   HermesSwiftUIRouteSnapshot,
   HermesSwiftUISkillSnapshot,
   HermesSwiftUISessionSnapshot,
+  HermesSwiftUISessionContextSnapshot,
   HermesSwiftUISystemSnapshot,
+  HermesSwiftUIWorkflowSnapshot,
+  HermesSwiftUIApprovalsSnapshot,
+  HermesSwiftUIRuntimeSnapshot,
 } from './swiftui-route-contract';
 import {
   HERMES_SWIFTUI_ROUTE_ACTIONS,
@@ -27,6 +31,7 @@ import {
   parseOfficialConversationPlaceholderId,
   type AccountFileEntry,
   type CustomModelConfiguration,
+  type ConversationSessionState,
   type SessionSummary,
 } from '../api/HermesCloudApi';
 import { isFreshObservation } from '../api/managed-node-status';
@@ -49,10 +54,25 @@ export async function loadHermesSwiftUIRouteSnapshot(
     route: routeId,
   } as const;
   switch (routeId) {
-    case 'sessions':
-      return { ...base, sessions: sessionsSnapshot(source) };
+    case 'sessions': {
+      const sessions = sessionsSnapshot(source);
+      const selected = sessions.find(({ id }) => id === selectedId);
+      const sessionState = selected && !selectedId.startsWith('official:')
+        ? await api.getConversationSessionState(selectedId, selected?.profile || profile)
+        : undefined;
+      return createHermesSwiftUISessionsSnapshot({
+        sessions: isRecord(source) ? source.sessions : [],
+        sessionState,
+      });
+    }
     case 'files':
       return { ...base, files: filesSnapshot(source) };
+    case 'workflows':
+      return { ...base, workflows: workflowsSnapshot(source, selectedId) };
+    case 'approvals':
+      return { ...base, approvals: approvalsSnapshot(source, selectedId) };
+    case 'runtime-center':
+      return { ...base, runtime: runtimeSnapshot(source, selectedId) };
     case 'analytics':
       return { ...base, analytics: analyticsSnapshot(source) };
     case 'models':
@@ -98,8 +118,12 @@ export async function performHermesSwiftUIRouteAction(
   event: HermesSwiftUIRouteActionEvent,
   profile: string,
 ): Promise<'reload' | 'none' | {
+  confirmMessage?: string;
+  confirmRequired?: boolean;
   detectedModels?: readonly string[];
   message: string;
+  model?: string;
+  provider?: string;
   reload?: boolean;
 }> {
   const { action, payload } = event;
@@ -132,15 +156,26 @@ export async function performHermesSwiftUIRouteAction(
         await api.renameConversation(payload.id, value);
       }
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionCompress:
+      if (!payload.id || payload.id.startsWith('official:')) return 'none';
+      await api.compressConversation(payload.id, {
+        focusTopic: payload.detail || '',
+        idempotencyKey: payload.requestId || `ios-compress-${Date.now().toString(36)}-${payload.id}`,
+        profile: payload.fields?.profile || profile,
+      });
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileDelete:
       if (!payload.id) return 'none';
       await api.deleteAccountFile(payload.id);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileImport:
-      for (const uri of payload.uris || []) {
+      for (const [index, uri] of (payload.uris || []).entries()) {
         const name = fileNameFromUri(uri);
         try {
-          await api.uploadAccountFile({ name, uri });
+          await api.uploadAccountFile(
+            { name, uri },
+            fileImportUploadId(payload.requestId, uri, index),
+          );
         } finally {
           if (payload.fields?.stagedImport === 'true') {
             await removeStagedFileImport(uri);
@@ -175,9 +210,25 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.modelSelect: {
       const selection = decodeModelSelection(payload.id || payload.value || '');
       if (!selection) return 'none';
-      await api.setModel(selection.provider, selection.model, profile);
+      const result = await api.setModel(
+        selection.provider,
+        selection.model,
+        profile,
+        payload.fields?.confirmExpensiveModel === 'true',
+      );
+      if (result?.confirmRequired) {
+        return {
+          confirmMessage: result.confirmMessage || 'This model has unusually high known pricing.',
+          confirmRequired: true,
+          message: '',
+          model: result.model,
+          provider: result.provider,
+        };
+      }
       return 'reload';
     }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.modelSelectCancel:
+      return 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.modelDiscover: {
       const fields = payload.fields || {};
       const result = await api.discoverCustomModels(
@@ -371,6 +422,52 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id || !value) return 'none';
       await api.sendCollaborationRoomMessage(payload.id, value, [], payload.requestId);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.workflowStart:
+      if (!payload.id) return 'none';
+      await api.startWorkflow(payload.id, profile, payload.requestId);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.workflowCancel: {
+      const revision = positiveRevision(payload.fields?.revision);
+      if (!payload.id || !revision) return 'none';
+      await api.cancelWorkflowRun(payload.id, revision, profile, payload.requestId);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.workflowRetry: {
+      const revision = positiveRevision(payload.fields?.revision);
+      if (!payload.id || !payload.targetId || !revision) return 'none';
+      await api.retryWorkflowNode(payload.id, payload.targetId, revision, profile, payload.requestId);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.workflowApprove: {
+      const revision = positiveRevision(payload.fields?.revision);
+      if (!payload.id || !payload.targetId || !revision) return 'none';
+      await api.approveWorkflowNode(payload.id, payload.targetId, revision, profile, payload.requestId);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.approvalApprove:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.approvalReject: {
+      const revision = positiveRevision(payload.fields?.revision);
+      if (!payload.id || !revision) return 'none';
+      await api.decideWriteApproval(
+        payload.id,
+        action === HERMES_SWIFTUI_ROUTE_ACTIONS.approvalApprove ? 'approve' : 'reject',
+        revision,
+        payload.requestId,
+        profile,
+      );
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.runtimeCancel:
+      if (!payload.fields?.actionUrl) return 'none';
+      await api.cancelRuntimeRun(payload.fields.actionUrl, payload.requestId);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.runtimeRetry:
+      if (!payload.fields?.actionUrl) return 'none';
+      await api.retryRuntimeRun(payload.fields.actionUrl, payload.requestId);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.workflowSelect:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.approvalSelect:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.runtimeSelect:
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionSelect:
     case HERMES_SWIFTUI_ROUTE_ACTIONS.logsFilter:
       return 'none';
@@ -410,10 +507,51 @@ function sessionsSnapshot(source: unknown): HermesSwiftUISessionSnapshot[] {
 export function createHermesSwiftUISessionsSnapshot(
   source: unknown,
 ): HermesSwiftUIRouteSnapshot {
+  const sessionState = isRecord(source) && isConversationSessionState(source.sessionState)
+    ? source.sessionState
+    : undefined;
   return {
     version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
     route: 'sessions',
     sessions: sessionsSnapshot(source),
+    sessionContext: sessionState ? sessionContextSnapshot(sessionState) : undefined,
+  };
+}
+
+function sessionContextSnapshot(
+  state: ConversationSessionState,
+): HermesSwiftUISessionContextSnapshot {
+  const currentId = state.lineage.current_session_id || state.session_id;
+  return {
+    conversationId: state.conversation_id,
+    sessionId: state.session_id,
+    profile: state.profile,
+    model: state.context.model?.trim() || 'Hermes',
+    activeMessages: state.context.active_messages,
+    archivedMessages: state.context.archived_messages,
+    messageTokens: state.context.message_tokens,
+    inputTokens: state.context.input_tokens,
+    outputTokens: state.context.output_tokens,
+    cacheReadTokens: state.context.cache_read_tokens,
+    cacheWriteTokens: state.context.cache_write_tokens,
+    reasoningTokens: state.context.reasoning_tokens,
+    compressionLineage: state.context.compression_lineage,
+    compressionCount: state.context.compression_count,
+    compressionInProgress: state.context.compression_in_progress,
+    parentCount: state.lineage.edges.filter(({ child_id }) => child_id === currentId).length,
+    childCount: state.lineage.edges.filter(({ parent_id }) => parent_id === currentId).length,
+    lineage: state.lineage.sessions.map((session) => ({
+      id: session.id,
+      title: session.title?.trim() || session.id,
+      parentSessionId: session.parent_session_id?.trim() || undefined,
+      source: session.source?.trim() || '',
+      model: session.model?.trim() || 'Hermes',
+      startedAt: session.started_at || undefined,
+      endedAt: session.ended_at || undefined,
+      messageCount: session.message_count || 0,
+      toolCallCount: session.tool_call_count || 0,
+      current: session.id === currentId,
+    })),
   };
 }
 
@@ -452,6 +590,246 @@ function formatFileDate(timestamp: number): string {
     month: '2-digit',
     year: 'numeric',
   }).format(new Date(timestamp));
+}
+
+function workflowsSnapshot(source: unknown, selectedId: string): HermesSwiftUIWorkflowSnapshot {
+  if (!isRecord(source)) {
+    return { workflows: [], nodes: [], edges: [], changeSets: [], workspaceAudits: [] };
+  }
+  const definitions = recordArray(source.definitions);
+  const runs = recordArray(source.runs);
+  const selectedEnvelope = isRecord(source.selected_definition) ? source.selected_definition : {};
+  const selectedCandidate = isRecord(selectedEnvelope.definition)
+    ? selectedEnvelope.definition
+    : selectedEnvelope;
+  const selected = stringValue(selectedCandidate.id)
+    ? selectedCandidate
+    : definitions.find((entry) => stringValue(entry.id) === selectedId);
+  const selectedWorkflowId = stringValue(selected?.id) || undefined;
+  const selectedRuns = selectedWorkflowId
+    ? runs.filter((entry) => stringValue(entry.definition_id) === selectedWorkflowId)
+    : [];
+  const runRecord = selectedRuns[0];
+  const workspaceEnvelope = isRecord(source.workspace_changes) ? source.workspace_changes : {};
+  const changeSets = recordArray(workspaceEnvelope.change_sets).map(workspaceChangeSetSnapshot);
+  const workspaceAudits = recordArray(workspaceEnvelope.workspace_audits).map(workspaceAuditSnapshot);
+  const detailEnvelope = isRecord(source.selected_change_set) ? source.selected_change_set : {};
+  const detailRecord = isRecord(detailEnvelope.change_set)
+    ? detailEnvelope.change_set
+    : stringValue(detailEnvelope.id) ? detailEnvelope : undefined;
+  const nodeRuns = recordArray(runRecord?.node_runs);
+  const latestNodeRuns = new Map<string, Record<string, unknown>>();
+  for (const nodeRun of nodeRuns) {
+    const key = stringValue(nodeRun.node_key);
+    if (!key) continue;
+    const current = latestNodeRuns.get(key);
+    if (!current || numberValue(nodeRun.attempt) >= numberValue(current.attempt)) {
+      latestNodeRuns.set(key, nodeRun);
+    }
+  }
+  const spec = isRecord(selected?.spec) ? selected.spec : {};
+  const nodes = recordArray(spec.nodes).map((node) => {
+    const id = stringValue(node.id);
+    const nodeRun = latestNodeRuns.get(id);
+    const nodeRunSpec = isRecord(nodeRun?.spec) ? nodeRun.spec : {};
+    const requiresApproval = node.requires_approval === true
+      || node.approval_required === true
+      || nodeRunSpec.requires_approval === true;
+    const state = stringValue(nodeRun?.state) || 'pending';
+    return {
+      id,
+      runNodeId: stringValue(nodeRun?.id) || undefined,
+      label: stringValue(node.label) || stringValue(node.name) || id,
+      kind: stringValue(node.kind) || stringValue(node.type),
+      state,
+      detail: stringValue(node.description) || stringValue(nodeRun?.error),
+      x: finiteNumber(node.x),
+      y: finiteNumber(node.y),
+      requiresApproval,
+      approvalPending: requiresApproval && state === 'ready',
+      revision: positiveRevision(nodeRun?.revision) || 0,
+    };
+  }).filter((node) => node.id);
+  const edges = recordArray(spec.edges).map((edge, index) => {
+    const sourceId = stringValue(edge.source);
+    const targetId = stringValue(edge.target);
+    return {
+      id: stringValue(edge.id) || `${sourceId}:${targetId}:${index}`,
+      source: sourceId,
+      target: targetId,
+      label: stringValue(edge.label) || stringValue(edge.condition),
+      state: stringValue(edge.state),
+    };
+  }).filter((edge) => edge.source && edge.target);
+  return {
+    selectedWorkflowId,
+    workflows: definitions.map((definition) => {
+      const definitionId = stringValue(definition.id);
+      const activeRun = runs.find((entry) => stringValue(entry.definition_id) === definitionId);
+      return {
+        id: definitionId,
+        name: stringValue(definition.name),
+        detail: stringValue(definition.description),
+        revision: positiveRevision(definition.revision) || 0,
+        state: stringValue(activeRun?.state),
+        updatedAt: epochMilliseconds(definition.updated_at),
+        activeRunId: stringValue(activeRun?.id) || undefined,
+      };
+    }).filter((definition) => definition.id),
+    nodes,
+    edges,
+    run: runRecord ? workflowRunSnapshot(runRecord) : undefined,
+    changeSets,
+    workspaceAudits,
+    selectedChangeSet: detailRecord ? workspaceChangeSetDetailSnapshot(detailRecord) : undefined,
+  };
+}
+
+function workflowRunSnapshot(run: Record<string, unknown>) {
+  const nodeRuns = recordArray(run.node_runs);
+  const startedAt = epochMilliseconds(run.created_at);
+  const completedAt = epochMilliseconds(run.finished_at);
+  const current = nodeRuns.find((node) => ['ready', 'dispatched', 'running'].includes(stringValue(node.state)));
+  const failed = nodeRuns.find((node) => stringValue(node.error));
+  const state = stringValue(run.state);
+  return {
+    id: stringValue(run.id),
+    workflowId: stringValue(run.definition_id),
+    state,
+    startedAt,
+    completedAt,
+    durationMs: startedAt ? Math.max(0, (completedAt || Date.now()) - startedAt) : undefined,
+    currentNodeId: stringValue(current?.node_key) || undefined,
+    error: stringValue(run.error) || stringValue(failed?.error) || undefined,
+    canCancel: state === 'running',
+    canRetry: state === 'failed',
+    revision: positiveRevision(run.revision) || 0,
+  };
+}
+
+function workspaceChangeSetSnapshot(entry: Record<string, unknown>) {
+  const counts = isRecord(entry.change_counts) ? entry.change_counts : {};
+  return {
+    id: stringValue(entry.id),
+    runId: stringValue(entry.run_id),
+    turnId: stringValue(entry.turn_id),
+    summary: stringValue(entry.summary),
+    createdAt: epochMilliseconds(entry.created_at),
+    fileCount: numberValue(entry.file_count),
+    byteCount: numberValue(entry.byte_count),
+    addedCount: numberValue(counts.added),
+    modifiedCount: numberValue(counts.modified),
+    deletedCount: numberValue(counts.deleted),
+    renamedCount: numberValue(counts.renamed),
+  };
+}
+
+function workspaceAuditSnapshot(entry: Record<string, unknown>) {
+  return {
+    nodeRunId: stringValue(entry.node_run_id),
+    runId: stringValue(entry.run_id),
+    state: stringValue(entry.state),
+    reason: stringValue(entry.reason),
+    fileCount: numberValue(entry.file_count),
+    byteCount: numberValue(entry.byte_count),
+    changeSetId: stringValue(entry.change_set_id) || undefined,
+    updatedAt: epochMilliseconds(entry.updated_at),
+    finalizedAt: epochMilliseconds(entry.finalized_at),
+  };
+}
+
+function workspaceChangeSetDetailSnapshot(entry: Record<string, unknown>) {
+  return {
+    id: stringValue(entry.id),
+    runId: stringValue(entry.run_id),
+    turnId: stringValue(entry.turn_id),
+    summary: stringValue(entry.summary),
+    createdAt: epochMilliseconds(entry.created_at),
+    files: recordArray(entry.files).map((file) => ({
+      path: stringValue(file.path),
+      changeType: stringValue(file.change_type),
+      sha256: stringValue(file.sha256),
+      byteCount: numberValue(file.byte_count),
+      patch: stringValue(file.patch),
+    })).filter(({ path }) => path),
+  };
+}
+
+function approvalsSnapshot(source: unknown, selectedId: string): HermesSwiftUIApprovalsSnapshot {
+  if (!isRecord(source)) return { items: [] };
+  const items = recordArray(source.approvals).map((entry) => approvalSnapshot(entry));
+  const selectedRecord = isRecord(source.approval)
+    ? source.approval
+    : recordArray(source.approvals).find((entry) => stringValue(entry.id) === selectedId);
+  const selected = selectedRecord ? approvalSnapshot(selectedRecord) : undefined;
+  return {
+    selectedId: selected?.id || undefined,
+    items,
+    selected,
+  };
+}
+
+function approvalSnapshot(entry: Record<string, unknown>) {
+  const payload = isRecord(entry.payload) ? entry.payload : {};
+  const diff = stringValue(entry.diff);
+  return {
+    id: stringValue(entry.id),
+    title: stringValue(entry.summary) || stringValue(entry.action),
+    summary: stringValue(entry.summary),
+    subsystem: stringValue(entry.subsystem),
+    action: stringValue(entry.action),
+    origin: stringValue(entry.origin),
+    profile: stringValue(entry.profile),
+    state: stringValue(entry.state),
+    target: stringValue(payload.path) || stringValue(payload.name) || stringValue(payload.target),
+    revision: positiveRevision(entry.revision) || 0,
+    createdAt: epochMilliseconds(entry.created_at),
+    expiresAt: epochMilliseconds(entry.expires_at),
+    diff,
+    diffAvailable: Boolean(diff),
+  };
+}
+
+function runtimeSnapshot(source: unknown, selectedId: string): HermesSwiftUIRuntimeSnapshot {
+  if (!isRecord(source)) return { runs: [] };
+  const runs = recordArray(source.runs).map((entry) => runtimeRunSnapshot(entry));
+  const selectedEnvelope = isRecord(source.selected_run) ? source.selected_run : {};
+  const selectedRecord = isRecord(selectedEnvelope.run)
+    ? selectedEnvelope.run
+    : stringValue(selectedEnvelope.id)
+      ? selectedEnvelope
+      : recordArray(source.runs).find((entry) => stringValue(entry.id) === selectedId);
+  const selected = selectedRecord ? runtimeRunSnapshot(selectedRecord) : undefined;
+  return { selectedRunId: selected?.id || undefined, runs, selected };
+}
+
+function runtimeRunSnapshot(entry: Record<string, unknown>) {
+  const startedAt = epochMilliseconds(entry.started_at);
+  const completedAt = epochMilliseconds(entry.completed_at);
+  const updatedAt = epochMilliseconds(entry.updated_at);
+  const artifacts = Array.isArray(entry.artifacts) ? entry.artifacts : [];
+  return {
+    id: stringValue(entry.id),
+    title: stringValue(entry.title) || stringValue(entry.source_run_id),
+    kind: stringValue(entry.source),
+    state: stringValue(entry.status),
+    profile: stringValue(entry.profile),
+    detail: stringValue(entry.current_node) || stringValue(entry.session_id),
+    startedAt,
+    completedAt,
+    heartbeatAt: updatedAt,
+    observedAt: updatedAt,
+    durationMs: startedAt ? Math.max(0, (completedAt || updatedAt || Date.now()) - startedAt) : undefined,
+    cancelable: entry.cancel_supported === true && Boolean(stringValue(entry.cancel_url)),
+    retryable: entry.retry_supported === true && Boolean(stringValue(entry.retry_url)),
+    conversationId: stringValue(entry.conversation_id) || undefined,
+    workflowId: stringValue(entry.workflow_id) || undefined,
+    error: stringValue(entry.error) || undefined,
+    artifactCount: artifacts.length,
+    changeSetId: stringValue(entry.change_set_id) || undefined,
+    cancelUrl: stringValue(entry.cancel_url) || undefined,
+    retryUrl: stringValue(entry.retry_url) || undefined,
+  };
 }
 
 function analyticsSnapshot(source: unknown) {
@@ -504,6 +882,16 @@ function modelsSnapshot(source: unknown): HermesSwiftUIModelSnapshot[] {
     if (!isRecord(providerEntry)) continue;
     const provider = stringValue(providerEntry.slug);
     if (!provider || !Array.isArray(providerEntry.models)) continue;
+    const authenticated = providerEntry.authenticated !== false;
+    const warning = stringValue(providerEntry.warning);
+    const freeTier = providerEntry.free_tier === true;
+    const unavailableModels = new Set(
+      Array.isArray(providerEntry.unavailable_models)
+        ? providerEntry.unavailable_models.filter((value): value is string => typeof value === 'string')
+        : [],
+    );
+    const pricing = isRecord(providerEntry.pricing) ? providerEntry.pricing : {};
+    const capabilities = isRecord(providerEntry.capabilities) ? providerEntry.capabilities : {};
     for (const modelEntry of providerEntry.models) {
       const model = typeof modelEntry === 'string'
         ? modelEntry
@@ -515,6 +903,8 @@ function modelsSnapshot(source: unknown): HermesSwiftUIModelSnapshot[] {
       const contextLength = active
         ? currentContextLength
         : isRecord(modelEntry) ? numberValue(modelEntry.context_length) : 0;
+      const modelPricing = isRecord(pricing[model]) ? pricing[model] : {};
+      const modelCapabilities = isRecord(capabilities[model]) ? capabilities[model] : {};
       add({
         active,
         apiKeyConfigured: false,
@@ -527,12 +917,35 @@ function modelsSnapshot(source: unknown): HermesSwiftUIModelSnapshot[] {
         model,
         provider,
         reasoningEffort: 'none',
+        authenticated,
+        selectable: authenticated && !unavailableModels.has(model),
+        warning,
+        priceInput: stringValue(modelPricing.input),
+        priceOutput: stringValue(modelPricing.output),
+        priceCache: stringValue(modelPricing.cache),
+        free: modelPricing.free === true,
+        freeTier,
+        supportsFast: modelCapabilities.fast === true,
+        supportsReasoning: modelCapabilities.reasoning === true,
       });
     }
   }
 
   if (currentProvider && currentModel) {
-    add({
+    const currentId = encodeModelSelection(currentProvider, currentModel);
+    const providerEntry = providers.find((value) => (
+      isRecord(value) && stringValue(value.slug) === currentProvider
+    ));
+    const providerRecord = isRecord(providerEntry) ? providerEntry : {};
+    const authenticated = providerEntry === undefined || providerRecord.authenticated !== false;
+    const unavailable = Array.isArray(providerRecord.unavailable_models)
+      && providerRecord.unavailable_models.includes(currentModel);
+    const pricing = isRecord(providerRecord.pricing) && isRecord(providerRecord.pricing[currentModel])
+      ? providerRecord.pricing[currentModel] : {};
+    const capabilities = isRecord(providerRecord.capabilities)
+      && isRecord(providerRecord.capabilities[currentModel])
+      ? providerRecord.capabilities[currentModel] : {};
+    if (!indexes.has(currentId)) add({
       active: true,
       apiKeyConfigured: false,
       apiKeyPreview: '',
@@ -540,15 +953,29 @@ function modelsSnapshot(source: unknown): HermesSwiftUIModelSnapshot[] {
       baseUrl: '',
       context: formatContextLength(currentContextLength),
       contextLength: currentContextLength,
-      id: encodeModelSelection(currentProvider, currentModel),
+      id: currentId,
       model: currentModel,
       provider: currentProvider,
       reasoningEffort: 'none',
+      authenticated,
+      selectable: authenticated && !unavailable,
+      warning: stringValue(providerRecord.warning),
+      priceInput: stringValue(pricing.input),
+      priceOutput: stringValue(pricing.output),
+      priceCache: stringValue(pricing.cache),
+      free: pricing.free === true,
+      freeTier: providerRecord.free_tier === true,
+      supportsFast: capabilities.fast === true,
+      supportsReasoning: capabilities.reasoning === true,
     });
   }
 
   const customModel = stringValue(custom.model);
   if (customModel) {
+    const customId = encodeModelSelection('custom', customModel);
+    const existingCustomIndex = indexes.get(customId);
+    const existingCustom = existingCustomIndex === undefined
+      ? undefined : snapshots[existingCustomIndex];
     const contextLength = numberValue(custom.contextLength)
       || (currentProvider === 'custom' && customModel === currentModel ? currentContextLength : 0);
     add({
@@ -559,10 +986,20 @@ function modelsSnapshot(source: unknown): HermesSwiftUIModelSnapshot[] {
       baseUrl: stringValue(custom.baseUrl),
       context: formatContextLength(contextLength),
       contextLength,
-      id: encodeModelSelection('custom', customModel),
+      id: customId,
       model: customModel,
       provider: 'custom',
       reasoningEffort: customReasoningEffort(stringValue(custom.reasoningEffort)),
+      authenticated: custom.apiKeyConfigured === true || stringValue(custom.baseUrl).length > 0,
+      selectable: custom.apiKeyConfigured === true || stringValue(custom.baseUrl).length > 0,
+      warning: existingCustom?.warning || '',
+      priceInput: existingCustom?.priceInput || '',
+      priceOutput: existingCustom?.priceOutput || '',
+      priceCache: existingCustom?.priceCache || '',
+      free: existingCustom?.free || false,
+      freeTier: existingCustom?.freeTier || false,
+      supportsFast: existingCustom?.supportsFast || false,
+      supportsReasoning: existingCustom?.supportsReasoning ?? true,
     });
   }
 
@@ -958,9 +1395,13 @@ async function presentAccountFile(
   const target = new File(Paths.cache, safeFileName(name));
   target.create({ intermediates: true, overwrite: true });
   target.write(new Uint8Array(await blob.arrayBuffer()));
-  const presented = shareOnly ? false : await quickLook.presentQuickLook(target.uri, name);
-  if (!presented && await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(target.uri, { dialogTitle: name });
+  try {
+    const presented = shareOnly ? false : await quickLook.presentQuickLook(target.uri, name);
+    if (!presented && await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(target.uri, { dialogTitle: name });
+    }
+  } finally {
+    if (target.exists) target.delete();
   }
 }
 
@@ -979,10 +1420,26 @@ async function presentSkillContent(
   const target = new File(Paths.cache, safeFileName(`${name}-SKILL.md`));
   target.create({ intermediates: true, overwrite: true });
   target.write(content);
-  const presented = await quickLook.presentQuickLook(target.uri, `${name}/SKILL.md`);
-  if (!presented && await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(target.uri);
+  try {
+    const presented = await quickLook.presentQuickLook(target.uri, `${name}/SKILL.md`);
+    if (!presented && await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(target.uri);
+    }
+  } finally {
+    if (target.exists) target.delete();
   }
+}
+
+function fileImportUploadId(requestId: string | undefined, uri: string, index: number): string {
+  const stableRequest = requestId?.trim() || `file-import-${Date.now().toString(36)}`;
+  let hash = 2166136261;
+  for (const char of uri) {
+    hash ^= char.codePointAt(0) || 0;
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${stableRequest}-${index}-${(hash >>> 0).toString(16)}`
+    .replace(/[^A-Za-z0-9._:-]/g, '-')
+    .slice(0, 256);
 }
 
 function fileNameFromUri(value: string): string {
@@ -1043,6 +1500,20 @@ function isSessionSummary(value: unknown): value is SessionSummary {
     && typeof value.id === 'string'
     && typeof value.message_count === 'number'
     && typeof value.tool_call_count === 'number';
+}
+
+function isConversationSessionState(value: unknown): value is ConversationSessionState {
+  if (!isRecord(value) || !isRecord(value.context) || !isRecord(value.lineage)) {
+    return false;
+  }
+  return typeof value.conversation_id === 'string'
+    && typeof value.profile === 'string'
+    && typeof value.session_id === 'string'
+    && typeof value.context.session_id === 'string'
+    && Array.isArray(value.context.compression_lineage)
+    && typeof value.lineage.current_session_id === 'string'
+    && Array.isArray(value.lineage.sessions)
+    && Array.isArray(value.lineage.edges);
 }
 
 function isAccountFileEntry(value: unknown): value is AccountFileEntry {
@@ -1138,6 +1609,25 @@ function hashString(value: string): string {
 
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function positiveRevision(value: unknown): number | undefined {
+  const revision = typeof value === 'number' ? value : Number(value);
+  return Number.isInteger(revision) && revision > 0 ? revision : undefined;
+}
+
+function epochMilliseconds(value: unknown): number | undefined {
+  const timestamp = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return undefined;
+  return timestamp < 10_000_000_000 ? timestamp * 1_000 : timestamp;
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
 function stringValue(value: unknown): string {

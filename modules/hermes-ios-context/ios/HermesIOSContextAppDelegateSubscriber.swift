@@ -39,8 +39,11 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
-    if let ownerScope = Self.accountDeletionOwnerScope(userInfo) {
-      _ = HermesAccountLifecycle.deleteOwnerScope(ownerScope)
+    if let tombstone = Self.accountDeletionTombstone(userInfo) {
+      _ = HermesAccountLifecycle.deleteOwnerScope(
+        tombstone.ownerScope,
+        requestedAt: tombstone.requestedAt
+      )
       completionHandler(.newData)
       return
     }
@@ -89,6 +92,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   private func resumePowerMonitoringIfEligible() {
     guard !HermesContextEventQueue.shared.isCollectionSuspended else { return }
+    guard HermesContextEventQueue.shared.hasCurrentOwner else { return }
     HermesDeviceService.shared.startMonitoringPowerChanges()
   }
 
@@ -109,19 +113,38 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     HermesContextEventQueue.shared.enqueue(type: "screen-time", payload: payload)
   }
 
-  private static func accountDeletionOwnerScope(
+  private static func accountDeletionTombstone(
     _ userInfo: [AnyHashable: Any]
-  ) -> String? {
+  ) -> (ownerScope: String, requestedAt: Double)? {
     guard let hermes = userInfo["hermes"] as? [String: Any],
           hermes["category"] as? String == "account-deletion",
           let data = hermes["data"] as? [String: Any],
           data["action"] as? String == "delete-account-data",
-          let ownerScope = data["owner_scope"] as? String else {
+          let ownerScope = data["owner_scope"] as? String,
+          let requestedAt = normalizedEpochMilliseconds(data["requested_at"]),
+          let validUntil = normalizedEpochMilliseconds(data["valid_until"]),
+          requestedAt <= validUntil,
+          validUntil > Date().timeIntervalSince1970 * 1000 else {
       return nil
     }
     let normalized = ownerScope.trimmingCharacters(in: .whitespacesAndNewlines)
-    return normalized.isEmpty ? nil : normalized
+    return normalized.isEmpty ? nil : (normalized, requestedAt)
   }
+}
+
+private func normalizedEpochMilliseconds(_ value: Any?) -> Double? {
+  let number: Double
+  if let value = value as? NSNumber {
+    number = value.doubleValue
+  } else if let value = value as? Double {
+    number = value
+  } else if let value = value as? Int {
+    number = Double(value)
+  } else {
+    return nil
+  }
+  guard number.isFinite, number > 0 else { return nil }
+  return number > 10_000_000_000 ? number : number * 1000
 }
 
 private func hermesJSONSafe(_ value: Any) -> Any {

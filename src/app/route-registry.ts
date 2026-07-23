@@ -23,7 +23,10 @@ export type NativeRouteId =
   | 'chat'
   | 'achievements'
   | 'kanban'
-  | 'collaboration';
+  | 'collaboration'
+  | 'workflows'
+  | 'approvals'
+  | 'runtime-center';
 
 export interface NativeRouteDefinition {
   id: NativeRouteId;
@@ -57,6 +60,8 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'profile-new', path: '/profiles/new', visibleInSidebar: false },
   { id: 'config', path: '/config', visibleInSidebar: true },
   { id: 'account', path: '/account', visibleInSidebar: true },
+  { id: 'approvals', path: '/approvals', visibleInSidebar: true },
+  { id: 'runtime-center', path: '/runtime-center', visibleInSidebar: true },
   { id: 'env', path: '/env', visibleInSidebar: true },
   { id: 'docs', path: '/docs', visibleInSidebar: true },
   { id: 'chat', path: '/chat', visibleInSidebar: true },

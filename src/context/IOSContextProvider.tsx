@@ -22,6 +22,7 @@ import {
   type IOSHealthSummary,
 } from '../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../api/HermesApiClient';
+import { withDeadline } from '../api/async-deadline';
 import {
   IOSIntelligenceApi,
   type IOSContextEvent,
@@ -58,6 +59,7 @@ interface PersistedIOSDeviceCommand extends IOSDeviceCommand {
 const EVENT_BATCH_SIZE = 200;
 const FOREGROUND_SYNC_MS = 20_000;
 const SNAPSHOT_SYNC_MS = 30 * 60_000;
+const NETWORK_PROBE_DEADLINE_MS = 5_000;
 
 interface IOSPermissionContextValue {
   openSettings(): Promise<void>;
@@ -375,14 +377,12 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     }, SNAPSHOT_SYNC_MS);
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        if (permissionSnapshotRef.current.phase === 'paused'
-          || permissionSettingsOpenedRef.current) {
-          permissionSettingsOpenedRef.current = false;
-          setPermissionAttempt((value) => value + 1);
-        }
+        // Permission grants can be revoked in Settings while the app is in
+        // the background. Re-read every native status before collectors and
+        // MCP commands use the cached account-scoped snapshot again.
+        permissionSettingsOpenedRef.current = false;
+        setPermissionAttempt((value) => value + 1);
         setScreenTimeReportRefresh(Date.now());
-        synchronize();
-        void syncSnapshots().catch(() => undefined);
       }
     });
 
@@ -460,7 +460,11 @@ const styles = StyleSheet.create({
 
 async function hasUsableNetwork(): Promise<boolean> {
   try {
-    const state = await NetInfo.fetch();
+    const state = await withDeadline(
+      NetInfo.fetch(),
+      NETWORK_PROBE_DEADLINE_MS,
+      'network reachability probe timed out',
+    );
     return state.isConnected !== false && state.isInternetReachable !== false;
   } catch {
     // An unavailable reachability probe must not strand the durable queue.
@@ -656,7 +660,9 @@ async function executeDeviceCommand(
     case 'ios-map:refresh': {
       return {
         location: await HermesIOSContext.requestCurrentLocation(),
-        map: 'MKMapView.standard.flat',
+        map: 'native-standard-map',
+        preferredProvider: 'amap',
+        fallbackProvider: 'mapkit',
         showsPredictions: false,
       };
     }

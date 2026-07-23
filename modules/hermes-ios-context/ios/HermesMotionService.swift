@@ -38,7 +38,9 @@ final class HermesMotionService {
 
   @discardableResult
   func start() -> Bool {
+    guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return false }
     guard CMMotionActivityManager.isActivityAvailable() else { return false }
+    guard CMMotionActivityManager.authorizationStatus() == .authorized else { return false }
     manager.startActivityUpdates(to: queue) { [weak self] activity in
       guard let self, let activity else { return }
       let payload: [String: Any] = [

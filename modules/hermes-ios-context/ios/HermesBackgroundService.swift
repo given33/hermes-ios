@@ -26,6 +26,7 @@ final class HermesBackgroundService {
 
   func schedule() {
     guard !HermesContextEventQueue.shared.isCollectionSuspended else { return }
+    guard HermesContextEventQueue.shared.hasCurrentOwner else { return }
     let refresh = BGAppRefreshTaskRequest(identifier: Self.appRefreshIdentifier)
     refresh.earliestBeginDate = Date(timeIntervalSinceNow: 20 * 60)
     try? BGTaskScheduler.shared.submit(refresh)
@@ -44,7 +45,8 @@ final class HermesBackgroundService {
 
   @discardableResult
   func notifyRelayWake(reason: String, completion: ((Bool) -> Void)? = nil) -> String {
-    guard !HermesContextEventQueue.shared.isCollectionSuspended else {
+    guard !HermesContextEventQueue.shared.isCollectionSuspended,
+          HermesContextEventQueue.shared.hasCurrentOwner else {
       completion?(false)
       return ""
     }
@@ -83,7 +85,8 @@ final class HermesBackgroundService {
   }
 
   private func handle(task: BGTask) {
-    guard !HermesContextEventQueue.shared.isCollectionSuspended else {
+    guard !HermesContextEventQueue.shared.isCollectionSuspended,
+          HermesContextEventQueue.shared.hasCurrentOwner else {
       task.setTaskCompleted(success: true)
       return
     }

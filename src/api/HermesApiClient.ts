@@ -13,8 +13,12 @@ import {
   mintWebSocketTicket,
   type HermesWebSocketPath,
 } from './ws-ticket';
+import { AsyncDeadlineError } from './async-deadline';
+
+export const HERMES_REQUEST_DEADLINE_MS = 30_000;
 
 export interface HermesRequestOptions extends RequestInit {
+  deadlineMs?: number;
   profile?: string;
   query?: HermesQuery;
 }
@@ -101,10 +105,12 @@ export class HermesApiClient {
 
   async request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
     const {
+      deadlineMs = HERMES_REQUEST_DEADLINE_MS,
       headers: callerHeaders,
       profile,
       query,
       redirect: unsupportedRedirect,
+      signal: callerSignal,
       ...requestInit
     } = options;
     void unsupportedRedirect;
@@ -113,57 +119,63 @@ export class HermesApiClient {
     if (profile !== undefined) url.searchParams.set('profile', profile);
     this.assertUrlHasNoCredentials(url, this.currentCredentialSecrets());
 
-    const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
-      url,
-      callerHeaders,
-      requestInit,
-    );
-    const body = await response.text();
-
-    if (!response.ok) {
-      throw new HermesApiError(
-        response.status,
-        safeResponseDetail(body, response, attemptedTokens),
+    return withRequestDeadline(async (signal) => {
+      const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
+        url,
+        callerHeaders,
+        { ...requestInit, signal },
       );
-    }
-    if (!body) return undefined as T;
+      const body = await response.text();
 
-    const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
-    if (contentType.includes('/json') || contentType.includes('+json')) {
-      try {
-        return JSON.parse(body) as T;
-      } catch {
-        throw new Error('Hermes returned invalid JSON');
+      if (!response.ok) {
+        throw new HermesApiError(
+          response.status,
+          safeResponseDetail(body, response, attemptedTokens),
+        );
       }
-    }
-    return body as T;
+      if (!body) return undefined as T;
+
+      const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
+      if (contentType.includes('/json') || contentType.includes('+json')) {
+        try {
+          return JSON.parse(body) as T;
+        } catch {
+          throw new Error('Hermes returned invalid JSON');
+        }
+      }
+      return body as T;
+    }, callerSignal, deadlineMs, 'Hermes request timed out');
   }
 
   async download(path: string, options: HermesRequestOptions = {}): Promise<Blob> {
     const {
+      deadlineMs = HERMES_REQUEST_DEADLINE_MS,
       headers: callerHeaders,
       profile,
       query,
       redirect: unsupportedRedirect,
+      signal: callerSignal,
       ...requestInit
     } = options;
     void unsupportedRedirect;
     const url = this.createSameOriginUrl(path);
     mergeQuery(url, query);
     if (profile !== undefined) url.searchParams.set('profile', profile);
-    const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
-      url,
-      callerHeaders,
-      requestInit,
-    );
-    if (!response.ok) {
-      const body = await response.text();
-      throw new HermesApiError(
-        response.status,
-        safeResponseDetail(body, response, attemptedTokens),
+    return withRequestDeadline(async (signal) => {
+      const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
+        url,
+        callerHeaders,
+        { ...requestInit, signal },
       );
-    }
-    return response.blob();
+      if (!response.ok) {
+        const body = await response.text();
+        throw new HermesApiError(
+          response.status,
+          safeResponseDetail(body, response, attemptedTokens),
+        );
+      }
+      return response.blob();
+    }, callerSignal, deadlineMs, 'Hermes download timed out');
   }
 
   createAttachmentUrl(path: string, query?: HermesQuery): string {
@@ -416,4 +428,44 @@ function secretEncodings(secret: string): string[] {
 
 function percentEscapesToLowerCase(value: string): string {
   return value.replace(/%[0-9A-F]{2}/g, (escape) => escape.toLowerCase());
+}
+
+async function withRequestDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  callerSignal: AbortSignal | null | undefined,
+  timeoutMs: number,
+  message: string,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new AsyncDeadlineError(message);
+  }
+  if (callerSignal?.aborted) throw abortError();
+
+  const controller = new AbortController();
+  let rejectInterruption: (reason: Error) => void = () => undefined;
+  const interruption = new Promise<never>((_resolve, reject) => {
+    rejectInterruption = reject;
+  });
+  const onCallerAbort = () => {
+    rejectInterruption(abortError());
+    controller.abort();
+  };
+  callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+  const timer = setTimeout(() => {
+    rejectInterruption(new AsyncDeadlineError(message));
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await Promise.race([operation(controller.signal), interruption]);
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener('abort', onCallerAbort);
+  }
+}
+
+function abortError(): Error {
+  const error = new Error('Hermes request was aborted');
+  error.name = 'AbortError';
+  return error;
 }

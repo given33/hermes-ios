@@ -32,6 +32,7 @@ public final class HermesIOSContextModule: Module {
   private let device = HermesDeviceService.shared
   private let screenTime = HermesScreenTimeService.shared
   private let liveActivity = HermesLiveActivityService.shared
+  private let attachmentVault = HermesAttachmentVault.shared
   private var relayWakeObserver: NSObjectProtocol?
 
   public func definition() -> ModuleDefinition {
@@ -48,7 +49,37 @@ public final class HermesIOSContextModule: Module {
     watchDefinitions()
     screenTimeDefinitions()
     liveActivityDefinitions()
+    attachmentVaultDefinitions()
     viewDefinitions()
+  }
+
+  @ModuleDefinitionBuilder
+  private func attachmentVaultDefinitions() -> ModuleDefinition {
+    AsyncFunction("encryptAttachment") {
+      (owner: String, sourceURI: String, targetURI: String) throws -> [String: Any] in
+      try self.attachmentVault.encrypt(
+        owner: owner,
+        sourceURI: sourceURI,
+        targetURI: targetURI
+      )
+    }
+
+    AsyncFunction("decryptAttachmentForUpload") {
+      (owner: String, encryptedURI: String, filename: String) throws -> String in
+      try self.attachmentVault.decryptForUpload(
+        owner: owner,
+        encryptedURI: encryptedURI,
+        filename: filename
+      )
+    }
+
+    AsyncFunction("deleteDecryptedAttachment") { (uri: String) throws -> Bool in
+      try self.attachmentVault.deleteDecryptedFile(uri: uri)
+    }
+
+    AsyncFunction("deleteAttachmentEncryptionKey") { (owner: String) throws -> Bool in
+      try self.attachmentVault.deleteKey(owner: owner)
+    }
   }
 
   @ModuleDefinitionBuilder
@@ -226,14 +257,17 @@ public final class HermesIOSContextModule: Module {
       HermesPermissionCollectionGate.shared.setReady(ready, ownerScope: scope)
     }
 
-    AsyncFunction("activateOwnerScope") { (scope: String) -> Int in
+    AsyncFunction("activateOwnerScope") { (scope: String) throws -> Int in
+      if !scope.isEmpty { try self.attachmentVault.activate(owner: scope) }
       let generation = HermesAccountLifecycle.activateOwnerScope(scope)
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
       return generation
     }.runOnQueue(.main)
 
-    AsyncFunction("deleteOwnerScope") { (scope: String) -> Int in
-      HermesAccountLifecycle.deleteOwnerScope(scope)
+    AsyncFunction("deleteOwnerScope") { (scope: String) throws -> Int in
+      let deleted = HermesAccountLifecycle.deleteOwnerScope(scope)
+      if !scope.isEmpty { _ = try self.attachmentVault.deleteKey(owner: scope) }
+      return deleted
     }.runOnQueue(.main)
 
     AsyncFunction("readPendingEventsByKind") { (limit: Int, kinds: [String], scope: String?) -> [[String: Any]] in

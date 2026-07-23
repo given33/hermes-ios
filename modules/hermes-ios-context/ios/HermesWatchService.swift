@@ -51,7 +51,18 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
     let resetAt = UserDefaults.standard.double(forKey: resetAtKey)
     let lastMessageAt = UserDefaults.standard.double(forKey: lastMessageAtKey)
     if lastMessageAt > resetAt {
-      payload["applicationContext"] = session.receivedApplicationContext
+      let applicationContext = session.receivedApplicationContext
+      let contextGeneration = (applicationContext["accountGeneration"] as? NSNumber)?.intValue
+        ?? applicationContext["accountGeneration"] as? Int
+      let contextObservedAt = Self.observedDate(applicationContext["observedAt"])
+      let currentGeneration = UserDefaults.standard.integer(forKey: generationKey)
+      if contextGeneration == currentGeneration,
+         let contextObservedAt,
+         contextObservedAt.timeIntervalSince1970 * 1000 > resetAt {
+        payload["applicationContext"] = applicationContext
+      } else {
+        payload["applicationContext"] = [String: Any]()
+      }
       payload["lastMessageAt"] = lastMessageAt
     } else {
       payload["applicationContext"] = [String: Any]()
@@ -69,7 +80,10 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
   func activateAccountGeneration(_ generation: Int) {
     UserDefaults.standard.set(generation, forKey: generationKey)
     Task {
-      _ = await send(payload: ["action": "set-account-generation"])
+      _ = await send(payload: [
+        "action": "set-account-generation",
+        "controlIssuedAt": Date().timeIntervalSince1970 * 1000,
+      ])
     }
   }
 
@@ -124,12 +138,18 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
         "source": "apple-watch",
       ],
       occurredAt: occurredAt,
-      sourceDeviceID: sourceDeviceID
+      sourceDeviceID: sourceDeviceID,
+      accountGeneration: generation
     ) { [weak self] in self?.onMessage?(message) }
 
     switch message["kind"] as? String {
     case "watch-location":
-      enqueueLocation(message, occurredAt: occurredAt, sourceDeviceID: sourceDeviceID)
+      enqueueLocation(
+        message,
+        occurredAt: occurredAt,
+        sourceDeviceID: sourceDeviceID,
+        accountGeneration: generation
+      )
     case "watch-motion":
       let motion = message["motion"] as? String ?? "unknown"
       HermesContextEventQueue.shared.enqueue(
@@ -141,18 +161,25 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
           "state": motion,
         ],
         occurredAt: occurredAt,
-        sourceDeviceID: sourceDeviceID
+        sourceDeviceID: sourceDeviceID,
+        accountGeneration: generation
       )
     case "watch-context":
       if let location = message["location"] as? [String: Any] {
-        enqueueLocation(location, occurredAt: occurredAt, sourceDeviceID: sourceDeviceID)
+        enqueueLocation(
+          location,
+          occurredAt: occurredAt,
+          sourceDeviceID: sourceDeviceID,
+          accountGeneration: generation
+        )
       }
       if let steps = message["steps"] {
         HermesContextEventQueue.shared.enqueue(
           type: "health-activity",
           payload: ["source": "apple-watch", "steps": steps],
           occurredAt: occurredAt,
-          sourceDeviceID: sourceDeviceID
+          sourceDeviceID: sourceDeviceID,
+          accountGeneration: generation
         )
       }
     case "watch-workout-sample":
@@ -163,7 +190,8 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
         type: "health-activity",
         payload: payload,
         occurredAt: occurredAt,
-        sourceDeviceID: sourceDeviceID
+        sourceDeviceID: sourceDeviceID,
+        accountGeneration: generation
       )
     default:
       break
@@ -173,7 +201,8 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
   private func enqueueLocation(
     _ value: [String: Any],
     occurredAt: Date,
-    sourceDeviceID: String
+    sourceDeviceID: String,
+    accountGeneration: Int
   ) {
     guard value["latitude"] is NSNumber, value["longitude"] is NSNumber else { return }
     var payload = value
@@ -187,7 +216,8 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
       type: "location",
       payload: payload,
       occurredAt: occurredAt,
-      sourceDeviceID: sourceDeviceID
+      sourceDeviceID: sourceDeviceID,
+      accountGeneration: accountGeneration
     )
   }
 

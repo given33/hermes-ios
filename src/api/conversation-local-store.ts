@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type {
+  CollaborationMessage,
   HermesCloudApi,
   HostedTurnEnqueueInput,
   JsonRecord,
@@ -15,6 +16,8 @@ const OUTBOX_VERSION = 1 as const;
 const OUTBOX_PREFIX = 'hermes.native.hosted-turn-outbox.v1';
 const ROOM_OUTBOX_VERSION = 1 as const;
 const ROOM_OUTBOX_PREFIX = 'hermes.native.collaboration-room-outbox.v1';
+const OPTIMISTIC_LEDGER_VERSION = 1 as const;
+const OPTIMISTIC_LEDGER_PREFIX = 'hermes.native.optimistic-messages.v1';
 const cacheWriteChains = new Map<string, Promise<void>>();
 const synchronizationGenerations = new Map<string, number>();
 
@@ -32,21 +35,39 @@ export interface ConversationCacheReconciliation {
 }
 
 export interface HostedTurnOutboxItem {
+  attempts?: number;
+  cancelledAt?: number;
+  deliveryAcceptedAt?: number;
+  deliveryTerminalAt?: number;
+  foregroundFailedAt?: number;
+  reconciliationAttempts?: number;
+  reconciliationExhaustedAt?: number;
   conversationId: string;
   conversationPending?: boolean;
   conversationProfile?: string;
   conversationTitle?: string;
   input: HostedTurnEnqueueInput;
+  lastError?: string;
+  nextAttemptAt?: number;
+  purpose?: 'hosted-turn-cancel' | 'message';
   pendingAttachments?: HostedTurnPendingAttachment[];
   queuedAt: number;
 }
 
+export interface PendingEnqueueMutationResult {
+  item: HostedTurnOutboxItem | null;
+  updated: boolean;
+}
+
 export interface HostedTurnPendingAttachment {
+  encryption?: 'aes-gcm-v1';
   id: string;
   kind: 'file' | 'image';
   mimeType?: string | null;
   name: string;
+  ownedTemporary?: boolean;
   size?: number | null;
+  sourceUri?: string;
   uri: string;
   uploaded?: JsonRecord;
 }
@@ -57,6 +78,23 @@ export interface CollaborationRoomOutboxItem {
   queuedAt: number;
   requestId: string;
   roomId: string;
+}
+
+export interface OptimisticConversationLedgerItem {
+  conversationId: string;
+  messages: CollaborationMessage[];
+  pendingTurn?: OptimisticPendingTurn;
+  updatedAt: number;
+}
+
+export interface OptimisticPendingTurn {
+  attempt: number;
+  lastError?: string;
+  phase: 'executing' | 'reconnecting' | 'thinking';
+  phaseStartedAt: number;
+  turnId?: string;
+  updatedAt: number;
+  userMessageId: string;
 }
 
 export interface ConversationStorageAdapter {
@@ -175,14 +213,513 @@ export class ConversationLocalStore {
         ),
         normalizedOwner,
       );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedItem.input.requestId,
+      );
+      const durableItem = previous?.cancelledAt
+        ? { ...normalizedItem, cancelledAt: previous.cancelledAt }
+        : normalizedItem;
       const next = current.filter(({ input }) => input.requestId !== normalizedItem.input.requestId);
-      next.push(normalizedItem);
+      next.push(durableItem);
       await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
         version: OUTBOX_VERSION,
         owner: normalizedOwner,
         items: next,
       }));
     });
+  }
+
+  async initializePendingEnqueue(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    messages: readonly CollaborationMessage[],
+    pendingTurn: OptimisticPendingTurn,
+  ): Promise<PendingEnqueueMutationResult> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingEnqueue(item);
+    const normalizedMessages = messages.flatMap(normalizeCollaborationMessage);
+    const normalizedPendingTurn = normalizeOptimisticPendingTurn(pendingTurn);
+    if (
+      !normalizedOwner
+      || !normalizedItem
+      || !normalizedMessages.length
+      || !normalizedPendingTurn
+    ) return { item: null, updated: false };
+    let result: PendingEnqueueMutationResult = { item: null, updated: false };
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const currentOutbox = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = currentOutbox.find(
+        ({ input }) => input.requestId === normalizedItem.input.requestId,
+      );
+      if (previous) {
+        result = { item: previous, updated: false };
+        return;
+      }
+
+      const ledgerKey = optimisticLedgerKey(normalizedOwner);
+      const currentLedger = parseOptimisticConversations(
+        await this.storage.getItem(ledgerKey),
+        normalizedOwner,
+      );
+      const currentEntry = currentLedger.find(
+        ({ conversationId }) => conversationId === normalizedItem.conversationId,
+      );
+      if (
+        currentEntry?.pendingTurn
+        && currentEntry.pendingTurn.userMessageId !== normalizedPendingTurn.userMessageId
+      ) return;
+
+      const nextOutbox = currentOutbox.filter(
+        ({ input }) => input.requestId !== normalizedItem.input.requestId,
+      );
+      nextOutbox.push(normalizedItem);
+      // The outbox is the recovery intent. Persist it before the UI ledger so
+      // a process exit can replay the same request id without losing the send.
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: nextOutbox,
+      }));
+
+      const mergedMessages = new Map(
+        (currentEntry?.messages || []).map((message) => (
+          [message.id, cloneCollaborationMessage(message)]
+        )),
+      );
+      for (const message of normalizedMessages) {
+        const current = mergedMessages.get(message.id);
+        if (!current || shouldReplaceOptimisticMessage(current, message)) {
+          mergedMessages.set(message.id, cloneCollaborationMessage(message));
+        }
+      }
+      const nextLedger = currentLedger.filter(
+        ({ conversationId }) => conversationId !== normalizedItem.conversationId,
+      );
+      nextLedger.push({
+        conversationId: normalizedItem.conversationId,
+        messages: [...mergedMessages.values()].sort(
+          (left, right) => messageTimestamp(left) - messageTimestamp(right),
+        ),
+        pendingTurn: normalizedPendingTurn,
+        updatedAt: Date.now(),
+      });
+      await this.storage.setItem(ledgerKey, JSON.stringify({
+        version: OPTIMISTIC_LEDGER_VERSION,
+        owner: normalizedOwner,
+        items: nextLedger,
+      }));
+      result = { item: normalizedItem, updated: true };
+    });
+    return result;
+  }
+
+  async upsertPendingEnqueueIfActive(
+    owner: string,
+    item: HostedTurnOutboxItem,
+  ): Promise<PendingEnqueueMutationResult> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingEnqueue(item);
+    if (!normalizedOwner || !normalizedItem) return { item: null, updated: false };
+    let result: PendingEnqueueMutationResult = { item: null, updated: false };
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedItem.input.requestId,
+      );
+      if (
+        previous?.cancelledAt
+        || (previous?.deliveryTerminalAt && !normalizedItem.deliveryTerminalAt)
+        || (previous?.deliveryAcceptedAt && !normalizedItem.deliveryAcceptedAt)
+      ) {
+        result = { item: previous, updated: false };
+        return;
+      }
+      const next = current.filter(
+        ({ input }) => input.requestId !== normalizedItem.input.requestId,
+      );
+      next.push(normalizedItem);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      result = { item: normalizedItem, updated: true };
+    });
+    return result;
+  }
+
+  async transitionPendingEnqueueRetry(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    pendingTurn: OptimisticPendingTurn,
+  ): Promise<PendingEnqueueMutationResult> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingEnqueue(item);
+    const normalizedPendingTurn = normalizeOptimisticPendingTurn(pendingTurn);
+    if (!normalizedOwner || !normalizedItem || !normalizedPendingTurn) {
+      return { item: null, updated: false };
+    }
+    let result: PendingEnqueueMutationResult = { item: null, updated: false };
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedItem.input.requestId,
+      );
+      if (
+        !previous
+        || previous.cancelledAt
+        || previous.deliveryAcceptedAt
+        || previous.deliveryTerminalAt
+      ) {
+        result = { item: previous || null, updated: false };
+        return;
+      }
+      const next = current.filter(
+        ({ input }) => input.requestId !== normalizedItem.input.requestId,
+      );
+      next.push(normalizedItem);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      await writeOptimisticPendingTurn(
+        this.storage,
+        normalizedOwner,
+        normalizedItem.conversationId,
+        normalizedPendingTurn,
+      );
+      result = { item: normalizedItem, updated: true };
+    });
+    return result;
+  }
+
+  async transitionPendingEnqueueTerminal(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    terminalMessages: readonly CollaborationMessage[],
+  ): Promise<PendingEnqueueMutationResult> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingEnqueue(item);
+    const normalizedTerminal = terminalMessages.flatMap(normalizeCollaborationMessage);
+    if (
+      !normalizedOwner
+      || !normalizedItem
+      || !normalizedItem.deliveryTerminalAt
+      || !normalizedTerminal.length
+    ) return { item: null, updated: false };
+    let result: PendingEnqueueMutationResult = { item: null, updated: false };
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedItem.input.requestId,
+      );
+      if (
+        !previous
+        || previous.cancelledAt
+        || previous.deliveryAcceptedAt
+      ) {
+        result = { item: previous || null, updated: false };
+        return;
+      }
+      const durableTerminal = previous.deliveryTerminalAt
+        ? previous
+        : normalizedItem;
+      const next = current.filter(
+        ({ input }) => input.requestId !== normalizedItem.input.requestId,
+      );
+      next.push(durableTerminal);
+      // Persist the terminal outbox marker first. A process exit before the
+      // ledger write is repaired by terminal replay and never resubmits the
+      // model request.
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      await writeOptimisticTerminal(
+        this.storage,
+        normalizedOwner,
+        normalizedItem.conversationId,
+        normalizedTerminal,
+      );
+      result = { item: durableTerminal, updated: true };
+    });
+    return result;
+  }
+
+  async transitionPendingEnqueueForegroundFailure(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    terminalMessages: readonly CollaborationMessage[],
+  ): Promise<PendingEnqueueMutationResult> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingEnqueue(item);
+    const normalizedTerminal = terminalMessages.flatMap(normalizeCollaborationMessage);
+    if (
+      !normalizedOwner
+      || !normalizedItem
+      || !normalizedItem.foregroundFailedAt
+      || !normalizedTerminal.length
+    ) return { item: null, updated: false };
+    let result: PendingEnqueueMutationResult = { item: null, updated: false };
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedItem.input.requestId,
+      );
+      if (
+        !previous
+        || previous.cancelledAt
+        || previous.deliveryAcceptedAt
+        || previous.deliveryTerminalAt
+      ) {
+        result = { item: previous || null, updated: false };
+        return;
+      }
+      const next = current.filter(
+        ({ input }) => input.requestId !== normalizedItem.input.requestId,
+      );
+      next.push(normalizedItem);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      await writeOptimisticTerminal(
+        this.storage,
+        normalizedOwner,
+        normalizedItem.conversationId,
+        normalizedTerminal,
+      );
+      result = { item: normalizedItem, updated: true };
+    });
+    return result;
+  }
+
+  async acceptPendingEnqueueIfActive(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    pendingTurn: OptimisticPendingTurn,
+  ): Promise<PendingEnqueueMutationResult> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingEnqueue(item);
+    const normalizedPendingTurn = normalizeOptimisticPendingTurn(pendingTurn);
+    if (!normalizedOwner || !normalizedItem || !normalizedPendingTurn) {
+      return { item: null, updated: false };
+    }
+    let result: PendingEnqueueMutationResult = { item: null, updated: false };
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedItem.input.requestId,
+      );
+      if (!previous || previous.cancelledAt || previous.deliveryTerminalAt) {
+        result = { item: previous || null, updated: false };
+        return;
+      }
+      const accepted = {
+        ...normalizedItem,
+        deliveryAcceptedAt: normalizedItem.deliveryAcceptedAt || Date.now(),
+        foregroundFailedAt: 0,
+        lastError: '',
+        nextAttemptAt: 0,
+      };
+      const next = current.filter(
+        ({ input }) => input.requestId !== normalizedItem.input.requestId,
+      );
+      next.push(accepted);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      await reconcileAcceptedOptimisticTurn(
+        this.storage,
+        normalizedOwner,
+        accepted.conversationId,
+        accepted.input.message.id,
+        normalizedPendingTurn,
+      );
+      result = { item: accepted, updated: true };
+    });
+    return result;
+  }
+
+  async cancelPendingEnqueue(
+    owner: string,
+    requestId: string,
+    fallback?: HostedTurnOutboxItem,
+    now = Date.now(),
+  ): Promise<HostedTurnOutboxItem | null> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedRequestId = stringValue(requestId);
+    const normalizedFallback = fallback ? normalizePendingEnqueue(fallback) : null;
+    if (!normalizedOwner || !normalizedRequestId) return null;
+    let cancelled: HostedTurnOutboxItem | null = null;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedRequestId,
+      );
+      const source = previous || (
+        normalizedFallback?.input.requestId === normalizedRequestId
+          ? normalizedFallback
+          : null
+      );
+      if (!source) return;
+      if (source.deliveryTerminalAt) {
+        cancelled = null;
+        return;
+      }
+      cancelled = {
+        ...source,
+        cancelledAt: source.cancelledAt || Math.max(1, now),
+        nextAttemptAt: 0,
+      };
+      const next = current.filter(
+        ({ input }) => input.requestId !== normalizedRequestId,
+      );
+      next.push(cancelled);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+    });
+    return cancelled;
+  }
+
+  async cancelPendingEnqueueAndFinalize(
+    owner: string,
+    requestId: string,
+    fallback: HostedTurnOutboxItem | undefined,
+    terminalMessages: readonly CollaborationMessage[],
+    now = Date.now(),
+  ): Promise<HostedTurnOutboxItem | null> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedRequestId = stringValue(requestId);
+    const normalizedFallback = fallback ? normalizePendingEnqueue(fallback) : null;
+    const normalizedTerminal = terminalMessages.flatMap(normalizeCollaborationMessage);
+    if (!normalizedOwner || !normalizedRequestId || !normalizedTerminal.length) return null;
+    let cancelled: HostedTurnOutboxItem | null = null;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedRequestId,
+      );
+      const source = previous || (
+        normalizedFallback?.input.requestId === normalizedRequestId
+          ? normalizedFallback
+          : null
+      );
+      if (!source || source.deliveryTerminalAt) return;
+      cancelled = {
+        ...source,
+        cancelledAt: source.cancelledAt || Math.max(1, now),
+        nextAttemptAt: 0,
+      };
+      const next = current.filter(({ input }) => input.requestId !== normalizedRequestId);
+      next.push(cancelled);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      await writeOptimisticCancellation(
+        this.storage,
+        normalizedOwner,
+        source.conversationId,
+        source.input.message.id,
+        normalizedTerminal,
+      );
+    });
+    return cancelled;
+  }
+
+  async removePendingEnqueueIfActive(owner: string, requestId: string): Promise<boolean> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedRequestId = stringValue(requestId);
+    if (!normalizedOwner || !normalizedRequestId) return false;
+    let removed = false;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const current = parsePendingEnqueues(
+        await readCurrentOrLegacy(
+          this.storage,
+          outboxKey(normalizedOwner),
+          legacyOutboxKey(normalizedOwner),
+        ),
+        normalizedOwner,
+      );
+      const previous = current.find(
+        ({ input }) => input.requestId === normalizedRequestId,
+      );
+      if (!previous || previous.cancelledAt) return;
+      const next = current.filter(({ input }) => input.requestId !== normalizedRequestId);
+      await this.storage.setItem(outboxKey(normalizedOwner), JSON.stringify({
+        version: OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      removed = true;
+    });
+    return removed;
   }
 
   async removePendingEnqueue(owner: string, requestId: string): Promise<void> {
@@ -267,6 +804,172 @@ export class ConversationLocalStore {
     });
   }
 
+  async readOptimisticConversations(
+    owner: string,
+  ): Promise<OptimisticConversationLedgerItem[]> {
+    const normalizedOwner = normalizeOwner(owner);
+    if (!normalizedOwner) return [];
+    let snapshot: OptimisticConversationLedgerItem[] = [];
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      snapshot = parseOptimisticConversations(
+        await this.storage.getItem(optimisticLedgerKey(normalizedOwner)),
+        normalizedOwner,
+      );
+    });
+    return snapshot;
+  }
+
+  async replaceOptimisticMessages(
+    owner: string,
+    conversationId: string,
+    messages: readonly CollaborationMessage[],
+    pendingTurn?: OptimisticPendingTurn | null,
+    expectedMessageIds?: readonly string[],
+  ): Promise<boolean> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedConversationId = stringValue(conversationId);
+    if (!normalizedOwner || !normalizedConversationId) return false;
+    const normalizedMessages = messages.flatMap(normalizeCollaborationMessage);
+    let committed = false;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const key = optimisticLedgerKey(normalizedOwner);
+      const current = parseOptimisticConversations(
+        await this.storage.getItem(key),
+        normalizedOwner,
+      );
+      const currentEntry = current.find(
+        ({ conversationId: currentId }) => currentId === normalizedConversationId,
+      );
+      const expectedIdsMatch = !expectedMessageIds
+        || sameMessageIds(currentEntry?.messages || [], expectedMessageIds);
+      const completesCurrentPendingTurn = Boolean(
+        !expectedIdsMatch
+        && pendingTurn === null
+        && currentEntry?.pendingTurn
+        && normalizedMessages.some(
+          ({ id, role }) => id === currentEntry.pendingTurn?.userMessageId && role === 'user',
+        )
+        && normalizedMessages.some(({ id, role, status }) => (
+          role === 'assistant'
+          && id.includes(currentEntry.pendingTurn?.userMessageId || '')
+          && (status === 'failed' || status === 'completed')
+        )),
+      );
+      if (
+        expectedMessageIds
+        && !expectedIdsMatch
+        && !completesCurrentPendingTurn
+      ) return;
+      const normalizedPendingTurn = pendingTurn === undefined
+        ? currentEntry?.pendingTurn
+        : pendingTurn === null
+          ? undefined
+          : normalizeOptimisticPendingTurn(pendingTurn);
+      const next = current.filter(
+        ({ conversationId: currentId }) => currentId !== normalizedConversationId,
+      );
+      if (normalizedMessages.length || normalizedPendingTurn) {
+        next.push({
+          conversationId: normalizedConversationId,
+          messages: normalizedMessages,
+          ...(normalizedPendingTurn ? { pendingTurn: normalizedPendingTurn } : {}),
+          updatedAt: Date.now(),
+        });
+      }
+      await this.storage.setItem(key, JSON.stringify({
+        version: OPTIMISTIC_LEDGER_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+      committed = true;
+    });
+    return committed;
+  }
+
+  async updateOptimisticPendingTurn(
+    owner: string,
+    conversationId: string,
+    pendingTurn: OptimisticPendingTurn,
+  ): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedConversationId = stringValue(conversationId);
+    const normalizedPendingTurn = normalizeOptimisticPendingTurn(pendingTurn);
+    if (!normalizedOwner || !normalizedConversationId || !normalizedPendingTurn) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const key = optimisticLedgerKey(normalizedOwner);
+      const current = parseOptimisticConversations(
+        await this.storage.getItem(key),
+        normalizedOwner,
+      );
+      const entry = current.find(({ conversationId: currentId }) => (
+        currentId === normalizedConversationId
+      ));
+      if (!entry) return;
+      const next = current.filter(({ conversationId: currentId }) => (
+        currentId !== normalizedConversationId
+      ));
+      next.push({
+        conversationId: normalizedConversationId,
+        messages: entry.messages.map(cloneCollaborationMessage),
+        pendingTurn: normalizedPendingTurn,
+        updatedAt: Date.now(),
+      });
+      await this.storage.setItem(key, JSON.stringify({
+        version: OPTIMISTIC_LEDGER_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+    });
+  }
+
+  async finalizeOptimisticTurn(
+    owner: string,
+    conversationId: string,
+    terminalMessages: readonly CollaborationMessage[],
+  ): Promise<OptimisticConversationLedgerItem | null> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedConversationId = stringValue(conversationId);
+    const normalizedTerminal = terminalMessages.flatMap(normalizeCollaborationMessage);
+    if (!normalizedOwner || !normalizedConversationId || !normalizedTerminal.length) return null;
+    let finalized: OptimisticConversationLedgerItem | null = null;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const key = optimisticLedgerKey(normalizedOwner);
+      const current = parseOptimisticConversations(
+        await this.storage.getItem(key),
+        normalizedOwner,
+      );
+      const entry = current.find(({ conversationId: currentId }) => (
+        currentId === normalizedConversationId
+      ));
+      const messages = new Map(
+        (entry?.messages || []).map((message) => [message.id, cloneCollaborationMessage(message)]),
+      );
+      for (const message of normalizedTerminal) {
+        const previous = messages.get(message.id);
+        if (!previous || shouldReplaceOptimisticMessage(previous, message)) {
+          messages.set(message.id, cloneCollaborationMessage(message));
+        }
+      }
+      finalized = {
+        conversationId: normalizedConversationId,
+        messages: [...messages.values()].sort(
+          (left, right) => messageTimestamp(left) - messageTimestamp(right),
+        ),
+        updatedAt: Date.now(),
+      };
+      const next = current.filter(({ conversationId: currentId }) => (
+        currentId !== normalizedConversationId
+      ));
+      next.push(finalized);
+      await this.storage.setItem(key, JSON.stringify({
+        version: OPTIMISTIC_LEDGER_VERSION,
+        owner: normalizedOwner,
+        items: next,
+      }));
+    });
+    return finalized;
+  }
+
   async purge(
     owner: string,
     beforeRemove?: (pending: HostedTurnOutboxItem[]) => Promise<void>,
@@ -294,10 +997,137 @@ export class ConversationLocalStore {
         legacyOutboxKey(normalizedOwner),
         roomOutboxKey(normalizedOwner),
         legacyRoomOutboxKey(normalizedOwner),
+        optimisticLedgerKey(normalizedOwner),
       ].map((key) => this.storage.removeItem(key)));
     });
     return pendingAttachments;
   }
+}
+
+async function writeOptimisticPendingTurn(
+  storage: ConversationStorageAdapter,
+  owner: string,
+  conversationId: string,
+  pendingTurn: OptimisticPendingTurn,
+): Promise<void> {
+  const key = optimisticLedgerKey(owner);
+  const current = parseOptimisticConversations(await storage.getItem(key), owner);
+  const entry = current.find(({ conversationId: currentId }) => currentId === conversationId);
+  if (!entry) return;
+  const next = current.filter(({ conversationId: currentId }) => currentId !== conversationId);
+  next.push({
+    conversationId,
+    messages: entry.messages.map(cloneCollaborationMessage),
+    pendingTurn,
+    updatedAt: Date.now(),
+  });
+  await storage.setItem(key, JSON.stringify({
+    version: OPTIMISTIC_LEDGER_VERSION,
+    owner,
+    items: next,
+  }));
+}
+
+async function writeOptimisticTerminal(
+  storage: ConversationStorageAdapter,
+  owner: string,
+  conversationId: string,
+  terminalMessages: readonly CollaborationMessage[],
+): Promise<void> {
+  const key = optimisticLedgerKey(owner);
+  const current = parseOptimisticConversations(await storage.getItem(key), owner);
+  const entry = current.find(({ conversationId: currentId }) => currentId === conversationId);
+  const messages = new Map(
+    (entry?.messages || []).map((message) => [message.id, cloneCollaborationMessage(message)]),
+  );
+  for (const message of terminalMessages) {
+    const previous = messages.get(message.id);
+    if (!previous || shouldReplaceOptimisticMessage(previous, message)) {
+      messages.set(message.id, cloneCollaborationMessage(message));
+    }
+  }
+  const next = current.filter(({ conversationId: currentId }) => currentId !== conversationId);
+  next.push({
+    conversationId,
+    messages: [...messages.values()].sort(
+      (left, right) => messageTimestamp(left) - messageTimestamp(right),
+    ),
+    updatedAt: Date.now(),
+  });
+  await storage.setItem(key, JSON.stringify({
+    version: OPTIMISTIC_LEDGER_VERSION,
+    owner,
+    items: next,
+  }));
+}
+
+async function reconcileAcceptedOptimisticTurn(
+  storage: ConversationStorageAdapter,
+  owner: string,
+  conversationId: string,
+  userMessageId: string,
+  pendingTurn: OptimisticPendingTurn,
+): Promise<void> {
+  const key = optimisticLedgerKey(owner);
+  const current = parseOptimisticConversations(await storage.getItem(key), owner);
+  const entry = current.find(({ conversationId: currentId }) => currentId === conversationId);
+  if (!entry) return;
+  const localFailureIds = new Set([
+    `send-failed-${userMessageId}`,
+    `connection-unavailable-${userMessageId}`,
+  ]);
+  const next = current.filter(({ conversationId: currentId }) => currentId !== conversationId);
+  next.push({
+    conversationId,
+    messages: entry.messages
+      .filter(({ id }) => !localFailureIds.has(id))
+      .map(cloneCollaborationMessage),
+    pendingTurn,
+    updatedAt: Date.now(),
+  });
+  await storage.setItem(key, JSON.stringify({
+    version: OPTIMISTIC_LEDGER_VERSION,
+    owner,
+    items: next,
+  }));
+}
+
+async function writeOptimisticCancellation(
+  storage: ConversationStorageAdapter,
+  owner: string,
+  conversationId: string,
+  userMessageId: string,
+  terminalMessages: readonly CollaborationMessage[],
+): Promise<void> {
+  const key = optimisticLedgerKey(owner);
+  const current = parseOptimisticConversations(await storage.getItem(key), owner);
+  const entry = current.find(({ conversationId: currentId }) => currentId === conversationId);
+  const replaceableIds = new Set([
+    `send-failed-${userMessageId}`,
+    `connection-unavailable-${userMessageId}`,
+    `cancelled-${userMessageId}`,
+  ]);
+  const messages = new Map(
+    (entry?.messages || [])
+      .filter(({ id }) => !replaceableIds.has(id))
+      .map((message) => [message.id, cloneCollaborationMessage(message)]),
+  );
+  for (const message of terminalMessages) {
+    messages.set(message.id, cloneCollaborationMessage(message));
+  }
+  const next = current.filter(({ conversationId: currentId }) => currentId !== conversationId);
+  next.push({
+    conversationId,
+    messages: [...messages.values()].sort(
+      (left, right) => messageTimestamp(left) - messageTimestamp(right),
+    ),
+    updatedAt: Date.now(),
+  });
+  await storage.setItem(key, JSON.stringify({
+    version: OPTIMISTIC_LEDGER_VERSION,
+    owner,
+    items: next,
+  }));
 }
 
 export function reconcileConversationCache(
@@ -316,6 +1146,37 @@ export function reconcileConversationCache(
     return cloneConversation(summary);
   });
   return { conversations, downloadIds };
+}
+
+export function mergeOptimisticConversationLedgers(
+  persisted: readonly OptimisticConversationLedgerItem[],
+  live: readonly OptimisticConversationLedgerItem[],
+): OptimisticConversationLedgerItem[] {
+  const merged = new Map<string, OptimisticConversationLedgerItem>();
+  for (const entry of [...persisted, ...live]) {
+    const current = merged.get(entry.conversationId);
+    if (!current) {
+      merged.set(entry.conversationId, cloneOptimisticLedgerEntry(entry));
+      continue;
+    }
+    const newest = entry.updatedAt >= current.updatedAt ? entry : current;
+    const messages = new Map(current.messages.map((message) => [message.id, message]));
+    for (const message of entry.messages) {
+      const previous = messages.get(message.id);
+      if (!previous || shouldReplaceOptimisticMessage(previous, message)) {
+        messages.set(message.id, message);
+      }
+    }
+    merged.set(entry.conversationId, {
+      conversationId: entry.conversationId,
+      messages: [...messages.values()].map(cloneCollaborationMessage).sort(
+        (left, right) => messageTimestamp(left) - messageTimestamp(right),
+      ),
+      ...(newest.pendingTurn ? { pendingTurn: { ...newest.pendingTurn } } : {}),
+      updatedAt: Math.max(current.updatedAt, entry.updatedAt),
+    });
+  }
+  return [...merged.values()].sort((left, right) => right.updatedAt - left.updatedAt);
 }
 
 export function mergeDownloadedConversations(
@@ -346,8 +1207,13 @@ export function upsertCachedConversation(
   const merged = {
     ...existing,
     ...conversation,
-    message_count: conversation.message_count
-      ?? Math.max(numberValue(existing?.message_count), conversation.messages.length),
+    messages: mergeConversationMessages(existing?.messages || [], conversation.messages),
+    message_count: Math.max(
+      numberValue(conversation.message_count),
+      numberValue(existing?.message_count),
+      conversation.messages.length,
+      existing?.messages.length || 0,
+    ),
   };
   return [
     cloneConversation(merged),
@@ -355,6 +1221,22 @@ export function upsertCachedConversation(
       item.id !== conversation.id && (!replacedId || item.id !== replacedId)
     )).map(cloneConversation),
   ].sort((left, right) => numberValue(right.updated_at) - numberValue(left.updated_at));
+}
+
+function mergeConversationMessages(
+  existing: readonly CollaborationMessage[],
+  incoming: readonly CollaborationMessage[],
+): CollaborationMessage[] {
+  const messages = new Map(existing.map((message) => [message.id, message]));
+  for (const message of incoming) {
+    const current = messages.get(message.id);
+    if (!current || optimisticMessageRevision(message) >= optimisticMessageRevision(current)) {
+      messages.set(message.id, message);
+    }
+  }
+  return [...messages.values()].map(cloneCollaborationMessage).sort(
+    (left, right) => messageTimestamp(left) - messageTimestamp(right),
+  );
 }
 
 export function isCompleteConversation(conversation: SingleConversation): boolean {
@@ -453,6 +1335,54 @@ function cloneConversation(conversation: SingleConversation): SingleConversation
   };
 }
 
+function cloneOptimisticLedgerEntry(
+  entry: OptimisticConversationLedgerItem,
+): OptimisticConversationLedgerItem {
+  return {
+    conversationId: entry.conversationId,
+    messages: entry.messages.map(cloneCollaborationMessage),
+    ...(entry.pendingTurn ? { pendingTurn: { ...entry.pendingTurn } } : {}),
+    updatedAt: entry.updatedAt,
+  };
+}
+
+function cloneCollaborationMessage(message: CollaborationMessage): CollaborationMessage {
+  return {
+    ...message,
+    ...(message.meta ? { meta: { ...message.meta } } : {}),
+  };
+}
+
+function shouldReplaceOptimisticMessage(
+  current: CollaborationMessage,
+  incoming: CollaborationMessage,
+): boolean {
+  if (current.status === 'failed' && incoming.status !== 'failed') return false;
+  if (incoming.status === 'failed' && current.status !== 'failed') return true;
+  return optimisticMessageRevision(incoming) >= optimisticMessageRevision(current);
+}
+
+function optimisticMessageRevision(message: CollaborationMessage): number {
+  return Math.max(
+    timestampNumber(message.created_at),
+    timestampNumber(message.updated_at),
+    timestampNumber(message.completed_at),
+  );
+}
+
+function messageTimestamp(message: CollaborationMessage): number {
+  return timestampNumber(message.created_at) || timestampNumber(message.updated_at);
+}
+
+function timestampNumber(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return 0;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function normalizeConversation(value: unknown): SingleConversation[] {
   if (!isRecord(value)) return [];
   const id = stringValue(value.id);
@@ -492,6 +1422,10 @@ function outboxKey(owner: string): string {
 
 function roomOutboxKey(owner: string): string {
   return `${ROOM_OUTBOX_PREFIX}.${ownerStorageKey(owner)}`;
+}
+
+function optimisticLedgerKey(owner: string): string {
+  return `${OPTIMISTIC_LEDGER_PREFIX}.${ownerStorageKey(owner)}`;
 }
 
 function legacyEncodedCacheKey(owner: string): string {
@@ -582,11 +1516,23 @@ function normalizePendingEnqueue(value: unknown): HostedTurnOutboxItem | null {
     deliveryContext: stringValue(value.input.deliveryContext),
   } as HostedTurnEnqueueInput;
   return {
+    attempts: Math.max(0, Math.floor(numberValue(value.attempts))),
+    cancelledAt: Math.max(0, numberValue(value.cancelledAt)),
+    deliveryAcceptedAt: Math.max(0, numberValue(value.deliveryAcceptedAt)),
+    deliveryTerminalAt: Math.max(0, numberValue(value.deliveryTerminalAt)),
+    foregroundFailedAt: Math.max(0, numberValue(value.foregroundFailedAt)),
+    reconciliationAttempts: Math.max(0, Math.floor(numberValue(value.reconciliationAttempts))),
+    reconciliationExhaustedAt: Math.max(0, numberValue(value.reconciliationExhaustedAt)),
     conversationId,
     conversationPending: Boolean(value.conversationPending),
     conversationProfile,
     conversationTitle: stringValue(value.conversationTitle),
     input,
+    lastError: stringValue(value.lastError),
+    nextAttemptAt: Math.max(0, numberValue(value.nextAttemptAt)),
+    purpose: value.purpose === 'hosted-turn-cancel'
+      ? 'hosted-turn-cancel'
+      : 'message',
     pendingAttachments: Array.isArray(value.pendingAttachments)
       ? value.pendingAttachments.flatMap((entry) => {
         if (!isRecord(entry)) return [];
@@ -596,11 +1542,14 @@ function normalizePendingEnqueue(value: unknown): HostedTurnOutboxItem | null {
         const uri = stringValue(entry.uri);
         if (!id || !kind || !name || !uri) return [];
         return [{
+          ...(entry.encryption === 'aes-gcm-v1' ? { encryption: 'aes-gcm-v1' as const } : {}),
           id,
           kind,
           mimeType: stringValue(entry.mimeType) || null,
           name,
+          ownedTemporary: Boolean(entry.ownedTemporary),
           size: numberValue(entry.size) || null,
+          sourceUri: stringValue(entry.sourceUri),
           uri,
           ...(isRecord(entry.uploaded) ? { uploaded: { ...entry.uploaded } } : {}),
         } as HostedTurnPendingAttachment];
@@ -626,6 +1575,78 @@ function parsePendingRoomMessages(
   } catch {
     return [];
   }
+}
+
+function parseOptimisticConversations(
+  raw: string | null,
+  owner: string,
+): OptimisticConversationLedgerItem[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || value.version !== OPTIMISTIC_LEDGER_VERSION) return [];
+    if (normalizeOwner(value.owner) !== owner || !Array.isArray(value.items)) return [];
+    return value.items.flatMap((entry) => {
+      if (!isRecord(entry)) return [];
+      const conversationId = stringValue(entry.conversationId);
+      if (!conversationId || !Array.isArray(entry.messages)) return [];
+      const messages = entry.messages.flatMap(normalizeCollaborationMessage);
+      const pendingTurn = normalizeOptimisticPendingTurn(entry.pendingTurn);
+      if (!messages.length && !pendingTurn) return [];
+      return [{
+        conversationId,
+        messages,
+        ...(pendingTurn ? { pendingTurn } : {}),
+        updatedAt: numberValue(entry.updatedAt) || Date.now(),
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function sameMessageIds(
+  messages: readonly CollaborationMessage[],
+  expectedMessageIds: readonly string[],
+): boolean {
+  const current = messages.map(({ id }) => id).sort();
+  const expected = [...expectedMessageIds].map(stringValue).filter(Boolean).sort();
+  return current.length === expected.length
+    && current.every((id, index) => id === expected[index]);
+}
+
+function normalizeOptimisticPendingTurn(value: unknown): OptimisticPendingTurn | undefined {
+  if (!isRecord(value)) return undefined;
+  const userMessageId = stringValue(value.userMessageId);
+  const phase = stringValue(value.phase);
+  if (
+    !userMessageId
+    || (phase !== 'thinking' && phase !== 'reconnecting' && phase !== 'executing')
+  ) return undefined;
+  return {
+    attempt: Math.max(0, Math.min(5, Math.floor(numberValue(value.attempt)))),
+    ...(stringValue(value.lastError) ? { lastError: stringValue(value.lastError) } : {}),
+    phase,
+    phaseStartedAt: numberValue(value.phaseStartedAt) || Date.now(),
+    ...(stringValue(value.turnId) ? { turnId: stringValue(value.turnId) } : {}),
+    updatedAt: numberValue(value.updatedAt) || Date.now(),
+    userMessageId,
+  };
+}
+
+function normalizeCollaborationMessage(value: unknown): CollaborationMessage[] {
+  if (!isRecord(value)) return [];
+  const id = stringValue(value.id);
+  const role = stringValue(value.role);
+  if (!id || (role !== 'user' && role !== 'assistant')) return [];
+  return [{
+    ...value,
+    id,
+    role,
+    name: stringValue(value.name),
+    content: stringValue(value.content),
+    ...(isRecord(value.meta) ? { meta: { ...value.meta } } : {}),
+  } as CollaborationMessage];
 }
 
 function normalizePendingRoomMessage(value: unknown): CollaborationRoomOutboxItem | null {

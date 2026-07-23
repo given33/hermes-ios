@@ -94,6 +94,11 @@ export function ModelsManagementPage({
     reasoningEffort,
   }), [apiKey, apiMode, baseUrl, contextLength, model, reasoningEffort]);
 
+  const invalidateDetection = () => {
+    setDetectedExpanded(false);
+    setDetectedModels([]);
+  };
+
   const discover = async () => {
     setOperation({
       kind: 'discover',
@@ -180,14 +185,20 @@ export function ModelsManagementPage({
           <PreviewText variant="label">Base URL</PreviewText>
           <NativeInput
             autoCapitalize="none"
-            onChangeText={setBaseUrl}
+            onChangeText={(value) => {
+              setBaseUrl(value);
+              invalidateDetection();
+            }}
             placeholder="https://example.com/v1"
             value={baseUrl}
           />
           <PreviewText variant="label">{chinese ? 'API 密钥' : 'API key'}</PreviewText>
           <NativeInput
             autoCapitalize="none"
-            onChangeText={setApiKey}
+            onChangeText={(value) => {
+              setApiKey(value);
+              invalidateDetection();
+            }}
             placeholder={apiKeyPreview
               ? `${chinese ? '已保存' : 'Saved'} ${apiKeyPreview}`
               : chinese ? '输入 API 密钥' : 'Enter API key'}

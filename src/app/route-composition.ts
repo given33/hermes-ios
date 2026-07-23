@@ -71,6 +71,20 @@ export const BASELINE_PLUGIN_MANIFESTS = [
     has_api: true,
     source: 'bundled',
   },
+  {
+    name: 'workflows',
+    label: '\u5de5\u4f5c\u6d41',
+    description:
+      'Versioned Hermes DAG workflows compiled to durable Kanban execution.',
+    icon: 'Zap',
+    version: '1.0.0',
+    tab: { path: '/workflows', position: 'after:kanban' },
+    slots: [],
+    entry: 'dist/index.js?v=1.0.0',
+    css: 'dist/style.css?v=1.0.0',
+    has_api: true,
+    source: 'bundled',
+  },
 ] as const satisfies readonly PluginManifest[];
 
 export const PLUGIN_ICON_NAMES = [
@@ -244,6 +258,18 @@ const BUILTIN_NAV_REST = [
     icon: 'Users',
   },
   {
+    routeId: 'approvals',
+    path: '/approvals',
+    labels: { en: 'Approvals', zh: '\u5ba1\u6279\u4e2d\u5fc3' },
+    icon: 'ShieldCheck',
+  },
+  {
+    routeId: 'runtime-center',
+    path: '/runtime-center',
+    labels: { en: 'Runtime Center', zh: '\u8fd0\u884c\u4e2d\u5fc3' },
+    icon: 'Activity',
+  },
+  {
     routeId: 'env',
     path: '/env',
     labels: { en: 'Keys', zh: '\u5bc6\u94a5' },
@@ -392,6 +418,7 @@ const PLUGIN_ROUTE_IDS: Readonly<Record<string, NativeRouteId>> = {
   collaboration: 'collaboration',
   'hermes-achievements': 'achievements',
   kanban: 'kanban',
+  workflows: 'workflows',
 };
 
 function pluginRouteId(name: string): NativeRouteId | undefined {

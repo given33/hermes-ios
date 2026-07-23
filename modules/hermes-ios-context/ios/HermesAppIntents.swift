@@ -7,6 +7,7 @@ struct HermesRefreshContextIntent: AppIntent {
   static var openAppWhenRun = false
 
   func perform() async throws -> some IntentResult {
+    guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return .result() }
     _ = await HermesLocationService.shared.requestCurrent()
     _ = HermesDeviceService.shared.recordSnapshot()
     return .result()
@@ -19,6 +20,7 @@ struct HermesCurrentLocationIntent: AppIntent {
   static var openAppWhenRun = false
 
   func perform() async throws -> some IntentResult {
+    guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return .result() }
     _ = await HermesLocationService.shared.requestCurrent()
     return .result()
   }

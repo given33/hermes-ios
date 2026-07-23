@@ -37,24 +37,46 @@ final class HermesScreenTimeService {
 
   @discardableResult
   func consumeExtensionEvents() -> Int {
-    guard let sharedDefaults else { return 0 }
+    guard let sharedDefaults,
+          !HermesContextEventQueue.shared.isCollectionSuspended,
+          HermesContextEventQueue.shared.hasCurrentOwner else { return 0 }
     let events = sharedDefaults.array(forKey: "device-activity-events") as? [[String: Any]] ?? []
     let summary = sharedDefaults.dictionary(forKey: "device-activity-summary-latest")
     if events.isEmpty, summary == nil { return 0 }
-    sharedDefaults.removeObject(forKey: "device-activity-events")
-    sharedDefaults.removeObject(forKey: "device-activity-summary-latest")
     let generation = HermesContextEventQueue.shared.accountGeneration
     let currentEvents = events.filter { Self.generation(of: $0) == generation }
-    for payload in currentEvents {
-      HermesContextEventQueue.shared.enqueue(type: "screen-time", payload: payload)
-    }
     let currentSummary = summary.flatMap {
       Self.generation(of: $0) == generation ? $0 : nil
     }
-    if let currentSummary {
-      HermesContextEventQueue.shared.enqueue(type: "screen-time", payload: currentSummary)
+    let currentPayloads = currentEvents + (currentSummary.map { [$0] } ?? [])
+    let batch = currentPayloads.map { payload -> [String: Any] in
+      [
+        "id": Self.eventID(of: payload),
+        "kind": "screen-time",
+        "observed_at": payload["observedAt"] ?? Date().timeIntervalSince1970 * 1000,
+        "payload": payload,
+        "account_generation": generation,
+      ]
     }
-    return currentEvents.count + (currentSummary == nil ? 0 : 1)
+    let persisted = (try? HermesContextEventQueue.shared.enqueueBatch(batch)) ?? 0
+    guard persisted == batch.count else { return 0 }
+
+    // Extensions and the host are separate processes. Remove only the exact
+    // records captured above so a callback written while persistence is in
+    // progress is not erased by the host.
+    let consumedEventIDs = Set(events.map { Self.eventID(of: $0) })
+    let latestEvents = sharedDefaults.array(forKey: "device-activity-events") as? [[String: Any]] ?? []
+    let remainingEvents = latestEvents.filter { !consumedEventIDs.contains(Self.eventID(of: $0)) }
+    if remainingEvents.isEmpty { sharedDefaults.removeObject(forKey: "device-activity-events") }
+    else { sharedDefaults.set(remainingEvents, forKey: "device-activity-events") }
+    if let summary {
+      let capturedID = Self.eventID(of: summary)
+      let latestSummary = sharedDefaults.dictionary(forKey: "device-activity-summary-latest")
+      if latestSummary.map({ Self.eventID(of: $0) }) == capturedID {
+        sharedDefaults.removeObject(forKey: "device-activity-summary-latest")
+      }
+    }
+    return persisted
   }
 
   func setAccountGeneration(_ generation: Int) {
@@ -77,6 +99,7 @@ final class HermesScreenTimeService {
 
   func startMonitoring(hasEntitlement: Bool, identifier: String, startHour: Int, endHour: Int) throws -> String {
     guard hasEntitlement, Self.frameworkAvailable else { throw HermesScreenTimeError.entitlementRequired }
+    guard authorizationStatus == "authorized" else { throw HermesScreenTimeError.permissionRequired }
     setAccountGeneration(HermesContextEventQueue.shared.accountGeneration)
 #if canImport(DeviceActivity)
     let start = DateComponents(hour: max(0, min(23, startHour)), minute: 0)
@@ -131,6 +154,13 @@ final class HermesScreenTimeService {
       ?? payload["accountGeneration"] as? Int
   }
 
+  private static func eventID(of payload: [String: Any]) -> String {
+    if let value = payload["eventId"] as? String, !value.isEmpty { return value }
+    let observedAt = (payload["observedAt"] as? NSNumber)?.doubleValue ?? 0
+    let state = payload["state"] as? String ?? "unknown"
+    return "legacy-device-activity-\(observedAt)-\(state)"
+  }
+
   static var frameworkAvailable: Bool {
 #if canImport(FamilyControls)
     return true
@@ -155,11 +185,13 @@ final class HermesScreenTimeService {
 
 private enum HermesScreenTimeError: LocalizedError {
   case entitlementRequired
+  case permissionRequired
   case unavailable
 
   var errorDescription: String? {
     switch self {
     case .entitlementRequired: return "Family Controls entitlement is required."
+    case .permissionRequired: return "Screen Time authorization is required."
     case .unavailable: return "Device Activity is unavailable on this build."
     }
   }
