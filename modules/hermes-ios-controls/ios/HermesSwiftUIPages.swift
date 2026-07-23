@@ -1714,7 +1714,7 @@ private struct HermesFilesPage: View {
   }
 
   var body: some View {
-    List {
+    let content = List {
       if sections.isEmpty {
         ContentUnavailableView(
           LocalizedStringKey(
@@ -1793,13 +1793,15 @@ private struct HermesFilesPage: View {
       }
     }
     }
-    .hermesListStyle()
+    let searchableContent = content
+      .hermesListStyle()
     .background(appearance.palette.background)
     .searchable(text: $search, prompt: chinese ? "搜索文件" : "Search files")
     .refreshable {
       onAction(.refresh, HermesRouteActionPayload(route: "files"))
     }
-    .toolbar {
+    let toolbarContent = searchableContent
+      .toolbar {
       ToolbarItemGroup(placement: .navigationBarTrailing) {
         Menu {
           Picker(chinese ? "来源" : "Source", selection: $sourceFilter) {
@@ -1825,7 +1827,8 @@ private struct HermesFilesPage: View {
         }
       }
     }
-    .fileImporter(isPresented: $importerOpen, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
+    return toolbarContent
+      .fileImporter(isPresented: $importerOpen, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
       if case let .success(urls) = result {
         let stagedURLs = HermesFileImportStaging.stage(urls)
         guard !stagedURLs.isEmpty else { return }

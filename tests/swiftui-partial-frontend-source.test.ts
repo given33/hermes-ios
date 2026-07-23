@@ -74,6 +74,14 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
   );
 });
 
+test('the cloud files page splits its generic view chain for Release compilation', () => {
+  const pages = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  assert.match(pages, /private struct HermesFilesPage:[\s\S]*let content = List/);
+  assert.match(pages, /let searchableContent = content[\s\S]*\.searchable/);
+  assert.match(pages, /let toolbarContent = searchableContent[\s\S]*\.toolbar/);
+  assert.match(pages, /return toolbarContent[\s\S]*\.fileImporter/);
+});
+
 test('SwiftUI management pages expose the server write operations', () => {
   const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
   const routeData = read('src/app/hermes-route-data.ts');
