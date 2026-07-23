@@ -61,7 +61,7 @@ test('frontend preview renders every customized route and authenticated builds m
   assert.doesNotMatch(previewSources, /WebView|WKWebView|react-native-webview/);
 });
 
-test('manual IPA builds launch the standalone frontend without login', () => {
+test('distributable IPA builds always launch the authenticated production frontend', () => {
   const workflow = read('.github/workflows/ios-unsigned.yml');
   const app = read('src/app/HermesNativeApp.tsx');
   const metro = read('metro.config.js');
@@ -69,11 +69,11 @@ test('manual IPA builds launch the standalone frontend without login', () => {
   const productionRouteStubs = read('src/preview/production-route-stubs.tsx');
   const productionPreviewLocalization = read('src/i18n/production-preview-localization.ts');
   const productionVerifier = read('scripts/verify-production-bundle.mjs');
+  const productionContract = read('scripts/production-artifact-contract.mjs');
 
-  assert.match(workflow, /frontend_preview:/);
-  assert.match(workflow, /default: false/);
-  assert.match(workflow, /EXPO_PUBLIC_FRONTEND_PREVIEW:/);
-  assert.match(workflow, /inputs\.frontend_preview/);
+  assert.match(workflow, /EXPO_PUBLIC_FRONTEND_PREVIEW: '0'/);
+  assert.match(workflow, /HERMES_DISTRIBUTABLE_BUILD: '1'/);
+  assert.doesNotMatch(workflow, /inputs\.frontend_preview/);
   assert.match(app, /process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
   assert.doesNotMatch(app, /__DEV__[\s\S]{0,80}EXPO_PUBLIC_FRONTEND_PREVIEW/);
   assert.match(metro, /EXPO_PUBLIC_FRONTEND_PREVIEW !== '1'/);
@@ -84,7 +84,8 @@ test('manual IPA builds launch the standalone frontend without login', () => {
   assert.doesNotMatch(productionRouteStubs, /v0\.9\.3|HMS-|Workspace backup|Deployment is healthy/);
   assert.doesNotMatch(productionPreviewLocalization, /HMS-|fixture routes|Gateway deployment|Workspace backup/);
   assert.match(workflow, /verify-production-bundle\.mjs/);
-  assert.match(productionVerifier, /preview fixture leaked into the production bundle/);
+  assert.match(productionVerifier, /verifyProductionBuffers/);
+  assert.match(productionContract, /preview fixture leaked into the production bundle/);
   for (const marker of [
     'HMS-142',
     'Complete frontend fixture routes',
@@ -94,7 +95,7 @@ test('manual IPA builds launch the standalone frontend without login', () => {
     'native-ios',
     'HERMES AGENT  v0.9.3',
   ]) {
-    assert.ok(productionVerifier.includes(marker));
+    assert.ok(productionContract.includes(marker));
   }
 });
 
@@ -212,6 +213,11 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /launchImageLibraryAsync/);
   assert.match(chat, /launchCameraAsync/);
   assert.match(chat, /DocumentPicker\.getDocumentAsync/);
+  assert.match(chat, /copyToCacheDirectory: false/);
+  assert.match(chat, /ownedTemporary: isUriInsideDirectory\(asset\.uri, Paths\.cache\.uri\)/);
+  assert.match(chat, /cleanupAttachmentSources\(pendingAttachments\)/);
+  assert.match(chat, /cleanupAttachmentSources\(attachmentsRef\.current\)/);
+  assert.match(chat, /cleanupAttachmentSources\(\[attachment\]\)/);
   assert.match(chat, /Sharing\.shareAsync/);
   assert.match(chat, /presentQuickLook/);
   assert.match(chat, /<IOSContextMenu/);
@@ -246,7 +252,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /function AttachmentItem/);
   assert.match(
     chat,
-    /await localStore\.upsertPendingEnqueue\([\s\S]{0,500}enqueuePersisted = true;\s*clearQueuedComposer\(\);/,
+    /await localStore\.initializePendingEnqueue\([\s\S]{0,500}enqueuePersisted = true;/,
   );
   assert.match(
     chat,
@@ -258,23 +264,23 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /if \(hostedAccepted\) \{[\s\S]{0,400}setHostedRunning\(true\);/,
+    /const acceptedMutation = await acceptPendingOutboxItem\(queuedItem\);[\s\S]{0,700}setHostedRunning\(true\);/,
   );
   assert.match(
     chat,
-    /const rejectionRetryable = enqueueRejection !== null\s*&& turnErrorCodeRetryable\(/,
+    /const responseFailure = hostedTurnResponseFailure\(delivery\.response\);/,
   );
   assert.match(
     chat,
-    /enteringReconnect = true;\s*void attemptReconnect\(\);/,
+    /const outcome = await handleOutboxFailure\(queuedItem, responseFailure\);/,
   );
   assert.match(
     chat,
-    /setHostedRunning\(false\);\s*retryStateRef\.current\.active = false;/,
+    /updatePendingPhase\('reconnecting', reconnecting\.phaseStartedAt\);/,
   );
   assert.match(
     chat,
-    /else if \(!enqueueAcknowledged\) \{[\s\S]{0,320}\.\.\.userMessage,[\s\S]{0,80}status: 'failed'/,
+    /if \(enqueuePersisted && !enqueueAcknowledged\) \{[\s\S]{0,800}handleOutboxFailure/,
   );
   assert.doesNotMatch(chat, /<HermesLiquidGlassView/);
   assert.match(chat, /require\('\.\.\/\.\.\/assets\/icon\.png'\)/);
@@ -423,7 +429,9 @@ test('preview share, import, export, and model selection open iOS system surface
   assert.match(chat, /haptic=\{canCancelHostedTurn \? 'medium' : canSend \? 'light' : 'none'\}/);
   assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{canCancelHostedTurn \?[\s\S]*: requestSend\}/);
   assert.match(chat, /const currentContent = contentRef\.current/);
-  assert.match(chat, /requestAnimationFrame\(\(\) => \{\s*pendingSendFrame\.current = null;\s*void send\(\);/);
+  assert.match(chat, /sendSubmissionGateRef\.current\.tryAcquire\(\)/);
+  assert.match(chat, /setSending\(true\);\s*void send\(\)\.finally\(\(\) => sendSubmissionGateRef\.current\.release\(\)\);/);
+  assert.doesNotMatch(chat, /pendingSendFrame/);
   assert.match(core, /ActionSheetIOS\.showActionSheetWithOptions/);
   assert.match(plugins, /Share\.share\(/);
   assert.match(settings, /new File\(Paths\.cache, 'hermes-config-preview\.json'\)/);
@@ -440,10 +448,11 @@ test('chat continuation keeps the opened conversation Profile on every send step
     chat,
     /conversationIndexRef\.current\.find\([\s\S]*activeConversationIdRef\.current[\s\S]*\?\.profile\?\.trim\(\)[\s\S]*\|\| profile/,
   );
-  assert.match(chat, /getModels\(conversationProfile\)/);
+  assert.match(chat, /const conversationProfile = \([\s\S]*\?\.profile\?\.trim\(\)[\s\S]*\|\| profile/);
   assert.match(chat, /profiles: \[conversationProfile\]/);
   assert.match(chat, /conversationProfile,\s*conversationTitle:/);
-  assert.match(chat, /profile: conversationProfile,\s*turnId:/);
+  assert.match(chat, /conversationProfile,\s*conversationTitle:/);
+  assert.match(chat, /profile: item\.conversationProfile \|\| profile,\s*turnId: item\.input\.turnId/);
 });
 
 test('stale conversation selection is removed instead of surfacing another 404', () => {

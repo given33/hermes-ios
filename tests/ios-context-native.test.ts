@@ -13,7 +13,7 @@ const moduleRoot = resolve(root, 'modules', 'hermes-ios-context');
 const read = (file: string) => readFileSync(resolve(moduleRoot, file), 'utf8');
 
 test('signed iOS builds declare native context privacy and background capabilities', () => {
-  const config = JSON.parse(readFileSync(resolve(root, 'app.json'), 'utf8')) as {
+  const config = JSON.parse(readFileSync(resolve(root, 'app.base.json'), 'utf8')) as {
     expo: {
       ios: {
         entitlements: Record<string, unknown>;
@@ -133,7 +133,10 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   assert.match(subscriber, /HermesLocationService\.shared\.start\(\)/);
   assert.match(subscriber, /account-deletion/);
   assert.match(subscriber, /data\["owner_scope"\]/);
-  assert.match(subscriber, /HermesAccountLifecycle\.deleteOwnerScope\(ownerScope\)/);
+  assert.match(
+    subscriber,
+    /HermesAccountLifecycle\.deleteOwnerScope\([\s\S]*tombstone\.ownerScope,[\s\S]*requestedAt: tombstone\.requestedAt/,
+  );
   assert.doesNotMatch(subscriber, /deleteCurrentOwnerScope\(\)/);
   assert.match(queue, /state\["collectionSuspended"\] = true/);
   assert.match(queue, /guard !isCollectionSuspendedUnlocked\(\)/);
@@ -142,7 +145,7 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   assert.match(lifecycle, /HermesScreenTimeService\.shared\.stopAllMonitoring\(/);
   assert.match(lifecycle, /HermesBackgroundService\.shared\.cancelScheduledTasks\(\)/);
   assert.match(lifecycle, /HermesWatchService\.shared\.resetAccountState\(/);
-  assert.match(lifecycle, /queue\.deleteOwnerScope\(ownerScope\)/);
+  assert.match(lifecycle, /queue\.deleteOwnerScope\(ownerScope, requestedAt: requestedAt\)/);
   assert.doesNotMatch(lifecycle, /isCurrentOwnerScope/);
   assert.match(queue, /func activateOwnerScope\(_ scope: String\)/);
   assert.match(queue, /state\["accountGeneration"\]/);
@@ -189,7 +192,7 @@ test('context startup upgrades an existing When-In-Use grant to Always', () => {
   assert.doesNotMatch(provider, /activateOwnerScope\(ownerScope\)/);
   assert.match(
     provider,
-    /state === 'active'[\s\S]*permissionSnapshotRef\.current\.phase === 'paused'[\s\S]*setPermissionAttempt/,
+    /state === 'active'[\s\S]*permissionSettingsOpenedRef\.current = false;[\s\S]*setPermissionAttempt/,
   );
 });
 
@@ -230,7 +233,7 @@ test('location collector is adaptive, resumable, and eligible for background del
   assert.match(source, /HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner/);
   assert.match(source, /date\.timeIntervalSinceNow - 30 \* 60/);
   assert.match(source, /deadline: \.now\(\) \+ 15/);
-  assert.match(source, /didFailWithError[\s\S]*resolveLocationRequest\(with: nil\)/);
+  assert.match(source, /didFailWithError[\s\S]*resolveLocationRequest\(with: bestPayload, matching: token\)/);
   assert.match(
     read('ios/HermesIOSContextAppDelegateSubscriber.swift'),
     /guard HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner else \{ return \}/,
@@ -241,20 +244,20 @@ test('location collector is adaptive, resumable, and eligible for background del
 });
 
 test('weather map stays a flat standard vector map with native gestures and user location', () => {
-  const source = read('ios/HermesStandardMapView.swift');
-  assert.match(source, /MKStandardMapConfiguration\(elevationStyle: \.flat\)/);
+  const source = read('ios/HermesMapKitSurface.swift');
+  assert.match(source, /MKStandardMapConfiguration\([\s\S]*elevationStyle: \.flat,[\s\S]*emphasisStyle: \.default/);
   assert.match(source, /isScrollEnabled = true/);
   assert.match(source, /isZoomEnabled = true/);
   assert.match(source, /isRotateEnabled = true/);
-  assert.match(source, /locationButton\.addGestureRecognizer/);
+  assert.match(source, /locationButton\.addTarget/);
   assert.match(source, /requestPreciseAuthorization\(\)/);
-  assert.match(source, /requestCurrent\(\)/);
-  assert.match(source, /centerOnUser\(animated: true\)/);
+  assert.match(source, /requestCurrent\(forceFresh: true\)/);
+  assert.match(source, /centerOnUser\(animated: self\.hasCenteredOnUser, location: location\)/);
   assert.match(source, /centerOnNextUserLocation = true/);
   assert.match(source, /didUpdate userLocation[\s\S]*!hasCenteredOnUser \|\| centerOnNextUserLocation/);
   assert.match(source, /isPitchEnabled = false/);
-  assert.match(source, /var showsUserLocation = false/);
-  assert.match(source, /mapView\.showsUserLocation = showsUserLocation/);
+  assert.match(source, /func setShowsUserLocation\(_ shows: Bool\)/);
+  assert.match(source, /mapView\.showsUserLocation = shows/);
   assert.match(source, /MKPolyline/);
   assert.doesNotMatch(source, /satellite|hybrid|search/i);
 });
@@ -410,7 +413,8 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /reloadGenerationRef/);
   assert.match(source, /requestedDay !== dayKey\(new Date\(\)\)/);
   assert.doesNotMatch(source, /now \+ 6 \* 60 \* 60 \* 1000/);
-  assert.doesNotMatch(source, /LocateFixed|IOSPressable/);
+  assert.doesNotMatch(source, /LocateFixed/);
+  assert.match(source, /<NativeButton/);
   assert.match(source, /NativeMapErrorBoundary/);
   assert.match(source, /smart-weather-map-error/);
   assert.match(source, /smart-weather-permission-status/);
@@ -453,7 +457,7 @@ test('native map registration is verified after pods and after Xcode compilation
   assert.match(mapModule, /View\(HermesStandardMapView\.self\)/);
   assert.doesNotMatch(module, /View\(HermesStandardMapView\.self\)/);
   assert.match(bridge, /getNativeViewContract/);
-  assert.match(bridge, /requireOptionalNativeModule\('HermesStandardMap'\)/);
+  assert.match(bridge, /requireOptionalNativeModule<HermesStandardMapNativeModule>\([\s\S]*'HermesStandardMap'/);
   assert.match(bridge, /requireNativeView<P>\(registeredModuleName\)/);
   assert.match(bridge, /NativeUnimoduleProxy\?\.viewManagersMetadata/);
   assert.match(bridge, /getViewConfig/);

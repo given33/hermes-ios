@@ -39,6 +39,7 @@ import { SymbolView, type SFSymbol } from 'expo-symbols';
 import {
   DefaultTheme,
   NavigationContainer,
+  StackActions,
   useNavigationContainerRef,
 } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';

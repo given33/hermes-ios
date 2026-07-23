@@ -101,6 +101,16 @@ test('analytics and model snapshots do not invent unavailable server values', as
     model: 'model-a',
     provider: 'provider-a',
     reasoningEffort: 'none',
+    authenticated: true,
+    selectable: true,
+    warning: '',
+    priceInput: '',
+    priceOutput: '',
+    priceCache: '',
+    free: false,
+    freeTier: false,
+    supportsFast: false,
+    supportsReasoning: false,
   });
   assert.deepEqual(
     models.models?.slice(0, 2).map((model) => [model.provider, model.model]),
@@ -192,7 +202,7 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   };
   assert.deepEqual(calls, [
     ['delete', 'session-1'],
-    ['model', 'provider-a', 'model-a', 'reviewer'],
+    ['model', 'provider-a', 'model-a', 'reviewer', false],
     ['model-save', custom, 'reviewer'],
     ['model-test', custom, 'reviewer'],
     ['model-discover', 'https://model.example/v1', 'secret', 'reviewer'],
@@ -497,10 +507,12 @@ test('native file imports upload every selected system URI to the account cloud 
   }, 'default');
 
   assert.equal(result, 'reload');
-  assert.deepEqual(uploads, [
-    [{ name: 'Report Final.pdf', uri: 'file:///private/var/mobile/Report%20Final.pdf' }],
-    [{ name: 'photo.jpg', uri: 'file:///private/var/mobile/photo.jpg' }],
+  assert.deepEqual(uploads.map(([upload]) => upload), [
+    { name: 'Report Final.pdf', uri: 'file:///private/var/mobile/Report%20Final.pdf' },
+    { name: 'photo.jpg', uri: 'file:///private/var/mobile/photo.jpg' },
   ]);
+  assert.equal(new Set(uploads.map(([, uploadId]) => uploadId)).size, 2);
+  for (const [, uploadId] of uploads) assert.match(String(uploadId), /^file-import-/);
 });
 
 test('file snapshots expose durable account metadata for native filtering and grouping', async () => {

@@ -64,11 +64,11 @@ test('sending is one durable idempotent enqueue with foreground outbox compensat
   assert.match(source, /upsertPendingEnqueue\(cacheOwner,/);
   assert.match(source, /persistPendingAttachments\(/);
   assert.match(source, /deliverPendingEnqueue\(/);
-  assert.match(source, /enqueueHostedTurn\(item\.conversationId, item\.input\)/);
+  assert.match(source, /enqueueHostedTurn\(item\.conversationId, item\.input, signal\)/);
   assert.match(source, /uploadId: attachment\.id/);
   assert.match(source, /globalThis\.crypto\?\.randomUUID/);
   assert.doesNotMatch(source, /const userMessageId = `user-\$\{userMessageCreatedAt\}`/);
-  assert.match(source, /removePendingEnqueue\(cacheOwner, userMessageId\)/);
+  assert.match(source, /removePendingEnqueueIfActive\([\s\S]*cacheOwner,[\s\S]*source\.input\.requestId/);
   assert.match(source, /replayPendingEnqueues/);
   assert.doesNotMatch(source, /recordConversationMessage\(conversationId|routeMessage\(/);
   assert.doesNotMatch(source, /new HermesChatStream|createNativeHermesChatStreamRuntime/);
@@ -80,13 +80,13 @@ test('the user message is rendered before any model or network request', () => {
   const send = source.slice(sendStart, sendEnd);
   const optimisticInsert = send.indexOf('setMessages((current) => [...current, userMessage])');
   const composerClear = send.indexOf('clearQueuedComposer()');
-  const modelRequest = send.indexOf('cloudApi.getModels(conversationProfile)');
-  const enqueueRequest = send.indexOf('cloudApi.enqueueHostedTurn(');
+  const durableIntent = send.indexOf('await localStore.initializePendingEnqueue(');
+  const enqueueRequest = send.indexOf('await deliverPendingEnqueue(queuedItem)');
 
   assert.ok(optimisticInsert >= 0, 'the local user message is inserted');
   assert.ok(composerClear > optimisticInsert, 'the composer clears after the local insert');
-  assert.ok(modelRequest > composerClear, 'model validation starts after the local UI update');
-  assert.ok(enqueueRequest > modelRequest, 'hosted delivery remains after validation');
+  assert.ok(durableIntent > composerClear, 'the durable intent starts after the local UI update');
+  assert.ok(enqueueRequest > durableIntent, 'hosted delivery starts after the durable intent');
 });
 
 test('chat maps gateway failures to bounded native copy instead of proxy documents', () => {

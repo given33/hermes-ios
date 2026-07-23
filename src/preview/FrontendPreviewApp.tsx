@@ -429,6 +429,7 @@ function PreviewRoute({
         client={client}
         locale={locale ?? 'zh'}
         notify={notify}
+        onOpenNavigation={openNavigation}
         onReady={() => reportRouteReady(route.path)}
       />
     );

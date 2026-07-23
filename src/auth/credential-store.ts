@@ -179,6 +179,10 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     try {
       await this.secureStore.setItemAsync(BASE_URL_STORAGE_KEY, connection.baseUrl);
       await this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, connection.username);
+      // Session credentials stay in the Keychain, but are device-unlock
+      // protected instead of requiring a fresh biometric prompt on every app
+      // launch. The account password remains biometric-protected separately.
+      await this.secureStore.deleteItemAsync(ACCESS_TOKEN_STORAGE_KEY).catch(() => undefined);
       await this.secureStore.setItemAsync(
         ACCESS_TOKEN_STORAGE_KEY,
         connection.accessToken,
@@ -240,6 +244,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
         REFRESH_TOKEN_POINTER_STORAGE_KEY,
         nextKey,
       );
+      await this.secureStore.deleteItemAsync(ACCESS_TOKEN_STORAGE_KEY).catch(() => undefined);
       await this.secureStore.setItemAsync(
         ACCESS_TOKEN_STORAGE_KEY,
         normalizedToken,
@@ -331,6 +336,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       keys.map((key) => this.secureStore.deleteItemAsync(key)),
     );
   }
+
 }
 
 function createRefreshTokenKey(): string {

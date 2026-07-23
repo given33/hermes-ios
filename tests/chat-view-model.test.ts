@@ -89,6 +89,27 @@ test('cloud conversation messages preserve worker, reviewer, reporter, and activ
   ]);
 });
 
+test('DBB3 manager planning and handoff remain identifiable after cloud restore', () => {
+  const messages = conversationMessagesToView(conversation({
+    messages: [{
+      content: 'Structured plan',
+      id: 'manager-plan',
+      kind: 'message',
+      meta: {
+        profile: 'dbb3-manager',
+        role_stage: 'manager_planning',
+      },
+      name: 'dbb3-manager',
+      role: 'assistant',
+      status: 'completed',
+    }],
+  }), true);
+
+  assert.equal(messages[0].name, 'DBB3 Manager');
+  assert.equal(messages[0].roleStage, 'dispatcher');
+  assert.equal(messages[0].avatarRole, 'dispatcher');
+});
+
 test('server workflow metadata restores sender, runtime, timestamps, handoff, and full activities', () => {
   const startedAt = new Date(2026, 6, 16, 9, 5, 0).getTime();
   const completedAt = startedAt + 132_000;

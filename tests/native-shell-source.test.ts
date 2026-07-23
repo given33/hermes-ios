@@ -34,7 +34,7 @@ test('phone drawer uses the UI-thread native gesture while the iPad rail keeps n
 
 test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () => {
   const source = read('src/app/NativeShell.tsx');
-  const appConfig = JSON.parse(read('app.json')) as {
+  const appConfig = JSON.parse(read('app.base.json')) as {
     expo: { ios: { infoPlist: Record<string, unknown> } };
   };
   const scrollSources = [

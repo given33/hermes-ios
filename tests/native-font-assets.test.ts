@@ -480,7 +480,7 @@ test('Expo config and static useFonts requires cover exactly the 50-face catalog
     '../src/design/native-font-faces'
   );
   const appConfig = JSON.parse(
-    readFileSync(resolve(projectRoot, 'app.json'), 'utf8'),
+    readFileSync(resolve(projectRoot, 'app.base.json'), 'utf8'),
   );
   const fontPlugin = appConfig.expo.plugins.find(
     (plugin: string | [string, unknown]) =>

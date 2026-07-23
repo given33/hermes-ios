@@ -148,6 +148,6 @@ test('smart weather place rows expose arrival, departure, and dwell duration', (
   const map = read('modules/hermes-ios-context/ios/HermesStandardMapView.swift');
   assert.match(page, /Stayed|停留/);
   assert.match(page, /Math\.round\(elapsed \/ 60_000\)/);
-  assert.match(map, /rangeText\(start: start, end: end\)/);
+  assert.match(map, /timeFormatter\.string\(from: start\)[\s\S]*timeFormatter\.string\(from: end\)/);
   assert.match(map, /timeIntervalSince\(start\)/);
 });

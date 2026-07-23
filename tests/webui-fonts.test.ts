@@ -61,7 +61,7 @@ test('Expo embeds the exact font assets and runtime maps each file explicitly', 
   const packageConfig = JSON.parse(
     readFileSync(resolve(projectRoot, 'package.json'), 'utf8'),
   );
-  const appConfig = JSON.parse(readFileSync(resolve(projectRoot, 'app.json'), 'utf8'));
+  const appConfig = JSON.parse(readFileSync(resolve(projectRoot, 'app.base.json'), 'utf8'));
   const fontPlugin = appConfig.expo.plugins.find(
     (plugin: string | [string, Record<string, unknown>]) =>
       Array.isArray(plugin) && plugin[0] === 'expo-font',
