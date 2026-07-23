@@ -12,20 +12,14 @@ module.exports = () => {
       'Distributable iOS builds require EXPO_PUBLIC_FRONTEND_PREVIEW=0.',
     );
   }
-  if (distributableBuild && !amapIOSAPIKey) {
-    throw new Error(
-      'Distributable iOS builds require HERMES_AMAP_IOS_API_KEY.',
-    );
-  }
-
   return {
     ...base,
     ios: {
       ...base.ios,
       infoPlist: {
         ...base.ios.infoPlist,
-        // AMap's iOS SDK uses an app-bound key. Keep it outside Git; local
-        // development without the secret retains the native MapKit fallback.
+        // AMap's iOS SDK uses an app-bound key. Keep it outside Git. Builds
+        // without the optional key retain the native MapKit fallback.
         HermesAmapIOSAPIKey: amapIOSAPIKey,
       },
     },

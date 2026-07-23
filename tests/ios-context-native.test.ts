@@ -473,6 +473,19 @@ test('native map registration is verified after pods and after Xcode compilation
   assert.match(verifier, /HermesStandardMapView\\\.swift/);
 });
 
+test('distributable builds keep MapKit available when the optional AMap key is absent', () => {
+  const appConfig = readFileSync(resolve(root, 'app.config.js'), 'utf8');
+  const workflow = readFileSync(resolve(root, '.github/workflows/ios-unsigned.yml'), 'utf8');
+  const mapView = read('ios/HermesStandardMapView.swift');
+
+  assert.doesNotMatch(appConfig, /distributableBuild\s*&&\s*!amapIOSAPIKey/);
+  assert.match(appConfig, /HermesAmapIOSAPIKey:\s*amapIOSAPIKey/);
+  assert.match(workflow, /No app-bound AMap key is configured; native MapKit fallback is enabled/);
+  assert.match(workflow, /\$\{HERMES_AMAP_IOS_API_KEY:-\}/);
+  assert.match(mapView, /static var amapConfigured:[\s\S]*!amapAPIKey\.isEmpty/);
+  assert.match(mapView, /let mapKit = HermesMapKitSurface/);
+});
+
 test('native map discovery requires the default Expo view manager and runtime config', () => {
   const registeredMap = { nativeComponent: 'HermesStandardMapView' };
   const mapModule = {};

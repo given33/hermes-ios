@@ -30,12 +30,13 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - name: Require the production AMap key
+      - name: Select the native map provider
         shell: bash
         run: |
-          if [ -z "$HERMES_AMAP_IOS_API_KEY" ]; then
-            echo 'HERMES_AMAP_IOS_API_KEY is required for every distributable IPA.' >&2
-            exit 1
+          if [ -n "$HERMES_AMAP_IOS_API_KEY" ]; then
+            echo 'Native AMap is enabled for this build.'
+          else
+            echo 'No app-bound AMap key is configured; native MapKit fallback is enabled.'
           fi
       - run: pnpm install --frozen-lockfile
       - run: pnpm doctor
@@ -65,8 +66,8 @@ jobs:
             exit 1
           fi
           GENERATED_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$MAP_PLIST")"
-          if [ "$GENERATED_KEY" != "$HERMES_AMAP_IOS_API_KEY" ]; then
-            echo 'Generated HermesAmapIOSAPIKey does not match the protected build secret.' >&2
+          if [ "$GENERATED_KEY" != "${HERMES_AMAP_IOS_API_KEY:-}" ]; then
+            echo 'Generated HermesAmapIOSAPIKey does not match the selected map configuration.' >&2
             exit 1
           fi
       - name: Verify native extension targets
@@ -125,8 +126,8 @@ jobs:
             exit 1
           fi
           BUNDLED_AMAP_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$APP_PATH/Info.plist")"
-          if [ "$BUNDLED_AMAP_KEY" != "$HERMES_AMAP_IOS_API_KEY" ]; then
-            echo 'Compiled app is missing the protected AMap key.' >&2
+          if [ "$BUNDLED_AMAP_KEY" != "${HERMES_AMAP_IOS_API_KEY:-}" ]; then
+            echo 'Compiled app map configuration does not match the build environment.' >&2
             exit 1
           fi
           APP_BUILD_NUMBER="$(plutil -extract CFBundleVersion raw "$APP_PATH/Info.plist")"
