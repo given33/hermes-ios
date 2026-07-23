@@ -248,6 +248,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(quickLookBridge, /requireOptionalNativeModule<.*>\([\s\S]*'HermesQuickLook'/);
   assert.match(quickLookNative, /import QuickLook/);
   assert.match(quickLookNative, /QLPreviewController\(\)/);
+  assert.match(quickLookNative, /title: String\?, promise: Promise/);
+  assert.match(quickLookNative, /promise\.resolve\(true\)/);
+  assert.doesNotMatch(quickLookNative, /withCheckedContinuation/);
   assert.match(quickLookNative, /\.runOnQueue\(\.main\)/);
   assert.match(chat, /function AttachmentItem/);
   assert.match(

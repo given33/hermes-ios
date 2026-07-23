@@ -8,25 +8,24 @@ public final class HermesQuickLookModule: Module {
   public func definition() -> ModuleDefinition {
     Name("HermesQuickLook")
 
-    AsyncFunction("present") { (uri: URL, title: String?) -> Bool in
+    AsyncFunction("present") { (uri: URL, title: String?, promise: Promise) in
       guard uri.isFileURL,
             FileManager.default.fileExists(atPath: uri.path),
             let presenter = Self.topViewController(),
             self.dataSource == nil else {
-        return false
+        promise.resolve(false)
+        return
       }
 
-      return await withCheckedContinuation { continuation in
-        let source = HermesQuickLookDataSource(url: uri, title: title) { [weak self] in
-          self?.dataSource = nil
-          continuation.resume(returning: true)
-        }
-        let preview = QLPreviewController()
-        preview.dataSource = source
-        preview.delegate = source
-        self.dataSource = source
-        presenter.present(preview, animated: true)
+      let source = HermesQuickLookDataSource(url: uri, title: title) { [weak self] in
+        self?.dataSource = nil
+        promise.resolve(true)
       }
+      let preview = QLPreviewController()
+      preview.dataSource = source
+      preview.delegate = source
+      self.dataSource = source
+      presenter.present(preview, animated: true)
     }.runOnQueue(.main)
   }
 
