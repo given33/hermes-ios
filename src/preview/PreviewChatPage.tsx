@@ -115,6 +115,7 @@ import {
   hostedTurnTransportFailure,
   type HostedTurnDeliveryFailure,
 } from '../api/hosted-turn-delivery-state';
+import { consumeHostedConversationEvents } from '../api/hosted-conversation-events';
 import {
   activityCategoryLabel,
   activityDisplayContent,
@@ -166,6 +167,9 @@ const HOSTED_TURN_VISIBILITY_GRACE_MS = 20_000;
 const RECONNECT_MAX_ATTEMPTS = 5;
 const HOSTED_TURN_REQUEST_TIMEOUT_MS = 20_000;
 const HOSTED_TURN_CANCEL_TIMEOUT_MS = 5_000;
+const HOSTED_EVENT_RECONNECT_MS = 1_500;
+const HOSTED_EVENT_POLL_FALLBACK_MS = 15_000;
+const HOSTED_EVENT_POLL_DISCONNECTED_MS = 1_000;
 
 type PendingPhase = 'thinking' | 'reconnecting' | 'executing';
 
@@ -262,6 +266,7 @@ export function ChatPreviewPage({
   );
   const cancelHostedTurnInFlightRef = useRef(false);
   const conversationIndexRef = useRef<SingleConversation[]>([]);
+  const hostedEventCursorRef = useRef(new Map<string, number>());
   const conversationSyncGenerationRef = useRef(0);
   const conversationIndexRefreshGateRef = useRef(new AsyncSingleFlight());
   const hydratedCacheOwnerRef = useRef('');
@@ -763,6 +768,13 @@ export function ChatPreviewPage({
   }, [persistConversationCache]);
 
   const applyConversation = useCallback((incomingConversation: SingleConversation) => {
+    const incomingCursor = Math.max(0, Number(incomingConversation.event_cursor) || 0);
+    const currentCursor = hostedEventCursorRef.current.get(incomingConversation.id) || 0;
+    if (incomingCursor < currentCursor) return;
+    hostedEventCursorRef.current.set(
+      incomingConversation.id,
+      Math.max(currentCursor, incomingCursor),
+    );
     const conversation = upsertCachedConversation(
       conversationIndexRef.current,
       incomingConversation,
@@ -1551,6 +1563,7 @@ export function ChatPreviewPage({
     conversationSyncGenerationRef.current += 1;
     hydratedCacheOwnerRef.current = '';
     conversationIndexRef.current = [];
+    hostedEventCursorRef.current = new Map();
     optimisticMessagesByConversationRef.current = new Map();
     optimisticPendingByConversationRef.current = new Map();
     optimisticMessagesRef.current = [];
@@ -1632,26 +1645,94 @@ export function ChatPreviewPage({
       return undefined;
     }
     let disposed = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    conversationSyncGenerationRef.current += 1;
+    let streamActive = false;
+    let streamHealthy = false;
+    let streamController: AbortController | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    const generation = ++conversationSyncGenerationRef.current;
+
+    const scheduleStream = () => {
+      if (
+        disposed
+        || streamActive
+        || reconnectTimer
+        || AppState.currentState !== 'active'
+      ) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        startStream();
+      }, HOSTED_EVENT_RECONNECT_MS);
+    };
+    const startStream = () => {
+      if (disposed || streamActive || AppState.currentState !== 'active') return;
+      streamActive = true;
+      streamController = new AbortController();
+      void consumeHostedConversationEvents(
+        cloudApi,
+        activeConversationId,
+        hostedEventCursorRef.current.get(activeConversationId) || 0,
+        streamController.signal,
+        ({ conversation, cursor }) => {
+          if (
+            disposed
+            || generation !== conversationSyncGenerationRef.current
+            || activeConversationIdRef.current !== activeConversationId
+          ) return;
+          streamHealthy = true;
+          hostedEventCursorRef.current.set(activeConversationId, cursor);
+          applyConversation(conversation);
+        },
+      ).catch(() => {
+        if (!streamController?.signal.aborted) streamHealthy = false;
+      }).finally(() => {
+        streamActive = false;
+        streamController = null;
+        scheduleStream();
+      });
+    };
     const poll = async () => {
       if (disposed) return;
       if (AppState.currentState === 'active') {
-        const generation = conversationSyncGenerationRef.current;
         await withAbortableDeadline(
           (signal) => loadConversation(activeConversationId, generation, signal),
           HOSTED_TURN_REQUEST_TIMEOUT_MS,
           'Hermes conversation polling timed out',
         ).catch(() => undefined);
       }
-      if (!disposed) timer = setTimeout(() => void poll(), 1_000);
+      if (!disposed) {
+        pollTimer = setTimeout(
+          () => void poll(),
+          streamHealthy
+            ? HOSTED_EVENT_POLL_FALLBACK_MS
+            : HOSTED_EVENT_POLL_DISCONNECTED_MS,
+        );
+      }
     };
+    const appState = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        startStream();
+        return;
+      }
+      streamHealthy = false;
+      streamController?.abort();
+    });
+    startStream();
     void poll();
     return () => {
       disposed = true;
-      if (timer) clearTimeout(timer);
+      streamController?.abort();
+      appState.remove();
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (pollTimer) clearTimeout(pollTimer);
     };
-  }, [activeConversationId, cloudApi, hostedRunning, loadConversation]);
+  }, [
+    activeConversationId,
+    applyConversation,
+    cloudApi,
+    hostedRunning,
+    loadConversation,
+  ]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1688,6 +1769,10 @@ export function ChatPreviewPage({
       try {
         const result = await cloudApi.createConversation(profile, isChinese ? '新对话' : 'New conversation');
         applyConversation(result.conversation);
+        contentRef.current = '';
+        setContent('');
+        cleanupAttachmentSources(attachmentsRef.current);
+        updateAttachments([]);
       } catch (error) {
         notify(serverFailure(error, isChinese));
       }
@@ -3358,6 +3443,13 @@ function serverFailure(error: unknown, chinese: boolean): string {
     return chinese ? `服务器操作失败：${error.message}` : `Server operation failed: ${error.message}`;
   }
   return chinese ? '服务器操作失败，请稍后重试。' : 'Server operation failed. Try again.';
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'status' in error
+    && (error as { status?: unknown }).status === 404;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

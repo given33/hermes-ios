@@ -419,7 +419,7 @@ export function collaborationMessageToView(
   const logicalRoleBase = logicalRole.toLowerCase().split(/[.:/]/, 1)[0];
   const isVisibleSystemEvent = message.role === 'system'
     && (kind === 'workflow' || Boolean(stringValue(message.sender_role) || stringValue(message.collaboration_role)));
-  const isAssistantRole = [
+  const isAssistantRole = message.role === 'assistant' || [
     'assistant',
     'chat',
     'dbb3-worker',
@@ -1117,6 +1117,8 @@ function profileDisplayName(
   stage: HermesChatViewMessage['roleStage'],
   chinese: boolean,
 ): string {
+  const normalizedProfile = profile.toLowerCase();
+  if (normalizedProfile === 'dbb3-manager') return 'DBB3 Manager';
   if (stage === 'dispatcher') return chinese ? 'Hermes 调度员' : 'Hermes Dispatcher';
   if (stage === 'reporter') return chinese ? 'Hermes 汇报员' : 'Hermes Reporter';
   if (stage === 'reviewer' && !profile) return chinese ? 'Hermes 审阅员' : 'Hermes Reviewer';
@@ -1127,7 +1129,7 @@ function profileDisplayName(
       'pc-worker': 'PC/WSL Worker',
       reviewer: 'Hermes Reviewer',
     };
-    return names[profile.toLowerCase()] || profile || 'Hermes Agent';
+    return names[normalizedProfile] || profile || 'Hermes Agent';
   }
   const names: Record<string, string> = {
     default: 'Hermes',
@@ -1135,7 +1137,7 @@ function profileDisplayName(
     'pc-worker': 'PC/WSL 执行员',
     reviewer: 'Hermes 审阅员',
   };
-  return names[profile.toLowerCase()] || profile || 'Hermes Agent';
+  return names[normalizedProfile] || profile || 'Hermes Agent';
 }
 
 function roleStageLabel(

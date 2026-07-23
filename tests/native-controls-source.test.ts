@@ -174,7 +174,7 @@ test('confirm dialog keeps canonical blur, fonts, and native modal behavior', ()
 });
 
 test('all native modules and the app share an explicit iOS 18 deployment target', () => {
-  const appConfig = JSON.parse(read('app.json')) as {
+  const appConfig = JSON.parse(read('app.base.json')) as {
     expo: { plugins: Array<string | [string, Record<string, unknown>]> };
   };
   const packageJson = JSON.parse(read('package.json')) as {
@@ -197,7 +197,7 @@ test('local native effects always launch through a development client', () => {
     dependencies: Record<string, string>;
     scripts: Record<string, string>;
   };
-  const appConfig = JSON.parse(read('app.json')) as {
+  const appConfig = JSON.parse(read('app.base.json')) as {
     expo: { plugins: Array<string | [string, Record<string, unknown>]> };
   };
   const easConfig = JSON.parse(read('eas.json')) as {

@@ -219,16 +219,8 @@ export function useHermesSwiftUIRouteData({
       route: routeId,
     }));
     void (async () => {
-      if (routeId === 'sessions' && localStore && cacheOwner) {
-        const cached = await localStore.read(cacheOwner);
-        if (cached && lifecycleVersion === requestVersion.current) {
-          setDataJson(encodeHermesSwiftUIRouteSnapshot(
-            createHermesSwiftUISessionsSnapshot({
-              sessions: cached.conversations.map(conversationSessionSummary),
-            }),
-          ));
-        }
-      }
+      // Do not render an unverified local index. The server's account-scoped
+      // index is authoritative and will repopulate the cache during reload.
       if (lifecycleVersion === requestVersion.current) await reload();
     })();
     if (!api || routeId === 'models') return undefined;

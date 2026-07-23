@@ -29,6 +29,8 @@ const CORE_ROUTE_PATHS = [
   '/profiles/new',
   '/config',
   '/account',
+  '/approvals',
+  '/runtime-center',
   '/env',
   '/docs',
 ] as const;
@@ -48,6 +50,8 @@ const CORE_NAV_PATHS = [
   '/profiles',
   '/config',
   '/account',
+  '/approvals',
+  '/runtime-center',
   '/env',
   '/system',
   '/docs',
@@ -68,6 +72,8 @@ const CORE_NAV_ICONS = [
   'Users',
   'Settings',
   'Users',
+  'ShieldCheck',
+  'Activity',
   'KeyRound',
   'Wrench',
   'BookOpen',
@@ -88,6 +94,8 @@ const ENGLISH_NAV_LABELS = [
   'Profiles',
   'Config',
   'Account',
+  'Approvals',
+  'Runtime Center',
   'Keys',
   'System',
   'Documentation',
@@ -108,6 +116,8 @@ const CHINESE_NAV_LABELS = [
   '\u591aAgent\u914d\u7f6e',
   '\u914d\u7f6e',
   '\u8d26\u6237',
+  '\u5ba1\u6279\u4e2d\u5fc3',
+  '\u8fd0\u884c\u4e2d\u5fc3',
   '\u5bc6\u94a5',
   '\u7cfb\u7edf\u76d1\u63a7',
   '\u6587\u6863',
@@ -230,6 +240,20 @@ test('freezes bundled manifests as plugin inputs in discovery order', () => {
       has_api: true,
       source: 'bundled',
     },
+    {
+      name: 'workflows',
+      label: '\u5de5\u4f5c\u6d41',
+      description:
+        'Versioned Hermes DAG workflows compiled to durable Kanban execution.',
+      icon: 'Zap',
+      version: '1.0.0',
+      tab: { path: '/workflows', position: 'after:kanban' },
+      slots: [],
+      entry: 'dist/index.js?v=1.0.0',
+      css: 'dist/style.css?v=1.0.0',
+      has_api: true,
+      source: 'bundled',
+    },
   ]);
 });
 
@@ -333,7 +357,7 @@ test('baseline plugin positions are applied before sidebar partitioning', () => 
   });
   assert.deepEqual(
     analyticsHidden.pluginItems.map((item) => item.path),
-    ['/kanban', '/achievements'],
+    ['/kanban', '/workflows', '/achievements'],
   );
   assert.equal(
     analyticsHidden.coreItems.some((item) => item.path === '/collaboration'),
@@ -351,10 +375,10 @@ test('baseline plugin positions are applied before sidebar partitioning', () => 
   });
   assert.deepEqual(
     analyticsVisible.pluginItems.map((item) => item.path),
-    ['/achievements', '/kanban'],
+    ['/achievements', '/kanban', '/workflows'],
   );
   assert.deepEqual(
-    analyticsVisible.routes.slice(-3).map(({ key, path, pluginName, routeId }) => ({
+    analyticsVisible.routes.slice(-4).map(({ key, path, pluginName, routeId }) => ({
       key,
       path,
       pluginName,
@@ -372,6 +396,12 @@ test('baseline plugin positions are applied before sidebar partitioning', () => 
         path: '/kanban',
         pluginName: 'kanban',
         routeId: 'kanban',
+      },
+      {
+        key: 'plugin:workflows',
+        path: '/workflows',
+        pluginName: 'workflows',
+        routeId: 'workflows',
       },
       {
         key: 'plugin:hidden:collaboration',

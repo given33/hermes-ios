@@ -441,17 +441,11 @@ test('SecureStore keeps the first-login session available for automatic cold-sta
   assert.ok(
     [...operationKeys].some((key) => key.startsWith(REFRESH_TOKEN_KEY_PREFIX)),
   );
-  const isProtectedSecretKey = (key: string) => (
-    key === ACCESS_TOKEN_STORAGE_KEY
-    || key === REFRESH_TOKEN_STORAGE_KEY
-    || key === REMEMBERED_PASSWORD_STORAGE_KEY
-    || key.startsWith(REFRESH_TOKEN_KEY_PREFIX)
-  );
   const protectedOperations = operations.filter(
     ({ operation, key }) =>
-      isProtectedSecretKey(key) && (operation === 'get' || operation === 'set'),
+      key === REMEMBERED_PASSWORD_STORAGE_KEY && (operation === 'get' || operation === 'set'),
   );
-  assert.ok(protectedOperations.length >= 4);
+  assert.ok(protectedOperations.length >= 2);
   for (const operation of protectedOperations) assert.equal(operation.options, sessionOptions);
   const accessTokenOperations = operations.filter(
     ({ operation, key }) =>

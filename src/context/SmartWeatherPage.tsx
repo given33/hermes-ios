@@ -24,6 +24,7 @@ import {
 import type { HermesApiClient } from '../api/HermesApiClient';
 import { NativeButton } from '../components/ui/NativeButton';
 import { ScreenState } from '../components/ui/ScreenState';
+import { multiplyAlpha } from '../design/control-contracts';
 import { useTheme } from '../design/ThemeProvider';
 import {
   IOSIntelligenceApi,
@@ -46,6 +47,7 @@ interface SmartWeatherPageProps {
   client?: HermesApiClient;
   locale: 'en' | 'zh';
   notify(message: string): void;
+  onOpenNavigation?(): void;
   onReady?(): void;
 }
 
@@ -574,6 +576,83 @@ function normalizeForecast(forecast: IOSActiveForecast): IOSActiveForecast {
     starts_at: forecast.starts_at ?? forecast.valid_from ?? nested.starts_at,
     expires_at: forecast.expires_at ?? forecast.valid_until ?? nested.expires_at,
   };
+}
+
+function normalizeSnapshot(value: unknown): IOSIntelligenceSnapshot {
+  if (!isRecord(value)) return EMPTY;
+  const trajectory = Array.isArray(value.trajectory)
+    ? value.trajectory.flatMap((entry) => {
+        if (!isRecord(entry)) return [];
+        const latitude = Number(entry.latitude);
+        const longitude = Number(entry.longitude);
+        const observedAt = Number(entry.observed_at);
+        if (
+          !Number.isFinite(latitude)
+          || !Number.isFinite(longitude)
+          || !Number.isFinite(observedAt)
+          || Math.abs(latitude) > 90
+          || Math.abs(longitude) > 180
+        ) return [];
+        return [{ ...entry, latitude, longitude, observed_at: observedAt }];
+      })
+    : [];
+  const places = Array.isArray(value.places)
+    ? value.places.flatMap((entry) => {
+        if (!isRecord(entry)) return [];
+        const placeId = typeof entry.place_id === 'string' ? entry.place_id.trim() : '';
+        const arrivedAt = Number(entry.arrived_at);
+        if (!placeId || !Number.isFinite(arrivedAt)) return [];
+        const latitude = entry.latitude == null ? null : Number(entry.latitude);
+        const longitude = entry.longitude == null ? null : Number(entry.longitude);
+        return [{
+          ...entry,
+          arrived_at: arrivedAt,
+          latitude: latitude !== null
+            && Number.isFinite(latitude)
+            && Math.abs(latitude) <= 90
+            ? latitude
+            : null,
+          longitude: longitude !== null
+            && Number.isFinite(longitude)
+            && Math.abs(longitude) <= 180
+            ? longitude
+            : null,
+          name: typeof entry.name === 'string' ? entry.name : '',
+          place_id: placeId,
+        }];
+      })
+    : [];
+  const forecasts = Array.isArray(value.active_forecasts)
+    ? value.active_forecasts.filter(isRecord)
+    : Array.isArray(value.active_forecast)
+      ? value.active_forecast.filter(isRecord)
+      : [];
+  return {
+    ...value,
+    active_forecasts: forecasts,
+    date: typeof value.date === 'string' ? value.date : '',
+    places,
+    timezone: typeof value.timezone === 'string' && value.timezone
+      ? value.timezone
+      : 'Asia/Shanghai',
+    trajectory,
+  } as IOSIntelligenceSnapshot;
+}
+
+function smartWeatherErrorMessage(error: unknown, locale: 'en' | 'zh'): string {
+  const status = isRecord(error) && typeof error.status === 'number' ? error.status : 0;
+  if (status === 404 || status === 503) {
+    return locale === 'zh'
+      ? '服务器智能天气服务暂不可用，地图和定位仍可继续使用。'
+      : 'The Smart Weather service is temporarily unavailable. Map and location remain usable.';
+  }
+  return locale === 'zh'
+    ? '智能天气数据加载失败，请重试。'
+    : 'Smart Weather data failed to load. Try again.';
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function formatRange(start: number, end: number | null | undefined, locale: 'en' | 'zh') {

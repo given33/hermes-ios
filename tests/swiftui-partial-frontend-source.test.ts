@@ -53,7 +53,7 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
   assert.match(preview, /<ChatPreviewPage[\s\S]*profile=\{profile\}/);
   const chat = read('src/preview/PreviewChatPage.tsx');
   assert.match(chat, /createConversation\(profile,/);
-  assert.match(chat, /enqueueHostedTurn\(item\.conversationId, item\.input\)/);
+  assert.match(chat, /enqueueHostedTurn\(item\.conversationId, item\.input, signal\)/);
   assert.match(chat, /persistPendingAttachments\(/);
   assert.match(chat, /upsertPendingEnqueue\(cacheOwner,/);
   assert.match(chat, /cancelHostedTurn\(/);
@@ -89,7 +89,7 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routes, /\.modelSelect/);
   assert.match(routes, /\.modelDiscover/);
   assert.match(routes, /ForEach\(models\)/);
-  assert.match(routes, /ForEach\(detectedModels, id: \\.self\)/);
+  assert.match(routes, /ForEach\(displayedDetectedModels, id: \\.self\)/);
   assert.match(routes, /hermes-detect-models/);
   assert.match(routes, /HermesRouteActionPayload\(route: "models", id: model\.id\)/);
   assert.match(routes, /API key \(optional\)/);

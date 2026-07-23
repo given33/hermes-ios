@@ -14,7 +14,7 @@ import {
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const appSource = readFileSync(resolve(projectRoot, 'App.tsx'), 'utf8');
 const indexSource = readFileSync(resolve(projectRoot, 'index.ts'), 'utf8');
-const appConfig = JSON.parse(readFileSync(resolve(projectRoot, 'app.json'), 'utf8'));
+const appConfig = JSON.parse(readFileSync(resolve(projectRoot, 'app.base.json'), 'utf8'));
 const packageConfig = JSON.parse(readFileSync(resolve(projectRoot, 'package.json'), 'utf8'));
 
 test('native v2 has no WebView runtime', () => {
@@ -63,6 +63,8 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
       '/profiles/new',
       '/config',
       '/account',
+      '/approvals',
+      '/runtime-center',
       '/env',
       '/docs',
       '/chat',

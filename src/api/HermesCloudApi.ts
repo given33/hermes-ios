@@ -136,6 +136,7 @@ export interface SingleConversation {
   runtime_sessions?: Record<string, string>;
   runtime_runs?: Record<string, JsonRecord>;
   hosted_turns?: Record<string, JsonRecord>;
+  event_cursor?: number;
   created_at?: number;
   updated_at?: number;
   official_session_id?: string;
@@ -1238,6 +1239,20 @@ export class HermesCloudApi {
     return this.request<{ conversation: SingleConversation }>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
       { signal },
+    );
+  }
+
+  openHostedConversationEvents(
+    conversationId: string,
+    cursor: number,
+    signal: AbortSignal,
+  ) {
+    return this.client.openEventStream(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-events`,
+      {
+        query: { cursor: Math.max(0, Math.floor(cursor)) },
+        signal,
+      },
     );
   }
 

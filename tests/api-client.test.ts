@@ -257,6 +257,43 @@ test('authenticated binary downloads refresh one rejected token and preserve byt
   assert.doesNotMatch(calls.map(({ url }) => url).join('\n'), /mobile-token/);
 });
 
+test('hosted event streams refresh one rejected token without putting credentials in the URL', async () => {
+  const calls: FetchCall[] = [];
+  const provider = {
+    getCurrentAccessToken: () => 'old-stream-token',
+    getAccessToken: async (request?: { forceRefresh?: boolean }) =>
+      request?.forceRefresh ? 'new-stream-token' : 'old-stream-token',
+  };
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    provider,
+    async () => { throw new Error('regular fetch must not serve SSE'); },
+    async (input, init) => {
+      const url = String(input);
+      calls.push({ url, init: init ?? {} });
+      if (calls.length === 1) {
+        return jsonResponse(url, { detail: 'expired' }, { status: 401 });
+      }
+      return withResponseUrl(new Response(': keepalive\n\n', {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }), url);
+    },
+  );
+
+  const response = await client.openEventStream('/api/plugins/collaboration/events', {
+    query: { cursor: 12 },
+    signal: new AbortController().signal,
+  });
+
+  assert.equal(await response.text(), ': keepalive\n\n');
+  assert.equal(calls.length, 2);
+  assert.equal(new URL(calls[1].url).searchParams.get('cursor'), '12');
+  assert.equal(new Headers(calls[0].init.headers).get('Accept'), 'text/event-stream');
+  assert.equal(new Headers(calls[0].init.headers).get('Authorization'), 'Bearer old-stream-token');
+  assert.equal(new Headers(calls[1].init.headers).get('Authorization'), 'Bearer new-stream-token');
+  assert.doesNotMatch(calls.map(({ url }) => url).join('\n'), /stream-token/);
+});
+
 test('accepts only the actual mobile v1 handshake contract', () => {
   const handshake = {
     api_version: 1,

@@ -80,11 +80,13 @@ export class HermesApiClient {
   readonly baseUrl: string;
   private readonly credential: string | HermesAccessTokenProvider;
   private readonly fetchImpl: typeof fetch;
+  private readonly streamFetchImpl?: typeof fetch;
 
   constructor(
     baseUrl: string,
     credential: string | HermesAccessTokenProvider,
     fetchImpl: typeof fetch = fetch,
+    streamFetchImpl?: typeof fetch,
   ) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
     if (typeof credential === 'string') {
@@ -101,6 +103,7 @@ export class HermesApiClient {
       this.credential = credential;
     }
     this.fetchImpl = fetchImpl;
+    this.streamFetchImpl = streamFetchImpl;
   }
 
   async request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
@@ -176,6 +179,47 @@ export class HermesApiClient {
       }
       return response.blob();
     }, callerSignal, deadlineMs, 'Hermes download timed out');
+  }
+
+  async openEventStream(
+    path: string,
+    options: Omit<HermesRequestOptions, 'deadlineMs'> = {},
+  ): Promise<Response> {
+    const {
+      headers: callerHeaders,
+      profile,
+      query,
+      redirect: unsupportedRedirect,
+      signal,
+      ...requestInit
+    } = options;
+    void unsupportedRedirect;
+    const url = this.createSameOriginUrl(path);
+    mergeQuery(url, query);
+    if (profile !== undefined) url.searchParams.set('profile', profile);
+    this.assertUrlHasNoCredentials(url, this.currentCredentialSecrets());
+    const headers = new Headers(callerHeaders);
+    headers.set('Accept', 'text/event-stream');
+    const eventFetch = this.streamFetchImpl
+      ?? (await import('expo/fetch')).fetch as unknown as typeof fetch;
+    const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
+      url,
+      headers,
+      { ...requestInit, cache: 'no-store', method: 'GET', signal },
+      eventFetch,
+    );
+    if (!response.ok) {
+      const body = await response.text();
+      throw new HermesApiError(
+        response.status,
+        safeResponseDetail(body, response, attemptedTokens),
+      );
+    }
+    const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
+    if (!contentType.includes('text/event-stream')) {
+      throw new Error('Hermes returned a non-streaming hosted event response');
+    }
+    return response;
   }
 
   createAttachmentUrl(path: string, query?: HermesQuery): string {
@@ -262,6 +306,7 @@ export class HermesApiClient {
     url: URL,
     callerHeaders: HeadersInit | undefined,
     requestInit: Omit<HermesRequestOptions, 'headers' | 'profile' | 'query' | 'redirect'>,
+    fetchImpl: typeof fetch = this.fetchImpl,
   ): Promise<{ attemptedTokens: string[]; response: Response }> {
     const accessToken = await this.resolveAccessToken();
     this.assertUrlHasNoCredentials(url, [accessToken]);
@@ -275,6 +320,7 @@ export class HermesApiClient {
       accessToken,
       callerHeaders,
       requestInit,
+      fetchImpl,
     );
     this.assertResponseSameOrigin(response, requestedUrl);
     const attemptedTokens = [accessToken];
@@ -292,6 +338,7 @@ export class HermesApiClient {
         refreshedToken,
         callerHeaders,
         requestInit,
+        fetchImpl,
       );
       this.assertResponseSameOrigin(response, requestedUrl);
     }
@@ -303,11 +350,12 @@ export class HermesApiClient {
     accessToken: string,
     callerHeaders: HeadersInit | undefined,
     requestInit: Omit<HermesRequestOptions, 'headers' | 'profile' | 'query' | 'redirect'>,
+    fetchImpl: typeof fetch = this.fetchImpl,
   ): Promise<Response> {
     const headers = new Headers(callerHeaders);
     if (!headers.has('Accept')) headers.set('Accept', 'application/json');
     headers.set('Authorization', `Bearer ${accessToken}`);
-    return this.fetchImpl(url.toString(), { ...requestInit, headers });
+    return fetchImpl(url.toString(), { ...requestInit, headers });
   }
 
   private assertResponseSameOrigin(response: Response, requestedUrl: string): void {
