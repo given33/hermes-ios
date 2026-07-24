@@ -61,7 +61,10 @@ const SECRET_PATTERNS = Object.freeze([
   ['GitHub access token', /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,})\b/g],
   ['Slack access token', /\bxox[baprs]-[A-Za-z0-9-]{20,}\b/g],
   ['JSON Web Token', /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g],
-  ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g],
+  [
+    'private key',
+    /-----BEGIN ((?:RSA |EC |OPENSSH )?PRIVATE KEY)-----[\r\n]+[A-Za-z0-9+/=\r\n]{128,}-----END \1-----/g,
+  ],
 ]);
 
 const CREDENTIAL_ASSIGNMENTS = Object.freeze([
