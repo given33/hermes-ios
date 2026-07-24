@@ -117,6 +117,10 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routes, /HermesFileImports/);
   assert.match(routes, /cleanupExpiredBatches/);
   assert.match(routes, /fields: \["stagedImport": "true"\]/);
+  assert.match(
+    routes,
+    /HermesRouteActionPayload\(\s*route: "files",\s*requestId: "file-import-[\s\S]*?fields: \["stagedImport": "true"\],\s*uris:/,
+  );
   assert.match(routeData, /payload\.fields\?\.stagedImport === 'true'/);
   assert.match(routeData, /removeStagedFileImport\(uri\)/);
   assert.match(routes, /\.configImport/);

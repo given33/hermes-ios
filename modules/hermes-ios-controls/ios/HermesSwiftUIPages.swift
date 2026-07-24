@@ -1836,9 +1836,9 @@ private struct HermesFilesPage: View {
           .fileImport,
           HermesRouteActionPayload(
             route: "files",
+            requestId: "file-import-\(UUID().uuidString.lowercased())",
             fields: ["stagedImport": "true"],
-            uris: stagedURLs.map(\.absoluteString),
-            requestId: "file-import-\(UUID().uuidString.lowercased())"
+            uris: stagedURLs.map(\.absoluteString)
           )
         )
       }
