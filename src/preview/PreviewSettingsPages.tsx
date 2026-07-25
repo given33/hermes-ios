@@ -7,7 +7,6 @@ import {
   Archive,
   Bot,
   Check,
-  ChevronDown,
   CircleGauge,
   Clipboard,
   CloudDownload,
@@ -24,7 +23,6 @@ import {
   Import,
   KeyRound,
   MemoryStick,
-  MoreHorizontal,
   Plus,
   RefreshCw,
   RotateCw,
@@ -42,7 +40,7 @@ import {
   Wrench,
 } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
-import { ActionSheetIOS, Platform, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSContextMenu } from '../components/ios/IOSContextMenu';
@@ -52,10 +50,7 @@ import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
 import { useTheme } from '../design/ThemeProvider';
 import type { PreviewPageProps } from './PreviewCorePages';
-import {
-  PREVIEW_CONFIG_SECTIONS,
-  PREVIEW_PROFILES,
-} from './preview-fixtures';
+import { PREVIEW_CONFIG_SECTIONS } from './preview-fixtures';
 import {
   PreviewBadge,
   PreviewCard,
@@ -84,6 +79,7 @@ export function SystemPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
   const [hookOpen, setHookOpen] = useState(false);
   const [runningAction, setRunningAction] = useState<string | null>(null);
   const [credentialProvider, setCredentialProvider] = useState('');
+  const [hookTimeout, setHookTimeout] = useState('10');
   const runAction = (name: string) => {
     setConfirm(null);
     setRunningAction(name);
@@ -218,7 +214,7 @@ export function SystemPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
       <PreviewModal onClose={() => setHookOpen(false)} open={hookOpen} title="Add shell hook">
         <NativeInput placeholder="/usr/local/bin/my-hook.sh" />
         <NativeInput placeholder="Matcher, e.g. terminal" />
-        <NativeInput placeholder="Timeout in seconds" value="10" />
+        <NativeInput onChangeText={setHookTimeout} placeholder="Timeout in seconds" value={hookTimeout} />
         <NativeButton onPress={() => {
           notify('Shell hook added');
           setHookOpen(false);
@@ -228,244 +224,77 @@ export function SystemPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
   );
 }
 
-export function ProfilesPreviewPage({ navigate, notify }: PreviewPageProps) {
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [soulProfile, setSoulProfile] = useState<string | null>(null);
-  const [actionsProfile, setActionsProfile] = useState<
-    (typeof PREVIEW_PROFILES)[number] | null
-  >(null);
-  const setActive = (profile: (typeof PREVIEW_PROFILES)[number]) => {
-    notify(`Active profile: ${profile.name}`);
-  };
-  const editSoul = (profile: (typeof PREVIEW_PROFILES)[number]) => {
-    setSoulProfile(profile.name);
-  };
-  const copyCommand = (profile: (typeof PREVIEW_PROFILES)[number]) => {
-    notify(`hermes --profile ${profile.name} copied`);
-  };
-  const openProfileActions = (profile: (typeof PREVIEW_PROFILES)[number]) => {
-    if (Platform.OS !== 'ios') {
-      setActionsProfile(profile);
-      return;
-    }
-    ActionSheetIOS.showActionSheetWithOptions(
-      {
-        cancelButtonIndex: 4,
-        destructiveButtonIndex: 3,
-        options: ['Set active', 'Edit SOUL.md', 'Copy command', 'Delete profile', 'Cancel'],
-        title: profile.name,
-      },
-      (index) => {
-        if (index === 0) setActive(profile);
-        if (index === 1) editSoul(profile);
-        if (index === 2) copyCommand(profile);
-        if (index === 3) setDeleteTarget(profile.name);
-      },
-    );
-  };
+export function ProfilesPreviewPage({
+  gatewayStatuses = [],
+  locale = 'zh',
+  serverOnline = false,
+}: PreviewPageProps) {
+  const chinese = locale === 'zh';
+  const findNode = (id: string, label: string) => gatewayStatuses.find((node) => (
+    node.id.toLowerCase().includes(id) || node.label.toLowerCase().includes(label)
+  ));
+  const nodes = [
+    {
+      description: chinese ? '托管、持久化、路由与最终汇报' : 'Hosting, persistence, routing, and final reporting',
+      id: 'server',
+      label: chinese ? '主服务器 Hermes' : 'Main server Hermes',
+      state: serverOnline ? 'online' as const : 'unknown' as const,
+      version: null,
+    },
+    {
+      description: chinese ? 'Hermes 调度、执行与默认审阅节点' : 'Hermes planning, execution, and default review node',
+      id: 'dbb3',
+      label: 'DBB3 Hermes',
+      state: findNode('dbb3', 'dbb3')?.state ?? 'unknown' as const,
+      version: findNode('dbb3', 'dbb3')?.version ?? null,
+    },
+    {
+      description: chinese ? '常驻 PC Worker 与可迁移审阅节点' : 'Persistent PC Worker and optional review node',
+      id: 'wsl',
+      label: 'WSL Hermes',
+      state: findNode('wsl', 'wsl')?.state ?? 'unknown' as const,
+      version: findNode('wsl', 'wsl')?.version ?? null,
+    },
+  ];
   return (
     <PreviewPage
-      actions={<NativeButton onPress={() => navigate('/profiles/new')} prefix={<Plus />} size="sm">New profile</NativeButton>}
-      subtitle="Create specialized agents with scoped models, keys, memories, skills, and schedules."
-      title="Profiles"
+      title={chinese ? '配置' : 'Profiles'}
     >
+      <PreviewText variant="muted">
+        {chinese
+          ? '这里只显示三台 Hermes 节点的权威连接与版本状态；状态由主服务器每 15 秒刷新。'
+          : 'This view shows authoritative connection and version state for the three Hermes nodes and refreshes every 15 seconds.'}
+      </PreviewText>
       <PreviewGrid minItemWidth={300}>
-        {PREVIEW_PROFILES.map((profile) => (
-          <IOSSwipeActions
-            actions={[
-              {
-                icon: 'pencil',
-                id: 'edit',
-                label: 'Edit',
-                onPress: () => editSoul(profile),
-              },
-              {
-                destructive: true,
-                icon: 'trash',
-                id: 'delete',
-                label: 'Delete',
-                onPress: () => setDeleteTarget(profile.name),
-              },
-            ]}
-            containerStyle={styles.swipeContainer}
-            key={profile.name}
-          >
-          <IOSContextMenu
-            actions={[
-              {
-                id: 'active',
-                onPress: () => setActive(profile),
-                systemImage: 'checkmark.circle',
-                title: 'Set active',
-              },
-              {
-                id: 'soul',
-                onPress: () => editSoul(profile),
-                systemImage: 'pencil',
-                title: 'Edit SOUL.md',
-              },
-              {
-                id: 'copy',
-                onPress: () => copyCommand(profile),
-                systemImage: 'doc.on.doc',
-                title: 'Copy command',
-              },
-              {
-                destructive: true,
-                id: 'delete',
-                onPress: () => setDeleteTarget(profile.name),
-                systemImage: 'trash',
-                title: 'Delete profile',
-              },
-            ]}
-          >
+        {nodes.map((node) => (
           <PreviewCard
             action={(
-              <PreviewRow style={styles.profileHeaderActions}>
-                {profile.active ? <PreviewBadge tone="success">DEFAULT</PreviewBadge> : null}
-                <NativeButton
-                  accessibilityLabel="Profile actions"
-                  ghost
-                  onPress={() => openProfileActions(profile)}
-                  size="icon"
-                >
-                  <MoreHorizontal />
-                </NativeButton>
-              </PreviewRow>
+              <PreviewBadge tone={node.state === 'online' ? 'success' : node.state === 'degraded' ? 'warning' : 'outline'}>
+                {node.state === 'online'
+                  ? (chinese ? '在线' : 'Online')
+                  : node.state === 'degraded'
+                    ? (chinese ? '降级' : 'Degraded')
+                    : node.state === 'offline'
+                      ? (chinese ? '离线' : 'Offline')
+                      : (chinese ? '检测中' : 'Checking')}
+              </PreviewBadge>
             )}
-            subtitle={profile.description}
-            title={profile.name}
+            key={node.id}
           >
-            <PreviewDataRow label="Model" mono value={profile.model} />
-            <PreviewDataRow label="Skills" mono value={String(profile.skills)} />
-            <PreviewDataRow label="Environment" value={profile.env ? 'Configured' : 'Inherited'} />
+            <View style={styles.profileTitleRow}>
+              <Server size={24} />
+              <View style={styles.flexCopy}>
+                <PreviewText variant="heading">{node.label}</PreviewText>
+                <PreviewText variant="tiny">{node.description}</PreviewText>
+              </View>
+            </View>
+            <PreviewDataRow label={chinese ? '节点标识' : 'Node ID'} mono value={node.id} />
+            <PreviewDataRow label={chinese ? 'Hermes 版本' : 'Hermes version'} mono value={node.version?.split(' ')[0] || (chinese ? '等待服务器上报' : 'Awaiting server report')} />
+            <PreviewDataRow label={chinese ? '配置来源' : 'Configuration source'} value={chinese ? '主服务器托管配置' : 'Server-managed configuration'} />
           </PreviewCard>
-          </IOSContextMenu>
-          </IOSSwipeActions>
         ))}
       </PreviewGrid>
-      <ProfileActionsSheet
-        onClose={() => setActionsProfile(null)}
-        onCopy={() => {
-          notify(`hermes --profile ${actionsProfile?.name} copied`);
-          setActionsProfile(null);
-        }}
-        onDelete={() => {
-          setDeleteTarget(actionsProfile?.name ?? null);
-          setActionsProfile(null);
-        }}
-        onEditSoul={() => {
-          setSoulProfile(actionsProfile?.name ?? null);
-          setActionsProfile(null);
-        }}
-        onSetActive={() => {
-          notify(`Active profile: ${actionsProfile?.name}`);
-          setActionsProfile(null);
-        }}
-        profile={actionsProfile}
-      />
-      <PreviewModal onClose={() => setSoulProfile(null)} open={soulProfile !== null} title={`Edit ${soulProfile ?? ''} SOUL.md`}>
-        <NativeInput
-          multiline
-          style={styles.soulInput}
-          value="# iOS Native Agent\n\nYou preserve the customized Hermes WebUI contracts while using native iOS interaction patterns."
-        />
-        <NativeButton onPress={() => {
-          notify(`${soulProfile} SOUL.md saved`);
-          setSoulProfile(null);
-        }}>Save SOUL</NativeButton>
-      </PreviewModal>
-      <ConfirmDialog
-        description={`This permanently deletes '${deleteTarget ?? ''}', including configuration, keys, memories, sessions, skills, and cron jobs.`}
-        destructive
-        onCancel={() => setDeleteTarget(null)}
-        onConfirm={() => {
-          notify(`Deleted profile: ${deleteTarget}`);
-          setDeleteTarget(null);
-        }}
-        open={deleteTarget !== null}
-        title="Delete profile?"
-      />
     </PreviewPage>
-  );
-}
-
-function ProfileActionsSheet({
-  onClose,
-  onCopy,
-  onDelete,
-  onEditSoul,
-  onSetActive,
-  profile,
-}: {
-  onClose(): void;
-  onCopy(): void;
-  onDelete(): void;
-  onEditSoul(): void;
-  onSetActive(): void;
-  profile: (typeof PREVIEW_PROFILES)[number] | null;
-}) {
-  return (
-    <PreviewModal
-      onClose={onClose}
-      open={profile !== null}
-      title={`${profile?.name ?? ''} actions`}
-    >
-      {!profile?.active ? (
-        <ProfileActionItem
-          icon={Check}
-          label="Set active"
-          onPress={onSetActive}
-        />
-      ) : null}
-      <ProfileActionItem
-        icon={Edit3}
-        label="SOUL.md"
-        onPress={onEditSoul}
-      />
-      <ProfileActionItem
-        icon={Copy}
-        label="Copy CLI command"
-        onPress={onCopy}
-      />
-      {!profile?.active ? (
-        <ProfileActionItem
-          destructive
-          icon={Trash2}
-          label="Delete profile"
-          onPress={onDelete}
-        />
-      ) : null}
-    </PreviewModal>
-  );
-}
-
-function ProfileActionItem({
-  destructive = false,
-  icon: Icon,
-  label,
-  onPress,
-}: {
-  destructive?: boolean;
-  icon: typeof Check;
-  label: string;
-  onPress(): void;
-}) {
-  const { tokens } = useTheme();
-  const color = destructive ? tokens.colors.destructive : tokens.colors.foreground;
-  return (
-    <IOSPressable
-      accessibilityRole="button"
-      onPress={onPress}
-      pressedStyle={{ backgroundColor: tokens.colors.muted }}
-      style={[
-        styles.profileActionItem,
-        { borderBottomColor: tokens.colors.border },
-      ]}
-    >
-      <Icon color={color} size={17} />
-      <PreviewText color={color} variant="label">{label}</PreviewText>
-    </IOSPressable>
   );
 }
 
@@ -474,6 +303,9 @@ export function ProfileBuilderPreviewPage({ navigate, notify }: PreviewPageProps
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [model, setModel] = useState('anthropic/claude-sonnet-4');
+  const [mcpName, setMcpName] = useState('');
+  const [mcpUrl, setMcpUrl] = useState('');
+  const [mcpServers, setMcpServers] = useState<ReadonlyArray<{ name: string; url: string }>>([]);
   const [skills, setSkills] = useState<Record<string, boolean>>({
     'github-code-review': true,
     'frontend-design': true,
@@ -535,9 +367,16 @@ export function ProfileBuilderPreviewPage({ navigate, notify }: PreviewPageProps
           </>
         ) : (
           <>
-            <NativeInput placeholder="Server name" />
-            <NativeInput placeholder="URL (https://.../mcp)" />
-            <PreviewRow><NativeButton outlined prefix={<Plus />}>Add server</NativeButton></PreviewRow>
+            {mcpServers.map((server) => (
+              <PreviewSettingRow detail={server.url} key={server.name} label={server.name} />
+            ))}
+            <NativeInput onChangeText={setMcpName} placeholder="Server name" value={mcpName} />
+            <NativeInput onChangeText={setMcpUrl} placeholder="URL (https://.../mcp)" value={mcpUrl} />
+            <PreviewRow><NativeButton disabled={!mcpName.trim() || !mcpUrl.trim()} onPress={() => {
+              setMcpServers((current) => [...current, { name: mcpName.trim(), url: mcpUrl.trim() }]);
+              setMcpName('');
+              setMcpUrl('');
+            }} outlined prefix={<Plus />}>Add server</NativeButton></PreviewRow>
           </>
         )}
         <PreviewRow style={styles.builderFooter}>
@@ -560,6 +399,15 @@ export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
   const [mode, setMode] = useState<'form' | 'yaml'>('form');
   const [section, setSection] = useState('General');
   const [resetOpen, setResetOpen] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>(() => (
+    PREVIEW_CONFIG_SECTIONS.reduce<Record<string, string>>((result, group) => {
+      for (const [key, value] of group.fields) result[key] = value;
+      return result;
+    }, {})
+  ));
+  const [yamlText, setYamlText] = useState(
+    'default_model: anthropic/claude-sonnet-4\nmax_iterations: 50\ntimezone: Asia/Shanghai\n\nterminal:\n  shell: /bin/zsh\n  stream_output: true\n\nmemory:\n  provider: builtin\n  auto_compact_threshold: 0.82',
+  );
   const normalizedQuery = query.trim().toLowerCase();
   const sections = PREVIEW_CONFIG_SECTIONS.filter((group) => (
     `${group.name} ${isChinese ? configSectionZh(group.name) : ''}`
@@ -621,7 +469,7 @@ export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
       </PreviewCard>
       {mode === 'yaml' ? (
         <PreviewCard title={isChinese ? '原始 YAML 配置' : 'Raw YAML config'}>
-          <NativeInput multiline style={styles.yamlInput} value={'default_model: anthropic/claude-sonnet-4\nmax_iterations: 50\ntimezone: Asia/Shanghai\n\nterminal:\n  shell: /bin/zsh\n  stream_output: true\n\nmemory:\n  provider: builtin\n  auto_compact_threshold: 0.82'} />
+          <NativeInput multiline onChangeText={setYamlText} style={styles.yamlInput} value={yamlText} />
         </PreviewCard>
       ) : (
         <View style={styles.configLayout}>
@@ -643,9 +491,22 @@ export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
                       {isChinese ? configFieldZh(key) : key.replaceAll('_', ' ')}
                     </PreviewText>
                     {value === 'true' ? (
-                      <PreviewToggle accessibilityLabel={key} onChange={() => {}} value />
+                      <PreviewToggle
+                        accessibilityLabel={key}
+                        onChange={(enabled) => setValues((current) => ({
+                          ...current,
+                          [key]: enabled ? 'true' : 'false',
+                        }))}
+                        value={values[key] === 'true'}
+                      />
                     ) : (
-                      <NativeInput value={value} />
+                      <NativeInput
+                        onChangeText={(nextValue) => setValues((current) => ({
+                          ...current,
+                          [key]: nextValue,
+                        }))}
+                        value={values[key] ?? value}
+                      />
                     )}
                   </View>
                 ))}
@@ -662,6 +523,8 @@ export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
           : 'This restores every field in this section to its default. It remains local until Save is pressed.'}
         onCancel={() => setResetOpen(false)}
         onConfirm={() => {
+          const defaults = PREVIEW_CONFIG_SECTIONS.find((group) => group.name === section)?.fields ?? [];
+          setValues((current) => ({ ...current, ...Object.fromEntries(defaults) }));
           notify(isChinese ? `${configSectionZh(section)}已恢复默认值` : `${section} restored to defaults`);
           setResetOpen(false);
         }}
@@ -888,6 +751,18 @@ const styles = StyleSheet.create({
   profileHeaderActions: {
     flexWrap: 'nowrap',
     gap: 3,
+  },
+  profileTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  profileDetail: {
+    gap: 2,
+  },
+  profileCardActions: {
+    flexWrap: 'wrap',
+    gap: 4,
   },
   profileActionItem: {
     alignItems: 'center',

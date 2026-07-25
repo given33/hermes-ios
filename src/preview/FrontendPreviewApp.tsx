@@ -4,8 +4,10 @@ import {
   Download,
   Globe2,
   Languages,
+  Moon,
   RotateCw,
   Server,
+  Sun,
   UserRound,
 } from 'lucide-react-native';
 import Constants from 'expo-constants';
@@ -68,11 +70,14 @@ import {
   FilesPreviewPage,
   LogsPreviewPage,
   ModelsPreviewPage,
+  PerformancePreviewPage,
   SessionsPreviewPage,
   type PreviewPageProps,
 } from './PreviewCorePages';
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
+import { MemoryPreviewPage } from './PreviewMemoryPage';
+import { HermesStudioSettingsPage } from './HermesStudioSettingsPage';
 import { AccountPage } from '../auth/AccountPage';
 import {
   AchievementsPreviewPage,
@@ -80,7 +85,6 @@ import {
   KanbanPreviewPage,
 } from './PreviewPluginPages';
 import {
-  ConfigPreviewPage,
   DocsPreviewPage,
   EnvPreviewPage,
   ProfileBuilderPreviewPage,
@@ -284,23 +288,30 @@ export function FrontendPreviewApp({
         nativeRouteChrome={useSwiftUIRoutes}
         gatewayStatuses={gatewayStatuses}
         renderRoute={(route, _label, context) => (
-          <PreviewRoute
-            cacheOwner={cacheOwner}
-            account={account}
-            client={client}
-            gatewayStatuses={gatewayStatuses}
-            locale={locale}
-            navigate={context.navigate}
-            notify={notify}
-            notificationTarget={notificationTarget}
-            onOpenConversation={setPreferredConversationId}
-            onPreferredConversationConsumed={clearPreferredConversationId}
-            openNavigation={context.openNavigation}
-            profile={profile}
-            preferredConversationId={preferredConversationId}
-            reportRouteReady={context.reportRouteReady}
-            route={route}
-          />
+          <View
+            style={styles.nativeRoute}
+            testID={`studio-route-${route.routeId ?? 'unknown'}`}
+          >
+            <PreviewRoute
+              cacheOwner={cacheOwner}
+              account={account}
+              client={client}
+              compactNavigation={context.compact}
+              gatewayStatuses={gatewayStatuses}
+              locale={locale}
+              navigate={context.navigate}
+              notify={notify}
+              notificationTarget={notificationTarget}
+              onOpenConversation={setPreferredConversationId}
+              onPreferredConversationConsumed={clearPreferredConversationId}
+              openNavigation={context.openNavigation}
+              profile={profile}
+              preferredConversationId={preferredConversationId}
+              reportRouteReady={context.reportRouteReady}
+              route={route}
+              serverOnline={systemSummary.gatewayOnline}
+            />
+          </View>
         )}
         slots={slots}
       />
@@ -376,6 +387,7 @@ function PreviewRoute({
   account,
   cacheOwner,
   client,
+  compactNavigation,
   gatewayStatuses,
   locale,
   navigate,
@@ -388,10 +400,12 @@ function PreviewRoute({
   preferredConversationId,
   reportRouteReady,
   route,
+  serverOnline,
 }: PreviewPageProps & {
   account?: FrontendPreviewAppProps['account'];
   cacheOwner: string;
   client?: FrontendPreviewAppProps['client'];
+  compactNavigation: boolean;
   gatewayStatuses: readonly SidebarGatewayStatus[];
   notificationTarget?: FrontendPreviewAppProps['notificationTarget'];
   onOpenConversation(conversationId: string): void;
@@ -401,6 +415,7 @@ function PreviewRoute({
   preferredConversationId: string;
   reportRouteReady(path: string): void;
   route: ComposedRoute;
+  serverOnline: boolean;
 }) {
   const { tokens } = useTheme();
   const routeData = useHermesSwiftUIRouteData({
@@ -411,11 +426,18 @@ function PreviewRoute({
     profile,
     routeId: route.routeId ?? '',
   });
-  const props = { locale, navigate, notify };
+  const props = {
+    gatewayStatuses,
+    locale,
+    navigate,
+    notify,
+    serverOnline,
+  };
   const usesNativeSwiftUIRoute =
     Platform.OS === 'ios'
     && hasNativeSwiftUIRoute
     && route.routeId !== 'smart-weather'
+    && route.routeId !== 'memory'
     && route.routeId !== 'account'
     && route.routeId !== 'chat';
   useEffect(() => {
@@ -464,6 +486,7 @@ function PreviewRoute({
         path={route.path}
         pluginName={route.pluginName ?? ''}
         routeId={route.routeId ?? ''}
+        showsNavigationButton={compactNavigation}
         style={styles.nativeRoute}
       />
     );
@@ -471,12 +494,16 @@ function PreviewRoute({
   // Production/authenticated builds must never present fixture pages as live
   // product data. Fixture *PreviewPage surfaces are restricted to the explicit
   // frontend-preview packaging flag (manual Expo Go / design previews only).
-  const allowFixturePages = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1' && !client;
+  const allowFixturePages = !client && (
+    process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
+    || (__DEV__ && Platform.OS === 'web')
+  );
   if (
     !allowFixturePages
     && route.routeId !== 'chat'
     && route.routeId !== 'account'
     && !(route.routeId === 'models' && client)
+    && route.routeId !== 'memory'
   ) {
     const message = locale === 'zh'
       ? '此页面需要原生 SwiftUI 界面。请使用完整签名安装包。'
@@ -498,6 +525,7 @@ function PreviewRoute({
         {...props}
         cacheOwner={cacheOwner}
         client={client}
+        fixtureMode={allowFixturePages}
         gatewayStatuses={gatewayStatuses}
         notificationTarget={notificationTarget}
         openNavigation={openNavigation}
@@ -507,8 +535,17 @@ function PreviewRoute({
       />
     );
     case 'sessions': return <SessionsPreviewPage {...props} />;
+    case 'memory': return (
+      <MemoryPreviewPage
+        {...props}
+        client={client}
+        fixtureMode={allowFixturePages}
+        profile={profile}
+      />
+    );
     case 'files': return <FilesPreviewPage {...props} />;
     case 'analytics': return <AnalyticsPreviewPage {...props} />;
+    case 'runtime-center': return <PerformancePreviewPage {...props} />;
     case 'models': return client
       ? <ModelsManagementPage {...props} client={client} profile={profile} />
       : <ModelsPreviewPage {...props} />;
@@ -523,7 +560,7 @@ function PreviewRoute({
     case 'system': return <SystemPreviewPage {...props} />;
     case 'profiles': return <ProfilesPreviewPage {...props} />;
     case 'profile-new': return <ProfileBuilderPreviewPage {...props} />;
-    case 'config': return <ConfigPreviewPage {...props} />;
+    case 'config': return <HermesStudioSettingsPage {...props} />;
     case 'account': return (
       <AccountPage
         client={client}
@@ -682,6 +719,8 @@ function ControlsSlot({
   locale: NativeRouteLocale;
   onLanguage(): void;
 }) {
+  const { setTheme, themeName } = useTheme();
+  const dark = themeName === 'studio-ink-dark';
   return (
     <View style={styles.controlsSlot}>
       <SidebarControl
@@ -690,6 +729,15 @@ function ControlsSlot({
         icon={Languages}
         label={locale === 'zh' ? '中文' : 'EN'}
         onPress={onLanguage}
+      />
+      <SidebarControl
+        accessibilityLabel={dark ? 'Light theme' : 'Dark theme'}
+        collapsed={context.collapsed}
+        icon={dark ? Sun : Moon}
+        label={dark
+          ? locale === 'zh' ? '浅色' : 'Light'
+          : locale === 'zh' ? '深色' : 'Dark'}
+        onPress={() => void setTheme(dark ? 'studio-ink-light' : 'studio-ink-dark')}
       />
     </View>
   );
@@ -704,7 +752,7 @@ function SidebarControl({
 }: {
   accessibilityLabel: string;
   collapsed: boolean;
-  icon: typeof Languages;
+  icon: typeof Languages | typeof Moon;
   label: string;
   onPress(): void;
 }) {

@@ -131,6 +131,7 @@ export interface HermesPressFeedbackProps extends NativeViewProps {
 
 export interface HermesSwiftUISidebarProps extends NativeViewProps, HermesSwiftUIThemeProps {
   activePath: string;
+  avatarUri: string;
   gatewayStatusesJson: string;
   locale: 'en' | 'zh';
   onNavigate?(event: NativeSyntheticEvent<{ path: string }>): void;
@@ -148,6 +149,7 @@ export interface HermesSwiftUIRouteProps extends NativeViewProps, HermesSwiftUIT
   path: string;
   pluginName: string;
   routeId: string;
+  showsNavigationButton?: boolean;
 }
 
 export interface HermesSwiftUIModelToolsProps extends NativeViewProps, HermesSwiftUIThemeProps {

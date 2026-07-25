@@ -7,6 +7,7 @@ import type {
   HermesSwiftUIEnvironmentSecretSnapshot,
   HermesSwiftUIFileSnapshot,
   HermesSwiftUIIntegrationSnapshot,
+  HermesSwiftUIManagedInstallationSnapshot,
   HermesSwiftUIKanbanColumnSnapshot,
   HermesSwiftUILogSnapshot,
   HermesSwiftUIModelSnapshot,
@@ -82,11 +83,19 @@ export async function loadHermesSwiftUIRouteSnapshot(
     case 'cron':
       return { ...base, cron: cronSnapshot(source, chinese) };
     case 'skills':
-      return { ...base, skills: skillsSnapshot(source, chinese) };
+      return {
+        ...base,
+        skills: skillsSnapshot(source, chinese),
+        installations: managedInstallationsSnapshot(source, 'skill'),
+      };
     case 'plugins':
       return { ...base, integrations: integrationsSnapshot(source, 'plugins', chinese) };
     case 'mcp':
-      return { ...base, integrations: integrationsSnapshot(source, 'mcp', chinese) };
+      return {
+        ...base,
+        integrations: integrationsSnapshot(source, 'mcp', chinese),
+        installations: managedInstallationsSnapshot(source, 'mcp'),
+      };
     case 'channels':
       return { ...base, integrations: integrationsSnapshot(source, 'channels', chinese) };
     case 'webhooks':
@@ -1123,6 +1132,39 @@ function integrationsSnapshot(source: unknown, kind: string, chinese: boolean): 
       ),
       enabled: entry.enabled !== false && entry.disabled !== true,
       ...(kind === 'channels' ? { configuration: channelConfiguration(entry) } : {}),
+    }];
+  });
+}
+
+function managedInstallationsSnapshot(
+  source: unknown,
+  kind: 'mcp' | 'project' | 'skill',
+): HermesSwiftUIManagedInstallationSnapshot[] {
+  const container = isRecord(source) && isRecord(source.installations)
+    ? source.installations
+    : {};
+  const rows = Array.isArray(container.operations) ? container.operations : [];
+  return rows.flatMap((entry): HermesSwiftUIManagedInstallationSnapshot[] => {
+    if (!isRecord(entry) || stringValue(entry.kind) !== kind) return [];
+    const id = stringValue(entry.id);
+    if (!id) return [];
+    const targets = Array.isArray(entry.targets) ? entry.targets : [];
+    return [{
+      id,
+      identifier: stringValue(entry.identifier),
+      kind,
+      state: stringValue(entry.state),
+      error: stringValue(entry.error),
+      targets: targets.flatMap((target) => {
+        if (!isRecord(target)) return [];
+        const nodeId = stringValue(target.node_id);
+        if (nodeId !== 'server' && nodeId !== 'dbb3' && nodeId !== 'wsl') return [];
+        return [{
+          nodeId,
+          state: stringValue(target.state),
+          error: stringValue(target.error),
+        }];
+      }),
     }];
   });
 }

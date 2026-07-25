@@ -14,6 +14,9 @@ importers:
       '@expo/metro-runtime':
         specifier: ~6.1.2
         version: 6.1.2(expo@54.0.36)(react-dom@19.1.0(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.7)(@react-native/metro-config@0.81.5(@babel/core@7.29.7))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+      '@multiavatar/multiavatar':
+        specifier: 1.0.7
+        version: 1.0.7
       '@react-native-async-storage/async-storage':
         specifier: 2.2.0
         version: 2.2.0(react-native@0.81.5(@babel/core@7.29.7)(@react-native/metro-config@0.81.5(@babel/core@7.29.7))(@types/react@19.1.17)(react@19.1.0))
@@ -1114,6 +1117,9 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@multiavatar/multiavatar@1.0.7':
+    resolution: {integrity: sha512-Yg9Uw57bmlErsWL0CSv4d6D4ZqVBE00OZmYr9MRgygoXZdboNtsEI6FbBRw1AY8l88Sm1ARcyojtlm2uwUn0Zg==}
 
   '@react-native-async-storage/async-storage@2.2.0':
     resolution: {integrity: sha512-gvRvjR5JAaUZF8tv2Kcq/Gbt3JHwbKFYfmb445rhOj6NUMx3qPLixmDx5pZAyb9at1bYvJ4/eTUipU5aki45xw==}
@@ -4922,6 +4928,8 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@multiavatar/multiavatar@1.0.7': {}
 
   '@react-native-async-storage/async-storage@2.2.0(react-native@0.81.5(@babel/core@7.29.7)(@react-native/metro-config@0.81.5(@babel/core@7.29.7))(@types/react@19.1.17)(react@19.1.0))':
     dependencies:

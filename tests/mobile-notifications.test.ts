@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import test from 'node:test';
 
 import { HermesApiClient } from '../src/api/HermesApiClient';
@@ -266,4 +268,16 @@ test('smart-weather notification feedback is persisted through the native encryp
     },
   );
   assert.equal(buildSmartWeatherFeedbackEvent('', 'iphone-1'), null);
+});
+
+test('notification provider exposes registration health and retries transient APNs failures', () => {
+  const source = readFileSync(
+    resolve(process.cwd(), 'src', 'notifications', 'NotificationProvider.tsx'),
+    'utf8',
+  );
+  assert.match(source, /HermesNotificationHealth/);
+  assert.match(source, /setNotificationHealth\('syncing'\)/);
+  assert.match(source, /setNotificationHealth\(result\.status\)/);
+  assert.match(source, /setNotificationHealth\('error'\)[\s\S]*setTimeout\([\s\S]*30_000/);
+  assert.match(source, /useNotificationHealth/);
 });

@@ -46,6 +46,7 @@ interface HermesSwiftUIRouteDataController {
 }
 
 const FOREGROUND_REFRESH_MS = 15_000;
+const INSTALLATION_REFRESH_MS = 2_000;
 const COLLABORATION_SEND_TIMEOUT_MS = 20_000;
 
 function sendCollaborationRoomMessageWithDeadline(
@@ -225,6 +226,9 @@ export function useHermesSwiftUIRouteData({
     })();
     if (!api || routeId === 'models') return undefined;
 
+    const refreshInterval = routeId === 'skills' || routeId === 'mcp'
+      ? INSTALLATION_REFRESH_MS
+      : FOREGROUND_REFRESH_MS;
     const interval = setInterval(() => {
       if (AppState.currentState !== 'active') return;
       if (routeId === 'system') {
@@ -234,7 +238,7 @@ export function useHermesSwiftUIRouteData({
         ));
       }
       void reload();
-    }, FOREGROUND_REFRESH_MS);
+    }, refreshInterval);
     const appState = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       if (routeId === 'system') {
@@ -253,7 +257,12 @@ export function useHermesSwiftUIRouteData({
   }, [api, cacheOwner, localStore, reload, routeId]);
 
   const onAction = useCallback(async (action: string, payloadJson: string) => {
-    if (!api) return;
+    if (!api) {
+      notify(locale === 'zh'
+        ? 'Hermes 服务尚未连接，此操作未执行。'
+        : 'Hermes is not connected. The action was not executed.');
+      return;
+    }
     const event = decodeHermesSwiftUIRouteAction(action, payloadJson);
     if (!event) {
       notify('无法识别页面操作，请刷新后重试。');

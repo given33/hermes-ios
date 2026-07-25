@@ -38,6 +38,97 @@ export const defaultTheme: DashboardTheme = {
   terminalBackground: '#000000',
 };
 
+export const studioInkDarkTheme: DashboardTheme = {
+  name: 'studio-ink-dark',
+  label: 'Studio Ink Dark',
+  description: 'Hermes Studio inspired neutral dark interface',
+  palette: {
+    background: { hex: '#0e0e0e', alpha: 1 },
+    midground: { hex: '#eaeaea', alpha: 1 },
+    foreground: { hex: '#ffffff', alpha: 0 },
+    warmGlow: 'rgba(255, 255, 255, 0.06)',
+    noiseOpacity: 0,
+  },
+  typography: {
+    ...DEFAULT_TYPOGRAPHY,
+    fontSans: `"IBM Plex Sans", ${SYSTEM_SANS}`,
+    fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
+    fontUrl:
+      'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap',
+  },
+  layout: DEFAULT_LAYOUT,
+  terminalBackground: '#000000',
+  terminalForeground: '#eaeaea',
+  colorOverrides: {
+    card: '#171717',
+    cardForeground: '#eaeaea',
+    popover: '#171717',
+    popoverForeground: '#eaeaea',
+    secondary: '#1b1b1b',
+    secondaryForeground: '#eaeaea',
+    muted: '#202020',
+    mutedForeground: '#a0a0a0',
+    accent: '#272727',
+    accentForeground: '#eaeaea',
+    primary: '#eaeaea',
+    primaryForeground: '#0e0e0e',
+    border: '#303030',
+    input: '#303030',
+    ring: '#eaeaea',
+    success: '#66bb6a',
+    warning: '#ffb74d',
+    destructive: '#ef5350',
+  },
+};
+
+export const studioInkLightTheme: DashboardTheme = {
+  name: 'studio-ink-light',
+  label: 'Studio Ink Light',
+  description: 'Hermes Studio inspired neutral light interface',
+  palette: {
+    background: { hex: '#fafafa', alpha: 1 },
+    midground: { hex: '#1a1a1a', alpha: 1 },
+    foreground: { hex: '#ffffff', alpha: 0 },
+    warmGlow: 'rgba(0, 0, 0, 0.04)',
+    noiseOpacity: 0,
+  },
+  typography: {
+    ...DEFAULT_TYPOGRAPHY,
+    fontSans: `"IBM Plex Sans", ${SYSTEM_SANS}`,
+    fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
+    fontUrl:
+      'https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap',
+  },
+  layout: DEFAULT_LAYOUT,
+  terminalBackground: '#f4f4f4',
+  terminalForeground: '#1a1a1a',
+  colorOverrides: {
+    card: '#ffffff',
+    cardForeground: '#1a1a1a',
+    popover: '#ffffff',
+    popoverForeground: '#1a1a1a',
+    secondary: '#f0f0f0',
+    secondaryForeground: '#1a1a1a',
+    muted: '#f5f5f5',
+    mutedForeground: '#666666',
+    accent: '#eeeeee',
+    accentForeground: '#1a1a1a',
+    primary: '#333333',
+    primaryForeground: '#ffffff',
+    border: '#e0e0e0',
+    input: '#e0e0e0',
+    ring: '#333333',
+    success: '#2e7d32',
+    warning: '#a66400',
+    destructive: '#c62828',
+  },
+  seriesColors: {
+    inputTokenAccent: '#333333',
+    outputTokenAccent: '#777777',
+  },
+  swatchColors: ['#1a1a1a', '#ffffff', '#f0f0f0'],
+};
+
 export const midnightTheme: DashboardTheme = {
   name: 'midnight',
   label: 'Midnight',
@@ -207,6 +298,8 @@ export const defaultLargeTheme: DashboardTheme = {
 };
 
 export const BUILTIN_THEME_ORDER = [
+  'studio-ink-light',
+  'studio-ink-dark',
   'default',
   'default-large',
   'nous-blue',
@@ -220,6 +313,8 @@ export const BUILTIN_THEME_ORDER = [
 export type BuiltinThemeName = (typeof BUILTIN_THEME_ORDER)[number];
 
 export const BUILTIN_THEMES: Record<BuiltinThemeName, DashboardTheme> = {
+  'studio-ink-light': studioInkLightTheme,
+  'studio-ink-dark': studioInkDarkTheme,
   default: defaultTheme,
   'default-large': defaultLargeTheme,
   'nous-blue': nousBlueTheme,

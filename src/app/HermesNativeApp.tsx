@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect, type PropsWithChildren } from 'react';
+import { Platform, StyleSheet, View } from 'react-native';
 
 import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
@@ -18,7 +18,10 @@ import {
 } from '../design/ThemeProvider';
 import { useWebUiFonts } from './webui-fonts';
 
-const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1';
+// The preview is deliberately limited to the web dev shell. Native builds keep
+// the real authentication boundary even when Metro is running in development.
+const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
+  || (__DEV__ && Platform.OS === 'web');
 
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();
@@ -31,13 +34,15 @@ export function HermesNativeApp() {
       {fontsLoaded ? (
         FRONTEND_PREVIEW ? (
           <FrontendPreviewThemeProvider>
-            <ThemedStatusBar />
-            <View
-              accessibilityLabel="Hermes frontend preview"
-              style={styles.nativeContent}
-            >
-              <FrontendPreviewApp cacheOwner="expo-frontend-preview" />
-            </View>
+            <ThemedNativeSurface>
+              <ThemedStatusBar />
+              <View
+                accessibilityLabel="Hermes frontend preview"
+                style={styles.nativeContent}
+              >
+                <FrontendPreviewApp cacheOwner="expo-studio-preview-v2" />
+              </View>
+            </ThemedNativeSurface>
           </FrontendPreviewThemeProvider>
         ) : (
           <AuthProvider>
@@ -58,29 +63,40 @@ function NativeAuthRoot() {
   if (!client) return null;
   return (
     <ThemeProvider client={client}>
-      <ThemedStatusBar />
-      <View
-        accessibilityLabel="Hermes authenticated content"
-        style={styles.nativeContent}
-      >
-        <IOSContextProvider
-          client={client}
-          deviceId={state.connection.deviceId || ''}
-          ownerScope={`${state.connection.baseUrl}|${state.connection.username}`}
+      <ThemedNativeSurface>
+        <ThemedStatusBar />
+        <View
+          accessibilityLabel="Hermes authenticated content"
+          style={styles.nativeContent}
         >
-          <FrontendPreviewApp
-            account={{
-              deleteAccount,
-              logout,
-              username: state.connection.username,
-            }}
-            cacheOwner={`${state.connection.baseUrl}|${state.connection.username}`}
+          <IOSContextProvider
             client={client}
-            notificationTarget={notificationTarget}
-          />
-        </IOSContextProvider>
-      </View>
+            deviceId={state.connection.deviceId || ''}
+            ownerScope={`${state.connection.baseUrl}|${state.connection.username}`}
+          >
+            <FrontendPreviewApp
+              account={{
+                deleteAccount,
+                logout,
+                username: state.connection.username,
+              }}
+              cacheOwner={`${state.connection.baseUrl}|${state.connection.username}`}
+              client={client}
+              notificationTarget={notificationTarget}
+            />
+          </IOSContextProvider>
+        </View>
+      </ThemedNativeSurface>
     </ThemeProvider>
+  );
+}
+
+function ThemedNativeSurface({ children }: PropsWithChildren) {
+  const { theme } = useTheme();
+  return (
+    <View style={[styles.themedSurface, { backgroundColor: theme.palette.background.hex }]}>
+      {children}
+    </View>
   );
 }
 
@@ -117,6 +133,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#0e0e0e',
   },
   nativeContent: {
+    flex: 1,
+  },
+  themedSurface: {
     flex: 1,
   },
 });

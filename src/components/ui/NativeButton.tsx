@@ -76,7 +76,7 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
     {
       accessibilityLabel,
       accessibilityState,
-      borderRadius = 0,
+      borderRadius = 6,
       children,
       contentStyle,
       destructive = false,
@@ -122,6 +122,7 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
     const metrics = resolveButtonMetrics(tokens, size);
     const runtimeFont = resolveNativeFontStack(tokens.typography.fontMono, 700);
     const square = size === 'icon' || size === 'xs';
+    const softRaised = outlined && !destructive;
     // CSS `leading-0` lets glyph ink paint outside the line box. React Native
     // clips that ink, so small text buttons need an explicit painted height.
     const paintedHeight = square
@@ -232,6 +233,10 @@ export const NativeButton = forwardRef<View, NativeButtonProps>(
               height: paintedHeight,
               paddingLeft: square ? 0 : metrics.paddingLeft,
               paddingRight: square ? 0 : metrics.paddingRight,
+              shadowColor: softRaised ? tokens.colors.foreground : undefined,
+              shadowOffset: softRaised ? { height: 1, width: 0 } : undefined,
+              shadowOpacity: softRaised ? (visualState === 'pressed' ? 0.08 : 0.12) : 0,
+              shadowRadius: softRaised ? 2 : 0,
               width: square ? paintedHeight : undefined,
             },
             contentStyle,

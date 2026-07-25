@@ -18,3 +18,11 @@ export const PREVIEW_ENV_GROUPS = [];
 export const PREVIEW_CONFIG_SECTIONS = [];
 export const PREVIEW_KANBAN = [];
 export const PREVIEW_ACHIEVEMENTS = [];
+export const PREVIEW_MEMORY = {
+  memory: '',
+  memoryMtime: '',
+  soul: '',
+  soulMtime: '',
+  user: '',
+  userMtime: '',
+};

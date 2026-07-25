@@ -166,7 +166,7 @@ export function ThemeProvider({
 }
 
 export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
-  const [themeName, setThemeName] = useState<BuiltinThemeName>('default');
+  const [themeName, setThemeName] = useState<BuiltinThemeName>('studio-ink-light');
   const [fontId, setFontId] = useState(THEME_DEFAULT_FONT_ID);
   const [ready, setReady] = useState(false);
   const theme = BUILTIN_THEMES[themeName];
@@ -183,7 +183,7 @@ export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
     if (Object.prototype.hasOwnProperty.call(BUILTIN_THEMES, name)) {
       const next = name as BuiltinThemeName;
       setThemeName(next);
-      await AsyncStorage.setItem('hermes.preview.theme', next);
+      await AsyncStorage.setItem('hermes.preview.studio.theme', next);
     }
   }, []);
   const setFont = useCallback(async (id: string) => {
@@ -192,14 +192,14 @@ export function FrontendPreviewThemeProvider({ children }: PropsWithChildren) {
       || FONT_CHOICES.some((choice) => choice.id === id)
     ) {
       setFontId(id);
-      await AsyncStorage.setItem('hermes.preview.font', id);
+      await AsyncStorage.setItem('hermes.preview.studio.font', id);
     }
   }, []);
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      AsyncStorage.getItem('hermes.preview.theme'),
-      AsyncStorage.getItem('hermes.preview.font'),
+      AsyncStorage.getItem('hermes.preview.studio.theme'),
+      AsyncStorage.getItem('hermes.preview.studio.font'),
     ]).then(([storedTheme, storedFont]) => {
       if (cancelled) return;
       if (

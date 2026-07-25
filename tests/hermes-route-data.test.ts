@@ -212,9 +212,37 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
 test('all native management routes render the current cloud workspace response', async () => {
   const responses: Record<string, unknown> = {
     cron: [{ id: 'cron-1', name: '每日总结', schedule: '0 9 * * *', prompt: '总结会话', enabled: true }],
-    skills: { skills: [{ name: 'browser', description: '浏览网页', bundled: true, enabled: true }] },
+    skills: {
+      skills: [{ name: 'browser', description: '浏览网页', bundled: true, enabled: true }],
+      installations: {
+        operations: [{
+          id: 'mi-skill',
+          kind: 'skill',
+          identifier: 'official/browser',
+          state: 'running',
+          error: '',
+          targets: [
+            { node_id: 'server', state: 'completed', error: '' },
+            { node_id: 'dbb3', state: 'running', error: '' },
+          ],
+        }],
+      },
+    },
     plugins: { manifests: [{ name: 'collaboration', description: '多 Agent 协作', enabled: true }] },
-    mcp: { servers: { servers: [{ name: 'filesystem', command: 'npx', args: ['server-filesystem'], enabled: true }] }, catalog: { entries: [] } },
+    mcp: {
+      servers: { servers: [{ name: 'filesystem', command: 'npx', args: ['server-filesystem'], enabled: true }] },
+      catalog: { entries: [] },
+      installations: {
+        operations: [{
+          id: 'mi-mcp',
+          kind: 'mcp',
+          identifier: 'github',
+          state: 'completed',
+          error: '',
+          targets: [{ node_id: 'wsl', state: 'completed', error: '' }],
+        }],
+      },
+    },
     channels: { platforms: [{ id: 'telegram', name: 'Telegram', description: 'Telegram messaging', enabled: true, env_vars: [{ key: 'TELEGRAM_BOT_TOKEN', is_set: true, redacted_value: '123•••456' }] }] },
     webhooks: { enabled: true, subscriptions: [{ name: 'deploy', description: '部署回调', enabled: true }] },
     pairing: {
@@ -260,9 +288,15 @@ test('all native management routes render the current cloud workspace response',
 
   assert.equal(cron.cron?.[0].name, '每日总结');
   assert.equal(skills.skills?.[0].detail, '浏览网页');
+  assert.equal(skills.installations?.[0].identifier, 'official/browser');
+  assert.deepEqual(skills.installations?.[0].targets.map(({ nodeId, state }) => [nodeId, state]), [
+    ['server', 'completed'],
+    ['dbb3', 'running'],
+  ]);
   assert.equal(plugins.integrations?.[0].detail, '多 Agent 协作');
   assert.equal(mcp.integrations?.[0].name, '文件系统');
   assert.equal(mcp.integrations?.[0].detail, 'npx server-filesystem');
+  assert.equal(mcp.installations?.[0].state, 'completed');
   assert.equal(channels.integrations?.[0].name, 'Telegram 消息渠道');
   assert.equal(channels.integrations?.[0].detail, '通过 Telegram 消息渠道收发 Hermes 消息。');
   assert.deepEqual(JSON.parse(channels.integrations?.[0].configuration ?? ''), {

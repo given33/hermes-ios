@@ -2,6 +2,7 @@ import {
   Activity,
   BarChart3,
   BookOpen,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -54,12 +55,14 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  Image as ReactNativeImage,
   Keyboard,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   View,
+  type ImageSourcePropType,
 } from 'react-native';
 import Reanimated, {
   Easing,
@@ -74,6 +77,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AnimatedTintedIcon } from '../components/ui/AnimatedTintedIcon';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
+import { StudioOfficialAvatar } from '../components/studio/StudioOfficialAvatar';
+import { StudioProfileAvatar } from '../components/studio/StudioProfileAvatar';
 import {
   multiplyAlpha,
   opaque,
@@ -107,6 +112,21 @@ import {
   hasNativeSwiftUIPartialFrontend,
 } from '../../modules/hermes-ios-controls';
 
+const HERMES_SIDEBAR_AVATAR_ASSET = require('../../assets/icon.png') as
+  | number
+  | string
+  | { uri?: string };
+const HERMES_SIDEBAR_AVATAR_URI =
+  Platform.OS === 'web'
+    ? typeof HERMES_SIDEBAR_AVATAR_ASSET === 'string'
+      ? HERMES_SIDEBAR_AVATAR_ASSET
+      : typeof HERMES_SIDEBAR_AVATAR_ASSET === 'object'
+        ? HERMES_SIDEBAR_AVATAR_ASSET.uri ?? ''
+        : ''
+    : ReactNativeImage.resolveAssetSource(
+        HERMES_SIDEBAR_AVATAR_ASSET as ImageSourcePropType,
+      )?.uri ?? '';
+
 const NAV_ICONS: Record<NativeNavigationIconName, LucideIcon> = {
   Activity,
   BarChart3,
@@ -138,68 +158,68 @@ const NAV_ICONS: Record<NativeNavigationIconName, LucideIcon> = {
   Zap,
 };
 
-const REFERENCE_SIDEBAR_ROUTES = [
-  { labels: { en: 'Chat', zh: '单聊' }, path: '/chat', symbol: 'message.fill' },
-  { labels: { en: 'Sessions', zh: '会话' }, path: '/sessions', symbol: 'bubble.left.and.bubble.right' },
-  { labels: { en: 'Files', zh: '文件' }, path: '/files', symbol: 'folder' },
-  { labels: { en: 'Analytics', zh: '分析' }, path: '/analytics', symbol: 'chart.bar.xaxis' },
-  { labels: { en: 'Smart Weather', zh: '智能天气' }, path: '/smart-weather', symbol: 'cloud.rain' },
-  { labels: { en: 'Models', zh: '模型' }, path: '/models', symbol: 'cpu' },
-  { labels: { en: 'Logs', zh: '日志' }, path: '/logs', symbol: 'doc.text.magnifyingglass' },
-  { labels: { en: 'Scheduled tasks', zh: '定时任务' }, path: '/cron', symbol: 'clock.arrow.circlepath' },
-  { labels: { en: 'Skills', zh: '技能' }, path: '/skills', symbol: 'shippingbox' },
-  { labels: { en: 'MCP', zh: 'MCP' }, path: '/mcp', symbol: 'network' },
-  { labels: { en: 'Device pairing', zh: '设备配对' }, path: '/pairing', symbol: 'lock.shield' },
-  { labels: { en: 'Channels', zh: '消息渠道' }, path: '/channels', symbol: 'dot.radiowaves.left.and.right' },
-  { labels: { en: 'Webhooks', zh: '网络钩子' }, path: '/webhooks', symbol: 'arrow.triangle.branch' },
-  { labels: { en: 'Achievements', zh: '成就' }, path: '/achievements', symbol: 'trophy' },
-  { labels: { en: 'Collaboration', zh: '协作' }, path: '/collaboration', symbol: 'person.3' },
-  { labels: { en: 'Kanban', zh: '看板' }, path: '/kanban', symbol: 'rectangle.3.group' },
-  { labels: { en: 'Workflows', zh: '工作流' }, path: '/workflows', symbol: 'arrow.triangle.branch' },
-  { labels: { en: 'Approvals', zh: '审批中心' }, path: '/approvals', symbol: 'checkmark.shield' },
-  { labels: { en: 'Runtime Center', zh: '运行中心' }, path: '/runtime-center', symbol: 'waveform.path.ecg' },
-  { labels: { en: 'Agent profiles', zh: '多 Agent 配置' }, path: '/profiles', symbol: 'person.2' },
-  { labels: { en: 'Configuration', zh: '配置' }, path: '/config', symbol: 'slider.horizontal.3' },
-  { labels: { en: 'Account', zh: '账户' }, path: '/account', symbol: 'person.crop.circle' },
-  { labels: { en: 'Secrets', zh: '密钥' }, path: '/env', symbol: 'key' },
-  { labels: { en: 'System', zh: '系统监控' }, path: '/system', symbol: 'gauge' },
-  { labels: { en: 'Documentation', zh: '文档' }, path: '/docs', symbol: 'book.closed' },
-] as const satisfies readonly {
+interface ReferenceSidebarItem {
+  fallback: NativeNavigationIconName;
   labels: Record<NativeRouteLocale, string>;
   path: string;
   symbol: SFSymbol;
+}
+
+const REFERENCE_SIDEBAR_GROUPS = [
+  {
+    id: 'agent',
+    labels: { en: 'Agent', zh: 'Agent' },
+    items: [
+      { path: '/chat', labels: { en: 'Chat', zh: '聊天' }, symbol: 'message.fill', fallback: 'MessageSquare' },
+      { path: '/cron', labels: { en: 'Jobs', zh: '任务' }, symbol: 'clock.arrow.circlepath', fallback: 'Clock' },
+      { path: '/kanban', labels: { en: 'Kanban', zh: '看板' }, symbol: 'rectangle.3.group', fallback: 'Database' },
+      { path: '/channels', labels: { en: 'Channels', zh: '消息渠道' }, symbol: 'dot.radiowaves.left.and.right', fallback: 'Radio' },
+      { path: '/skills', labels: { en: 'Skills', zh: '技能' }, symbol: 'shippingbox', fallback: 'Package' },
+      { path: '/plugins', labels: { en: 'Plugins', zh: '插件' }, symbol: 'puzzlepiece.extension', fallback: 'Puzzle' },
+      { path: '/mcp', labels: { en: 'MCP', zh: 'MCP' }, symbol: 'network', fallback: 'Globe' },
+      { path: '/achievements', labels: { en: 'Petdex', zh: '成就图鉴' }, symbol: 'trophy', fallback: 'Star' },
+      { path: '/memory', labels: { en: 'Memory', zh: '记忆' }, symbol: 'brain', fallback: 'BookOpen' },
+      { path: '/models', labels: { en: 'Models', zh: '模型' }, symbol: 'cpu', fallback: 'Cpu' },
+    ],
+  },
+  {
+    id: 'monitoring',
+    labels: { en: 'Monitoring', zh: '监控' },
+    items: [
+      { path: '/logs', labels: { en: 'Logs', zh: '日志' }, symbol: 'doc.text.magnifyingglass', fallback: 'FileText' },
+      { path: '/analytics', labels: { en: 'Usage', zh: '使用量' }, symbol: 'chart.bar.xaxis', fallback: 'BarChart3' },
+      { path: '/runtime-center', labels: { en: 'Performance', zh: '性能' }, symbol: 'waveform.path.ecg', fallback: 'Activity' },
+    ],
+  },
+  {
+    id: 'tools',
+    labels: { en: 'Tools', zh: '工具' },
+    items: [
+      { path: '/pairing', labels: { en: 'Devices', zh: '设备' }, symbol: 'desktopcomputer', fallback: 'ShieldCheck' },
+      { path: '/files', labels: { en: 'Files', zh: '文件' }, symbol: 'folder', fallback: 'FolderOpen' },
+      { path: '/smart-weather', labels: { en: 'Smart Weather', zh: '智能天气' }, symbol: 'cloud.rain', fallback: 'Globe' },
+    ],
+  },
+  {
+    id: 'system',
+    labels: { en: 'System', zh: '系统' },
+    items: [
+      { path: '/profiles', labels: { en: 'Profiles', zh: '配置' }, symbol: 'person.2', fallback: 'Users' },
+      { path: '/config', labels: { en: 'Settings', zh: '设置' }, symbol: 'slider.horizontal.3', fallback: 'Settings' },
+      { path: '/account', labels: { en: 'Account', zh: '账户' }, symbol: 'person.crop.circle', fallback: 'Users' },
+      { path: '/env', labels: { en: 'Keys', zh: '密钥' }, symbol: 'key', fallback: 'KeyRound' },
+    ],
+  },
+] as const satisfies readonly {
+  id: string;
+  items: readonly ReferenceSidebarItem[];
+  labels: Record<NativeRouteLocale, string>;
 }[];
 
-const REFERENCE_SIDEBAR_FALLBACK_ICONS = {
-  '/workflows': 'Zap',
-  '/approvals': 'ShieldCheck',
-  '/runtime-center': 'Activity',
-  '/achievements': 'Star',
-  '/analytics': 'BarChart3',
-  '/smart-weather': 'Globe',
-  '/channels': 'Radio',
-  '/chat': 'MessageSquare',
-  '/collaboration': 'Users',
-  '/config': 'Settings',
-  '/account': 'Users',
-  '/cron': 'Clock',
-  '/docs': 'BookOpen',
-  '/env': 'KeyRound',
-  '/files': 'FolderOpen',
-  '/kanban': 'Database',
-  '/logs': 'FileText',
-  '/mcp': 'Globe',
-  '/models': 'Cpu',
-  '/pairing': 'ShieldCheck',
-  '/profiles': 'Users',
-  '/sessions': 'MessageSquare',
-  '/skills': 'Package',
-  '/system': 'Activity',
-  '/webhooks': 'Webhook',
-} as const satisfies Record<
-  (typeof REFERENCE_SIDEBAR_ROUTES)[number]['path'],
-  NativeNavigationIconName
->;
+const REFERENCE_SIDEBAR_ROUTES = REFERENCE_SIDEBAR_GROUPS.reduce<ReferenceSidebarItem[]>(
+  (items, group) => [...items, ...group.items],
+  [],
+);
 
 const COLOR_TRANSITION_EASING = Easing.bezier(
   ...IOS_MOTION.curve.standard,
@@ -267,7 +287,7 @@ export interface NativeShellProps {
 export function NativeShell({
   config,
   gatewayStatuses = EMPTY_SIDEBAR_GATEWAY_STATUSES,
-  initialPath = '/sessions',
+  initialPath = '/chat',
   locale = 'zh',
   manifests = [],
   nativeRouteChrome = false,
@@ -294,7 +314,7 @@ export function NativeShell({
     () => createNativeShellState(layout.mode, resolvedInitialPath),
   );
   const referenceCompactSidebar = Platform.OS === 'ios' || Platform.OS === 'web';
-  const compactSidebarWidth = layout.width;
+  const compactSidebarWidth = Math.min(270, Math.max(220, layout.width - 96));
   const drawerExtent = state.mode === 'compact' && referenceCompactSidebar
     ? compactSidebarWidth
     : SHELL_METRICS.sidebarWidth + insets.left;
@@ -460,7 +480,9 @@ export function NativeShell({
   ];
   const activeLabel = allNavigationItems.find(
     (item) => item.path === activeRoute?.path,
-  )?.label ?? activeRoute?.path ?? '';
+  )?.label ?? REFERENCE_SIDEBAR_ROUTES.find(
+    (item) => item.path === activeRoute?.path,
+  )?.labels[locale] ?? activeRoute?.path ?? '';
   const slotContext: NativeShellSlotContext = {
     collapsed: state.mode === 'split' && state.collapsed,
     compact: state.mode === 'compact',
@@ -474,6 +496,7 @@ export function NativeShell({
     <HermesSwiftUISidebarView
       {...swiftUIThemeProps}
       activePath={state.activePath}
+      avatarUri={HERMES_SIDEBAR_AVATAR_URI}
       gatewayStatusesJson={gatewayStatusesJson}
       locale={locale}
       onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
@@ -528,6 +551,7 @@ export function NativeShell({
               <HermesSwiftUISidebarView
                 {...swiftUIThemeProps}
                 activePath={state.activePath}
+                avatarUri={HERMES_SIDEBAR_AVATAR_URI}
                 gatewayStatusesJson={gatewayStatusesJson}
                 locale={locale}
                 onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
@@ -615,7 +639,9 @@ export function NativeShell({
                 }}
               >
                 {composition.routes.map((route) => {
-                  const label = allNavigationItems.find(
+                  const label = REFERENCE_SIDEBAR_ROUTES.find(
+                    (item) => item.path === route.path,
+                  )?.labels[locale] ?? allNavigationItems.find(
                     (item) => item.path === route.path,
                   )?.label ?? route.path;
                   const chatRoute = route.routeId === 'chat';
@@ -688,6 +714,11 @@ export function NativeShell({
                 {renderRoute?.(activeRoute, activeLabel, slotContext)
                   ?? <RoutePreview label={activeLabel} />}
               </View>
+            ) : Platform.OS === 'web' ? (
+              <View key={activeRoute.path} style={styles.routeStage}>
+                {renderRoute?.(activeRoute, activeLabel, slotContext)
+                  ?? <RoutePreview label={activeLabel} />}
+              </View>
             ) : (
               <Reanimated.View
                 entering={PAGE_ENTERING}
@@ -747,7 +778,10 @@ function CompactDrawerFrame({
       overlayAccessibilityLabel={locale === 'zh' ? '关闭导航' : 'Close navigation'}
       overlayStyle={{ backgroundColor: SHELL_METRICS.overlayColor }}
       renderDrawerContent={() => (
-        <View collapsable={false} style={styles.compactDrawerSurface}>
+        <View
+          collapsable={false}
+          style={[styles.compactDrawerSurface, { backgroundColor }]}
+        >
           {drawerContent}
         </View>
       )}
@@ -795,8 +829,7 @@ function Sidebar({
 }) {
   const { tokens } = useTheme();
   if (
-    (Platform.OS === 'ios' || Platform.OS === 'web')
-    && state.mode === 'compact'
+    Platform.OS === 'ios' || Platform.OS === 'web'
   ) {
     return (
       <ExpoReferenceSidebar
@@ -805,6 +838,9 @@ function Sidebar({
         insets={insets}
         locale={locale}
         navigate={navigate}
+        onClose={closeMobile}
+        slotContext={slotContext}
+        slots={slots}
       />
     );
   }
@@ -921,14 +957,27 @@ function ExpoReferenceSidebar({
   insets,
   locale,
   navigate,
+  onClose,
+  slotContext,
+  slots,
 }: {
   activePath: string;
   gatewayStatuses: readonly SidebarGatewayStatus[];
   insets: ReturnType<typeof useSafeAreaInsets>;
   locale: NativeRouteLocale;
   navigate(path: string): void;
+  onClose(): void;
+  slotContext: NativeShellSlotContext;
+  slots?: NativeShellSlots;
 }) {
   const { tokens } = useTheme();
+  const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
+  const bodyFont = resolveNativeFontStack(tokens.typography.fontSans, 500);
+  const monoFont = resolveNativeFontStack(tokens.typography.fontMono, 400);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const toggleGroup = (id: string) => {
+    setCollapsedGroups((current) => ({ ...current, [id]: !current[id] }));
+  };
   return (
     <View
       accessibilityLabel="Hermes navigation"
@@ -952,29 +1001,64 @@ function ExpoReferenceSidebar({
         style={styles.referenceSidebarScroll}
       >
         <View style={styles.referenceSidebarHeader}>
-          <Text
-            numberOfLines={1}
-            style={[
-              styles.referenceSidebarTitle,
-              { color: tokens.colors.foreground },
-            ]}
+          <View style={styles.referenceSidebarBrand}>
+            <StudioOfficialAvatar size={24} />
+            <Text
+              numberOfLines={1}
+              style={[
+                styles.referenceSidebarTitle,
+                { color: tokens.colors.foreground, fontFamily: displayFont },
+              ]}
+            >
+              Hermes Agent
+            </Text>
+          </View>
+          <IOSPressable
+            accessibilityLabel={locale === 'zh' ? '关闭导航' : 'Close navigation'}
+            hitSlop={10}
+            onPress={onClose}
+            style={styles.referenceSidebarClose}
           >
-            Hermes Agent
-          </Text>
+            <X color={tokens.colors.textSecondary} size={18} />
+          </IOSPressable>
         </View>
 
-        <View style={styles.referenceSidebarGroup}>
-          {REFERENCE_SIDEBAR_ROUTES.map((route) => {
-            const FallbackIcon = NAV_ICONS[
-              REFERENCE_SIDEBAR_FALLBACK_ICONS[route.path]
-            ];
-            const active = activePath === route.path;
-            return (
+        {slots?.profile?.(slotContext)}
+
+        {REFERENCE_SIDEBAR_GROUPS.map((group) => {
+          const collapsed = Boolean(collapsedGroups[group.id]);
+          return (
+            <View key={group.id} style={styles.referenceSidebarGroup}>
               <IOSPressable
+                accessibilityLabel={group.labels[locale]}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: !collapsed }}
+                onPress={() => toggleGroup(group.id)}
+                style={styles.referenceSidebarGroupHeader}
+              >
+                <Text
+                  style={[
+                    styles.referenceSidebarGroupLabel,
+                    { color: tokens.colors.textTertiary, fontFamily: bodyFont },
+                  ]}
+                >
+                  {group.labels[locale]}
+                </Text>
+                <ChevronDown
+                  color={tokens.colors.textTertiary}
+                  size={12}
+                  style={collapsed ? styles.referenceSidebarGroupArrowCollapsed : undefined}
+                />
+              </IOSPressable>
+              {!collapsed ? group.items.map((item) => {
+                const FallbackIcon = NAV_ICONS[item.fallback];
+                const active = activePath === item.path;
+                return (
+                  <IOSPressable
                     accessibilityRole="link"
                     accessibilityState={{ selected: active }}
-                    key={route.path}
-                    onPress={() => navigate(route.path)}
+                    key={`${group.id}:${item.path}:${item.labels.en}`}
+                    onPress={() => navigate(item.path)}
                     opacityTo={0.76}
                     scaleTo={0.99}
                     style={[
@@ -987,14 +1071,14 @@ function ExpoReferenceSidebar({
                     <SymbolView
                       fallback={(
                         <FallbackIcon
-                          color={tokens.colors.primary}
-                          size={18}
-                          strokeWidth={1.8}
+                          color={active ? tokens.colors.foreground : tokens.colors.textSecondary}
+                          size={16}
+                          strokeWidth={1.7}
                         />
                       )}
-                      name={route.symbol}
-                      size={18}
-                      tintColor={tokens.colors.primary}
+                      name={item.symbol as SFSymbol}
+                      size={16}
+                      tintColor={active ? tokens.colors.foreground : tokens.colors.textSecondary}
                       type="monochrome"
                       weight="regular"
                     />
@@ -1002,29 +1086,20 @@ function ExpoReferenceSidebar({
                       numberOfLines={1}
                       style={[
                         styles.referenceSidebarRowLabel,
-                        { color: tokens.colors.foreground },
+                        {
+                          color: active ? tokens.colors.foreground : tokens.colors.textSecondary,
+                          fontFamily: bodyFont,
+                        },
                       ]}
                     >
-                      {route.labels[locale]}
+                      {item.labels[locale]}
                     </Text>
-                    <SymbolView
-                      fallback={(
-                        <ChevronRight
-                          color={tokens.colors.textTertiary}
-                          size={13}
-                          strokeWidth={2.4}
-                        />
-                      )}
-                      name="chevron.right"
-                      size={13}
-                      tintColor={tokens.colors.textTertiary}
-                      type="monochrome"
-                      weight="semibold"
-                    />
-              </IOSPressable>
-            );
-          })}
-        </View>
+                  </IOSPressable>
+                );
+              }) : null}
+            </View>
+          );
+        })}
         <View style={styles.referenceSidebarFooter}>
           <View style={styles.referenceSidebarGatewayList}>
             {gatewayStatuses.map((gateway) => (
@@ -1040,7 +1115,7 @@ function ExpoReferenceSidebar({
                     numberOfLines={1}
                     style={[
                       styles.referenceSidebarStatusTitle,
-                      { color: tokens.colors.foreground },
+                      { color: tokens.colors.foreground, fontFamily: bodyFont },
                     ]}
                   >
                     {gateway.label}
@@ -1049,7 +1124,7 @@ function ExpoReferenceSidebar({
                     numberOfLines={1}
                     style={[
                       styles.referenceSidebarStatusMeta,
-                      { color: tokens.colors.textSecondary },
+                      { color: tokens.colors.textSecondary, fontFamily: monoFont },
                     ]}
                   >
                     {gatewayStatusMeta(gateway, locale)}
@@ -1059,6 +1134,8 @@ function ExpoReferenceSidebar({
             ))}
           </View>
         </View>
+        {slots?.controls?.(slotContext)}
+        {slots?.footer?.(slotContext)}
       </ScrollView>
     </View>
   );
@@ -1318,12 +1395,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   compactDrawerPanel: {
-    overflow: 'hidden',
+    borderWidth: 0,
   },
   compactDrawerSurface: {
     flex: 1,
     minHeight: 0,
-    backgroundColor: 'transparent',
+    width: '100%',
   },
   swiftUISidebar: {
     flex: 1,
@@ -1353,16 +1430,36 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   referenceSidebarHeader: {
-    height: 96,
-    justifyContent: 'flex-end',
-    paddingBottom: 12,
-    paddingHorizontal: 20,
+    alignItems: 'center',
+    flexDirection: 'row',
+    minHeight: 56,
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    position: 'relative',
+  },
+  referenceSidebarBrand: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flex: 1,
+    gap: 10,
+    minWidth: 0,
+    paddingRight: 34,
   },
   referenceSidebarTitle: {
-    fontSize: 34,
+    fontFamily: 'Collapse-Bold',
+    fontSize: 22,
     fontWeight: '700',
     letterSpacing: 0,
-    lineHeight: 41,
+    lineHeight: 28,
+  },
+  referenceSidebarClose: {
+    alignItems: 'center',
+    borderRadius: 6,
+    height: 28,
+    justifyContent: 'center',
+    position: 'absolute',
+    right: 10,
+    width: 28,
   },
   referenceSidebarScroll: {
     flex: 1,
@@ -1373,13 +1470,31 @@ const styles = StyleSheet.create({
   },
   referenceSidebarGroup: {
     backgroundColor: 'transparent',
+    paddingBottom: 4,
+  },
+  referenceSidebarGroupHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    minHeight: 30,
+    paddingHorizontal: 18,
+  },
+  referenceSidebarGroupLabel: {
+    fontSize: 10,
+    fontWeight: '600',
+    letterSpacing: 0.8,
+    lineHeight: 15,
+    textTransform: 'uppercase',
+  },
+  referenceSidebarGroupArrowCollapsed: {
+    transform: [{ rotate: '-90deg' }],
   },
   referenceSidebarRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    minHeight: 52,
-    paddingHorizontal: 16,
+    minHeight: 40,
+    paddingHorizontal: 18,
   },
   referenceSidebarRowLabel: {
     flex: 1,
@@ -1416,13 +1531,11 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   referenceSidebarStatusTitle: {
-    fontFamily: 'Collapse-Bold',
     fontSize: 13,
     letterSpacing: 0,
     lineHeight: 17,
   },
   referenceSidebarStatusMeta: {
-    fontFamily: 'HermesTerminal-JetBrainsMono-400-Normal',
     fontSize: 10,
     letterSpacing: 0,
     lineHeight: 14,

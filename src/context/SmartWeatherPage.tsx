@@ -1,5 +1,5 @@
 import * as Location from 'expo-location';
-import { MapPin, RefreshCw, Settings } from 'lucide-react-native';
+import { AlertTriangle, BellOff, ChevronDown, ChevronUp, MapPin, RefreshCw } from 'lucide-react-native';
 import {
   Component,
   useCallback,
@@ -11,6 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import { Linking, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -23,6 +24,7 @@ import {
 } from '../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../api/HermesApiClient';
 import { NativeButton } from '../components/ui/NativeButton';
+import { IOSPressable } from '../components/ios/IOSPressable';
 import { ScreenState } from '../components/ui/ScreenState';
 import { multiplyAlpha } from '../design/control-contracts';
 import { useTheme } from '../design/ThemeProvider';
@@ -42,6 +44,7 @@ import {
 } from './smart-weather-load';
 import { useIOSPermissionCoordinator } from './IOSContextProvider';
 import { ExpoStandardMap } from './ExpoStandardMap';
+import { useNotificationHealth } from '../notifications/NotificationProvider';
 
 interface SmartWeatherPageProps {
   client?: HermesApiClient;
@@ -78,13 +81,16 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
     'authorized' | 'denied' | 'notDetermined' | 'restricted'
   >('notDetermined');
   const [previewLocationLoading, setPreviewLocationLoading] = useState(false);
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
   const reloadGenerationRef = useRef(0);
   const reloadInFlightRef = useRef(false);
   const previewLocationInFlightRef = useRef(false);
   const nextAutomaticReloadAtRef = useRef(0);
   const onReadyRef = useRef(onReady);
   const readyReportedRef = useRef(false);
+  const nativePermissionRequestedRef = useRef(false);
   const permissions = useIOSPermissionCoordinator();
+  const notificationHealth = useNotificationHealth();
   onReadyRef.current = onReady;
 
   const reportReady = useCallback(() => {
@@ -129,6 +135,14 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
   useEffect(() => {
     if (!hasNativeStandardMapView) void requestPreviewLocation();
   }, [requestPreviewLocation]);
+
+  useEffect(() => {
+    if (!hasNativeStandardMapView || nativePermissionRequestedRef.current) return;
+    const location = permissions.snapshot.permissions.location;
+    if (location !== 'notDetermined' || permissions.snapshot.phase === 'requesting') return;
+    nativePermissionRequestedRef.current = true;
+    permissions.retry();
+  }, [permissions]);
 
   const reload = useCallback(async (manual = false) => {
     if (reloadInFlightRef.current) return;
@@ -264,6 +278,12 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
         previewLocationError,
         locale,
       );
+  const notificationState = permissions.snapshot.permissions.notification;
+  const notificationMessage = notificationPermissionMessage(
+    notificationState,
+    notificationHealth,
+    locale,
+  );
   const retry = useCallback(() => {
     setMapError('');
     setPreviewLocationError('');
@@ -333,7 +353,7 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
           </NativeMapErrorBoundary>
         )}
 
-        {(needsAMapPrivacyConsent || locationMessage || loadError) && !mapUnavailableMessage ? (
+        {needsAMapPrivacyConsent && !mapUnavailableMessage ? (
           <View style={[styles.bannerStack, { top: insets.top + 12 }]}>
             {needsAMapPrivacyConsent ? (
               <View
@@ -367,68 +387,56 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
                 </View>
               </View>
             ) : null}
+          </View>
+        ) : null}
+        {!mapUnavailableMessage && (locationMessage || notificationMessage || loadError) ? (
+          <View style={[styles.warningRail, { top: insets.top + 118 }]}>
             {locationMessage ? (
-              <View
-                style={[
-                  styles.permissionBanner,
-                  { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border },
-                ]}
-                testID="smart-weather-permission-status"
+              <IOSPressable
+                accessibilityLabel={locationMessage}
+                haptic="selection"
+                onPress={() => {
+                  if (locationState === 'denied' || locationState === 'restricted') {
+                    void (hasNativeStandardMapView ? permissions.openSettings() : Linking.openSettings());
+                  } else {
+                    retry();
+                  }
+                }}
+                style={[styles.warningButton, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border }]}
+                testID="smart-weather-permission-warning"
               >
-                <Text style={[styles.permissionText, { color: secondary }]}>{locationMessage}</Text>
-                <View style={styles.permissionActions}>
-                  <NativeButton
-                    accessibilityLabel={locale === 'zh' ? '重试位置权限' : 'Retry location permission'}
-                    onPress={retry}
-                    outlined
-                    prefix={<RefreshCw color={foreground} size={15} />}
-                    size="sm"
-                  >
-                    {locale === 'zh' ? '重试' : 'Retry'}
-                  </NativeButton>
-                  {(locationState === 'denied' || locationState === 'restricted') ? (
-                    <NativeButton
-                      accessibilityLabel={locale === 'zh' ? '打开系统设置' : 'Open system settings'}
-                      onPress={() => {
-                        void (hasNativeStandardMapView
-                          ? permissions.openSettings()
-                          : Linking.openSettings());
-                      }}
-                      outlined
-                      prefix={<Settings color={foreground} size={15} />}
-                      size="sm"
-                    >
-                      {locale === 'zh' ? '设置' : 'Settings'}
-                    </NativeButton>
-                  ) : null}
-                </View>
-              </View>
+                <AlertTriangle color={tokens.colors.warning} size={18} />
+              </IOSPressable>
+            ) : null}
+            {notificationMessage ? (
+              <IOSPressable
+                accessibilityLabel={notificationMessage}
+                haptic="selection"
+                onPress={() => {
+                  if (notificationState === 'denied' || notificationState === 'restricted') {
+                    void (hasNativeStandardMapView ? permissions.openSettings() : Linking.openSettings());
+                  } else {
+                    permissions.retry();
+                  }
+                }}
+                style={[styles.warningButton, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border }]}
+                testID="smart-weather-notification-warning"
+              >
+                <BellOff color={tokens.colors.warning} size={18} />
+              </IOSPressable>
             ) : null}
             {loadError ? (
-              <View
-                style={[
-                  styles.permissionBanner,
-                  { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border },
-                ]}
-                testID={snapshotStale ? 'smart-weather-stale-banner' : 'smart-weather-load-error'}
+              <IOSPressable
+                accessibilityLabel={snapshotStale
+                  ? locale === 'zh' ? `显示上次同步数据：${loadError}` : `Showing last-synced data: ${loadError}`
+                  : loadError}
+                haptic="selection"
+                onPress={() => { void reload(true); }}
+                style={[styles.warningButton, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border }]}
+                testID={snapshotStale ? 'smart-weather-stale-warning' : 'smart-weather-load-warning'}
               >
-                <Text style={[styles.permissionText, { color: secondary }]}>
-                  {snapshotStale
-                    ? locale === 'zh'
-                      ? `显示上次同步的数据：${loadError}`
-                      : `Showing last-synced data: ${loadError}`
-                    : loadError}
-                </Text>
-                <NativeButton
-                  accessibilityLabel={locale === 'zh' ? '重新加载' : 'Reload'}
-                  onPress={() => { void reload(true); }}
-                  outlined
-                  prefix={<RefreshCw color={foreground} size={15} />}
-                  size="sm"
-                >
-                  {locale === 'zh' ? '重试' : 'Retry'}
-                </NativeButton>
-              </View>
+                <RefreshCw color={tokens.colors.warning} size={18} />
+              </IOSPressable>
             ) : null}
           </View>
         ) : null}
@@ -440,10 +448,24 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
           {
             backgroundColor: tokens.colors.background,
             borderColor: tokens.colors.border,
+            maxHeight: timelineExpanded ? '76%' : '38%',
             paddingBottom: Math.max(insets.bottom, 12),
           },
         ]}
       >
+        <IOSPressable
+          accessibilityLabel={timelineExpanded
+            ? locale === 'zh' ? '收起今日地点' : 'Collapse today places'
+            : locale === 'zh' ? '展开今日地点' : 'Expand today places'}
+          haptic="selection"
+          onPress={() => setTimelineExpanded((current) => !current)}
+          style={styles.timelineHandle}
+        >
+          <View style={[styles.timelineHandleBar, { backgroundColor: tokens.colors.textTertiary }]} />
+          {timelineExpanded
+            ? <ChevronDown color={secondary} size={16} />
+            : <ChevronUp color={secondary} size={16} />}
+        </IOSPressable>
         {visibleForecasts.map((forecast, index) => (
           <View
             key={forecast.id || `${forecast.starts_at || 0}:${index}`}
@@ -461,6 +483,14 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
           {locale === 'zh' ? '今天到过的地方' : 'Places visited today'}
         </Text>
         <ScrollView contentContainerStyle={styles.placeList} showsVerticalScrollIndicator={false}>
+          {todayPlaces.length >= 2 ? (
+            <DailyRouteCurve
+              end={todayPlaces[todayPlaces.length - 1]?.name || (locale === 'zh' ? '当前位置' : 'Current')}
+              foreground={foreground}
+              secondary={secondary}
+              start={todayPlaces[0]?.name || (locale === 'zh' ? '起点' : 'Start')}
+            />
+          ) : null}
           {todayPlaces.length ? todayPlaces.map((place) => (
             <View key={`${place.place_id}:${place.arrived_at}`} style={styles.placeRow}>
               <MapPin color={secondary} size={16} />
@@ -479,6 +509,39 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
             </Text>
           )}
         </ScrollView>
+      </View>
+    </View>
+  );
+}
+
+function DailyRouteCurve({
+  end,
+  foreground,
+  secondary,
+  start,
+}: {
+  end: string;
+  foreground: string;
+  secondary: string;
+  start: string;
+}) {
+  return (
+    <View style={styles.routeCurve}>
+      <Svg height={54} width={104}>
+        <Path
+          d="M 10 42 C 34 3, 72 3, 94 42"
+          fill="none"
+          stroke={secondary}
+          strokeDasharray="4 4"
+          strokeLinecap="round"
+          strokeWidth={2}
+        />
+        <Circle cx={10} cy={42} fill={foreground} r={4} />
+        <Circle cx={94} cy={42} fill={foreground} r={4} />
+      </Svg>
+      <View style={styles.routeCurveLabels}>
+        <Text numberOfLines={1} style={[styles.routeCurveLabel, { color: foreground }]}>{start}</Text>
+        <Text numberOfLines={1} style={[styles.routeCurveLabel, styles.routeCurveLabelEnd, { color: foreground }]}>{end}</Text>
       </View>
     </View>
   );
@@ -563,6 +626,29 @@ function permissionMessage(
     return locale === 'zh'
       ? '定位权限受限；请开启“始终”和“精确位置”以恢复完整轨迹。'
       : 'Location is limited. Enable Always and Precise Location for complete tracks.';
+  }
+  return '';
+}
+
+function notificationPermissionMessage(
+  state: string,
+  health: string,
+  locale: 'en' | 'zh',
+): string {
+  if (state === 'denied' || state === 'restricted') {
+    return locale === 'zh'
+      ? '天气通知权限未开启；请在系统设置中允许通知。'
+      : 'Weather notifications are disabled. Allow notifications in Settings.';
+  }
+  if (state === 'unavailable') {
+    return locale === 'zh'
+      ? '此安装包暂不支持天气通知。'
+      : 'Weather notifications are unavailable in this build.';
+  }
+  if (health === 'error') {
+    return locale === 'zh'
+      ? '天气通知连接失败，正在后台自动重试。'
+      : 'Weather notification registration failed and will retry automatically.';
   }
   return '';
 }
@@ -693,21 +779,35 @@ const styles = StyleSheet.create({
   },
   permissionText: { fontSize: 12, lineHeight: 17 },
   permissionActions: { alignSelf: 'flex-end', flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  warningRail: { gap: 7, position: 'absolute', right: 10 },
+  warningButton: {
+    alignItems: 'center',
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
   timeline: {
     borderTopWidth: StyleSheet.hairlineWidth,
     bottom: 0,
     left: 0,
-    maxHeight: '38%',
     paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingTop: 4,
     position: 'absolute',
     right: 0,
   },
+  timelineHandle: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 30 },
+  timelineHandleBar: { borderRadius: 2, height: 4, opacity: 0.45, width: 42 },
   forecast: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: 10 },
   forecastTitle: { fontSize: 16, fontWeight: '600' },
   forecastBody: { fontSize: 13, lineHeight: 18, marginTop: 3 },
   sectionTitle: { fontSize: 14, fontWeight: '600', marginBottom: 8, marginTop: 10 },
   placeList: { gap: 9, paddingBottom: 2 },
+  routeCurve: { minHeight: 72, paddingHorizontal: 2, position: 'relative' },
+  routeCurveLabels: { bottom: 1, flexDirection: 'row', justifyContent: 'space-between', left: 0, position: 'absolute', right: 0 },
+  routeCurveLabel: { fontSize: 11, maxWidth: '44%' },
+  routeCurveLabelEnd: { textAlign: 'right' },
   placeRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 38 },
   placeText: { flex: 1, minWidth: 0 },
   placeName: { fontSize: 14, fontWeight: '500' },

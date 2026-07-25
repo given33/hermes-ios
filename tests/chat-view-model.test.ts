@@ -6,6 +6,7 @@ import {
   attachmentContext,
   avatarRoleFor,
   chatModelConfigurationError,
+  conversationCollaborationState,
   conversationHasRunningWork,
   conversationHostedTurnState,
   conversationMessagesToView,
@@ -89,7 +90,7 @@ test('cloud conversation messages preserve worker, reviewer, reporter, and activ
   ]);
 });
 
-test('DBB3 manager planning and handoff remain identifiable after cloud restore', () => {
+test('Hermes manager planning and handoff remain identifiable after cloud restore', () => {
   const messages = conversationMessagesToView(conversation({
     messages: [{
       content: 'Structured plan',
@@ -105,9 +106,41 @@ test('DBB3 manager planning and handoff remain identifiable after cloud restore'
     }],
   }), true);
 
-  assert.equal(messages[0].name, 'DBB3 Manager');
+  assert.equal(messages[0].name, 'Hermes 调度员');
   assert.equal(messages[0].roleStage, 'dispatcher');
   assert.equal(messages[0].avatarRole, 'dispatcher');
+});
+
+test('collaboration lift state follows persisted route and workflow progress', () => {
+  assert.equal(conversationCollaborationState(conversation()), 'single');
+  assert.equal(conversationCollaborationState(conversation({
+    hosted_turns: {
+      'turn-work': {
+        mode: 'work',
+        stage: 'accepted',
+        status: 'queued',
+      },
+    },
+  })), 'lifting');
+  assert.equal(conversationCollaborationState(conversation({
+    hosted_turns: {
+      'turn-work': {
+        mode: 'work',
+        stage: 'manager_planning',
+        status: 'running',
+      },
+    },
+  })), 'active');
+  assert.equal(conversationCollaborationState(conversation({
+    messages: [{
+      content: '正在审阅',
+      id: 'reviewer-progress',
+      meta: { role_stage: 'reviewer.progress' },
+      name: 'reviewer',
+      role: 'assistant',
+      status: 'running',
+    }],
+  })), 'active');
 });
 
 test('server workflow metadata restores sender, runtime, timestamps, handoff, and full activities', () => {
@@ -192,6 +225,7 @@ test('role avatars and activity labels distinguish every workflow participant', 
   assert.equal(avatarRoleFor('pc-wsl-worker', 'worker'), 'pc-worker');
   assert.equal(avatarRoleFor('reviewer', 'reviewer'), 'reviewer');
   assert.equal(avatarRoleFor('default', 'reporter'), 'reporter');
+  assert.equal(avatarRoleFor('supervisor', 'supervisor'), 'supervisor');
   assert.equal(activityCategoryLabel('reasoning', true), '思考');
   assert.equal(activityCategoryLabel('browser', true), '搜索');
   assert.equal(activityCategoryLabel('mcp', false), 'MCP');

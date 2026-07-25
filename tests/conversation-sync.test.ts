@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApiClient';
+import {
+  HermesApiError,
+  type HermesApiClient,
+  type HermesRequestOptions,
+} from '../src/api/HermesApiClient';
+import { ConversationSyncGeneration } from '../src/api/conversation-sync-generation';
 import {
   HermesCloudApi,
   officialConversationPlaceholderId,
@@ -13,10 +18,12 @@ import {
   reconcileConversationCache,
   synchronizeConversationCache,
 } from '../src/api/conversation-local-store';
+import { decideHostedTurnCancellationFailure } from '../src/api/hosted-turn-delivery-state';
 
 class MemoryStorage {
   readonly values = new Map<string, string>();
   readonly removeFailures = new Set<string>();
+  readonly setFailureSubstrings = new Set<string>();
 
   async getItem(key: string) {
     return this.values.get(key) ?? null;
@@ -28,6 +35,9 @@ class MemoryStorage {
   }
 
   async setItem(key: string, value: string) {
+    if ([...this.setFailureSubstrings].some((part) => key.includes(part))) {
+      throw new Error('storage write failed');
+    }
     this.values.set(key, value);
   }
 }
@@ -48,6 +58,65 @@ function conversation(
     updated_at: updatedAt,
   };
 }
+
+test('conversation index refreshes never invalidate an active conversation stream generation', () => {
+  const generations = new ConversationSyncGeneration();
+  const activeGeneration = generations.advanceActive();
+  const firstIndexGeneration = generations.advanceIndex();
+
+  assert.equal(generations.isActiveCurrent(activeGeneration), true);
+  assert.equal(generations.isIndexCurrent(firstIndexGeneration), true);
+
+  const secondIndexGeneration = generations.advanceIndex();
+  assert.equal(generations.isActiveCurrent(activeGeneration), true);
+  assert.equal(generations.isIndexCurrent(firstIndexGeneration), false);
+  assert.equal(generations.isIndexCurrent(secondIndexGeneration), true);
+
+  generations.advanceActive();
+  assert.equal(generations.isActiveCurrent(activeGeneration), false);
+});
+
+test('hosted cancellation retries transport failures but only settles explicit terminal statuses', () => {
+  const now = 1_000;
+  const retry = decideHostedTurnCancellationFailure(
+    new HermesApiError(503, 'unavailable'),
+    0,
+    now,
+  );
+  assert.equal(retry.outcome, 'retry');
+  assert.equal(retry.attempts, 1);
+  assert.equal(retry.nextAttemptAt, 61_000);
+
+  for (const status of [404, 409, 410]) {
+    assert.equal(
+      decideHostedTurnCancellationFailure(
+        new HermesApiError(status, 'already settled'),
+        0,
+        now,
+      ).outcome,
+      'settled',
+    );
+  }
+
+  for (const status of [400, 401, 403, 422]) {
+    assert.equal(
+      decideHostedTurnCancellationFailure(
+        new HermesApiError(status, 'not cancelled'),
+        0,
+        now,
+      ).outcome,
+      'failed',
+    );
+  }
+
+  const exhausted = decideHostedTurnCancellationFailure(
+    new HermesApiError(503, 'still unavailable'),
+    4,
+    now,
+  );
+  assert.equal(exhausted.outcome, 'failed');
+  assert.equal(exhausted.attempts, 5);
+});
 
 test('local conversation history is isolated by server account and restores the active chat', async () => {
   const storage = new MemoryStorage();
@@ -202,6 +271,94 @@ test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed a
   await store.removePendingEnqueue(ownerA, 'request-stable-1');
   assert.deepEqual(await store.readPendingEnqueues(ownerA), []);
   assert.equal((await store.readPendingEnqueues(ownerB)).length, 1);
+});
+
+test('hosted intervention intent is durable, owner-isolated, and rebuilds the optimistic message', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const ownerA = 'https://example.test|owner-a@example.test';
+  const ownerB = 'https://example.test|owner-b@example.test';
+  const intervention = {
+    attempts: 0,
+    content: '@Hermes Worker 检查边界',
+    conversationId: 'conversation-1',
+    message: {
+      content: '@Hermes Worker 检查边界',
+      created_at: 100,
+      id: 'intervention-stable-1',
+      name: '你',
+      role: 'user',
+      status: 'completed',
+    },
+    messageId: 'intervention-stable-1',
+    nextAttemptAt: 0,
+    queuedAt: 100,
+    turnId: 'turn-1',
+  };
+
+  const first = await store.initializePendingIntervention(ownerA, intervention);
+  const duplicate = await store.initializePendingIntervention(ownerA.toUpperCase(), {
+    ...intervention,
+    queuedAt: 200,
+  });
+  await store.initializePendingIntervention(ownerB, {
+    ...intervention,
+    conversationId: 'conversation-2',
+  });
+
+  assert.equal(first.updated, true);
+  assert.equal(duplicate.updated, false);
+  assert.equal((await store.readPendingInterventions(ownerA))[0].queuedAt, 100);
+  assert.equal((await store.readPendingInterventions(ownerB))[0].conversationId, 'conversation-2');
+  assert.equal(
+    (await store.readOptimisticConversations(ownerA))[0].messages[0].id,
+    intervention.messageId,
+  );
+
+  await store.upsertPendingIntervention(ownerA, {
+    ...intervention,
+    attempts: 1,
+    lastError: 'offline',
+    nextAttemptAt: 60_100,
+  });
+  assert.equal((await store.readPendingInterventions(ownerA))[0].attempts, 1);
+  await store.removePendingIntervention(ownerA, intervention.messageId);
+  assert.deepEqual(await store.readPendingInterventions(ownerA), []);
+  assert.equal((await store.readPendingInterventions(ownerB)).length, 1);
+});
+
+test('hosted intervention remains accepted when the secondary optimistic ledger write fails', async () => {
+  const storage = new MemoryStorage();
+  storage.setFailureSubstrings.add('optimistic-messages');
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|owner@example.test';
+  const intervention = {
+    content: '@Hermes Worker 先核对边界',
+    conversationId: 'conversation-1',
+    message: {
+      content: '@Hermes Worker 先核对边界',
+      id: 'intervention-ledger-failure',
+      name: '你',
+      role: 'user',
+    },
+    messageId: 'intervention-ledger-failure',
+    queuedAt: 100,
+    turnId: 'turn-1',
+  };
+
+  const result = await store.initializePendingIntervention(owner, intervention);
+
+  assert.equal(result.updated, true);
+  assert.equal(result.item?.messageId, intervention.messageId);
+  assert.equal((await store.readPendingInterventions(owner)).length, 1);
+
+  storage.setFailureSubstrings.clear();
+  await store.failPendingIntervention(owner, intervention, 'HTTP 409: turn completed');
+  assert.deepEqual(await store.readPendingInterventions(owner), []);
+  const failed = (await store.readOptimisticConversations(owner))[0].messages[0];
+  assert.equal(failed.id, intervention.messageId);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.meta?.delivery_error, 'HTTP 409: turn completed');
 });
 
 test('collaboration room outbox keeps one stable request until server acknowledgement', async () => {

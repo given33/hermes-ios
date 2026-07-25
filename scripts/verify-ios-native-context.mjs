@@ -56,9 +56,17 @@ function verifySource(projectRoot) {
   const mapKitSurface = read(join(moduleRoot, 'ios', 'HermesMapKitSurface.swift'));
   const amapSurface = read(join(moduleRoot, 'ios', 'HermesAMapSurface.swift'));
   requireMatch(mapView, /HermesAmapIOSAPIKey/, 'AMap app-bound key lookup');
+  requireMatch(mapView, /HermesAmapIOSBundleIdentifier/, 'AMap bundle binding lookup');
+  requireMatch(
+    mapView,
+    /amapBundleIdentifier == Bundle\.main\.bundleIdentifier/,
+    'AMap bundle binding gate',
+  );
   requireMatch(mapView, /amapPrivacyConsentGranted/, 'AMap privacy consent gate');
+  requireMatch(mapView, /amapFailedForSession = true/, 'AMap runtime failure fallback');
   requireMatch(mapKitSurface, /MKStandardMapConfiguration/, 'MapKit fallback');
   requireMatch(amapSurface, /MAMapView\.updatePrivacyAgree\(\.didAgree\)/, 'AMap privacy API');
+  requireMatch(amapSurface, /mapViewDidFailLoadingMap/, 'AMap load failure callback');
   requireMatch(amapSurface, /AMapCoordinateConvert\(coordinate, \.GPS\)/, 'WGS-84 to GCJ-02 conversion');
   read(join(moduleRoot, 'ios', 'HermesScreenTimeReportView.swift'));
   read(join(moduleRoot, 'ios', 'HermesPermissionCollectionGate.swift'));

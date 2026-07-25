@@ -23,6 +23,7 @@ export type HermesChatAvatarRole =
   | 'pc-worker'
   | 'reporter'
   | 'reviewer'
+  | 'supervisor'
   | 'user';
 
 export type HermesChatRoleStage =
@@ -30,7 +31,10 @@ export type HermesChatRoleStage =
   | 'dispatcher'
   | 'reporter'
   | 'reviewer'
+  | 'supervisor'
   | 'worker';
+
+export type ConversationCollaborationState = 'active' | 'lifting' | 'single';
 
 export interface HermesChatActivity {
   category: string;
@@ -434,6 +438,7 @@ export function collaborationMessageToView(
     'pc_wsl_worker',
     'reporter',
     'reviewer',
+    'supervisor',
     'worker',
   ].includes(logicalRoleBase);
   if (!isUser && !isAssistantRole && !isVisibleSystemEvent) return null;
@@ -619,6 +624,58 @@ export function conversationHasRunningWork(
     RUNTIME_RUN_FRESHNESS_MS,
     now,
   );
+}
+
+const ACTIVE_COLLABORATION_STAGES = new Set([
+  'cancel_requested',
+  'cancelled',
+  'completed',
+  'dispatching',
+  'failed',
+  'manager_handoff',
+  'manager_planning',
+  'reporting',
+  'reviewing',
+  'rework',
+  'running',
+  'worker_running',
+]);
+
+const COLLABORATION_ROLE_PATTERN = /(?:^|[.:/_-])(dispatch|manager|reporter|reviewer|supervisor|worker)(?:$|[.:/_-])/i;
+
+/**
+ * Resolves the collaboration surface from the authoritative conversation.
+ * A routed work turn starts in `lifting`; only persisted workflow progress (or
+ * a collaboration role message) promotes the same conversation to `active`.
+ */
+export function conversationCollaborationState(
+  conversation: SingleConversation,
+): ConversationCollaborationState {
+  let routedWorkFound = false;
+  for (const record of Object.values(conversation.hosted_turns || {})) {
+    if (!isRecord(record)) continue;
+    const routeMetadata = isRecord(record.route_metadata) ? record.route_metadata : {};
+    const mode = (stringValue(record.mode) || stringValue(routeMetadata.mode)).toLowerCase();
+    if (mode !== 'work') continue;
+    routedWorkFound = true;
+    const stage = stringValue(record.stage).toLowerCase();
+    const status = stringValue(record.status).toLowerCase();
+    if (ACTIVE_COLLABORATION_STAGES.has(stage) || TERMINAL_TURN_STATES.has(status)) {
+      return 'active';
+    }
+  }
+  for (const message of conversation.messages || []) {
+    const meta = messageMetadata(message);
+    if (message.kind === 'route' && stringValue(meta.mode).toLowerCase() === 'work') {
+      routedWorkFound = true;
+    }
+    const role = stringValue(meta.base_role_stage)
+      || stringValue(meta.role_stage)
+      || stringValue(message.sender_role)
+      || stringValue(message.collaboration_role);
+    if (COLLABORATION_ROLE_PATTERN.test(role)) return 'active';
+  }
+  return routedWorkFound ? 'lifting' : 'single';
 }
 
 export function conversationRunningHostedTurnId(
@@ -1090,6 +1147,7 @@ function normalizeRoleStage(
     return 'dispatcher';
   }
   if (/review/.test(normalized)) return 'reviewer';
+  if (/supervis|监督/.test(normalized)) return 'supervisor';
   if (/report/.test(normalized)) return 'reporter';
   if (/worker|executor/.test(normalized)) return 'worker';
   return 'chat';
@@ -1118,10 +1176,13 @@ function profileDisplayName(
   chinese: boolean,
 ): string {
   const normalizedProfile = profile.toLowerCase();
-  if (normalizedProfile === 'dbb3-manager') return 'DBB3 Manager';
+  if (normalizedProfile === 'dbb3-manager') {
+    return chinese ? 'Hermes 调度员' : 'Hermes Manager';
+  }
   if (stage === 'dispatcher') return chinese ? 'Hermes 调度员' : 'Hermes Dispatcher';
   if (stage === 'reporter') return chinese ? 'Hermes 汇报员' : 'Hermes Reporter';
   if (stage === 'reviewer' && !profile) return chinese ? 'Hermes 审阅员' : 'Hermes Reviewer';
+  if (stage === 'supervisor') return chinese ? 'Hermes 监督者' : 'Hermes Supervisor';
   if (!chinese) {
     const names: Record<string, string> = {
       default: 'Hermes',
@@ -1150,6 +1211,7 @@ function roleStageLabel(
       dispatcher: 'Task dispatch',
       reporter: 'Final report',
       reviewer: 'Review',
+      supervisor: 'Workflow supervision',
       worker: 'Execution',
     }[stage];
   }
@@ -1158,6 +1220,7 @@ function roleStageLabel(
     dispatcher: '任务调度',
     reporter: '最终汇报',
     reviewer: '结果审阅',
+    supervisor: '流程监督',
     worker: '任务执行',
   }[stage];
 }
@@ -1209,10 +1272,12 @@ export function avatarRoleFor(
   if (stage === 'dispatcher') return 'dispatcher';
   if (stage === 'reporter') return 'reporter';
   if (stage === 'reviewer') return 'reviewer';
+  if (stage === 'supervisor') return 'supervisor';
   const normalized = profile.toLowerCase();
   if (/dbb3/.test(normalized)) return 'dbb3-worker';
   if (/pc|wsl|windows|local/.test(normalized)) return 'pc-worker';
   if (/review/.test(normalized)) return 'reviewer';
+  if (/supervis|监督/.test(normalized)) return 'supervisor';
   return 'hermes';
 }
 

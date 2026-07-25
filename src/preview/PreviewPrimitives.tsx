@@ -85,44 +85,36 @@ export function PreviewPage({
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
   const { t } = useNativeLocalization();
+  const compact = width < 620;
   const rootSize = Number.parseFloat(tokens.typography.baseSize) || 15;
   const spacing = 4 * tokens.layout.spacingMultiplier;
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
   const bodyFont = resolveNativeFontStack(tokens.typography.fontSans, 400);
 
   return (
-    <ScrollView
-      contentContainerStyle={[
-        styles.pageContent,
-        {
-          gap: spacing * 5,
-          padding: width < 620 ? spacing * 4 : spacing * 6,
-          paddingBottom: (width < 620 ? spacing * 4 : spacing * 6) + insets.bottom,
-        },
-      ]}
-      decelerationRate="normal"
-      keyboardShouldPersistTaps="handled"
-      scrollEventThrottle={8}
-      showsVerticalScrollIndicator={false}
-      style={styles.page}
-    >
+    <View style={[styles.page, { backgroundColor: tokens.colors.background }]}>
       <View
         style={[
           styles.pageHeader,
-          { gap: spacing * 3 },
-          width < 620 && styles.pageHeaderCompact,
+          compact && styles.pageHeaderCompact,
+          {
+            borderBottomColor: tokens.colors.border,
+            gap: spacing * 3,
+            paddingLeft: compact ? 12 + insets.left : 20 + insets.left,
+            paddingRight: 20 + insets.right,
+            paddingTop: 0,
+          },
         ]}
       >
-        <View style={[styles.pageHeadingCopy, { gap: spacing }]}> 
+        {!compact ? <View style={styles.pageHeadingCopy}>
           {eyebrow ? (
             <Text
               style={{
                 color: tokens.colors.textTertiary,
                 fontFamily: displayFont,
-                fontSize: rootSize * 0.72,
-                letterSpacing: rootSize * 0.08,
-                lineHeight: rootSize,
-                textTransform: 'uppercase',
+                fontSize: 10,
+                letterSpacing: 0,
+                lineHeight: 13,
               }}
             >
               {t(eyebrow)}
@@ -130,38 +122,56 @@ export function PreviewPage({
           ) : null}
           <Text
             accessibilityRole="header"
-            style={{
-              color: tokens.colors.foreground,
-              fontFamily: displayFont,
-              fontSize: rootSize * 1.18,
-              fontWeight: displayFont ? undefined : '700',
-              letterSpacing: rootSize * 0.04,
-              lineHeight: rootSize * 1.45,
-            }}
-          >
-            {t(title)}
+              style={{
+                color: tokens.colors.foreground,
+                fontFamily: displayFont,
+                fontSize: 16,
+                fontWeight: displayFont ? undefined : '700',
+                letterSpacing: 0,
+                lineHeight: 22,
+              }}
+            >
+              {t(title)}
           </Text>
           {subtitle ? (
             <Text
               style={{
                 color: tokens.colors.textSecondary,
                 fontFamily: bodyFont,
-                fontSize: rootSize * 0.88,
-                lineHeight: rootSize * 1.35,
+                fontSize: 12,
+                lineHeight: 17,
               }}
             >
               {t(subtitle)}
             </Text>
           ) : null}
-        </View>
+        </View> : null}
         {actions ? (
-          <View style={[styles.pageActions, width < 620 && styles.pageActionsCompact]}>
+          <View style={styles.pageActions}>
             {actions}
           </View>
         ) : null}
       </View>
-      {children}
-    </ScrollView>
+      <ScrollView
+        contentContainerStyle={[
+          styles.pageContent,
+          {
+            gap: 16,
+            paddingHorizontal: width < 620 ? 12 + insets.left : 20 + insets.left,
+            paddingRight: (width < 620 ? 12 : 20) + insets.right,
+            paddingBottom: 20 + insets.bottom,
+            paddingTop: 20,
+          },
+        ]}
+        decelerationRate="normal"
+        keyboardShouldPersistTaps="handled"
+        scrollEventThrottle={8}
+        showsVerticalScrollIndicator={false}
+        style={styles.pageScroll}
+      >
+        {children}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -1120,23 +1130,32 @@ function parseRadius(value: string): number {
 const styles = StyleSheet.create({
   page: {
     flex: 1,
+    minHeight: 0,
+    minWidth: 0,
+  },
+  pageScroll: {
+    flex: 1,
+    minHeight: 0,
   },
   pageContent: {
     alignSelf: 'center',
     maxWidth: 1280,
-    minHeight: '100%',
     width: '100%',
   },
   pageHeader: {
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    borderBottomWidth: 1,
     flexDirection: 'row',
+    minHeight: 64,
     justifyContent: 'space-between',
   },
   pageHeaderCompact: {
-    flexDirection: 'column',
+    justifyContent: 'flex-end',
+    minHeight: 48,
   },
   pageHeadingCopy: {
     flex: 1,
+    gap: 2,
     minWidth: 0,
   },
   pageActions: {
@@ -1144,11 +1163,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexShrink: 0,
     gap: 8,
-  },
-  pageActionsCompact: {
-    alignSelf: 'stretch',
-    justifyContent: 'flex-start',
-    width: '100%',
   },
   card: {
     borderWidth: 1,

@@ -8,28 +8,32 @@ const source = readFileSync(
   'utf8',
 );
 
-test('workflow activity preserves the Build 28 order and keeps the summary chevron beside elapsed time', () => {
+test('workflow activity sits above the role row and uses the Hermes Studio collapsed summary', () => {
   const messageStart = source.indexOf('function UnifiedMessage');
   const messageEnd = source.indexOf('function MessageAvatar', messageStart);
   const message = source.slice(messageStart, messageEnd);
   const activity = message.indexOf('<RoleActivityGroup');
   const avatarRow = message.indexOf('<View style={[styles.messageRow');
+  const roleRow = message.indexOf('<View style={[styles.messageMeta');
 
   assert.ok(activity >= 0, 'workflow activity group is rendered');
-  assert.ok(avatarRow > activity, 'activity group stays above its avatar and message row');
+  assert.ok(activity > avatarRow && activity < roleRow, 'activity timing stays above the role row');
+  assert.match(message, /<View style=\{\[styles\.messageFooter/);
+  assert.doesNotMatch(message, /<RoleActivityGroup[\s\S]{0,100}footer/);
   assert.match(source, /const \[open, setOpen\] = useState\(false\)/);
   assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
   assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
   assert.match(source, /activitySummary: \{ alignItems: 'center', flexDirection: 'row', gap: 6,/);
   assert.doesNotMatch(source, /activitySummary: \{[^\n]*justifyContent: 'space-between'/);
-  assert.match(source, /activityTitle: \{ flexShrink: 1,/);
-  assert.doesNotMatch(source, /activityTitle: \{ flex: 1,/);
-  assert.match(source, /activityDivider: \{ height: StyleSheet\.hairlineWidth, marginBottom: 7, marginTop: 6/);
+  assert.match(source, /activityTitle: \{ flex: 1,/);
+  assert.match(source, /activityCount: \{ fontFamily: MONO_REGULAR/);
+  assert.doesNotMatch(source.slice(source.indexOf('function RoleActivityGroup'), source.indexOf('function shouldShowMessageTiming')), /<Cpu/);
+  assert.doesNotMatch(source, /activityDivider:/);
   assert.match(source, /shouldShowMessageTiming\(message\)/);
   assert.match(source, /activities\.length \? \(/);
 });
 
-test('message timestamps stay adjacent to sender names and user time precedes the user name', () => {
+test('only user timestamps stay adjacent to sender names while assistant runtime metadata stays hidden', () => {
   const messageStart = source.indexOf('function UnifiedMessage');
   const messageEnd = source.indexOf('function MessageAvatar', messageStart);
   const message = source.slice(messageStart, messageEnd);
@@ -37,19 +41,53 @@ test('message timestamps stay adjacent to sender names and user time precedes th
   const sender = message.indexOf('<View style={[styles.senderMeta');
 
   assert.ok(userTimestamp >= 0 && userTimestamp < sender);
+  assert.match(message, /const metadata = isUser/);
+  assert.doesNotMatch(message, /!isUser \? metadataNode/);
+  assert.doesNotMatch(message, /runtimeModel/);
   assert.match(source, /messageMeta: \{ alignItems: 'center', flexDirection: 'row', gap: 5,/);
   assert.doesNotMatch(source, /messageMeta: \{[^\n]*justifyContent: 'space-between'/);
   assert.doesNotMatch(source, /messageMeta: \{[^\n]*width: '100%'/);
 });
 
+test('the same conversation lifts into the Studio collaboration surface from persisted work state', () => {
+  assert.match(source, /conversationCollaborationState/);
+  assert.match(source, /collaborationStateByConversationRef/);
+  assert.match(source, /response\.route\.mode === 'work'/);
+  assert.match(source, /群聊正在拉起/);
+  assert.match(source, /群聊已拉起/);
+  assert.match(source, /function CollaborationLiftNotice/);
+  assert.match(source, /Hermes 调度员/);
+  assert.match(source, /Hermes 审阅员/);
+  assert.match(source, /Hermes 汇报员/);
+  assert.match(source, /Hermes 监督者/);
+  assert.match(source, /5 位成员/);
+  assert.match(source, /function CollaborationMemberStack/);
+  assert.match(source, /collaborationHeaderInfo/);
+  assert.match(source, /collaborationHeaderConnection/);
+  assert.match(source, /Hermes 调度员正在协调成员/);
+  assert.match(source, /协作成员正在重连/);
+  assert.doesNotMatch(source, /\/group-chat/);
+});
+
+test('messages preserve the IPA chat proportions and mobile scroll inspection', () => {
+  assert.match(source, /messageAvatar: \{[^\n]*height: 30,[^\n]*width: 30/);
+  assert.match(source, /messageRow: \{[^\n]*gap: 9/);
+  assert.match(source, /messageStack: \{[^\n]*maxWidth: '88%'/);
+  assert.match(source, /messageBody: \{[^\n]*borderRadius: 8,[^\n]*paddingHorizontal: 11,[^\n]*paddingTop: 9/);
+  assert.match(source, /const BODY_REGULAR = 'HermesGoogle-IBMPlexSans-400-Normal'/);
+  assert.match(source, /const DISPLAY_BOLD = 'SpaceGrotesk_700Bold'/);
+  assert.match(source, /: tokens\.colors\.card/);
+  assert.match(source, /showScrollToBottom/);
+  assert.match(source, /回到最新消息/);
+});
+
 test('chat messages expose role avatars, local metadata, and Codex-like Markdown hierarchy', () => {
   assert.match(source, /import Markdown from 'react-native-markdown-display'/);
+  assert.match(source, /import \{ StudioRoleAvatar \}/);
   assert.match(source, /function MessageAvatar/);
-  assert.match(source, /'dbb3-worker': 'server\.rack'/);
-  assert.match(source, /'pc-worker': 'desktopcomputer'/);
-  assert.match(source, /reviewer: 'checkmark\.shield\.fill'/);
-  assert.match(source, /avatarRole === 'dispatcher'/);
-  assert.match(source, /avatarRole === 'reporter'/);
+  assert.match(source, /<StudioRoleAvatar role=\{avatarRole\} size=\{size\}/);
+  assert.match(source, /const size = compact \? 24 : 30/);
+  assert.match(source, /isUser && remoteAvatar \? \(/);
   assert.match(source, /formatMessageLocalTime/);
   assert.match(source, /messageStatusLabel/);
   assert.match(source, /<Markdown style=\{markdownStyles\}>/);
@@ -103,6 +141,34 @@ test('a running hosted turn exposes the real server cancellation control', () =>
   assert.match(source, /name=\{cancellingHostedTurn[\s\S]*'stop\.fill'/);
 });
 
+test('collaboration members keep canonical distinct local avatars without excessive overlap', () => {
+  assert.match(source, /canonicalMember\('dispatcher', 'dispatcher'/);
+  assert.match(source, /canonicalMember\('worker', 'dbb3-worker'/);
+  assert.match(source, /canonicalMember\('reviewer', 'reviewer'/);
+  assert.match(source, /canonicalMember\('reporter', 'reporter'/);
+  assert.match(source, /canonicalMember\('supervisor', 'supervisor'/);
+  assert.match(source, /<StudioRoleAvatar role=\{member\.avatarRole \|\| 'hermes'\} size=\{24\}/);
+  assert.match(source, /marginLeft: index === 0 \? 0 : -6/);
+  assert.doesNotMatch(source, /<StudioOfficialAvatar size=\{24\} \/>/);
+  const avatars = readFileSync(
+    resolve(process.cwd(), 'src/components/studio/StudioRoleAvatar.tsx'),
+    'utf8',
+  );
+  assert.match(avatars, /'dbb3-worker': 'studio-role-worker-dbb3'/);
+  assert.match(avatars, /reporter: 'studio-role-reporter'/);
+  assert.match(avatars, /reviewer: 'studio-role-reviewer'/);
+  assert.match(avatars, /supervisor: 'studio-role-supervisor'/);
+});
+
+test('long pressing a member submits a durable intervention to the same hosted turn', () => {
+  assert.match(source, /onLongPress=\{isUser \? undefined : \(\) => onMentionMember\(message\)\}/);
+  assert.match(source, /onLongPress=\{\(\) => onMentionMember\(member\)\}/);
+  assert.match(source, /const mention = `@\$\{message\.name\.trim\(\)\} `/);
+  assert.match(source, /const composingIntervention = hostedRunning/);
+  assert.match(source, /cloudApi\.interveneHostedTurn\(/);
+  assert.match(source, /conversationId,[\s\S]*turnId,[\s\S]*trimmed,[\s\S]*messageId/);
+});
+
 test('an accepted hosted turn reaches a terminal state even when every poll fails', () => {
   assert.match(source, /optimisticHostedTurnTimeoutRef/);
   assert.match(source, /setTimeout\(\(\) => \{[\s\S]*hostedTurnVisibilityFailure/);
@@ -122,7 +188,7 @@ test('activity inspection pauses stream following and renders one primary body',
   assert.match(source, /onScroll=\{handleStreamScroll\}/);
   assert.match(source, /onInspectActivity\(\);[\s\S]*setOpen/);
   assert.match(source, /activityDisplayContent\(activity\)/);
-  assert.match(source, /<ActivityDetail value=\{detailContent\}/);
+  assert.match(source, /<ActivityDetail reasoning=\{isReasoning\} value=\{detailContent\}/);
   assert.doesNotMatch(source, /<ActivityDetail label=/);
   assert.doesNotMatch(source, /activityRuntime:/);
 });

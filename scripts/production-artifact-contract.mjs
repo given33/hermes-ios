@@ -26,10 +26,14 @@ export const FORBIDDEN_PRODUCTION_MARKERS = Object.freeze([
   'Tasks Completed',
   'native-ios',
   'HERMES AGENT  v0.9.3',
+  'preview/local-hermes',
+  '当前消息按简单对话处理，没有启动协作群聊。',
 ]);
 
 export const REQUIRED_PRODUCTION_MARKERS = Object.freeze([
   '/single/conversations',
+  'Business Source License 1.1',
+  'EKKOLearnAI',
   'HermesStandardMap',
   'hermes.native.conversations.v3',
 ]);

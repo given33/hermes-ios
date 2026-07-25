@@ -16,7 +16,11 @@ const productionPreviewLocalization = path.resolve(
   __dirname,
   'src/i18n/production-preview-localization.ts',
 );
-const previewRouteModule = /(?:^|\/)Preview(?:Automation|Core|Plugin|Settings)Pages$/;
+const productionChatSimulator = path.resolve(
+  __dirname,
+  'src/preview/production-chat-simulator.ts',
+);
+const previewRouteModule = /(?:^|\/)(?:Preview(?:Automation|Core|Plugin|Settings)Pages|HermesStudioSettingsPage)$/;
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (
@@ -36,6 +40,12 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     && (moduleName === './preview-localization' || moduleName.endsWith('/preview-localization'))
   ) {
     return context.resolveRequest(context, productionPreviewLocalization, platform);
+  }
+  if (
+    process.env.EXPO_PUBLIC_FRONTEND_PREVIEW !== '1'
+    && (moduleName === './chat-fixture-simulator' || moduleName.endsWith('/chat-fixture-simulator'))
+  ) {
+    return context.resolveRequest(context, productionChatSimulator, platform);
   }
   return context.resolveRequest(context, moduleName, platform);
 };

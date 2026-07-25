@@ -168,17 +168,11 @@ interface BuiltinNavigationDefinition {
 const CHAT_NAV_ITEM: BuiltinNavigationDefinition = {
   routeId: 'chat',
   path: '/chat',
-  labels: { en: 'Chat', zh: '\u5355\u804a' },
+  labels: { en: 'Chat', zh: '\u804a\u5929' },
   icon: 'Terminal',
 };
 
 const BUILTIN_NAV_REST = [
-  {
-    routeId: 'sessions',
-    path: '/sessions',
-    labels: { en: 'Sessions', zh: '\u4f1a\u8bdd' },
-    icon: 'MessageSquare',
-  },
   {
     routeId: 'analytics',
     path: '/analytics',
@@ -196,6 +190,12 @@ const BUILTIN_NAV_REST = [
     path: '/models',
     labels: { en: 'Models', zh: '\u6a21\u578b' },
     icon: 'Cpu',
+  },
+  {
+    routeId: 'memory',
+    path: '/memory',
+    labels: { en: 'Memory', zh: '\u8bb0\u5fc6' },
+    icon: 'BookOpen',
   },
   {
     routeId: 'logs',
@@ -248,7 +248,7 @@ const BUILTIN_NAV_REST = [
   {
     routeId: 'config',
     path: '/config',
-    labels: { en: 'Config', zh: '\u914d\u7f6e' },
+    labels: { en: 'Settings', zh: '\u8bbe\u7f6e' },
     icon: 'Settings',
   },
   {
@@ -290,6 +290,9 @@ const BUILTIN_NAV_REST = [
 ] as const satisfies readonly BuiltinNavigationDefinition[];
 
 const PLUGIN_ICON_SET: ReadonlySet<string> = new Set(PLUGIN_ICON_NAMES);
+const BUILTIN_ROUTE_PATH_SET: ReadonlySet<string> = new Set(
+  HERMES_NATIVE_ROUTES.map((route) => route.path),
+);
 const CHAT_ROUTE = HERMES_NATIVE_ROUTES[HERMES_NATIVE_ROUTES.length - 1];
 
 export function resolvePluginIcon(name: string): PluginIconName {
@@ -368,6 +371,7 @@ function buildNavItems(
     if (manifest.tab.override) continue;
     if (manifest.tab.hidden) continue;
     if (manifest.tab.path === '/plugins') continue;
+    if (BUILTIN_ROUTE_PATH_SET.has(manifest.tab.path)) continue;
 
     const pluginItem: ComposedNavigationItem = {
       path: manifest.tab.path,

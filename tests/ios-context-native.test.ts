@@ -410,7 +410,7 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /todayPlaces = snapshot\.places\.filter/);
   // Incomplete validity windows are rejected; stale reloads are labeled, not hidden as live.
   assert.match(source, /expires === null && starts === null/);
-  assert.match(source, /smart-weather-stale-banner/);
+  assert.match(source, /smart-weather-stale-warning/);
   assert.match(source, /setSnapshot\(EMPTY\)/);
   // Route readiness is one-shot and must not be a reload dependency: the
   // parent supplies an inline callback, which previously caused a 429 loop.
@@ -427,11 +427,15 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /<NativeButton/);
   assert.match(source, /NativeMapErrorBoundary/);
   assert.match(source, /smart-weather-map-error/);
-  assert.match(source, /smart-weather-permission-status/);
+  assert.match(source, /smart-weather-permission-warning/);
+  assert.match(source, /smart-weather-notification-warning/);
+  assert.match(source, /nativePermissionRequestedRef/);
+  assert.match(source, /<DailyRouteCurve/);
+  assert.match(source, /timelineExpanded \? '76%' : '38%'/);
   assert.match(source, /centerOnUserRequest=\{centerRequest\}/);
   assert.match(source, /smartWeatherLoadErrorMessage/);
   assert.doesNotMatch(source, /statusOverlay/);
-  assert.match(source, /permissionBanner: \{[\s\S]*alignItems: 'stretch'/);
+  assert.match(source, /warningRail: \{[\s\S]*position: 'absolute'/);
   assert.match(source, /permissionActions: \{[\s\S]*flexWrap: 'wrap'/);
 });
 
@@ -487,12 +491,20 @@ test('distributable builds keep MapKit available when the optional AMap key is a
   const appConfig = readFileSync(resolve(root, 'app.config.js'), 'utf8');
   const workflow = readFileSync(resolve(root, '.github/workflows/ios-unsigned.yml'), 'utf8');
   const mapView = read('ios/HermesStandardMapView.swift');
+  const amap = read('ios/HermesAMapSurface.swift');
 
   assert.doesNotMatch(appConfig, /distributableBuild\s*&&\s*!amapIOSAPIKey/);
   assert.match(appConfig, /HermesAmapIOSAPIKey:\s*amapIOSAPIKey/);
+  assert.match(appConfig, /HermesAmapIOSBundleIdentifier:\s*bundleIdentifier/);
+  assert.match(appConfig, /'aps-environment': apnsEnvironment/);
   assert.match(workflow, /No app-bound AMap key is configured; native MapKit fallback is enabled/);
   assert.match(workflow, /\$\{HERMES_AMAP_IOS_API_KEY:-\}/);
+  assert.match(workflow, /GENERATED_MAP_BUNDLE/);
+  assert.match(workflow, /BUNDLED_AMAP_BUNDLE/);
   assert.match(mapView, /static var amapConfigured:[\s\S]*!amapAPIKey\.isEmpty/);
+  assert.match(mapView, /amapBundleIdentifier == Bundle\.main\.bundleIdentifier/);
+  assert.match(mapView, /amapFailedForSession = true[\s\S]*installRendererIfNeeded\(\)/);
+  assert.match(amap, /mapViewDidFailLoadingMap[\s\S]*onProviderFailure\?\(error\)/);
   assert.match(mapView, /let mapKit = HermesMapKitSurface/);
 });
 

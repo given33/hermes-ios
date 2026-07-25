@@ -37,8 +37,10 @@ const DEFAULT_PALETTE = {
   noiseOpacity: 1,
 };
 
-test('freezes the eight customized-WebUI themes in source order', () => {
+test('freezes the customized WebUI and Studio themes in source order', () => {
   assert.deepEqual(BUILTIN_THEME_ORDER, [
+    'studio-ink-light',
+    'studio-ink-dark',
     'default',
     'default-large',
     'nous-blue',

@@ -9,6 +9,8 @@ const projectRoot = resolve(import.meta.dirname, '..');
 const verifier = resolve(projectRoot, 'scripts/verify-production-bundle.mjs');
 const requiredMarkers = [
   '/single/conversations',
+  'Business Source License 1.1',
+  'EKKOLearnAI',
   'HermesStandardMap',
   'hermes.native.conversations.v3',
 ].join('\n');

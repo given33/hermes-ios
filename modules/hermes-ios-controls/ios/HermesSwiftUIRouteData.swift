@@ -21,6 +21,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let cron: [HermesCronJobSnapshot]
   let skills: [HermesSkillSnapshot]
   let integrations: [HermesIntegrationSnapshot]
+  let installations: [HermesManagedInstallationSnapshot]
   let pairing: HermesPairingSnapshot
   let achievements: HermesAchievementsSnapshot
   let collaboration: HermesCollaborationSnapshot
@@ -48,6 +49,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     case cron
     case skills
     case integrations
+    case installations
     case pairing
     case achievements
     case collaboration
@@ -76,6 +78,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     cron: [HermesCronJobSnapshot] = [],
     skills: [HermesSkillSnapshot] = [],
     integrations: [HermesIntegrationSnapshot] = [],
+    installations: [HermesManagedInstallationSnapshot] = [],
     pairing: HermesPairingSnapshot = .empty,
     achievements: HermesAchievementsSnapshot = .empty,
     collaboration: HermesCollaborationSnapshot = .empty,
@@ -102,6 +105,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.cron = cron
     self.skills = skills
     self.integrations = integrations
+    self.installations = installations
     self.pairing = pairing
     self.achievements = achievements
     self.collaboration = collaboration
@@ -171,6 +175,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [HermesIntegrationSnapshot].self,
       forKey: .integrations
     ) ?? []
+    installations = try container.decodeIfPresent(
+      [HermesManagedInstallationSnapshot].self,
+      forKey: .installations
+    ) ?? []
     pairing = try container.decodeIfPresent(HermesPairingSnapshot.self, forKey: .pairing) ?? .empty
     achievements = try container.decodeIfPresent(
       HermesAchievementsSnapshot.self,
@@ -203,6 +211,23 @@ struct HermesRouteOperationSnapshot: Decodable, Equatable {
   let requestId: String?
   let state: String
   let targetId: String?
+}
+
+struct HermesManagedInstallationTargetSnapshot: Decodable, Equatable, Identifiable {
+  let nodeId: String
+  let state: String
+  let error: String
+
+  var id: String { nodeId }
+}
+
+struct HermesManagedInstallationSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let identifier: String
+  let kind: String
+  let state: String
+  let error: String
+  let targets: [HermesManagedInstallationTargetSnapshot]
 }
 
 struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {

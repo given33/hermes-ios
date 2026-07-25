@@ -1,15 +1,28 @@
-import { Download, LogOut, Trash2, UserRound } from 'lucide-react-native';
+import * as Clipboard from 'expo-clipboard';
+import { Copy, Download, FileText, LogOut, ShieldCheck, Trash2 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
+import { StudioProfileAvatar } from '../components/studio/StudioProfileAvatar';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { NativeButton } from '../components/ui/NativeButton';
+import { NativeInput } from '../components/ui/NativeInput';
 import { resolveNativeFontStack } from '../design/native-font-faces';
 import { useTheme } from '../design/ThemeProvider';
+import {
+  HERMES_STUDIO_BSL_1_1,
+  HERMES_STUDIO_LOGO_NOTICE,
+} from '../legal/third-party-notices';
 import type { NativeRouteLocale } from '../app/route-composition';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
-import { PreviewPage } from '../preview/PreviewPrimitives';
+import {
+  PreviewBadge,
+  PreviewDataRow,
+  PreviewModal,
+  PreviewPage,
+  PreviewText,
+} from '../preview/PreviewPrimitives';
 
 interface AccountPageProps {
   client?: HermesApiClient;
@@ -31,6 +44,7 @@ export function AccountPage({
   const { tokens } = useTheme();
   const [busy, setBusy] = useState<'delete' | 'export' | 'logout' | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showThirdPartyNotices, setShowThirdPartyNotices] = useState(false);
   const [exportPassphrase, setExportPassphrase] = useState('');
   const mounted = useRef(true);
   const chinese = locale === 'zh';
@@ -93,12 +107,19 @@ export function AccountPage({
     }
   }, [busy, chinese, notify, onDeleteAccount]);
 
+  const copyAccount = useCallback(async () => {
+    const identity = username || (chinese ? 'Hermes 账户' : 'Hermes account');
+    await Clipboard.setStringAsync([
+      `${chinese ? '账户' : 'Account'}: ${identity}`,
+      `${chinese ? '连接' : 'Connection'}: ${client ? (chinese ? '已连接' : 'Connected') : (chinese ? '预览' : 'Preview')}`,
+    ].join('\n'));
+    notify(chinese ? '账户信息已复制' : 'Account information copied');
+  }, [chinese, client, notify, username]);
+
   return (
     <PreviewPage title={chinese ? '账户' : 'Account'}>
       <View style={[styles.identity, { borderColor: tokens.colors.border }]}>
-        <View style={[styles.avatar, { backgroundColor: tokens.colors.muted }]}>
-          <UserRound color={tokens.colors.primary} size={24} />
-        </View>
+        <StudioProfileAvatar seed={username || 'Hermes iOS User'} size={48} />
         <View style={styles.identityCopy}>
           <Text style={[styles.username, { color: tokens.colors.foreground, fontFamily: displayFont }]}>
             {username || (chinese ? 'Hermes 账户' : 'Hermes account')}
@@ -107,10 +128,19 @@ export function AccountPage({
             {client ? (chinese ? '已连接' : 'Connected') : (chinese ? '预览' : 'Preview')}
           </Text>
         </View>
+        <PreviewBadge tone={client ? 'success' : 'outline'}>
+          {client ? (chinese ? '已连接' : 'CONNECTED') : (chinese ? '预览' : 'PREVIEW')}
+        </PreviewBadge>
+        <NativeButton accessibilityLabel={chinese ? '复制账户信息' : 'Copy account information'} ghost onPress={() => { void copyAccount(); }} size="icon">
+          <Copy />
+        </NativeButton>
       </View>
 
-      <View style={styles.actions}>
-        <TextInput
+      <View style={[styles.section, { borderTopColor: tokens.colors.border }]}>
+        <PreviewText variant="label">{chinese ? '账户数据' : 'Account data'}</PreviewText>
+        <PreviewDataRow label={chinese ? '导出格式' : 'Export format'} value={chinese ? '账户独立加密归档' : 'Per-account encrypted archive'} />
+        <PreviewDataRow label={chinese ? '本地明文缓存' : 'Plaintext cache'} value={chinese ? '不保留' : 'Never retained'} />
+        <NativeInput
           accessibilityLabel={chinese ? '导出密码' : 'Export password'}
           autoCapitalize="none"
           autoCorrect={false}
@@ -118,13 +148,6 @@ export function AccountPage({
           placeholder={chinese ? '导出密码（至少 12 位）' : 'Export password (12+ characters)'}
           placeholderTextColor={tokens.colors.textSecondary}
           secureTextEntry
-          style={[
-            styles.password,
-            {
-              borderColor: tokens.colors.border,
-              color: tokens.colors.foreground,
-            },
-          ]}
           value={exportPassphrase}
         />
         <NativeButton
@@ -137,6 +160,12 @@ export function AccountPage({
             ? (chinese ? '正在导出' : 'Exporting')
             : (chinese ? '导出账户数据' : 'Export account data')}
         </NativeButton>
+      </View>
+
+      <View style={[styles.section, { borderTopColor: tokens.colors.border }]}>
+        <PreviewText variant="label">{chinese ? '会话与安全' : 'Session and security'}</PreviewText>
+        <PreviewDataRow label={chinese ? '账户加密边界' : 'Encryption boundary'} value={<ShieldCheck color={tokens.colors.success} size={17} />} />
+        <View style={styles.actions}>
         <NativeButton
           disabled={!onLogout || busy !== null}
           onPress={() => { void runLogout(); }}
@@ -155,6 +184,18 @@ export function AccountPage({
             ? (chinese ? '正在删除' : 'Deleting')
             : (chinese ? '删除账户' : 'Delete account')}
         </NativeButton>
+        </View>
+      </View>
+
+      <View style={[styles.section, { borderTopColor: tokens.colors.border }]}>
+        <PreviewText variant="label">{chinese ? '关于' : 'About'}</PreviewText>
+        <NativeButton
+          onPress={() => setShowThirdPartyNotices(true)}
+          outlined
+          prefix={<FileText />}
+        >
+          {chinese ? '第三方授权' : 'Third-party notices'}
+        </NativeButton>
       </View>
 
       <ConfirmDialog
@@ -169,6 +210,17 @@ export function AccountPage({
         open={confirmDelete}
         title={chinese ? '删除账户？' : 'Delete account?'}
       />
+      <PreviewModal
+        onClose={() => setShowThirdPartyNotices(false)}
+        open={showThirdPartyNotices}
+        title={chinese ? '第三方授权' : 'Third-party notices'}
+      >
+        <PreviewText variant="heading">Hermes Studio</PreviewText>
+        <PreviewText style={styles.legalText}>{HERMES_STUDIO_LOGO_NOTICE}</PreviewText>
+        <PreviewText style={styles.legalText} variant="mono">
+          {HERMES_STUDIO_BSL_1_1}
+        </PreviewText>
+      </PreviewModal>
     </PreviewPage>
   );
 }
@@ -207,13 +259,6 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: 12,
   },
-  avatar: {
-    alignItems: 'center',
-    borderRadius: 8,
-    height: 48,
-    justifyContent: 'center',
-    width: 48,
-  },
   identity: {
     alignItems: 'center',
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -225,13 +270,14 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 3,
   },
-  password: {
-    borderRadius: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    fontSize: 15,
-    minHeight: 44,
-    paddingHorizontal: 12,
-    width: '100%',
+  section: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 10,
+    paddingTop: 16,
+  },
+  legalText: {
+    fontSize: 12,
+    lineHeight: 18,
   },
   status: {
     fontSize: 13,

@@ -46,6 +46,7 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
     [
       '/',
       '/sessions',
+      '/memory',
       '/files',
       '/analytics',
       '/smart-weather',

@@ -26,6 +26,7 @@ test('phone drawer uses the UI-thread native gesture while the iPad rail keeps n
   assert.match(source, /swipeMinDistance=\{48\}/);
   assert.match(source, /direction="ltr"[\s\S]*drawerPosition="left"/);
   assert.match(source, /resolveVisibleSidebarWidth/);
+  assert.match(source, /const compactSidebarWidth = Math\.min\(270, Math\.max\(220, layout\.width - 96\)\)/);
   assert.doesNotMatch(source, /PanResponder|CompactSidebarReturnSurface|styles\.openEdge/);
   assert.match(source, /onPress=\{openMobile\}/);
   assert.match(source, /onPress=\{closeMobile\}/);
@@ -55,6 +56,7 @@ test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () =>
   assert.match(source, /IOS_NAVIGATION_EASING = Easing\.bezier\(\.\.\.IOS_MOTION\.curve\.navigation\)/);
   assert.match(source, /entering=\{PAGE_ENTERING\}/);
   assert.match(source, /exiting=\{PAGE_EXITING\}/);
+  assert.match(source, /Platform\.OS === 'web' \? \([\s\S]*<View key=\{activeRoute\.path\} style=\{styles\.routeStage\}>/);
   assert.match(source, /animation: 'slide_from_right'/);
   for (const scrollSource of scrollSources) {
     const scrollViews = scrollSource.match(/<ScrollView\s/g)?.length ?? 0;
@@ -143,11 +145,13 @@ test('sidebar uses one opaque safe-area surface, full-width hit targets, and no 
 
   assert.match(source, /const sidebarBackground = rootBackground/);
   assert.match(compactDrawer, /drawerStyle=\{\[[\s\S]*styles\.compactDrawerPanel[\s\S]*\{ backgroundColor, width: drawerWidth \}[\s\S]*\]\}/);
-  assert.match(compactDrawer, /<View collapsable=\{false\} style=\{styles\.compactDrawerSurface\}>/);
-  assert.doesNotMatch(compactDrawer, /compactDrawerSurface, \{ backgroundColor \}/);
+  assert.match(compactDrawer, /style=\{\[styles\.compactDrawerSurface, \{ backgroundColor \}\]\}/);
   assert.doesNotMatch(referenceSidebar, /backgroundColor: opaque\(tokens\.colors\.background\)/);
-  assert.match(source, /compactDrawerSurface:[\s\S]*backgroundColor: 'transparent'/);
+  assert.match(source, /compactDrawerSurface:[\s\S]*flex: 1,[\s\S]*minHeight: 0,[\s\S]*width: '100%'/);
+  assert.doesNotMatch(source, /compactDrawerPanel:[\s\S]{0,80}overflow: 'hidden'/);
+  assert.doesNotMatch(source, /compactDrawerSurface:[\s\S]{0,100}backgroundColor: 'transparent'/);
   assert.match(source, /referenceSidebar:[\s\S]*backgroundColor: 'transparent'/);
+  assert.match(referenceSidebar, /paddingBottom: insets\.bottom,[\s\S]*paddingTop: insets\.top/);
   assert.match(referenceSidebar, /automaticallyAdjustContentInsets=\{false\}/);
   assert.match(referenceSidebar, /contentInsetAdjustmentBehavior="never"/);
   assert.match(referenceSidebar, /bounces=\{false\}/);
@@ -207,9 +211,11 @@ test('the compact fallback sidebar is one continuous panel without row dividers'
     source.indexOf('function ShellNavigationItem'),
   );
 
-  assert.match(sidebar, /<ScrollView[\s\S]*referenceSidebarHeader[\s\S]*REFERENCE_SIDEBAR_ROUTES[\s\S]*referenceSidebarFooter[\s\S]*<\/ScrollView>/);
+  assert.match(sidebar, /<ScrollView[\s\S]*referenceSidebarHeader[\s\S]*REFERENCE_SIDEBAR_GROUPS[\s\S]*referenceSidebarFooter[\s\S]*<\/ScrollView>/);
   assert.doesNotMatch(sidebar, /referenceSidebarSection|referenceSidebarSectionLabel|borderBottomWidth/);
-  assert.doesNotMatch(source, /REFERENCE_SIDEBAR_GROUPS/);
+  assert.match(sidebar, /Hermes Agent/);
+  assert.doesNotMatch(sidebar, /Hermes Studio/);
+  assert.match(source, /const REFERENCE_SIDEBAR_ROUTES = REFERENCE_SIDEBAR_GROUPS\.reduce/);
 });
 
 test('the generic sidebar is one scroll flow and exposes no fake release version', () => {
@@ -225,4 +231,15 @@ test('the generic sidebar is one scroll flow and exposes no fake release version
   assert.doesNotMatch(app, /v0\.9\.3/);
   assert.match(app, /Constants\.expoConfig\?\.version/);
   assert.match(app, /Constants\.expoConfig\?\.ios\?\.buildNumber/);
+});
+
+test('the bundled sidebar avatar does not call the native image resolver on web', () => {
+  const shell = read('src/app/NativeShell.tsx');
+
+  assert.match(shell, /Platform\.OS === 'web'/);
+  assert.doesNotMatch(
+    shell,
+    /const HERMES_SIDEBAR_AVATAR_URI = ReactNativeImage\.resolveAssetSource/,
+  );
+  assert.match(shell, /avatarUri=\{HERMES_SIDEBAR_AVATAR_URI\}/);
 });

@@ -24,6 +24,7 @@ test('frontend preview renders every customized route and authenticated builds m
     'sessions',
     'files',
     'analytics',
+    'runtime-center',
     'models',
     'logs',
     'cron',
@@ -68,6 +69,7 @@ test('distributable IPA builds always launch the authenticated production fronte
   const productionFixtures = read('src/preview/production-fixtures.ts');
   const productionRouteStubs = read('src/preview/production-route-stubs.tsx');
   const productionPreviewLocalization = read('src/i18n/production-preview-localization.ts');
+  const productionChatSimulator = read('src/preview/production-chat-simulator.ts');
   const productionVerifier = read('scripts/verify-production-bundle.mjs');
   const productionContract = read('scripts/production-artifact-contract.mjs');
 
@@ -80,9 +82,12 @@ test('distributable IPA builds always launch the authenticated production fronte
   assert.match(metro, /production-fixtures\.ts/);
   assert.match(metro, /production-route-stubs\.tsx/);
   assert.match(metro, /production-preview-localization\.ts/);
+  assert.match(metro, /production-chat-simulator\.ts/);
+  assert.match(metro, /chat-fixture-simulator/);
   assert.doesNotMatch(productionFixtures, /ses_|HMS-|Mapped the customized|Deployment is healthy/);
   assert.doesNotMatch(productionRouteStubs, /v0\.9\.3|HMS-|Workspace backup|Deployment is healthy/);
   assert.doesNotMatch(productionPreviewLocalization, /HMS-|fixture routes|Gateway deployment|Workspace backup/);
+  assert.doesNotMatch(productionChatSimulator, /preview\/local-hermes|当前消息按简单对话处理/);
   assert.match(workflow, /verify-production-bundle\.mjs/);
   assert.match(productionVerifier, /verifyProductionBuffers/);
   assert.match(productionContract, /preview fixture leaked into the production bundle/);
@@ -143,8 +148,8 @@ test('preview appearance persistence is limited to theme and font', () => {
   );
   const previewSource = themeProvider.slice(previewStart);
 
-  assert.match(previewSource, /hermes\.preview\.theme/);
-  assert.match(previewSource, /hermes\.preview\.font/);
+  assert.match(previewSource, /hermes\.preview\.studio\.theme/);
+  assert.match(previewSource, /hermes\.preview\.studio\.font/);
   assert.doesNotMatch(previewSource, /HermesApiClient|setTheme\(value\)|setFontPref/);
 });
 
@@ -189,18 +194,35 @@ test('chat preview preserves the customized collaboration single-chat contract',
     /onFocus=\{\(\) => \{[\s\S]{0,140}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,80}keepLatestVisible\(false\);/,
   );
   assert.match(chat, /Hermes Agent/);
-  assert.match(chat, /当前窗口持续使用同一个会话/);
+  assert.doesNotMatch(chat, /当前窗口持续使用同一个会话|This window keeps using the same conversation/);
+  assert.match(chat, /collaborationState !== 'single'/);
+  assert.match(chat, /accessibilityLabel=\{isChinese \? '上传图片或文件'/);
+  assert.match(chat, /haptic="light"[\s\S]{0,180}scaleTo=\{0\.88\}/);
+  assert.match(chat, /name="plus\.circle\.fill"/);
+  assert.match(chat, /size=\{27\}/);
+  assert.match(chat, /attachButton: \{[^}]*height: 38[^}]*width: 34/);
   assert.match(chat, /styles\.gatewayStatusLabel/);
   assert.match(chat, /styles\.gatewayStatusVersion/);
   assert.match(chat, /gatewayStatusLabel: \{[\s\S]*width: 36/);
   assert.match(chat, /gatewayStatusVersion: \{[\s\S]*textAlign: 'left'/);
-  assert.match(chat, /直接告诉 Hermes 你想做什么/);
+  assert.match(chat, /新对话/);
   assert.match(chat, /function UnifiedMessage/);
   assert.match(app, /clearPreferredConversationId/);
   assert.match(chat, /onPreferredConversationConsumed\?\.\(preferredConversationId\)/);
   assert.doesNotMatch(app, /继续对话|Continue conversation/);
   assert.match(chat, /function RoleActivityGroup/);
-  assert.match(chat, /function ModelToolsDrawer/);
+  assert.match(chat, /const \[open, setOpen\] = useState\(false\)/);
+  assert.match(chat, /styles\.activityCount/);
+  assert.match(chat, /activity\.category === 'reasoning'/);
+  assert.match(chat, /styles\.reasoningActivityDetail/);
+  assert.match(chat, /activityDisplayContent\(activity\)/);
+  assert.match(chat, /function ConversationHistory/);
+  assert.match(chat, /previewConversationHistory/);
+  assert.match(chat, /accessibilityLabel=\{isChinese \? '[^']+' : 'Refresh history'\}[\s\S]{0,100}onPress=\{onRefresh\}/);
+  assert.match(chat, /accessibilityLabel="Check API Relay" onPress=\{onCheckRelay\}/);
+  assert.match(chat, /cloudApi\.getStatus\(\)/);
+  assert.match(chat, /isChinese \? '会话' : 'Conversations'/);
+  assert.doesNotMatch(chat, /<ModelToolsDrawer/);
   assert.match(chat, /animationType="none"/);
   assert.match(chat, /translateX/);
   assert.match(chat, /withSpring\(0,[\s\S]*IOS_MOTION\.spring\.stiffness/);
@@ -214,7 +236,11 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /launchCameraAsync/);
   assert.match(chat, /DocumentPicker\.getDocumentAsync/);
   assert.match(chat, /copyToCacheDirectory: false/);
-  assert.match(chat, /ownedTemporary: isUriInsideDirectory\(asset\.uri, Paths\.cache\.uri\)/);
+  assert.match(
+    chat,
+    /ownedTemporary: Platform\.OS !== 'web'\s*&& isUriInsideDirectory\(asset\.uri, Paths\.cache\.uri\)/,
+  );
+  assert.match(chat, /if \(Platform\.OS === 'web'\) return;/);
   assert.match(chat, /cleanupAttachmentSources\(pendingAttachments\)/);
   assert.match(chat, /cleanupAttachmentSources\(attachmentsRef\.current\)/);
   assert.match(chat, /cleanupAttachmentSources\(\[attachment\]\)/);
@@ -286,9 +312,55 @@ test('chat preview preserves the customized collaboration single-chat contract',
     /if \(enqueuePersisted && !enqueueAcknowledged\) \{[\s\S]{0,800}handleOutboxFailure/,
   );
   assert.doesNotMatch(chat, /<HermesLiquidGlassView/);
-  assert.match(chat, /require\('\.\.\/\.\.\/assets\/icon\.png'\)/);
+  assert.match(chat, /<StudioOfficialAvatar/);
+  assert.equal(packageJson.dependencies['@multiavatar/multiavatar'], '1.0.7');
   assert.doesNotMatch(chat, /TerminalStatusBar|terminalTranscript/);
   assert.doesNotMatch(chat, /<PreviewModal[^>]+title=\{isChinese \? '模型与工具'/);
+});
+
+test('interactive preview controls never use empty callbacks or actionless buttons', () => {
+  const interactiveSources = [
+    'src/preview/PreviewAutomationPages.tsx',
+    'src/preview/HermesStudioSettingsPage.tsx',
+    'src/preview/PreviewPluginPages.tsx',
+    'src/preview/PreviewSettingsPages.tsx',
+  ].map(read).join('\n');
+
+  assert.doesNotMatch(
+    interactiveSources,
+    /on(?:Change|Press|ValueChange)=\{\([^)]*\)\s*=>\s*\{\s*\}\}/,
+  );
+  assert.doesNotMatch(
+    interactiveSources,
+    /<NativeButton(?:(?!onPress|>).)*>(?:Archive|Add server)<\/NativeButton>/s,
+  );
+  assert.match(interactiveSources, /onChange=\{setStatusFilter\}/);
+  assert.match(interactiveSources, /onChange=\{setDeliverOnly\}/);
+  assert.match(interactiveSources, /toggleServer\(server\.name, active\)/);
+  assert.match(interactiveSources, /setArchivedTasks/);
+  for (const [input] of interactiveSources.matchAll(/(<NativeInput\b[^>]*\bvalue=\{?[^>]*\/>)/g)) {
+    assert.match(
+      input,
+      /onChangeText=|editable=\{false\}/,
+      `controlled input is missing an update handler: ${input}`,
+    );
+  }
+});
+
+test('Studio secondary surfaces keep the device, account, and compact-header contracts', () => {
+  const automation = read('src/preview/PreviewAutomationPages.tsx');
+  const account = read('src/auth/AccountPage.tsx');
+  const primitives = read('src/preview/PreviewPrimitives.tsx');
+
+  assert.match(automation, /输入远程设备 URL/);
+  assert.match(automation, /复制配对链接/);
+  assert.match(automation, /Agent 版本/);
+  assert.match(automation, /配对请求/);
+  assert.match(account, /StudioProfileAvatar/);
+  assert.match(account, /账户独立加密归档/);
+  assert.match(account, /本地明文缓存/);
+  assert.match(primitives, /!compact \? <View style=\{styles\.pageHeadingCopy\}>/);
+  assert.match(primitives, /pageHeaderCompact/);
 });
 
 test('application surfaces use the shared iOS press, swipe, and haptic controls', () => {
@@ -493,7 +565,11 @@ test('Chinese preview mode translates every shared visible control surface', () 
 test('narrow admin rows use mobile-safe action layouts instead of scattered icon buttons', () => {
   const settings = read('src/preview/PreviewSettingsPages.tsx');
 
-  assert.match(settings, /function ProfileActionsSheet/);
+  assert.doesNotMatch(settings, /function ProfileActionsSheet|Profile actions|Set active/);
+  assert.match(settings, /主服务器 Hermes/);
+  assert.match(settings, /DBB3 Hermes/);
+  assert.match(settings, /WSL Hermes/);
+  assert.match(settings, /gatewayStatuses/);
   assert.match(settings, /styles\.envValueRow/);
   assert.match(settings, /styles\.envValue/);
   assert.match(settings, /PREVIEW_MODEL_CREDENTIALS/);
@@ -521,7 +597,7 @@ test('sidebar system actions and status bar follow the WebUI mobile contract', (
   assert.match(root, /isLightColor\(theme\.palette\.background\.hex\)/);
 });
 
-test('skills preview uses the current WebUI filter and compact row structure', () => {
+test('skills preview scans local skills and renders the Hermes Studio categorized list', () => {
   const skills = read('src/preview/PreviewAutomationPages.tsx');
   const skillsPage = skills.slice(
     skills.indexOf('export function SkillsPreviewPage'),
@@ -529,20 +605,16 @@ test('skills preview uses the current WebUI filter and compact row structure', (
   );
   const listItem = read('src/components/ui/NativeListItem.tsx');
 
-  assert.match(skillsPage, /function SkillFilterItem/);
   assert.match(skillsPage, /<NativeListItem/);
-  assert.match(skillsPage, /styles\.skillRow/);
-  assert.match(skillsPage, /<Pencil \/>/);
-  assert.match(skillsPage, /activeBackgroundColor=\{multiplyAlpha\(tokens\.colors\.foreground, 0\.9\)\}/);
-  // Skills filter strip must share the card surface — no gray/muted automation bar.
-  assert.match(
-    skillsPage,
-    /styles\.skillsFilters,\s*\{\s*backgroundColor:\s*tokens\.colors\.card/,
-  );
-  assert.doesNotMatch(
-    skillsPage,
-    /styles\.skillsFilters[\s\S]{0,120}tokens\.colors\.muted/,
-  );
+  assert.match(skillsPage, /styles\.skillSourceLegend/);
+  assert.match(skillsPage, /'builtin'[\s\S]*'hub'[\s\S]*'local'[\s\S]*'external'[\s\S]*'modified'/);
+  assert.match(skillsPage, /styles\.studioSkillSidebar/);
+  assert.match(skillsPage, /自动检索本机 Skill/);
+  assert.match(skillsPage, /自动添加/);
+  assert.doesNotMatch(skillsPage, /styles\.studioSkillDetail|技能目标|SKILL\.md/);
+  assert.doesNotMatch(skillsPage, /label: 'Hermes'|label: 'Claude'|label: 'Codex'/);
+  assert.match(skillsPage, /activeBackgroundColor=\{multiplyAlpha\(tokens\.colors\.primary, 0\.09\)\}/);
+  assert.doesNotMatch(skillsPage, /toolsets|Browse hub/);
   assert.doesNotMatch(skillsPage, /<PreviewGrid minItemWidth=\{290\}>/);
   assert.doesNotMatch(skillsPage, /prefix=\{<Code2 \/>\}/);
   assert.match(listItem, /activeBackgroundColor\?: string/);

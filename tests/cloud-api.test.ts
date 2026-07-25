@@ -199,10 +199,29 @@ test('profile-scoped management routes keep the active Profile on every request'
     '/api/cron/jobs',
     '/api/mcp/servers',
     '/api/mcp/catalog',
+    '/api/managed-installations',
     '/api/messaging/platforms',
     '/api/model/credentials',
   ]);
   assert.ok(calls.every(({ options }) => options.query?.profile === 'reviewer'));
+});
+
+test('managed installations are submitted once to the authoritative server', async () => {
+  const { api, calls } = createApi();
+
+  await api.createManagedInstallation({
+    identifier: 'official/security-review',
+    kind: 'skill',
+    request_id: 'mobile-install-1',
+  });
+
+  assert.equal(calls[0].path, '/api/managed-installations');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
+    identifier: 'official/security-review',
+    kind: 'skill',
+    request_id: 'mobile-install-1',
+  });
 });
 
 test('the collaboration client keeps conversation and hosted-turn state on the server', async () => {
@@ -641,6 +660,41 @@ test('custom model credentials require HTTPS except for loopback services', asyn
   await api.saveCustomModel({ ...insecure, baseUrl: 'http://127.0.0.1:11434/v1' });
   const body = JSON.parse(String(calls[0].options.body)) as Record<string, unknown>;
   assert.equal(body.base_url, 'http://127.0.0.1:11434/v1');
+});
+
+test('Studio memory reads and writes the profile-scoped Hermes memory contract', async () => {
+  const calls: Call[] = [];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ path, options });
+      return Promise.resolve({
+        memory: 'notes',
+        memory_mtime: 1_700_000_000,
+        soul: 'identity',
+        soul_mtime: 'Yesterday',
+        user: 'profile',
+        user_mtime: 1_700_000_100_000,
+      } as T);
+    },
+  } as HermesApiClient;
+  const api = new HermesCloudApi(client);
+
+  const loaded = await api.getStudioMemory('reviewer');
+  const saved = await api.saveStudioMemory('reviewer', 'user', 'updated profile');
+
+  assert.deepEqual(calls.map(({ path }) => path), [
+    '/api/hermes/memory',
+    '/api/hermes/memory',
+  ]);
+  assert.equal(calls[0]?.options.profile, 'reviewer');
+  assert.equal(calls[1]?.options.profile, 'reviewer');
+  assert.deepEqual(JSON.parse(String(calls[1]?.options.body)), {
+    content: 'updated profile',
+    section: 'user',
+  });
+  assert.equal(loaded.memory, 'notes');
+  assert.equal(loaded.soulMtime, 'Yesterday');
+  assert.equal(saved.user, 'profile');
 });
 
 test('group collaboration reads and writes the modified Hermes room APIs', async () => {

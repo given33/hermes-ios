@@ -153,7 +153,7 @@ export function resolveShellTypography(
 
 export function createNativeShellState(
   mode: AdaptiveLayoutMode,
-  activePath = '/sessions',
+  activePath = '/chat',
 ): NativeShellState {
   return {
     mode,
@@ -235,7 +235,7 @@ export function resolveNativeShellPath(
   requestedPath: string,
 ): string {
   const fallback = routes.find(
-    (route) => route.path === '/sessions' && !route.redirectTo,
+    (route) => route.path === '/chat' && !route.redirectTo,
   ) ?? routes.find((route) => !route.redirectTo);
   let path = requestedPath;
   const visited = new Set<string>();

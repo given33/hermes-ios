@@ -12,6 +12,7 @@ import { HERMES_NATIVE_ROUTES } from '../src/app/route-registry';
 const CORE_ROUTE_PATHS = [
   '/',
   '/sessions',
+  '/memory',
   '/files',
   '/analytics',
   '/smart-weather',
@@ -36,10 +37,10 @@ const CORE_ROUTE_PATHS = [
 ] as const;
 
 const CORE_NAV_PATHS = [
-  '/sessions',
   '/analytics',
   '/smart-weather',
   '/models',
+  '/memory',
   '/logs',
   '/cron',
   '/skills',
@@ -58,10 +59,10 @@ const CORE_NAV_PATHS = [
 ] as const;
 
 const CORE_NAV_ICONS = [
-  'MessageSquare',
   'BarChart3',
   'Globe',
   'Cpu',
+  'BookOpen',
   'FileText',
   'Clock',
   'Package',
@@ -80,10 +81,10 @@ const CORE_NAV_ICONS = [
 ] as const;
 
 const ENGLISH_NAV_LABELS = [
-  'Sessions',
   'Analytics',
   'Smart Weather',
   'Models',
+  'Memory',
   'Logs',
   'Cron',
   'Skills',
@@ -92,7 +93,7 @@ const ENGLISH_NAV_LABELS = [
   'Webhooks',
   'Pairing',
   'Profiles',
-  'Config',
+  'Settings',
   'Account',
   'Approvals',
   'Runtime Center',
@@ -102,10 +103,10 @@ const ENGLISH_NAV_LABELS = [
 ] as const;
 
 const CHINESE_NAV_LABELS = [
-  '\u4f1a\u8bdd',
   '\u5206\u6790',
   '\u667a\u80fd\u5929\u6c14',
   '\u6a21\u578b',
+  '\u8bb0\u5fc6',
   '\u65e5\u5fd7',
   '\u5b9a\u65f6\u4efb\u52a1',
   '\u6280\u80fd',
@@ -114,7 +115,7 @@ const CHINESE_NAV_LABELS = [
   '\u7f51\u7edc\u94a9\u5b50',
   '\u8bbe\u5907\u914d\u5bf9',
   '\u591aAgent\u914d\u7f6e',
-  '\u914d\u7f6e',
+  '\u8bbe\u7f6e',
   '\u8d26\u6237',
   '\u5ba1\u6279\u4e2d\u5fc3',
   '\u8fd0\u884c\u4e2d\u5fc3',
@@ -164,7 +165,7 @@ test('freezes the customized WebUI built-in route map without bundled plugins', 
   assert.deepEqual(HERMES_NATIVE_ROUTES[0], {
     id: 'root',
     path: '/',
-    redirectTo: '/sessions',
+    redirectTo: '/chat',
     visibleInSidebar: false,
   });
   assert.equal(
@@ -341,7 +342,7 @@ test('composes exact English and Chinese core labels and icons', () => {
     locale: 'zh',
   });
   assert.deepEqual(navProjection(chinese.coreItems), [
-    { path: '/chat', label: '\u5355\u804a', icon: 'Terminal' },
+    { path: '/chat', label: '\u804a\u5929', icon: 'Terminal' },
     ...CORE_NAV_PATHS.map((path, index) => ({
       path,
       label: CHINESE_NAV_LABELS[index],
@@ -454,7 +455,7 @@ test('navigation preserves position hints, duplicates, and built-in collisions',
     composition.coreItems.filter((item) => item.path === '/sessions').map(
       (item) => item.source,
     ),
-    ['builtin', 'plugin'],
+    [],
   );
   assert.equal(
     composition.pluginItems.some((item) => item.path === '/override-tab'),

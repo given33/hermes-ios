@@ -301,6 +301,21 @@ export interface HermesSwiftUIIntegrationSnapshot {
   configuration?: string;
 }
 
+export interface HermesSwiftUIManagedInstallationTargetSnapshot {
+  nodeId: 'dbb3' | 'server' | 'wsl';
+  state: string;
+  error: string;
+}
+
+export interface HermesSwiftUIManagedInstallationSnapshot {
+  id: string;
+  identifier: string;
+  kind: 'mcp' | 'project' | 'skill';
+  state: string;
+  error: string;
+  targets: readonly HermesSwiftUIManagedInstallationTargetSnapshot[];
+}
+
 export interface HermesSwiftUIPairingSnapshot {
   pending: readonly HermesSwiftUIPairingEntrySnapshot[];
   approved: readonly HermesSwiftUIPairingEntrySnapshot[];
@@ -437,6 +452,7 @@ export interface HermesSwiftUIRouteSnapshot {
   cron?: readonly HermesSwiftUICronJobSnapshot[];
   skills?: readonly HermesSwiftUISkillSnapshot[];
   integrations?: readonly HermesSwiftUIIntegrationSnapshot[];
+  installations?: readonly HermesSwiftUIManagedInstallationSnapshot[];
   pairing?: HermesSwiftUIPairingSnapshot;
   achievements?: HermesSwiftUIAchievementsSnapshot;
   collaboration?: HermesSwiftUICollaborationSnapshot;

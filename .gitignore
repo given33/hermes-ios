@@ -42,3 +42,6 @@ __pycache__/
 # generated native folders
 /ios
 /android
+
+# Local upstream source checkouts
+/vendor/hermes-studio-ui/

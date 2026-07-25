@@ -18,6 +18,7 @@ struct HermesMapPlace: Record {
 
 protocol HermesMapRendering: AnyObject {
   var onLocationPress: (() -> Void)? { get set }
+  var onProviderFailure: ((Error) -> Void)? { get set }
   func requestFreshCenter()
   func setPlaces(_ places: [HermesMapPlace])
   func setShowsUserLocation(_ shows: Bool)
@@ -32,9 +33,16 @@ enum HermesNativeMapConfiguration {
       .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
   }
 
+  static var amapBundleIdentifier: String {
+    (Bundle.main.object(forInfoDictionaryKey: "HermesAmapIOSBundleIdentifier") as? String)?
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+  }
+
   static var amapConfigured: Bool {
     #if canImport(MAMapKit)
     !amapAPIKey.isEmpty
+      && !amapBundleIdentifier.isEmpty
+      && amapBundleIdentifier == Bundle.main.bundleIdentifier
     #else
     false
     #endif
@@ -52,6 +60,7 @@ final class HermesStandardMapView: ExpoView {
   private var renderer: HermesMapRendering?
   private var rendererView: UIView?
   private var usingAMap = false
+  private var amapFailedForSession = false
 
   var amapPrivacyConsentGranted = false {
     didSet {
@@ -86,7 +95,9 @@ final class HermesStandardMapView: ExpoView {
   }
 
   private var shouldUseAMap: Bool {
-    HermesNativeMapConfiguration.amapConfigured && amapPrivacyConsentGranted
+    HermesNativeMapConfiguration.amapConfigured
+      && amapPrivacyConsentGranted
+      && !amapFailedForSession
   }
 
   private func installRendererIfNeeded() {
@@ -119,6 +130,13 @@ final class HermesStandardMapView: ExpoView {
     renderer = nextRenderer
     rendererView = nextView
     nextRenderer.onLocationPress = { [weak self] in self?.onLocationPress([:]) }
+    nextRenderer.onProviderFailure = { [weak self] _ in
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.usingAMap else { return }
+        self.amapFailedForSession = true
+        self.installRendererIfNeeded()
+      }
+    }
     nextRenderer.setShowsUserLocation(showsUserLocation)
     nextRenderer.setTrack(track)
     nextRenderer.setPlaces(places)

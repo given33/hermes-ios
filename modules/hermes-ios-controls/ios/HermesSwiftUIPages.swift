@@ -637,52 +637,60 @@ private struct HermesRemoteRoutePage: View {
       .hermesListStyle()
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "cron")) }
     case .skills:
-      List(data.skills) { skill in
-        HermesRemoteRow(icon: skill.bundled ? "shippingbox.fill" : "shippingbox", title: skill.name, detail: skill.detail, tint: appearance.palette.accent) {
-          Toggle("", isOn: Binding(
-            get: { skill.enabled },
-            set: { onAction(.skillToggle, HermesRouteActionPayload(route: "skills", id: skill.id, enabled: $0)) }
-          )).labelsHidden()
-        }
-        .contextMenu {
-          Button {
-            requestedSkillID = skill.id
-            onAction(.skillSelect, HermesRouteActionPayload(route: "skills", id: skill.id))
-          } label: {
-            Label(chinese ? "编辑 SKILL.md" : "Edit SKILL.md", systemImage: "square.and.pencil")
-          }
-          Button { onAction(.skillView, HermesRouteActionPayload(route: "skills", id: skill.id)) } label: {
-            Label(chinese ? "查看 SKILL.md" : "View SKILL.md", systemImage: "doc.text")
+      List {
+        installationSection
+        Section(chinese ? "已安装 Skill" : "Installed Skills") {
+          ForEach(data.skills) { skill in
+            HermesRemoteRow(icon: skill.bundled ? "shippingbox.fill" : "shippingbox", title: skill.name, detail: skill.detail, tint: appearance.palette.accent) {
+              Toggle("", isOn: Binding(
+                get: { skill.enabled },
+                set: { onAction(.skillToggle, HermesRouteActionPayload(route: "skills", id: skill.id, enabled: $0)) }
+              )).labelsHidden()
+            }
+            .contextMenu {
+              Button {
+                requestedSkillID = skill.id
+                onAction(.skillSelect, HermesRouteActionPayload(route: "skills", id: skill.id))
+              } label: {
+                Label(chinese ? "编辑 SKILL.md" : "Edit SKILL.md", systemImage: "square.and.pencil")
+              }
+              Button { onAction(.skillView, HermesRouteActionPayload(route: "skills", id: skill.id)) } label: {
+                Label(chinese ? "查看 SKILL.md" : "View SKILL.md", systemImage: "doc.text")
+              }
+            }
           }
         }
       }
       .hermesListStyle()
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "skills")) }
     case .plugins, .mcp, .channels, .webhooks:
-      List(data.integrations) { item in
-        HermesRemoteRow(icon: route == .plugins ? "puzzlepiece.extension" : route == .mcp ? "point.3.connected.trianglepath.dotted" : route == .channels ? "dot.radiowaves.left.and.right" : "arrow.triangle.branch", title: item.name, detail: item.detail, tint: item.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
-          Toggle("", isOn: Binding(
-            get: { item.enabled },
-            set: { onAction(.integrationToggle, HermesRouteActionPayload(route: route.rawValue, id: item.id, enabled: $0)) }
-          )).labelsHidden()
-        }
-        .swipeActions {
-          if route == .mcp || route == .webhooks {
-            Button(role: .destructive) {
-              onAction(.integrationDelete, HermesRouteActionPayload(route: route.rawValue, id: item.id))
-            } label: { Label(chinese ? "删除" : "Delete", systemImage: "trash") }
+      List {
+        if route == .mcp { installationSection }
+        ForEach(data.integrations) { item in
+          HermesRemoteRow(icon: route == .plugins ? "puzzlepiece.extension" : route == .mcp ? "point.3.connected.trianglepath.dotted" : route == .channels ? "dot.radiowaves.left.and.right" : "arrow.triangle.branch", title: item.name, detail: item.detail, tint: item.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
+            Toggle("", isOn: Binding(
+              get: { item.enabled },
+              set: { onAction(.integrationToggle, HermesRouteActionPayload(route: route.rawValue, id: item.id, enabled: $0)) }
+            )).labelsHidden()
           }
-        }
-        .contextMenu {
-          if route == .channels {
-            Button {
-              editorID = item.id
-              editorName = item.name
-              editorValue = ""
-              editorDetail = item.configuration ?? "{}"
-              editor = .channel
-            } label: {
-              Label(chinese ? "编辑渠道配置" : "Edit channel configuration", systemImage: "gearshape")
+          .swipeActions {
+            if route == .mcp || route == .webhooks {
+              Button(role: .destructive) {
+                onAction(.integrationDelete, HermesRouteActionPayload(route: route.rawValue, id: item.id))
+              } label: { Label(chinese ? "删除" : "Delete", systemImage: "trash") }
+            }
+          }
+          .contextMenu {
+            if route == .channels {
+              Button {
+                editorID = item.id
+                editorName = item.name
+                editorValue = ""
+                editorDetail = item.configuration ?? "{}"
+                editor = .channel
+              } label: {
+                Label(chinese ? "编辑渠道配置" : "Edit channel configuration", systemImage: "gearshape")
+              }
             }
           }
         }
@@ -1051,6 +1059,59 @@ private struct HermesRemoteRoutePage: View {
       }.refreshable { onAction(.refresh, HermesRouteActionPayload(route: "system")) }
     default:
       EmptyView()
+    }
+  }
+
+  @ViewBuilder private var installationSection: some View {
+    if !data.installations.isEmpty {
+      Section(chinese ? "节点安装状态" : "Node installation status") {
+        ForEach(data.installations) { operation in
+          VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+              Text(operation.identifier)
+                .font(HermesFonts.bodyBold(14))
+                .lineLimit(1)
+              Spacer()
+              HermesStatusPill(text: localizedInstallationState(operation.state))
+            }
+            Text(operation.targets.map {
+              "\(localizedNode($0.nodeId)): \(localizedInstallationState($0.state))"
+            }.joined(separator: "  ·  "))
+              .font(HermesFonts.body(12))
+              .foregroundStyle(appearance.palette.secondary)
+            if !operation.error.isEmpty {
+              Text(operation.error)
+                .font(HermesFonts.body(12))
+                .foregroundStyle(appearance.palette.destructive)
+            }
+          }
+          .padding(.vertical, 3)
+        }
+      }
+    }
+  }
+
+  private func localizedNode(_ value: String) -> String {
+    switch value {
+    case "server": return chinese ? "主服务器" : "Server"
+    case "dbb3": return "DBB3"
+    case "wsl": return "WSL"
+    default: return value
+    }
+  }
+
+  private func localizedInstallationState(_ value: String) -> String {
+    guard chinese else { return value.capitalized }
+    switch value {
+    case "accepted": return "已受理"
+    case "dispatching": return "正在分发"
+    case "pending": return "等待中"
+    case "retry": return "正在重试"
+    case "running": return "安装中"
+    case "completed": return "已完成"
+    case "failed": return "失败"
+    case "cancelled": return "已取消"
+    default: return value
     }
   }
 

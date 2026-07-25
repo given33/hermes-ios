@@ -34,11 +34,20 @@ import {
 } from '../context/ios-permission-coordinator';
 
 const TaskNotificationContext = createContext<HermesNotificationTarget | null>(null);
+export type HermesNotificationHealth =
+  | 'idle'
+  | 'syncing'
+  | 'registered'
+  | 'denied'
+  | 'unavailable'
+  | 'error';
+const NotificationHealthContext = createContext<HermesNotificationHealth>('idle');
 
 export function NotificationProvider({ children }: PropsWithChildren) {
   const { client, rememberDeviceId, state } = useAuth();
   const runtime = useMemo(createExpoNotificationRuntime, []);
   const [target, setTarget] = useState<HermesNotificationTarget | null>(null);
+  const [notificationHealth, setNotificationHealth] = useState<HermesNotificationHealth>('idle');
   const handledNotifications = useRef(new Set<string>());
 
   const acceptResponse = useCallback((response: unknown) => {
@@ -103,15 +112,23 @@ export function NotificationProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (state.status !== 'authenticated' || !client || !runtime.available) {
+      setNotificationHealth(runtime.available ? 'idle' : 'unavailable');
       return undefined;
     }
     let active = true;
     let unsubscribeTokens: () => void = () => undefined;
     let queue = Promise.resolve();
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const api = new HermesMobileNotificationApi(client);
     const config = currentApnsRegistrationConfig();
     const enqueueSynchronization = (token?: NativePushToken) => {
+      if (retryTimer) {
+        clearTimeout(retryTimer);
+        retryTimer = undefined;
+      }
       queue = queue.then(async () => {
+        if (!active) return;
+        setNotificationHealth('syncing');
         const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
         if (hasNativeIOSContext) {
           await HermesIOSContext.setOwnerScope(ownerScope);
@@ -139,6 +156,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
             requestUndeterminedPermission: !coordinated,
           },
         );
+        if (active) setNotificationHealth(result.status);
         if (
           active
           && 'deviceId' in result
@@ -149,7 +167,14 @@ export function NotificationProvider({ children }: PropsWithChildren) {
         if (coordinated && !canCollectIOSPermission(coordinated, 'notification')) {
           return;
         }
-      }).catch(() => undefined);
+      }).catch(() => {
+        if (!active) return;
+        setNotificationHealth('error');
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          if (active) enqueueSynchronization();
+        }, 30_000);
+      });
     };
     enqueueSynchronization();
     void runtime.subscribePushTokens((token) => {
@@ -163,6 +188,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
     });
     return () => {
       active = false;
+      if (retryTimer) clearTimeout(retryTimer);
       unsubscribeTokens();
       appStateSubscription.remove();
     };
@@ -170,11 +196,17 @@ export function NotificationProvider({ children }: PropsWithChildren) {
 
   return (
     <TaskNotificationContext.Provider value={target}>
-      {children}
+      <NotificationHealthContext.Provider value={notificationHealth}>
+        {children}
+      </NotificationHealthContext.Provider>
     </TaskNotificationContext.Provider>
   );
 }
 
 export function useTaskNotificationTarget(): HermesNotificationTarget | null {
   return useContext(TaskNotificationContext);
+}
+
+export function useNotificationHealth(): HermesNotificationHealth {
+  return useContext(NotificationHealthContext);
 }

@@ -28,6 +28,7 @@ import { ScrollView, Share, StyleSheet, View } from 'react-native';
 
 import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
+import { StudioProfileAvatar } from '../components/studio/StudioProfileAvatar';
 import { useTheme } from '../design/ThemeProvider';
 import type { PreviewPageProps } from './PreviewCorePages';
 import {
@@ -52,7 +53,8 @@ import {
   PreviewToggle,
 } from './PreviewPrimitives';
 
-export function AchievementsPreviewPage({ notify }: PreviewPageProps) {
+export function AchievementsPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
+  const chinese = locale === 'zh';
   const [visibility, setVisibility] = useState<'all' | 'unlocked' | 'discovered'>('all');
   const [shareTarget, setShareTarget] = useState<string | null>(null);
   const visible = PREVIEW_ACHIEVEMENTS.filter((achievement) => (
@@ -63,96 +65,137 @@ export function AchievementsPreviewPage({ notify }: PreviewPageProps) {
   const shareAchievement = async () => {
     if (!shareTarget) return;
     await Share.share({
-      message: `Hermes Achievement: ${shareTarget} - Unlocked`,
-      title: `Hermes Achievement: ${shareTarget}`,
+      message: chinese
+        ? `Hermes 成就：${achievementNameZh(shareTarget)} - 已解锁`
+        : `Hermes Achievement: ${shareTarget} - Unlocked`,
+      title: chinese ? `Hermes 成就：${achievementNameZh(shareTarget)}` : `Hermes Achievement: ${shareTarget}`,
     });
-    notify('Achievement shared');
+    notify(chinese ? '成就已分享' : 'Achievement shared');
   };
   return (
     <PreviewPage
-      actions={<NativeButton onPress={() => notify('Achievement scan preview started')} outlined prefix={<RefreshCw />} size="sm">Rescan</NativeButton>}
-      eyebrow="Agentic Gamerscore"
-      subtitle="Collectible Hermes badges earned from real session history."
-      title="Hermes Achievements"
+      actions={<NativeButton ghost haptic="selection" onPress={() => notify(chinese ? '成就扫描已开始' : 'Achievement scan started')} prefix={<RefreshCw />} size="sm">{chinese ? '重新扫描' : 'Rescan'}</NativeButton>}
+      eyebrow={chinese ? '智能体成就积分' : 'Agentic Gamerscore'}
+      subtitle={chinese ? '根据真实会话历史解锁 Hermes 收藏徽章。' : 'Collectible Hermes badges earned from real session history.'}
+      title={chinese ? 'Hermes 成就图鉴' : 'Hermes Achievements'}
     >
       <PreviewGrid minItemWidth={170}>
-        <PreviewMetric accent="#ffbd38" icon={Trophy} label="Unlocked" value="12" hint="earned badges" />
-        <PreviewMetric icon={Eye} label="Discovered" value="7" hint="known, not earned" />
-        <PreviewMetric icon={Sparkles} label="Secrets" value="3" hint="still hidden" />
-        <PreviewMetric icon={Award} label="Highest tier" value="Gold" hint="Copper to Olympian" />
+        <PreviewMetric accent="#ffbd38" icon={Trophy} label={chinese ? '已解锁' : 'Unlocked'} value="12" hint={chinese ? '已获得徽章' : 'earned badges'} />
+        <PreviewMetric icon={Eye} label={chinese ? '已发现' : 'Discovered'} value="7" hint={chinese ? '已知但未获得' : 'known, not earned'} />
+        <PreviewMetric icon={Sparkles} label={chinese ? '隐藏成就' : 'Secrets'} value="3" hint={chinese ? '仍待发现' : 'still hidden'} />
+        <PreviewMetric icon={Award} label={chinese ? '最高等级' : 'Highest tier'} value={chinese ? '黄金' : 'Gold'} hint={chinese ? '青铜至奥林匹克' : 'Copper to Olympian'} />
       </PreviewGrid>
       <PreviewRow style={styles.toolbarBetween}>
         <PreviewSegmented<'all' | 'unlocked' | 'discovered'>
           onChange={setVisibility}
           options={[
-            { label: 'All', value: 'all' },
-            { label: 'Unlocked', value: 'unlocked' },
-            { label: 'Discovered', value: 'discovered' },
+            { label: chinese ? '全部' : 'All', value: 'all' },
+            { label: chinese ? '已解锁' : 'Unlocked', value: 'unlocked' },
+            { label: chinese ? '已发现' : 'Discovered', value: 'discovered' },
           ]}
           value={visibility}
         />
-        <PreviewBadge tone="success">SCAN COMPLETE</PreviewBadge>
+        <PreviewBadge tone="success">{chinese ? '扫描完成' : 'SCAN COMPLETE'}</PreviewBadge>
       </PreviewRow>
       <PreviewGrid minItemWidth={280}>
         {visible.map((achievement) => (
           <PreviewCard
-            action={<PreviewBadge tone={achievement.unlocked ? 'success' : 'outline'}>{achievement.unlocked ? 'UNLOCKED' : 'DISCOVERED'}</PreviewBadge>}
+            action={<PreviewBadge tone={achievement.unlocked ? 'success' : 'outline'}>{achievement.unlocked ? (chinese ? '已解锁' : 'UNLOCKED') : (chinese ? '已发现' : 'DISCOVERED')}</PreviewBadge>}
             key={achievement.name}
-            subtitle={achievement.detail}
-            title={achievement.name}
+            subtitle={chinese ? achievementDetailZh(achievement.name) : achievement.detail}
+            title={chinese ? achievementNameZh(achievement.name) : achievement.name}
           >
             <View style={styles.achievementMark}>
               <Trophy color={achievement.unlocked ? '#ffbd38' : '#7f8f8f'} size={48} strokeWidth={1.25} />
             </View>
             <PreviewRow style={styles.toolbarBetween}>
-              <PreviewBadge tone="warning">{achievement.tier.toUpperCase()}</PreviewBadge>
+              <PreviewBadge tone="warning">{chinese ? achievementTierZh(achievement.tier) : achievement.tier.toUpperCase()}</PreviewBadge>
               <PreviewText variant="mono">{achievement.progress}%</PreviewText>
             </PreviewRow>
             <PreviewProgress color={achievement.unlocked ? '#ffbd38' : undefined} value={achievement.progress} />
-            <NativeButton onPress={() => setShareTarget(achievement.name)} outlined prefix={<Share2 />} size="sm">Share</NativeButton>
+            <NativeButton ghost haptic="selection" onPress={() => setShareTarget(achievement.name)} prefix={<Share2 />} size="sm">{chinese ? '分享' : 'Share'}</NativeButton>
           </PreviewCard>
         ))}
       </PreviewGrid>
-      <PreviewModal onClose={() => setShareTarget(null)} open={shareTarget !== null} title={`Share: ${shareTarget ?? ''}`}>
+      <PreviewModal onClose={() => setShareTarget(null)} open={shareTarget !== null} title={chinese ? `分享：${achievementNameZh(shareTarget ?? '')}` : `Share: ${shareTarget ?? ''}`}>
         <View style={styles.shareCard}>
           <Trophy color="#ffbd38" size={56} />
-          <PreviewText variant="label">Hermes Achievement</PreviewText>
-          <PreviewText variant="heading">{shareTarget}</PreviewText>
-          <PreviewBadge tone="warning">UNLOCKED</PreviewBadge>
+          <PreviewText variant="label">{chinese ? 'Hermes 成就' : 'Hermes Achievement'}</PreviewText>
+          <PreviewText variant="heading">{chinese ? achievementNameZh(shareTarget ?? '') : shareTarget}</PreviewText>
+          <PreviewBadge tone="warning">{chinese ? '已解锁' : 'UNLOCKED'}</PreviewBadge>
         </View>
         <PreviewRow>
-          <NativeButton onPress={() => notify('Share image copied')} outlined>Copy image</NativeButton>
-          <NativeButton haptic="light" onPress={() => void shareAchievement()} prefix={<Share2 />}>Share</NativeButton>
+          <NativeButton ghost onPress={() => notify(chinese ? '分享图片已复制' : 'Share image copied')}>{chinese ? '复制图片' : 'Copy image'}</NativeButton>
+          <NativeButton haptic="light" onPress={() => void shareAchievement()} prefix={<Share2 />}>{chinese ? '分享' : 'Share'}</NativeButton>
         </PreviewRow>
       </PreviewModal>
     </PreviewPage>
   );
 }
 
-export function KanbanPreviewPage({ notify }: PreviewPageProps) {
+function achievementNameZh(name: string): string {
+  return ({
+    'Deep Context': '深度上下文',
+    'Native Instinct': '原生直觉',
+    'Night Shift': '夜间值守',
+    Toolsmith: '工具大师',
+  } as Record<string, string>)[name] ?? name;
+}
+
+function achievementDetailZh(name: string): string {
+  return ({
+    'Deep Context': '完成一次输入超过 10 万 Token 的会话。',
+    'Native Instinct': '在不依赖浏览器界面的情况下交付一个工作流。',
+    'Night Shift': '在午夜至 05:00 之间完成十项任务。',
+    Toolsmith: '在 Hermes 会话中累计完成 100 次工具调用。',
+  } as Record<string, string>)[name] ?? name;
+}
+
+function achievementTierZh(tier: string): string {
+  return ({ Copper: '青铜', Diamond: '钻石', Gold: '黄金', Silver: '白银' } as Record<string, string>)[tier] ?? tier;
+}
+
+export function KanbanPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
+  const chinese = locale === 'zh';
   const [query, setQuery] = useState('');
   const [newTask, setNewTask] = useState(false);
   const [taskTitle, setTaskTitle] = useState('');
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
   const [lanes, setLanes] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'review'>('all');
+  const [archivedTasks, setArchivedTasks] = useState<ReadonlySet<string>>(() => new Set());
+  const visibleColumns = PREVIEW_KANBAN.filter((column) => (
+    statusFilter === 'all'
+    || (statusFilter === 'running' && column.name === 'Running')
+    || (statusFilter === 'review' && ['Triage', 'Ready'].includes(column.name))
+  ));
   return (
     <PreviewPage
       actions={(
         <PreviewRow>
-          <NativeButton onPress={() => setNewTask(true)} prefix={<Plus />} size="sm">New task</NativeButton>
-          <NativeButton accessibilityLabel="Refresh board" ghost onPress={() => notify('Kanban board refreshed')} size="icon"><RefreshCw /></NativeButton>
+          <PreviewBadge tone="outline">Hermes Board · 5 tasks</PreviewBadge>
+          <NativeButton outlined onPress={() => notify(chinese ? '已触发任务调度' : 'Dispatch nudged')} size="sm">{chinese ? '调度' : 'Dispatch'}</NativeButton>
+          <NativeButton onPress={() => setNewTask(true)} prefix={<Plus />} size="sm">{chinese ? '创建任务' : 'New task'}</NativeButton>
+          <NativeButton accessibilityLabel="Refresh board" ghost onPress={() => notify(chinese ? '看板已刷新' : 'Kanban board refreshed')} size="icon"><RefreshCw /></NativeButton>
         </PreviewRow>
       )}
-      subtitle="Multi-agent workflow board with task ownership, dependencies, comments, and run history."
-      title="Kanban"
+      title={chinese ? '看板' : 'Kanban'}
     >
-      <PreviewCard>
-        <PreviewRow style={styles.toolbarBetween}>
-          <PreviewSearch onChangeText={setQuery} placeholder="Filter cards..." value={query} />
-          <PreviewSettingRow label="Lanes by profile" trailing={<PreviewToggle accessibilityLabel="Lanes by profile" onChange={setLanes} value={lanes} />} />
-          <PreviewBadge tone="outline">Native iOS</PreviewBadge>
-        </PreviewRow>
-      </PreviewCard>
+      <PreviewRow style={styles.toolbarBetween}>
+        <View style={styles.kanbanSearch}>
+          <PreviewSearch onChangeText={setQuery} placeholder={chinese ? '筛选任务...' : 'Filter cards...'} value={query} />
+        </View>
+        <PreviewSegmented<'all' | 'running' | 'review'>
+          onChange={setStatusFilter}
+          options={[
+            { label: chinese ? '全部状态' : 'All statuses', value: 'all' },
+            { label: chinese ? '运行中' : 'Running', value: 'running' },
+            { label: chinese ? '审查' : 'Review', value: 'review' },
+          ]}
+          value={statusFilter}
+        />
+        <PreviewSettingRow label={chinese ? '按 Profile 分栏' : 'Lanes by profile'} trailing={<PreviewToggle accessibilityLabel="Lanes by profile" onChange={setLanes} value={lanes} />} />
+      </PreviewRow>
       <ScrollView
         contentContainerStyle={styles.board}
         decelerationRate="normal"
@@ -161,7 +204,7 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
         scrollEventThrottle={8}
         showsHorizontalScrollIndicator={false}
       >
-        {PREVIEW_KANBAN.map((column) => (
+        {visibleColumns.map((column) => (
           <View key={column.name} style={styles.column}>
             <View style={styles.columnHeader}>
               <PreviewRow>
@@ -172,6 +215,7 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
             </View>
             <View style={styles.columnCards}>
               {column.cards
+                .filter((card) => !archivedTasks.has(card.id))
                 .filter((card) => `${card.id} ${card.title} ${card.profile}`.toLowerCase().includes(query.toLowerCase()))
                 .map((card) => (
                   <PreviewCard key={card.id} style={styles.taskCard}>
@@ -181,10 +225,10 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
                     </PreviewRow>
                     <PreviewText variant="heading">{card.title}</PreviewText>
                     <PreviewRow>
-                      <UserRound size={14} />
+                      <StudioProfileAvatar seed={card.profile} size={18} />
                       <PreviewText variant="tiny">{card.profile}</PreviewText>
                     </PreviewRow>
-                    <NativeButton onPress={() => setSelectedTask(card.id)} outlined size="sm">Open</NativeButton>
+                    <NativeButton onPress={() => setSelectedTask(card.id)} outlined size="sm">{chinese ? '打开' : 'Open'}</NativeButton>
                   </PreviewCard>
                 ))}
             </View>
@@ -217,7 +261,12 @@ export function KanbanPreviewPage({ notify }: PreviewPageProps) {
         <NativeInput placeholder="Add comment..." />
         <PreviewRow>
           <NativeButton onPress={() => notify(`${selectedTask} marked complete`)} prefix={<CheckCircle2 />}>Complete</NativeButton>
-          <NativeButton outlined prefix={<Archive />}>Archive</NativeButton>
+          <NativeButton onPress={() => {
+            if (!selectedTask) return;
+            setArchivedTasks((current) => new Set([...current, selectedTask]));
+            notify(`${selectedTask} archived`);
+            setSelectedTask(null);
+          }} outlined prefix={<Archive />}>Archive</NativeButton>
         </PreviewRow>
       </PreviewModal>
     </PreviewPage>
@@ -284,7 +333,12 @@ function GroupMessage({ profile, text, time }: { profile: string; text: string; 
 
 const styles = StyleSheet.create({
   toolbarBetween: {
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
+  },
+  kanbanSearch: {
+    flex: 1,
+    minWidth: 220,
   },
   achievementMark: {
     alignItems: 'center',

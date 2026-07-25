@@ -400,6 +400,35 @@ export interface ModelAssignmentResult {
   scope: string;
 }
 
+function normalizeStudioMemory(value: JsonRecord): StudioMemoryContent {
+  const text = (key: string) => typeof value[key] === 'string' ? value[key] as string : '';
+  const timestamp = (key: string) => {
+    const raw = value[key];
+    if (typeof raw === 'string') return raw;
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      return new Date(raw < 10_000_000_000 ? raw * 1_000 : raw).toLocaleString();
+    }
+    return '';
+  };
+  return {
+    memory: text('memory'),
+    memoryMtime: timestamp('memory_mtime'),
+    soul: text('soul'),
+    soulMtime: timestamp('soul_mtime'),
+    user: text('user'),
+    userMtime: timestamp('user_mtime'),
+  };
+}
+
+export interface StudioMemoryContent {
+  memory: string;
+  memoryMtime: string;
+  soul: string;
+  soulMtime: string;
+  user: string;
+  userMtime: string;
+}
+
 const COLLABORATION = '/api/plugins/collaboration';
 const KANBAN = '/api/plugins/kanban';
 const ACHIEVEMENTS = '/api/plugins/hermes-achievements';
@@ -417,6 +446,23 @@ export class HermesCloudApi {
 
   request<T>(path: string, options?: HermesRequestOptions): Promise<T> {
     return this.client.request<T>(path, options);
+  }
+
+  async getStudioMemory(profile: string): Promise<StudioMemoryContent> {
+    const value = await this.request<JsonRecord>('/api/hermes/memory', { profile });
+    return normalizeStudioMemory(value);
+  }
+
+  async saveStudioMemory(
+    profile: string,
+    section: 'memory' | 'soul' | 'user',
+    content: string,
+  ): Promise<StudioMemoryContent> {
+    const value = await this.json<JsonRecord>('/api/hermes/memory', 'PUT', {
+      content,
+      section,
+    }, { profile });
+    return normalizeStudioMemory(value);
   }
 
   getStatus() {
@@ -697,7 +743,31 @@ export class HermesCloudApi {
     return Promise.all([
       this.request<JsonRecord[]>('/api/skills', { profile }),
       this.request<JsonRecord[]>('/api/tools/toolsets', { profile }),
-    ]).then(([skills, toolsets]) => ({ skills, toolsets }));
+      this.getManagedInstallations('skill', profile),
+    ]).then(([skills, toolsets, installations]) => ({ skills, toolsets, installations }));
+  }
+
+  getManagedInstallations(kind = '', profile = 'default', limit = 50) {
+    return this.request<{ operations: JsonRecord[] }>('/api/managed-installations', {
+      query: { kind, profile, limit: String(limit) },
+    });
+  }
+
+  createManagedInstallation(request: {
+    identifier: string;
+    kind: 'mcp' | 'project' | 'skill';
+    locality?: 'ios-relay' | 'network' | 'node' | 'portable' | 'server' | 'workers';
+    profile?: string;
+    project_name?: string;
+    request_id: string;
+    scope?: 'auto' | 'fleet' | 'server' | 'workers';
+    targets?: readonly ('dbb3' | 'server' | 'wsl')[];
+  }) {
+    return this.json<{ accepted: boolean; operation: JsonRecord }>(
+      '/api/managed-installations',
+      'POST',
+      request as JsonRecord,
+    );
   }
 
   toggleSkill(name: string, enabled: boolean, profile = 'default') {
@@ -740,7 +810,8 @@ export class HermesCloudApi {
     return Promise.all([
       this.request<JsonRecord>('/api/mcp/servers', { query: { profile } }),
       this.request<JsonRecord>('/api/mcp/catalog', { query: { profile } }),
-    ]).then(([servers, catalog]) => ({ servers, catalog }));
+      this.getManagedInstallations('mcp', profile),
+    ]).then(([servers, catalog, installations]) => ({ servers, catalog, installations }));
   }
 
   addMcpServer(server: JsonRecord, profile = 'default') {
@@ -1445,6 +1516,26 @@ export class HermesCloudApi {
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-turns/${encodeURIComponent(turnId)}/cancel`,
       'POST',
       { reason },
+      { signal },
+    );
+  }
+
+  interveneHostedTurn(
+    conversationId: string,
+    turnId: string,
+    content: string,
+    messageId: string,
+    signal?: AbortSignal,
+  ) {
+    return this.json<{
+      accepted: boolean;
+      hosted_turn: JsonRecord;
+      message: CollaborationMessage;
+      targets: string[];
+    }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-turns/${encodeURIComponent(turnId)}/interventions`,
+      'POST',
+      { content, message_id: messageId },
       { signal },
     );
   }

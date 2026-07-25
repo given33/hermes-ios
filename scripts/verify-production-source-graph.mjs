@@ -11,23 +11,29 @@ const productionLocalization = resolve(
   projectRoot,
   'src/i18n/production-preview-localization.ts',
 );
+const productionChatSimulator = resolve(
+  projectRoot,
+  'src/preview/production-chat-simulator.ts',
+);
 const previewRoot = resolve(projectRoot, 'src/preview');
 const productionPreviewAllowlist = new Set(
   [
     'FrontendPreviewApp.tsx',
     'PreviewChatPage.tsx',
+    'PreviewMemoryPage.tsx',
     'PreviewPrimitives.tsx',
     'frontend-preview-contract.ts',
     'in-flight-action-gate.ts',
     'production-fixtures.ts',
+    'production-chat-simulator.ts',
     'production-route-stubs.tsx',
   ].map((fileName) => resolve(previewRoot, fileName)),
 );
-const previewRouteModule = /(?:^|\/)Preview(?:Automation|Core|Plugin|Settings)Pages$/;
+const previewRouteModule = /(?:^|\/)(?:Preview(?:Automation|Core|Plugin|Settings)Pages|HermesStudioSettingsPage)$/;
 const sourceExtensions = ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx'];
 const importPattern = /(?:import|export)\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']|require\(\s*["']([^"']+)["']\s*\)|import\(\s*["']([^"']+)["']\s*\)/g;
 
-for (const required of [entry, productionFixtures, productionRoutes, productionLocalization]) {
+for (const required of [entry, productionFixtures, productionRoutes, productionLocalization, productionChatSimulator]) {
   if (!existsSync(required)) fail(`required production source is missing: ${relative(projectRoot, required)}`);
 }
 const metro = readFileSync(resolve(projectRoot, 'metro.config.js'), 'utf8');
@@ -36,6 +42,7 @@ for (const marker of [
   'production-fixtures.ts',
   'production-route-stubs.tsx',
   'production-preview-localization.ts',
+  'production-chat-simulator.ts',
 ]) {
   if (!metro.includes(marker)) fail(`production Metro alias is missing: ${marker}`);
 }
@@ -85,6 +92,9 @@ function resolveProductionImport(importer, specifier) {
   if (previewRouteModule.test(normalized)) return productionRoutes;
   if (normalized === './preview-localization' || normalized.endsWith('/preview-localization')) {
     return productionLocalization;
+  }
+  if (normalized === './chat-fixture-simulator' || normalized.endsWith('/chat-fixture-simulator')) {
+    return productionChatSimulator;
   }
   if (!normalized.startsWith('.')) return null;
   const base = resolve(dirname(importer), normalized);

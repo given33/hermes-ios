@@ -3,6 +3,7 @@ import UIKit
 
 final class HermesMapKitSurface: UIView, HermesMapRendering, MKMapViewDelegate {
   var onLocationPress: (() -> Void)?
+  var onProviderFailure: ((Error) -> Void)?
 
   private let mapView = MKMapView(frame: .zero)
   private lazy var compassButton = MKCompassButton(mapView: mapView)

@@ -140,6 +140,6 @@ export const NativeInput = forwardRef<TextInput, NativeInputProps>(
 
 const styles = StyleSheet.create({
   input: {
-    borderRadius: 0,
+    borderRadius: 6,
   },
 });

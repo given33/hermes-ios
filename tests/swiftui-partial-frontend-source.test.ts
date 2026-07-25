@@ -7,6 +7,27 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (path: string) => readFileSync(resolve(projectRoot, path), 'utf8');
 
+test('Swift and TypeScript route action protocols remain exactly aligned', () => {
+  const contract = read('src/app/swiftui-route-contract.ts');
+  const swiftSource = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIRouteData.swift',
+  );
+  const swiftActionEnum = swiftSource.slice(
+    swiftSource.indexOf('enum HermesRouteAction:'),
+    swiftSource.indexOf('struct HermesRouteActionPayload:'),
+  );
+  const typeScriptActions = new Set(
+    [...contract.matchAll(/^\s+[A-Za-z][A-Za-z0-9]*:\s*'([^']+)',?$/gm)]
+      .map((match) => match[1]),
+  );
+  const swiftActions = new Set(
+    [...swiftActionEnum.matchAll(/case\s+[A-Za-z][A-Za-z0-9]*\s*=\s*"([^"]+)"/g)]
+      .map((match) => match[1]),
+  );
+
+  assert.deepEqual([...swiftActions].sort(), [...typeScriptActions].sort());
+});
+
 test('signed iOS builds use the partial SwiftUI frontend without replacing chat', () => {
   const config = JSON.parse(
     read('modules/hermes-ios-controls/expo-module.config.json'),
@@ -137,6 +158,13 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.doesNotMatch(routes, /\.environmentUpsert/);
   assert.doesNotMatch(routeData, /HERMES_SWIFTUI_ROUTE_ACTIONS\.environmentUpsert/);
   assert.match(routeData, /api\.updateChannel/);
+  assert.match(routes, /节点安装状态/);
+  assert.match(routes, /data\.installations/);
+  assert.match(routes, /localizedInstallationState/);
+  assert.match(routeData, /managedInstallationsSnapshot/);
+  const controller = read('src/app/useHermesSwiftUIRouteData.ts');
+  assert.match(controller, /INSTALLATION_REFRESH_MS = 2_000/);
+  assert.match(controller, /routeId === 'skills' \|\| routeId === 'mcp'/);
 });
 
 test('SwiftUI owns one synchronized sidebar transition and native page navigation', () => {
@@ -197,10 +225,16 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = next \}/);
   assert.match(native, /NavigationStack \{/);
   assert.doesNotMatch(native, /navigationTitle\("Hermes Agent"\)/);
-  assert.match(native, /Text\("Hermes Agent"\)\s*\.font\(\.largeTitle\.bold\(\)\)/);
+  assert.match(native, /HermesSidebarAvatar\(uri: avatarUri\)/);
+  assert.match(native, /Text\("Hermes Agent"\)\s*\.font\(\.title2\.bold\(\)\)/);
+  assert.match(nativeSidebar, /Image\(systemName: "xmark"\)/);
+  assert.match(nativeSidebar, /\.frame\(width: 44, height: 44\)/);
+  assert.match(nativeSidebar, /showsCloseButton: props\.presentation != "split"/);
+  assert.match(shell, /avatarUri=\{HERMES_SIDEBAR_AVATAR_URI\}/);
   assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
-  assert.match(nativeSidebar, /\.background\(Color\.clear\.ignoresSafeArea\(\)\)/);
-  assert.doesNotMatch(nativeSidebar, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
+  assert.match(nativeSidebar, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
+  assert.doesNotMatch(nativeSidebar, /\.background\(Color\.clear\.ignoresSafeArea\(\)\)/);
+  assert.doesNotMatch(nativeSidebar, /\.clipped\(\)/);
   assert.match(native, /\.frame\(maxWidth: \.infinity, minHeight: 52, alignment: \.leading\)/);
   assert.match(nativeSidebar, /ForEach\(HermesRoute\.allCases\.filter\(\\\.visibleInSidebar\)\)/);
   assert.doesNotMatch(nativeSidebar, /ForEach\(0\.\.<4|sectionTitle|Workspace|Automation|Administration/);
@@ -299,7 +333,7 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
   assert.doesNotMatch(native, /\.background\(\.ultraThinMaterial\)/);
   assert.match(native, /minHeight: 52/);
   assert.match(shell, /\.\.\.swiftUIThemeProps/);
-  assert.match(shell, /<SymbolView[\s\S]*name=\{route\.symbol\}[\s\S]*size=\{18\}/);
+  assert.match(shell, /<SymbolView[\s\S]*name=\{item\.symbol as SFSymbol\}[\s\S]*size=\{16\}/);
   assert.match(shell, /referenceSidebarRow:[\s\S]*minHeight: 52/);
   assert.match(preview, /\.\.\.resolveSwiftUIThemeProps\(tokens\)/);
 });
@@ -401,4 +435,21 @@ test('SwiftUI collaboration keeps its draft and stable request until durable ack
   assert.match(controller, /isPermanentRoomSendError\(error\)/);
   assert.match(controller, /!\[401, 408, 429\]\.includes\(error\.status\)/);
   assert.match(store, /hermes\.native\.collaboration-room-outbox\.v1/);
+});
+
+test('SwiftUI route navigation control is only rendered for the compact drawer shell', () => {
+  const bridge = read('modules/hermes-ios-controls/index.ts');
+  const native = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
+  );
+  const preview = read('src/preview/FrontendPreviewApp.tsx');
+
+  assert.match(bridge, /showsNavigationButton\?: boolean/);
+  assert.match(preview, /compactNavigation=\{context\.compact\}/);
+  assert.match(preview, /showsNavigationButton=\{compactNavigation\}/);
+  assert.match(native, /@Field var showsNavigationButton = true/);
+  assert.match(
+    native,
+    /if props\.showsNavigationButton \{\s*ToolbarItem\(placement: \.navigationBarLeading\)/,
+  );
 });

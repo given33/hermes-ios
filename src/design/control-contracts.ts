@@ -670,22 +670,28 @@ export function resolveButtonVisual(
     case 'outlined-default':
       visual = {
         id,
-        backgroundColor: TRANSPARENT,
+        backgroundColor: multiplyAlpha(
+          midground,
+          state === 'pressed' ? 0.13 : state === 'hovered' || state === 'focused' ? 0.09 : 0.055,
+        ),
         borderColor: TRANSPARENT,
         textColor: midground,
-        bevel: DEFAULT_BEVEL,
-        arcVisible,
+        bevel: null,
+        arcVisible: false,
         filter: state === 'pressed' ? activeFilter : null,
       };
       break;
     case 'outlined-invert':
       visual = {
         id,
-        backgroundColor: TRANSPARENT,
+        backgroundColor: multiplyAlpha(
+          midground,
+          state === 'pressed' ? 0.16 : state === 'hovered' || state === 'focused' ? 0.11 : 0.07,
+        ),
         borderColor: TRANSPARENT,
         textColor: midground,
-        bevel: INVERT_OUTLINED_BEVEL,
-        arcVisible,
+        bevel: null,
+        arcVisible: false,
         filter: state === 'pressed' ? activeFilter : null,
       };
       break;

@@ -6,6 +6,7 @@ import UIKit
 
 final class HermesAMapSurface: UIView, HermesMapRendering, MAMapViewDelegate {
   var onLocationPress: (() -> Void)?
+  var onProviderFailure: ((Error) -> Void)?
 
   private let mapView: MAMapView
   private let compassButton = UIButton(type: .system)
@@ -204,6 +205,11 @@ final class HermesAMapSurface: UIView, HermesMapRendering, MAMapViewDelegate {
       )
       centerOnDisplayedUser(animated: hasCenteredOnUser, location: displayedLocation)
     }
+  }
+
+  func mapViewDidFailLoadingMap(_ mapView: MAMapView!, withError error: Error!) {
+    guard let error else { return }
+    onProviderFailure?(error)
   }
 
   private func centerOnDisplayedUser(animated: Bool, location: CLLocation) {

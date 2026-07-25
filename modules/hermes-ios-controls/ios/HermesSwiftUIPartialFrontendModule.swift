@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -15,6 +16,7 @@ public final class HermesSwiftUIPartialFrontendModule: Module {
 enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
   case chat
   case sessions
+  case memory
   case files
   case analytics
   case smartWeather = "smart-weather"
@@ -42,12 +44,13 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
 
   var id: String { rawValue }
   var path: String { "/\(rawValue)" }
-  var visibleInSidebar: Bool { self != .plugins }
+  var visibleInSidebar: Bool { self != .plugins && self != .sessions }
 
   var symbol: String {
     switch self {
     case .chat: return "message.fill"
     case .sessions: return "bubble.left.and.bubble.right"
+    case .memory: return "brain"
     case .files: return "folder"
     case .analytics: return "chart.bar.xaxis"
     case .smartWeather: return "cloud.rain"
@@ -78,8 +81,9 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
   func title(_ chinese: Bool) -> String {
     if !chinese { return rawValue.capitalized }
     switch self {
-    case .chat: return "单聊"
+    case .chat: return "聊天"
     case .sessions: return "会话"
+    case .memory: return "记忆"
     case .files: return "文件"
     case .analytics: return "分析"
     case .smartWeather: return "智能天气"
@@ -109,7 +113,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
 
   var group: Int {
     switch self {
-    case .chat, .sessions, .files, .analytics, .smartWeather, .models, .logs: return 0
+    case .chat, .sessions, .memory, .files, .analytics, .smartWeather, .models, .logs: return 0
     case .cron, .skills, .plugins, .mcp, .pairing, .channels, .webhooks: return 1
     case .achievements, .collaboration, .kanban, .workflows: return 2
     case .approvals, .runtimeCenter: return 3
@@ -127,7 +131,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     default: break
     }
     if path == "/profiles/new" { return .profiles }
-    return HermesRoute(rawValue: path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))) ?? .sessions
+    return HermesRoute(rawValue: path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))) ?? .chat
   }
 }
 
@@ -209,6 +213,7 @@ extension HermesThemeProviding {
 
 final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
   @Field var activePath = "/chat"
+  @Field var avatarUri = ""
   @Field var gatewayStatusesJson = "[]"
   @Field var locale = "zh"
   @Field var open = false
@@ -244,17 +249,22 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     GeometryReader { proxy in
       let drawerWidth = fillsAvailableWidth ? proxy.size.width : min(360, proxy.size.width)
       ZStack(alignment: .leading) {
+        appearance.palette.background
+          .ignoresSafeArea()
         HermesSidebarContent(
           activePath: props.activePath,
+          avatarUri: props.avatarUri,
           chinese: chinese,
           gateways: decodeGateways(props.gatewayStatusesJson),
-          onNavigate: select
+          onClose: requestClose,
+          onNavigate: select,
+          showsCloseButton: props.presentation != "split"
         )
         .environmentObject(appearance)
       }
       .frame(width: drawerWidth)
       .frame(maxHeight: .infinity, alignment: .leading)
-      .background(Color.clear)
+      .background(appearance.palette.background.ignoresSafeArea())
       .offset(x: isDrawer ? drawerOffset(width: drawerWidth) : 0)
       .shadow(
         color: .black.opacity(isDrawer && presented ? 0.22 : 0),
@@ -263,8 +273,7 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       )
       .contentShape(Rectangle())
     }
-    .background(Color.clear.ignoresSafeArea())
-    .clipped()
+    .background(appearance.palette.background.ignoresSafeArea())
     .onAppear {
       presented = isDrawer ? false : true
       if isDrawer && props.open {
@@ -293,6 +302,12 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
     props.onNavigate(["path": route.path])
   }
 
+  private func requestClose() {
+    dismissHermesKeyboard()
+    feedbackTrigger += 1
+    props.onRequestClose([:])
+  }
+
 }
 
 private struct HermesSidebarGateway: Decodable, Identifiable {
@@ -309,20 +324,40 @@ private func decodeGateways(_ json: String) -> [HermesSidebarGateway] {
 private struct HermesSidebarContent: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let activePath: String
+  let avatarUri: String
   let chinese: Bool
   let gateways: [HermesSidebarGateway]
+  let onClose: () -> Void
   let onNavigate: (HermesRoute) -> Void
+  let showsCloseButton: Bool
 
   var body: some View {
     ScrollView(.vertical, showsIndicators: false) {
       LazyVStack(alignment: .leading, spacing: 0) {
-        Text("Hermes Agent")
-          .font(.largeTitle.bold())
-          .foregroundStyle(appearance.palette.foreground)
-          .padding(.horizontal, 20)
-          .padding(.vertical, 8)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .accessibilityAddTraits(.isHeader)
+        HStack(spacing: 10) {
+          HermesSidebarAvatar(uri: avatarUri)
+          Text("Hermes Agent")
+            .font(.title2.bold())
+            .foregroundStyle(appearance.palette.foreground)
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .accessibilityAddTraits(.isHeader)
+          Spacer(minLength: 4)
+          if showsCloseButton {
+            Button(action: onClose) {
+              Image(systemName: "xmark")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(appearance.palette.secondary)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(chinese ? "\u{5173}\u{95ed}\u{5bfc}\u{822a}" : "Close navigation")
+          }
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, showsCloseButton ? 4 : 18)
+        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
 
         ForEach(HermesRoute.allCases.filter(\.visibleInSidebar)) { route in
           Button {
@@ -405,12 +440,53 @@ private struct HermesSidebarContent: View {
   }
 }
 
+private struct HermesSidebarAvatar: View {
+  let uri: String
+
+  var body: some View {
+    Group {
+      if let url = URL(string: uri), url.isFileURL,
+         let image = UIImage(contentsOfFile: url.path) {
+        Image(uiImage: image)
+          .resizable()
+      } else if let url = URL(string: uri) {
+        AsyncImage(url: url) { phase in
+          if let image = phase.image {
+            image.resizable()
+          } else {
+            fallback
+          }
+        }
+      } else {
+        fallback
+      }
+    }
+    .aspectRatio(contentMode: .fill)
+    .frame(width: 24, height: 24)
+    .background(appearanceColor)
+    .clipShape(Circle())
+    .accessibilityHidden(true)
+  }
+
+  private var fallback: some View {
+    Image(systemName: "sparkles")
+      .font(.system(size: 12, weight: .semibold))
+      .foregroundStyle(Color.secondary)
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var appearanceColor: Color {
+    Color(uiColor: .secondarySystemBackground)
+  }
+}
+
 final class HermesSwiftUIRouteProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
   @Field var dataJson = "{}"
   @Field var locale = "zh"
-  @Field var path = "/sessions"
+  @Field var path = "/chat"
   @Field var pluginName = ""
-  @Field var routeId = "sessions"
+  @Field var routeId = "chat"
+  @Field var showsNavigationButton = true
   @Field var themeAccentColor = "#ffe6cb"
   @Field var themeBackgroundColor = "#041c1c"
   @Field var themeBorderColor = "#ffe6cb26"
@@ -497,14 +573,16 @@ struct HermesSwiftUIRouteView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       .navigationTitle(route.title(chinese))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
-          Button {
-            dismissHermesKeyboard()
-            props.onOpenNavigation([:])
-          } label: {
-            Image(systemName: "chevron.backward")
+        if props.showsNavigationButton {
+          ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+              dismissHermesKeyboard()
+              props.onOpenNavigation([:])
+            } label: {
+              Image(systemName: "chevron.backward")
+            }
+            .accessibilityLabel(chinese ? "返回侧边栏" : "Back to sidebar")
           }
-          .accessibilityLabel(chinese ? "返回侧边栏" : "Back to sidebar")
         }
         if route == .system {
           ToolbarItem(placement: .navigationBarTrailing) {

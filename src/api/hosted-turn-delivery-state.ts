@@ -19,6 +19,20 @@ export interface HostedTurnDeliveryDecision {
   terminal: boolean;
 }
 
+export type HostedTurnCancellationDecision =
+  | {
+      attempts: number;
+      outcome: 'failed' | 'retry';
+      failure: HostedTurnDeliveryFailure;
+      nextAttemptAt: number;
+    }
+  | {
+      attempts: number;
+      outcome: 'settled';
+      failure: HostedTurnDeliveryFailure;
+      nextAttemptAt: 0;
+    };
+
 export class HostedTurnDeliveryClaimRegistry {
   private readonly claims = new Map<string, symbol>();
 
@@ -80,6 +94,31 @@ export function hostedTurnTransportFailure(error: unknown): HostedTurnDeliveryFa
     message,
     retryable: /network|fetch|offline|timed?\s*out|timeout|connection|socket/i.test(message),
   };
+}
+
+export function decideHostedTurnCancellationFailure(
+  error: unknown,
+  previousAttempts = 0,
+  now = Date.now(),
+): HostedTurnCancellationDecision {
+  const failure = hostedTurnTransportFailure(error);
+  const attempts = Math.min(
+    Math.max(0, Math.floor(previousAttempts)) + 1,
+    HOSTED_TURN_MAX_DELIVERY_ATTEMPTS,
+  );
+  const status = error instanceof HermesApiError ? error.status : 0;
+  if (status === 404 || status === 409 || status === 410) {
+    return { attempts, failure, nextAttemptAt: 0, outcome: 'settled' };
+  }
+  if (failure.retryable && attempts < HOSTED_TURN_MAX_DELIVERY_ATTEMPTS) {
+    return {
+      attempts,
+      failure,
+      nextAttemptAt: now + HOSTED_TURN_RETRY_DELAY_MS,
+      outcome: 'retry',
+    };
+  }
+  return { attempts, failure, nextAttemptAt: 0, outcome: 'failed' };
 }
 
 export function decideHostedTurnDeliveryFailure(

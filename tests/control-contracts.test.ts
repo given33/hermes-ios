@@ -317,6 +317,12 @@ test('button variant resolver covers the complete canonical matrix', () => {
     'solid-destructive': null,
     'outlined-destructive': null,
   } as const;
+  const arcCapable = new Set([
+    'solid-default',
+    'solid-invert',
+    'solid-destructive',
+    'outlined-destructive',
+  ]);
   for (const [variant, id] of variants) {
     for (const state of ['base', 'hovered', 'focused', 'pressed', 'disabled'] as const) {
       const visual = resolveButtonVisual(defaultTokens, variant, state);
@@ -328,9 +334,9 @@ test('button variant resolver covers the complete canonical matrix', () => {
       );
       assert.equal(
         visual.arcVisible,
-        !('ghost' in variant && variant.ghost) && state !== 'disabled'
+        arcCapable.has(id) && state !== 'disabled'
           && (state === 'hovered' || state === 'focused' || state === 'pressed'),
-        `${id}/${state} maps arc visibility`,
+        `${id}/${state} maps its allowed arc visibility`,
       );
     }
   }

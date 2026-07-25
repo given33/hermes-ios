@@ -16,6 +16,8 @@ const OUTBOX_VERSION = 1 as const;
 const OUTBOX_PREFIX = 'hermes.native.hosted-turn-outbox.v1';
 const ROOM_OUTBOX_VERSION = 1 as const;
 const ROOM_OUTBOX_PREFIX = 'hermes.native.collaboration-room-outbox.v1';
+const INTERVENTION_OUTBOX_VERSION = 1 as const;
+const INTERVENTION_OUTBOX_PREFIX = 'hermes.native.hosted-intervention-outbox.v1';
 const OPTIMISTIC_LEDGER_VERSION = 1 as const;
 const OPTIMISTIC_LEDGER_PREFIX = 'hermes.native.optimistic-messages.v1';
 const cacheWriteChains = new Map<string, Promise<void>>();
@@ -78,6 +80,24 @@ export interface CollaborationRoomOutboxItem {
   queuedAt: number;
   requestId: string;
   roomId: string;
+}
+
+export interface HostedInterventionOutboxItem {
+  attempts?: number;
+  content: string;
+  conversationId: string;
+  deliveryAcceptedAt?: number;
+  lastError?: string;
+  message: CollaborationMessage;
+  messageId: string;
+  nextAttemptAt?: number;
+  queuedAt: number;
+  turnId: string;
+}
+
+export interface PendingInterventionMutationResult {
+  item: HostedInterventionOutboxItem | null;
+  updated: boolean;
 }
 
 export interface OptimisticConversationLedgerItem {
@@ -225,6 +245,183 @@ export class ConversationLocalStore {
         version: OUTBOX_VERSION,
         owner: normalizedOwner,
         items: next,
+      }));
+    });
+  }
+
+  async readPendingInterventions(owner: string): Promise<HostedInterventionOutboxItem[]> {
+    const normalizedOwner = normalizeOwner(owner);
+    if (!normalizedOwner) return [];
+    return parsePendingInterventions(
+      await this.storage.getItem(interventionOutboxKey(normalizedOwner)),
+      normalizedOwner,
+    );
+  }
+
+  async initializePendingIntervention(
+    owner: string,
+    item: HostedInterventionOutboxItem,
+  ): Promise<PendingInterventionMutationResult> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingIntervention(item);
+    if (!normalizedOwner || !normalizedItem) return { item: null, updated: false };
+    let result: PendingInterventionMutationResult = { item: null, updated: false };
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const key = interventionOutboxKey(normalizedOwner);
+      const current = parsePendingInterventions(
+        await this.storage.getItem(key),
+        normalizedOwner,
+      );
+      const previous = current.find(({ messageId }) => messageId === normalizedItem.messageId);
+      if (previous) {
+        result = { item: previous, updated: false };
+        return;
+      }
+      await this.storage.setItem(key, JSON.stringify({
+        version: INTERVENTION_OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: [...current, normalizedItem],
+      }));
+      result = { item: normalizedItem, updated: true };
+      try {
+        const ledgerKey = optimisticLedgerKey(normalizedOwner);
+        const ledger = parseOptimisticConversations(
+          await this.storage.getItem(ledgerKey),
+          normalizedOwner,
+        );
+        const currentEntry = ledger.find(
+          ({ conversationId }) => conversationId === normalizedItem.conversationId,
+        );
+        const messages = new Map(
+          (currentEntry?.messages || []).map((message) => [message.id, message]),
+        );
+        messages.set(normalizedItem.message.id, cloneCollaborationMessage(normalizedItem.message));
+        const nextLedger = ledger.filter(
+          ({ conversationId }) => conversationId !== normalizedItem.conversationId,
+        );
+        nextLedger.push({
+          conversationId: normalizedItem.conversationId,
+          messages: [...messages.values()].map(cloneCollaborationMessage).sort(
+            (left, right) => messageTimestamp(left) - messageTimestamp(right),
+          ),
+          ...(currentEntry?.pendingTurn ? { pendingTurn: { ...currentEntry.pendingTurn } } : {}),
+          updatedAt: Date.now(),
+        });
+        await this.storage.setItem(ledgerKey, JSON.stringify({
+          version: OPTIMISTIC_LEDGER_VERSION,
+          owner: normalizedOwner,
+          items: nextLedger,
+        }));
+      } catch {
+        // The outbox is authoritative. Index hydration reconstructs this
+        // optimistic message if the best-effort ledger write is interrupted.
+      }
+    });
+    return result;
+  }
+
+  async upsertPendingIntervention(
+    owner: string,
+    item: HostedInterventionOutboxItem,
+  ): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingIntervention(item);
+    if (!normalizedOwner || !normalizedItem) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const key = interventionOutboxKey(normalizedOwner);
+      const current = parsePendingInterventions(
+        await this.storage.getItem(key),
+        normalizedOwner,
+      );
+      await this.storage.setItem(key, JSON.stringify({
+        version: INTERVENTION_OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: [
+          ...current.filter(({ messageId }) => messageId !== normalizedItem.messageId),
+          normalizedItem,
+        ],
+      }));
+    });
+  }
+
+  async removePendingIntervention(owner: string, messageId: string): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedMessageId = stringValue(messageId);
+    if (!normalizedOwner || !normalizedMessageId) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const key = interventionOutboxKey(normalizedOwner);
+      const current = parsePendingInterventions(
+        await this.storage.getItem(key),
+        normalizedOwner,
+      );
+      await this.storage.setItem(key, JSON.stringify({
+        version: INTERVENTION_OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: current.filter(({ messageId: currentId }) => currentId !== normalizedMessageId),
+      }));
+    });
+  }
+
+  async failPendingIntervention(
+    owner: string,
+    item: HostedInterventionOutboxItem,
+    error: string,
+  ): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    const normalizedItem = normalizePendingIntervention(item);
+    const normalizedError = stringValue(error);
+    if (!normalizedOwner || !normalizedItem) return;
+    await enqueueCacheWrite(normalizedOwner, async () => {
+      const ledgerKey = optimisticLedgerKey(normalizedOwner);
+      const ledger = parseOptimisticConversations(
+        await this.storage.getItem(ledgerKey),
+        normalizedOwner,
+      );
+      const currentEntry = ledger.find(
+        ({ conversationId }) => conversationId === normalizedItem.conversationId,
+      );
+      const failedMessage = {
+        ...normalizedItem.message,
+        status: 'failed',
+        meta: {
+          ...(isRecord(normalizedItem.message.meta) ? normalizedItem.message.meta : {}),
+          delivery_error: normalizedError,
+        },
+      };
+      const existingMessages = currentEntry?.messages || [];
+      const hasIntervention = existingMessages.some(
+        ({ id }) => id === normalizedItem.messageId,
+      );
+      const nextLedger = ledger.filter(
+        ({ conversationId }) => conversationId !== normalizedItem.conversationId,
+      );
+      nextLedger.push({
+        conversationId: normalizedItem.conversationId,
+        messages: [
+          ...existingMessages.map((message) => (
+            message.id === normalizedItem.messageId
+              ? failedMessage
+              : cloneCollaborationMessage(message)
+          )),
+          ...(hasIntervention ? [] : [failedMessage]),
+        ].sort((left, right) => messageTimestamp(left) - messageTimestamp(right)),
+        ...(currentEntry?.pendingTurn ? { pendingTurn: { ...currentEntry.pendingTurn } } : {}),
+        updatedAt: Date.now(),
+      });
+      await this.storage.setItem(ledgerKey, JSON.stringify({
+        version: OPTIMISTIC_LEDGER_VERSION,
+        owner: normalizedOwner,
+        items: nextLedger,
+      }));
+      const key = interventionOutboxKey(normalizedOwner);
+      const current = parsePendingInterventions(
+        await this.storage.getItem(key),
+        normalizedOwner,
+      );
+      await this.storage.setItem(key, JSON.stringify({
+        version: INTERVENTION_OUTBOX_VERSION,
+        owner: normalizedOwner,
+        items: current.filter(({ messageId }) => messageId !== normalizedItem.messageId),
       }));
     });
   }
@@ -997,6 +1194,7 @@ export class ConversationLocalStore {
         legacyOutboxKey(normalizedOwner),
         roomOutboxKey(normalizedOwner),
         legacyRoomOutboxKey(normalizedOwner),
+        interventionOutboxKey(normalizedOwner),
         optimisticLedgerKey(normalizedOwner),
       ].map((key) => this.storage.removeItem(key)));
     });
@@ -1424,6 +1622,10 @@ function roomOutboxKey(owner: string): string {
   return `${ROOM_OUTBOX_PREFIX}.${ownerStorageKey(owner)}`;
 }
 
+function interventionOutboxKey(owner: string): string {
+  return `${INTERVENTION_OUTBOX_PREFIX}.${ownerStorageKey(owner)}`;
+}
+
 function optimisticLedgerKey(owner: string): string {
   return `${OPTIMISTIC_LEDGER_PREFIX}.${ownerStorageKey(owner)}`;
 }
@@ -1482,6 +1684,47 @@ function parsePendingEnqueues(raw: string | null, owner: string): HostedTurnOutb
   } catch {
     return [];
   }
+}
+
+function parsePendingInterventions(
+  raw: string | null,
+  owner: string,
+): HostedInterventionOutboxItem[] {
+  if (!raw) return [];
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || value.version !== INTERVENTION_OUTBOX_VERSION) return [];
+    if (normalizeOwner(value.owner) !== owner || !Array.isArray(value.items)) return [];
+    return value.items.flatMap((item) => {
+      const normalized = normalizePendingIntervention(item);
+      return normalized ? [normalized] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function normalizePendingIntervention(value: unknown): HostedInterventionOutboxItem | null {
+  if (!isRecord(value)) return null;
+  const conversationId = stringValue(value.conversationId);
+  const turnId = stringValue(value.turnId);
+  const messageId = stringValue(value.messageId);
+  const content = stringValue(value.content);
+  const message = normalizeCollaborationMessage(value.message)[0];
+  if (!conversationId || !turnId || !messageId || !content || !message) return null;
+  if (message.id !== messageId || message.role !== 'user') return null;
+  return {
+    attempts: Math.max(0, Math.floor(numberValue(value.attempts))),
+    content,
+    conversationId,
+    deliveryAcceptedAt: Math.max(0, numberValue(value.deliveryAcceptedAt)),
+    lastError: stringValue(value.lastError),
+    message: cloneCollaborationMessage(message),
+    messageId,
+    nextAttemptAt: Math.max(0, numberValue(value.nextAttemptAt)),
+    queuedAt: numberValue(value.queuedAt) || Date.now(),
+    turnId,
+  };
 }
 
 function normalizePendingEnqueue(value: unknown): HostedTurnOutboxItem | null {
