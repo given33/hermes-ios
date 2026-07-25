@@ -26,6 +26,8 @@ struct HermesRouteContent: View {
         sessionContext: data.sessionContext,
         onAction: onAction
       )
+    case .memory:
+      HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .files:
       HermesFilesPage(
         chinese: chinese,

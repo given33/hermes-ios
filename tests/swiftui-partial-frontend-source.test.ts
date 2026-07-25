@@ -68,6 +68,10 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
     );
   }
   assert.match(routes, /case \.chat:[\s\S]*EmptyView\(\)/);
+  assert.match(
+    routes,
+    /case \.memory:\s*HermesRemoteRoutePage\(route: route, data: data, chinese: chinese, onAction: onAction\)/,
+  );
   assert.doesNotMatch(routes, /case \.chat:[\s\S]*HermesChatPage\(/);
   assert.match(preview, /route\.routeId !== 'chat'/);
   assert.match(preview, /<ChatPreviewPage/);
