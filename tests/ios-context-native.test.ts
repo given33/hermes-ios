@@ -500,7 +500,19 @@ test('distributable builds keep MapKit available when the optional AMap key is a
   assert.match(workflow, /No app-bound AMap key is configured; native MapKit fallback is enabled/);
   assert.match(workflow, /\$\{HERMES_AMAP_IOS_API_KEY:-\}/);
   assert.match(workflow, /GENERATED_MAP_BUNDLE/);
+  assert.match(
+    workflow,
+    /require\('\.\/app\.base\.json'\)\.expo\.ios\.bundleIdentifier/,
+  );
+  assert.match(
+    workflow,
+    /if \[ "\$GENERATED_MAP_BUNDLE" != "\$GENERATED_APP_BUNDLE" \]/,
+  );
   assert.match(workflow, /BUNDLED_AMAP_BUNDLE/);
+  assert.match(
+    workflow,
+    /if \[ "\$BUNDLED_AMAP_BUNDLE" != "\$APP_BUNDLE_IDENTIFIER" \]/,
+  );
   assert.match(mapView, /static var amapConfigured:[\s\S]*!amapAPIKey\.isEmpty/);
   assert.match(mapView, /amapBundleIdentifier == Bundle\.main\.bundleIdentifier/);
   assert.match(mapView, /amapFailedForSession = true[\s\S]*installRendererIfNeeded\(\)/);

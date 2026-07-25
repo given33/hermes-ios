@@ -67,7 +67,7 @@ jobs:
           fi
           GENERATED_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$MAP_PLIST")"
           GENERATED_MAP_BUNDLE="$(plutil -extract HermesAmapIOSBundleIdentifier raw "$MAP_PLIST")"
-          GENERATED_APP_BUNDLE="$(plutil -extract CFBundleIdentifier raw "$MAP_PLIST")"
+          GENERATED_APP_BUNDLE="$(node -p "require('./app.base.json').expo.ios.bundleIdentifier")"
           if [ "$GENERATED_KEY" != "${HERMES_AMAP_IOS_API_KEY:-}" ]; then
             echo 'Generated HermesAmapIOSAPIKey does not match the selected map configuration.' >&2
             exit 1
