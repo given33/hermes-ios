@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createInFlightActionGate } from '../src/preview/in-flight-action-gate';
+import { createInFlightActionGate } from '../src/studio/in-flight-action-gate';
 
 test('rapid workflow submissions share one in-flight gate and one stable request', async () => {
   const gate = createInFlightActionGate();

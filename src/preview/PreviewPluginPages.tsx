@@ -51,7 +51,7 @@ import {
   PreviewSettingRow,
   PreviewText,
   PreviewToggle,
-} from './PreviewPrimitives';
+} from '../studio/PreviewPrimitives';
 
 export function AchievementsPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
   const chinese = locale === 'zh';

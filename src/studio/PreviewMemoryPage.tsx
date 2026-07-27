@@ -1,23 +1,30 @@
 import { FileText, Pencil, RefreshCw, Smile, UserRound } from 'lucide-react-native';
-import { useCallback, useEffect, useState, type ComponentType } from 'react';
+import { memo, useCallback, useEffect, useState, type ComponentType } from 'react';
 import {
-  ActivityIndicator,
   StyleSheet,
   TextInput,
   View,
   useWindowDimensions,
 } from 'react-native';
+import Reanimated, {
+  Easing,
+  FadeIn,
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withTiming,
+} from 'react-native-reanimated';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
-import {
-  HermesCloudApi,
-  type StudioMemoryContent,
-} from '../api/HermesCloudApi';
+import type { StudioMemoryContent } from '../api/HermesCloudApi';
+import { hermesCloudApiFor } from '../api/hermes-api-registry';
 import { NativeButton } from '../components/ui/NativeButton';
 import { multiplyAlpha } from '../design/control-contracts';
+import { MOTION, useMotion } from '../design/motion';
 import { useTheme } from '../design/ThemeProvider';
-import type { PreviewPageProps } from './PreviewCorePages';
-import { PREVIEW_MEMORY } from './preview-fixtures';
+import type { PreviewPageProps } from '../preview/PreviewCorePages';
+import { PREVIEW_MEMORY } from '../preview/preview-fixtures';
 import { PreviewPage, PreviewText } from './PreviewPrimitives';
 
 type MemorySectionId = 'memory' | 'user' | 'soul';
@@ -73,7 +80,7 @@ export function MemoryPreviewPage({
     }
     setLoading(true);
     try {
-      setContent(await new HermesCloudApi(client).getStudioMemory(profile));
+      setContent(await hermesCloudApiFor(client).getStudioMemory(profile));
     } catch (error) {
       notify(memoryError(error, locale));
     } finally {
@@ -90,7 +97,7 @@ export function MemoryPreviewPage({
     setSaving(true);
     try {
       if (client) {
-        setContent(await new HermesCloudApi(client).saveStudioMemory(
+        setContent(await hermesCloudApiFor(client).saveStudioMemory(
           profile,
           editing,
           draft,
@@ -112,6 +119,19 @@ export function MemoryPreviewPage({
     }
   }, [client, draft, editing, fixtureMode, locale, notify, profile]);
 
+  // Stable handlers keep the memoized sections' props identical while the
+  // draft changes, so typing in one editor re-renders one section, not all
+  // three full documents.
+  const beginEdit = useCallback((section: MemorySectionId) => {
+    setEditing(section);
+    setDraft(content[section]);
+  }, [content]);
+  const cancelEdit = useCallback(() => {
+    setEditing(null);
+    setDraft('');
+  }, []);
+  const requestSave = useCallback(() => { void save(); }, [save]);
+
   return (
     <PreviewPage
       actions={(
@@ -122,27 +142,67 @@ export function MemoryPreviewPage({
       title={locale === 'zh' ? '记忆' : 'Memory'}
     >
       {loading ? (
-        <View style={styles.loading}><ActivityIndicator /></View>
+        <MemorySkeleton />
       ) : (
         <MemorySections
           content={content}
           draft={draft}
           editing={editing}
           locale={locale}
-          onCancel={() => {
-            setEditing(null);
-            setDraft('');
-          }}
+          onCancel={cancelEdit}
           onChangeDraft={setDraft}
-          onEdit={(section) => {
-            setEditing(section);
-            setDraft(content[section]);
-          }}
-          onSave={() => { void save(); }}
+          onEdit={beginEdit}
+          onSave={requestSave}
           saving={saving}
         />
       )}
     </PreviewPage>
+  );
+}
+
+// Ambient placeholder while the server memory loads: same card geometry as
+// the loaded sections so the page does not reflow, with a soft opacity pulse.
+// Under Reduce Motion the pulse loop never starts (a static placeholder is
+// rendered), which the parity contract requires of ambient animation.
+function MemorySkeleton() {
+  const { tokens } = useTheme();
+  const { width } = useWindowDimensions();
+  const motion = useMotion();
+  const pulse = useSharedValue(0.55);
+  useEffect(() => {
+    if (motion.reduceMotion) {
+      pulse.value = 0.55;
+      return undefined;
+    }
+    pulse.value = withRepeat(
+      withTiming(1, {
+        duration: MOTION.duration.skeleton / 2,
+        easing: Easing.bezier(...MOTION.easing.standard),
+      }),
+      -1,
+      true,
+    );
+    return () => cancelAnimation(pulse);
+  }, [motion.reduceMotion, pulse]);
+  const pulseStyle = useAnimatedStyle(() => ({ opacity: pulse.value }));
+  return (
+    <View style={[styles.sections, width < 860 && styles.sectionsCompact]}>
+      {MEMORY_SECTIONS.map((section) => (
+        <Reanimated.View
+          key={section.id}
+          style={[
+            styles.section,
+            styles.skeletonSection,
+            { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border },
+            pulseStyle,
+          ]}
+        >
+          <View style={[styles.skeletonBar, { backgroundColor: tokens.colors.muted }]} />
+          <View style={[styles.skeletonBar, styles.skeletonBarWide, { backgroundColor: tokens.colors.muted }]} />
+          <View style={[styles.skeletonBar, { backgroundColor: tokens.colors.muted }]} />
+        </Reanimated.View>
+      ))}
+    </View>
   );
 }
 
@@ -168,29 +228,36 @@ function MemorySections({
   saving: boolean;
 }) {
   const { width } = useWindowDimensions();
+  const motion = useMotion();
   return (
-    <View style={[styles.sections, width < 860 && styles.sectionsCompact]}>
+    <Reanimated.View
+      entering={motion.animate(FadeIn.duration(MOTION.duration.transition))}
+      style={[styles.sections, width < 860 && styles.sectionsCompact]}
+    >
       {MEMORY_SECTIONS.map((section) => (
         <MemorySection
           content={content[section.id]}
           definition={section}
-          draft={draft}
+          // Only the section being edited sees the live draft (and the saving
+          // flag); the other two keep identical props so memo() skips
+          // re-rendering their full documents on every keystroke.
+          draft={editing === section.id ? draft : ''}
           editing={editing === section.id}
           key={section.id}
           locale={locale}
           mtime={content[section.mtime]}
           onCancel={onCancel}
           onChangeDraft={onChangeDraft}
-          onEdit={() => onEdit(section.id)}
+          onEdit={onEdit}
           onSave={onSave}
-          saving={saving}
+          saving={editing === section.id ? saving : false}
         />
       ))}
-    </View>
+    </Reanimated.View>
   );
 }
 
-function MemorySection({
+const MemorySection = memo(function MemorySection({
   content,
   definition,
   draft,
@@ -211,11 +278,12 @@ function MemorySection({
   mtime: string;
   onCancel(): void;
   onChangeDraft(value: string): void;
-  onEdit(): void;
+  onEdit(section: MemorySectionId): void;
   onSave(): void;
   saving: boolean;
 }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const Icon = definition.icon;
   return (
     <View style={[styles.section, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }]}>
@@ -234,13 +302,18 @@ function MemorySection({
           {mtime ? <PreviewText variant="tiny">{mtime}</PreviewText> : null}
         </View>
         {!editing ? (
-          <NativeButton ghost onPress={onEdit} prefix={<Pencil />} size="sm">
+          <NativeButton ghost onPress={() => onEdit(definition.id)} prefix={<Pencil />} size="sm">
             {locale === 'zh' ? '编辑' : 'Edit'}
           </NativeButton>
         ) : null}
       </View>
       {editing ? (
-        <View style={styles.editor}>
+        // Editor and read view cross-fade on the control timing instead of
+        // popping; the entering prop is dropped entirely under Reduce Motion.
+        <Reanimated.View
+          entering={motion.animate(FadeIn.duration(MOTION.duration.control))}
+          style={styles.editor}
+        >
           <TextInput
             multiline
             onChangeText={onChangeDraft}
@@ -261,17 +334,20 @@ function MemorySection({
             <NativeButton disabled={saving} onPress={onCancel} size="sm">{locale === 'zh' ? '取消' : 'Cancel'}</NativeButton>
             <NativeButton disabled={saving} onPress={onSave} size="sm">{locale === 'zh' ? '保存' : 'Save'}</NativeButton>
           </View>
-        </View>
+        </Reanimated.View>
       ) : (
-        <View style={styles.body}>
+        <Reanimated.View
+          entering={motion.animate(FadeIn.duration(MOTION.duration.control))}
+          style={styles.body}
+        >
           <PreviewText style={styles.bodyText} variant={content ? 'body' : 'muted'}>
             {content || definition.empty}
           </PreviewText>
-        </View>
+        </Reanimated.View>
       )}
     </View>
   );
-}
+});
 
 function memoryError(error: unknown, locale: 'en' | 'zh'): string {
   const detail = error instanceof Error ? error.message : String(error);
@@ -284,10 +360,12 @@ const styles = StyleSheet.create({
   bodyText: { lineHeight: 24 },
   editor: { flex: 1, gap: 10, minHeight: 300, padding: 14 },
   input: { borderRadius: 6, borderWidth: 1, flex: 1, fontSize: 13, lineHeight: 21, minHeight: 240, padding: 12 },
-  loading: { alignItems: 'center', justifyContent: 'center', minHeight: 320 },
   section: { borderRadius: 7, borderWidth: 1, flex: 1, minHeight: 360, minWidth: 0, overflow: 'hidden' },
   sectionHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 44, paddingHorizontal: 12 },
   sectionTitle: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 8, minWidth: 0 },
   sections: { alignItems: 'stretch', flexDirection: 'row', gap: 16, minHeight: 500 },
   sectionsCompact: { flexDirection: 'column' },
+  skeletonBar: { borderRadius: 4, height: 12, width: '52%' },
+  skeletonBarWide: { width: '84%' },
+  skeletonSection: { gap: 12, padding: 16 },
 });

@@ -1,4 +1,17 @@
-export const HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION = 1 as const;
+import {
+  HERMES_SWIFTUI_ROUTE_ACTIONS,
+  HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS,
+  HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+  isHermesSwiftUIRouteActionPayload,
+  type HermesSwiftUIRouteActionPayload,
+} from './swiftui-route-actions.generated';
+
+export {
+  HERMES_SWIFTUI_ROUTE_ACTIONS,
+  HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS,
+  HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+} from './swiftui-route-actions.generated';
+export type { HermesSwiftUIRouteActionPayload } from './swiftui-route-actions.generated';
 
 export interface HermesSwiftUISessionSnapshot {
   id: string;
@@ -175,6 +188,7 @@ export interface HermesSwiftUIApprovalItemSnapshot {
   expiresAt?: number;
   diff: string;
   diffAvailable: boolean;
+  payloadDigest?: string;
 }
 
 export interface HermesSwiftUIApprovalsSnapshot {
@@ -463,88 +477,8 @@ export interface HermesSwiftUIRouteSnapshot {
   system?: HermesSwiftUISystemSnapshot;
 }
 
-export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
-  refresh: 'route.refresh',
-  sessionSelect: 'session.select',
-  sessionOpen: 'session.open',
-  sessionDelete: 'session.delete',
-  sessionRename: 'session.rename',
-  sessionCompress: 'session.compress',
-  fileSelect: 'file.select',
-  fileDelete: 'file.delete',
-  fileDownload: 'file.download',
-  fileShare: 'file.share',
-  fileImport: 'file.import',
-  folderCreate: 'folder.create',
-  modelSelect: 'model.select',
-  modelSelectCancel: 'model.select.cancel',
-  modelDiscover: 'model.discover',
-  modelSave: 'model.save',
-  modelTest: 'model.test',
-  logsFilter: 'logs.filter',
-  cronCreate: 'cron.create',
-  cronToggle: 'cron.toggle',
-  cronRun: 'cron.run',
-  cronDelete: 'cron.delete',
-  skillToggle: 'skill.toggle',
-  skillSelect: 'skill.select',
-  skillView: 'skill.view',
-  skillUpdate: 'skill.update',
-  integrationCreate: 'integration.create',
-  integrationUpdate: 'integration.update',
-  integrationToggle: 'integration.toggle',
-  integrationDelete: 'integration.delete',
-  pairingApprove: 'pairing.approve',
-  pairingRevoke: 'pairing.revoke',
-  pairingClearPending: 'pairing.clear-pending',
-  achievementsRescan: 'achievements.rescan',
-  profileCreate: 'profile.create',
-  profileUpdate: 'profile.update',
-  profileActivate: 'profile.activate',
-  profileDelete: 'profile.delete',
-  configUpdate: 'config.update',
-  configImport: 'config.import',
-  environmentDelete: 'environment.delete',
-  systemRestart: 'system.restart',
-  systemRecover: 'system.recover',
-  systemUpdate: 'system.update',
-  kanbanCreate: 'kanban.create',
-  kanbanUpdate: 'kanban.update',
-  kanbanMove: 'kanban.move',
-  kanbanDelete: 'kanban.delete',
-  collaborationSelect: 'collaboration.select',
-  collaborationCreate: 'collaboration.create',
-  collaborationDelete: 'collaboration.delete',
-  collaborationSend: 'collaboration.send',
-  workflowSelect: 'workflow.select',
-  workflowStart: 'workflow.start',
-  workflowCancel: 'workflow.cancel',
-  workflowRetry: 'workflow.retry',
-  workflowApprove: 'workflow.approve',
-  approvalSelect: 'approval.select',
-  approvalApprove: 'approval.approve',
-  approvalReject: 'approval.reject',
-  runtimeSelect: 'runtime.select',
-  runtimeCancel: 'runtime.cancel',
-  runtimeRetry: 'runtime.retry',
-} as const;
-
 export type HermesSwiftUIRouteAction =
   typeof HERMES_SWIFTUI_ROUTE_ACTIONS[keyof typeof HERMES_SWIFTUI_ROUTE_ACTIONS];
-
-export interface HermesSwiftUIRouteActionPayload {
-  route: string;
-  id?: string;
-  name?: string;
-  value?: string;
-  detail?: string;
-  targetId?: string;
-  enabled?: boolean;
-  position?: number;
-  requestId?: string;
-  fields?: Readonly<Record<string, string>>;
-  uris?: readonly string[];
-}
 
 export interface HermesSwiftUIRouteActionEvent {
   action: HermesSwiftUIRouteAction;
@@ -555,10 +489,69 @@ const actionNames = new Set<HermesSwiftUIRouteAction>(
   Object.values(HERMES_SWIFTUI_ROUTE_ACTIONS),
 );
 
+const snapshotRecordArrays = [
+  'sessions',
+  'files',
+  'models',
+  'logs',
+  'cron',
+  'skills',
+  'integrations',
+  'installations',
+  'kanban',
+  'profiles',
+  'environment',
+] as const;
+const snapshotRecords = [
+  'sessionContext',
+  'workflows',
+  'approvals',
+  'runtime',
+  'analytics',
+  'modelConfirmation',
+  'operation',
+  'pairing',
+  'achievements',
+  'collaboration',
+  'config',
+  'system',
+] as const;
+const snapshotFieldNames = new Set<string>(HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS);
+
 export function encodeHermesSwiftUIRouteSnapshot(
   snapshot: HermesSwiftUIRouteSnapshot,
 ): string {
+  if (!isHermesSwiftUIRouteSnapshot(snapshot)) {
+    throw new TypeError('Invalid Hermes SwiftUI route snapshot');
+  }
   return JSON.stringify(snapshot);
+}
+
+export function isHermesSwiftUIRouteSnapshot(
+  value: unknown,
+): value is HermesSwiftUIRouteSnapshot {
+  if (!isRecord(value) || value.version !== HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION) {
+    return false;
+  }
+  if (Object.keys(value).some((field) => !snapshotFieldNames.has(field))) return false;
+  if (value.route !== undefined && typeof value.route !== 'string') return false;
+  for (const field of snapshotRecordArrays) {
+    const candidate = value[field];
+    if (
+      candidate !== undefined
+      && (!Array.isArray(candidate) || candidate.some((entry) => !isRecord(entry)))
+    ) return false;
+  }
+  for (const field of snapshotRecords) {
+    const candidate = value[field];
+    if (candidate !== undefined && !isRecord(candidate)) return false;
+  }
+  if (
+    value.detectedModels !== undefined
+    && (!Array.isArray(value.detectedModels)
+      || value.detectedModels.some((model) => typeof model !== 'string'))
+  ) return false;
+  return true;
 }
 
 export function decodeHermesSwiftUIRouteAction(
@@ -569,7 +562,7 @@ export function decodeHermesSwiftUIRouteAction(
 
   try {
     const payload = JSON.parse(payloadJson) as unknown;
-    if (!isActionPayload(payload)) return null;
+    if (!isHermesSwiftUIRouteActionPayload(payload)) return null;
     return {
       action: action as HermesSwiftUIRouteAction,
       payload,
@@ -577,32 +570,6 @@ export function decodeHermesSwiftUIRouteAction(
   } catch {
     return null;
   }
-}
-
-function isActionPayload(value: unknown): value is HermesSwiftUIRouteActionPayload {
-  if (!isRecord(value) || typeof value.route !== 'string') return false;
-  if (value.id !== undefined && typeof value.id !== 'string') return false;
-  if (value.name !== undefined && typeof value.name !== 'string') return false;
-  if (value.value !== undefined && typeof value.value !== 'string') return false;
-  if (value.detail !== undefined && typeof value.detail !== 'string') return false;
-  if (value.targetId !== undefined && typeof value.targetId !== 'string') return false;
-  if (value.enabled !== undefined && typeof value.enabled !== 'boolean') return false;
-  if (value.position !== undefined && typeof value.position !== 'number') return false;
-  if (value.requestId !== undefined && typeof value.requestId !== 'string') return false;
-  if (
-    value.fields !== undefined
-    && (!isRecord(value.fields)
-      || Object.values(value.fields).some((field) => typeof field !== 'string'))
-  ) {
-    return false;
-  }
-  if (
-    value.uris !== undefined
-    && (!Array.isArray(value.uris) || value.uris.some((uri) => typeof uri !== 'string'))
-  ) {
-    return false;
-  }
-  return true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

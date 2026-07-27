@@ -41,10 +41,10 @@ test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () =>
   const scrollSources = [
     'src/app/NativeShell.tsx',
     'src/auth/LoginScreen.tsx',
-    'src/preview/PreviewChatPage.tsx',
+    'src/studio/PreviewChatPage.tsx',
     'src/preview/PreviewCorePages.tsx',
     'src/preview/PreviewPluginPages.tsx',
-    'src/preview/PreviewPrimitives.tsx',
+    'src/studio/PreviewPrimitives.tsx',
   ].map(read);
 
   assert.equal(
@@ -220,7 +220,7 @@ test('the compact fallback sidebar is one continuous panel without row dividers'
 
 test('the generic sidebar is one scroll flow and exposes no fake release version', () => {
   const shell = read('src/app/NativeShell.tsx');
-  const app = read('src/preview/FrontendPreviewApp.tsx');
+  const app = read('src/studio/FrontendPreviewApp.tsx');
   const sidebar = shell.slice(
     shell.indexOf('function Sidebar'),
     shell.indexOf('function ExpoReferenceSidebar'),

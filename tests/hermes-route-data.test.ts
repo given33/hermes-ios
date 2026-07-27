@@ -209,6 +209,61 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   ]);
 });
 
+test('approval decisions echo the digest rendered by the native snapshot', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    loadRoute: async () => ({
+      approval: {
+        id: 'approval-1',
+        action: 'create',
+        created_at: 1_752_643_200,
+        expires_at: 1_752_646_800,
+        origin: 'foreground',
+        payload: { name: 'reviewed-skill' },
+        payload_digest: 'a'.repeat(64),
+        profile: 'reviewer',
+        revision: 7,
+        state: 'pending',
+        subsystem: 'skills',
+        summary: 'Install reviewed skill',
+      },
+      approvals: [],
+    }),
+    decideWriteApproval: async (...args: unknown[]) => { calls.push(args); },
+  } as unknown as HermesCloudApi;
+
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(
+    api,
+    'approvals',
+    'reviewer',
+    'approval-1',
+  );
+  assert.equal(snapshot.approvals?.selected?.payloadDigest, 'a'.repeat(64));
+
+  const result = await performHermesSwiftUIRouteAction(api, {
+    action: 'approval.approve',
+    payload: {
+      fields: {
+        payloadDigest: snapshot.approvals?.selected?.payloadDigest ?? '',
+        revision: '7',
+      },
+      id: 'approval-1',
+      requestId: 'approval-request-1',
+      route: 'approvals',
+    },
+  }, 'reviewer');
+
+  assert.equal(result, 'reload');
+  assert.deepEqual(calls, [[
+    'approval-1',
+    'approve',
+    7,
+    'approval-request-1',
+    'reviewer',
+    'a'.repeat(64),
+  ]]);
+});
+
 test('all native management routes render the current cloud workspace response', async () => {
   const responses: Record<string, unknown> = {
     cron: [{ id: 'cron-1', name: '每日总结', schedule: '0 9 * * *', prompt: '总结会话', enabled: true }],
@@ -625,4 +680,75 @@ test('native configuration editor submits the complete server document', async (
     model: { default: 'model-a', provider: 'openrouter' },
     agent: { max_turns: 42 },
   }, 'reviewer']]);
+});
+
+test('snapshot labels and action messages follow the caller locale', async () => {
+  // Chinese remains the default (the pins above run without the flag); an
+  // English client threads chinese=false through the SwiftUI route hook and
+  // must not receive hardcoded Chinese labels or action feedback.
+  const responses: Record<string, unknown> = {
+    sessions: { sessions: [{ id: 'session-1', message_count: 8, tool_call_count: 3 }] },
+    files: {
+      files: [{
+        id: 'file-1',
+        name: 'report.pdf',
+        sha256: 'abc',
+        mime_type: 'application/pdf',
+        extension: '.pdf',
+        file_type: 'document',
+        size: 2048,
+        source: 'model_output',
+        status: 'available',
+        created_at: 1_752_643_200_000,
+        updated_at: 1_752_643_200_000,
+        download_url: '/api/plugins/collaboration/files/file-1/download',
+      }],
+    },
+    pairing: {
+      pending: [{ platform: 'telegram', user_id: '42', user_name: 'Alice', age_minutes: 3 }],
+      approved: [],
+    },
+    system: {
+      status: { gateway_running: true, active_sessions: 2 },
+      stats: { uptime_seconds: 1_213_200 },
+    },
+  };
+  const api = {
+    loadRoute: async (route: string) => responses[route],
+    saveCustomModel: async () => {},
+    testCustomModel: async () => (
+      { latency_ms: 84, message: 'ok', ok: true, reachable: true, status: 200 }
+    ),
+  } as unknown as HermesCloudApi;
+
+  const sessions = await loadHermesSwiftUIRouteSnapshot(api, 'sessions', 'default', '', false);
+  const files = await loadHermesSwiftUIRouteSnapshot(api, 'files', 'default', '', false);
+  const pairing = await loadHermesSwiftUIRouteSnapshot(api, 'pairing', 'default', '', false);
+  const system = await loadHermesSwiftUIRouteSnapshot(api, 'system', 'default', '', false);
+
+  assert.equal(sessions.sessions?.[0].title, 'Untitled session');
+  assert.equal(sessions.sessions?.[0].detail, '8 messages · 3 tool calls');
+  assert.equal(files.files?.[0].detail, 'Model output · 2 KB · Available');
+  assert.equal(pairing.pairing?.pending[0].detail, 'Alice · 3 min ago');
+  assert.equal(system.system?.uptimeLabel, '14d 1h');
+
+  const fields = {
+    apiKey: 'secret',
+    apiMode: 'chat_completions',
+    baseUrl: 'https://model.example/v1',
+    contextLength: '131072',
+    model: 'model-a',
+    reasoningEffort: 'high',
+  };
+  const saved = await performHermesSwiftUIRouteAction(api, {
+    action: 'model.save',
+    payload: { fields, route: 'models' },
+  }, 'default', false);
+  const tested = await performHermesSwiftUIRouteAction(api, {
+    action: 'model.test',
+    payload: { fields, route: 'models' },
+  }, 'default', false);
+
+  assert.deepEqual(saved, { message: 'Model configuration saved', reload: true });
+  assert.deepEqual(tested, { message: 'Connection succeeded (HTTP 200, 84 ms)' });
 });

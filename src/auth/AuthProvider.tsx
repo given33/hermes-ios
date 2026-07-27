@@ -32,6 +32,8 @@ import {
   authReducer,
   bootstrapSavedConnection,
   initialAuthState,
+  inspectSavedConnection,
+  MAX_FACE_ID_ATTEMPTS,
   type AuthState,
 } from './auth-state';
 import {
@@ -47,7 +49,10 @@ import {
   MobileAuthApiError,
   type MobileAuthSession,
 } from './mobile-auth';
-import { savedSessionFailureInvalidatesCredentials } from './session-restore-policy';
+import {
+  savedSessionFailureInvalidatesCredentials,
+  savedSessionFailureIsCleartextBaseUrl,
+} from './session-restore-policy';
 
 interface AuthContextValue {
   state: AuthState;
@@ -55,6 +60,7 @@ interface AuthContextValue {
   rememberedLogin: RememberedLogin;
   registrationOpen: boolean;
   authenticate(username: string, password: string, rememberLogin: boolean): Promise<void>;
+  unlock(): Promise<void>;
   register(
     email: string,
     verificationCode: string,
@@ -62,6 +68,7 @@ interface AuthContextValue {
     password: string,
   ): Promise<void>;
   requestRegistrationCode(email: string): Promise<number>;
+  revealRememberedPassword(): Promise<string | null>;
   rememberDeviceId(deviceId: string): Promise<void>;
   logout(): Promise<void>;
   deleteAccount(): Promise<void>;
@@ -71,27 +78,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const volatileWebSession = new Map<string, string>();
 const webSessionStore: SecureStoreAdapter = {
   async getItemAsync(key) {
-    try {
-      return globalThis.sessionStorage?.getItem(key) ?? volatileWebSession.get(key) ?? null;
-    } catch {
-      return volatileWebSession.get(key) ?? null;
-    }
+    return volatileWebSession.get(key) ?? null;
   },
   async setItemAsync(key, value) {
     volatileWebSession.set(key, value);
-    try {
-      globalThis.sessionStorage?.setItem(key, value);
-    } catch {
-      // The in-memory value keeps the current test tab usable.
-    }
   },
   async deleteItemAsync(key) {
     volatileWebSession.delete(key);
-    try {
-      globalThis.sessionStorage?.removeItem(key);
-    } catch {
-      // The in-memory value is already removed.
-    }
   },
 };
 const authStore: SecureStoreAdapter = Platform.OS === 'web' ? webSessionStore : SecureStore;
@@ -104,6 +97,13 @@ const SAVED_SESSION_RETRY_DELAY_MS = 5_000;
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
 const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
+const CLEARTEXT_BASEURL_ERROR = '保存的服务器地址使用了不安全的 http://，已被安全策略拒绝。'
+  + '请改用 https:// 服务器地址重新登录；如确需 http（仅限本地开发），'
+  + '请使用设置了 EXPO_PUBLIC_HERMES_ALLOW_HTTP=1 的开发构建。';
+const UNLOCK_FAILED_ERROR = '面容识别未通过，请重试。';
+const UNLOCK_CANCELLED_ERROR = '已取消解锁，请重试或使用密码登录。';
+const UNLOCK_UNAVAILABLE_ERROR = '无法使用 Face ID 解锁，请使用密码登录。';
+const UNLOCK_LOCKOUT_ERROR = '解锁失败次数过多，请使用密码登录。';
 const EMPTY_REMEMBERED_LOGIN: RememberedLogin = {
   enabled: false,
   password: '',
@@ -153,37 +153,34 @@ export function AuthProvider({ children }: PropsWithChildren) {
             .resume(localAccountCleanupTasks())
             .catch(() => []);
         }
-        const [savedLogin, result] = await Promise.all([
-          credentialStore.readRememberedLogin().catch(() => EMPTY_REMEMBERED_LOGIN),
-          bootstrapSavedConnection(credentialStore),
+        // Cold start reads only unprotected metadata: the remembered-login
+        // preference (never the password item) and the protection-mode flag.
+        const [savedLogin, unlockRequired] = await Promise.all([
+          credentialStore.readRememberedLoginPreference().catch(() => EMPTY_REMEMBERED_LOGIN),
+          credentialStore.sessionUnlockRequired(),
         ]);
         if (!current()) return;
         setRememberedLogin(savedLogin);
+        if (unlockRequired) {
+          const inspection = await inspectSavedConnection(credentialStore);
+          if (!current()) return;
+          if (inspection.status === 'locked') {
+            // The refresh token sits behind a Face ID ACL. Keep every token
+            // item closed until unlock() passes the biometric check.
+            dispatch({ type: 'BOOTSTRAP_LOCKED', baseUrl: inspection.baseUrl });
+            return;
+          }
+          // A protection flag without a base URL is a partial wipe; drop the
+          // leftovers and continue to the provisioning path.
+          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+        }
+        const result = await bootstrapSavedConnection(credentialStore);
+        if (!current()) return;
         if (result.status === 'authenticated') {
           refreshingSavedSession = true;
           savedOwnerScope = `${result.connection.baseUrl}|${result.connection.username}`;
-          const mobileAuth = new MobileAuthApiClient(result.connection.baseUrl);
-          const refreshed = await mobileAuth.refresh(result.connection.refreshToken);
-          if (refreshed.account.username !== result.connection.username) {
-            throw new Error('Hermes refreshed a different account');
-          }
-          // Refresh tokens rotate on every successful exchange. Persist the
-          // successor before the handshake so a transient handshake failure
-          // never retries an already-consumed token and revokes this device.
-          await credentialMutations.run(() => credentialStore.saveSessionTokens(
-            refreshed.accessToken,
-            refreshed.refreshToken,
-            refreshed.expiresAt,
-          ));
-          if (await hasPendingRemoteAccountDeletion(savedOwnerScope)) {
-            const deletionClient = new HermesApiClient(
-              mobileAuth.baseUrl,
-              refreshed.accessToken,
-            );
-            await new IOSIntelligenceApi(deletionClient).deleteAccount(savedOwnerScope);
-            await localAccountCleanupSaga.markRemoteDone(savedOwnerScope);
-            await localAccountCleanupSaga.run(savedOwnerScope, localAccountCleanupTasks());
-            await credentialMutations.run(() => credentialStore.clear());
+          const adoption = await adoptSavedSession(result.connection, current);
+          if (adoption.outcome === 'deleted') {
             if (current()) {
               setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
               dispatch({
@@ -194,37 +191,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
             }
             return;
           }
-          const verifiedConnection = await persistVerifiedConnection(
-            {
-              baseUrl: mobileAuth.baseUrl,
-              username: refreshed.account.username,
-              accessToken: refreshed.accessToken,
-              refreshToken: refreshed.refreshToken,
-              expiresAt: refreshed.expiresAt,
-              deviceId: refreshed.deviceId,
-            },
-            {
-              store: {
-                async save(candidate) {
-                  await credentialMutations.run(() => credentialStore.save(candidate));
-                },
-              },
-              async verify(candidate) {
-                const client = new HermesApiClient(candidate.baseUrl, candidate.accessToken);
-                assertMobileHandshake(
-                  await client.request<unknown>('/api/mobile/v1/handshake'),
-                );
-              },
-            },
-          );
-          if (!current()) return;
-          if (hasNativeIOSContext) {
-            await HermesIOSContext.activateOwnerScope(
-              `${verifiedConnection.baseUrl}|${verifiedConnection.username}`,
-            );
-          }
-          if (current()) {
-            dispatch({ type: 'AUTHENTICATED', connection: verifiedConnection });
+          if (adoption.outcome === 'authenticated' && current()) {
+            dispatch({ type: 'AUTHENTICATED', connection: adoption.connection });
           }
           return;
         }
@@ -290,7 +258,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
             type: 'BOOTSTRAP_EMPTY',
             mode: 'login',
             error: invalidatesSavedSession
-              ? SESSION_EXPIRED_ERROR
+              ? invalidatedSessionError(error)
               : CONNECTION_ERROR,
           });
         }
@@ -413,6 +381,138 @@ export function AuthProvider({ children }: PropsWithChildren) {
     },
     [persistSession, state],
   );
+
+  const unlock = useCallback(async () => {
+    if (state.status !== 'locked' || state.busy) return;
+    const failedAttempts = state.failedAttempts;
+    const operationGeneration = authLifecycle.current.beginOperation();
+    if (operationGeneration === null) return;
+    dispatch({ type: 'UNLOCK_STARTED' });
+    const currentOperation = () => authLifecycle.current.isCurrent(operationGeneration);
+    let refreshingSavedSession = false;
+    let savedOwnerScope = '';
+    try {
+      // The Face ID prompt fires inside this read: the Keychain releases the
+      // refresh token only after the biometric check passes.
+      const result = await bootstrapSavedConnection(credentialStore);
+      if (!currentOperation()) return;
+      if (result.status !== 'authenticated') {
+        const failure = result.status === 'locked' ? result.failure : undefined;
+        if (failure === 'cancelled') {
+          dispatch({
+            type: 'UNLOCK_FAILED',
+            error: UNLOCK_CANCELLED_ERROR,
+            countAttempt: false,
+          });
+          return;
+        }
+        if (failure === 'authentication_failed') {
+          // The OS prompt already allowed its own retries; count one
+          // app-level attempt and drop the saved session once the budget
+          // is spent so a stranger cannot keep probing the biometric.
+          if (failedAttempts + 1 >= MAX_FACE_ID_ATTEMPTS) {
+            await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+          }
+          if (currentOperation()) {
+            dispatch({
+              type: 'UNLOCK_FAILED',
+              error: UNLOCK_FAILED_ERROR,
+              fallbackError: UNLOCK_LOCKOUT_ERROR,
+            });
+          }
+          return;
+        }
+        // Missing items or a biometry re-enrolment invalidated the token;
+        // the saved session can never unlock, so fall back to password login.
+        await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+        if (currentOperation()) {
+          dispatch({
+            type: 'UNLOCK_FAILED',
+            error: UNLOCK_UNAVAILABLE_ERROR,
+            fallbackImmediately: true,
+          });
+        }
+        return;
+      }
+      refreshingSavedSession = true;
+      savedOwnerScope = `${result.connection.baseUrl}|${result.connection.username}`;
+      const adoption = await adoptSavedSession(result.connection, currentOperation);
+      if (adoption.outcome === 'deleted') {
+        if (currentOperation()) {
+          setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
+          dispatch({
+            type: 'BOOTSTRAP_EMPTY',
+            mode: 'login',
+            setupTokenRequired: false,
+          });
+        }
+        return;
+      }
+      if (adoption.outcome === 'authenticated' && currentOperation()) {
+        dispatch({ type: 'AUTHENTICATED', connection: adoption.connection });
+      }
+    } catch (error) {
+      const invalidatesSavedSession = savedSessionFailureInvalidatesCredentials(error);
+      if (
+        refreshingSavedSession
+        && invalidatesSavedSession
+        && savedOwnerScope
+        && await hasPendingRemoteAccountDeletion(savedOwnerScope)
+      ) {
+        // Same terminal signal as the cold-start path: a committed server
+        // deletion revoked this refresh token, so finish the local wipe.
+        await localAccountCleanupSaga.markRemoteDone(savedOwnerScope).catch(() => undefined);
+        await localAccountCleanupSaga
+          .run(savedOwnerScope, localAccountCleanupTasks())
+          .catch(() => undefined);
+        await credentialMutations.run(() => credentialStore.clear()).catch(() => undefined);
+        if (currentOperation()) {
+          setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
+          dispatch({
+            type: 'BOOTSTRAP_EMPTY',
+            mode: 'login',
+            setupTokenRequired: false,
+          });
+        }
+        return;
+      }
+      if (invalidatesSavedSession) {
+        await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+        if (currentOperation()) {
+          dispatch({
+            type: 'UNLOCK_FAILED',
+            error: invalidatedSessionError(error),
+            fallbackImmediately: true,
+          });
+        }
+        return;
+      }
+      // Transient network failure: stay locked without spending an attempt.
+      if (currentOperation()) {
+        dispatch({
+          type: 'UNLOCK_FAILED',
+          error: CONNECTION_ERROR,
+          countAttempt: false,
+        });
+      }
+    } finally {
+      authLifecycle.current.finishOperation(operationGeneration);
+    }
+  }, [state]);
+
+  const revealRememberedPassword = useCallback(async () => {
+    if (!rememberedLogin.enabled) return null;
+    try {
+      // Face ID gates this read; it must only run from an explicit user action.
+      const saved = await credentialStore.readRememberedLogin();
+      if (!saved.enabled || !saved.password) return null;
+      setRememberedLogin(saved);
+      return saved.password;
+    } catch {
+      // Cancelled or biometrics unavailable — the user types the password.
+      return null;
+    }
+  }, [rememberedLogin.enabled]);
 
   const register = useCallback(async (
     email: string,
@@ -689,8 +789,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
       rememberedLogin,
       registrationOpen,
       authenticate,
+      unlock,
       register,
       requestRegistrationCode,
+      revealRememberedPassword,
       rememberDeviceId,
       logout,
       deleteAccount,
@@ -705,7 +807,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
       registrationOpen,
       rememberDeviceId,
       requestRegistrationCode,
+      revealRememberedPassword,
       state,
+      unlock,
     ],
   );
 
@@ -736,6 +840,80 @@ async function hasPendingRemoteAccountDeletion(ownerScope: string): Promise<bool
     .some((record) => record.owner.toLowerCase() === normalized && !record.remoteDone);
 }
 
+type SavedSessionAdoption =
+  | { outcome: 'authenticated'; connection: SavedConnection }
+  /** A pending remote account deletion completed; the saved session is gone. */
+  | { outcome: 'deleted' }
+  /** The auth generation changed mid-flight; the caller must do nothing. */
+  | { outcome: 'stale' };
+
+/**
+ * Turns a saved connection into a live one: rotate the refresh token, finish
+ * any pending account deletion, verify the handshake, persist, and activate
+ * the native owner scope. Shared by the non-interactive cold start and the
+ * Face ID unlock path so both keep identical rotation/deletion semantics.
+ */
+async function adoptSavedSession(
+  saved: SavedConnection,
+  isCurrent: () => boolean,
+): Promise<SavedSessionAdoption> {
+  const savedOwnerScope = `${saved.baseUrl}|${saved.username}`;
+  const mobileAuth = new MobileAuthApiClient(saved.baseUrl);
+  const refreshed = await mobileAuth.refresh(saved.refreshToken);
+  if (refreshed.account.username !== saved.username) {
+    throw new Error('Hermes refreshed a different account');
+  }
+  // Refresh tokens rotate on every successful exchange. Persist the
+  // successor before the handshake so a transient handshake failure
+  // never retries an already-consumed token and revokes this device.
+  await credentialMutations.run(() => credentialStore.saveSessionTokens(
+    refreshed.accessToken,
+    refreshed.refreshToken,
+    refreshed.expiresAt,
+  ));
+  if (await hasPendingRemoteAccountDeletion(savedOwnerScope)) {
+    const deletionClient = new HermesApiClient(
+      mobileAuth.baseUrl,
+      refreshed.accessToken,
+    );
+    await new IOSIntelligenceApi(deletionClient).deleteAccount(savedOwnerScope);
+    await localAccountCleanupSaga.markRemoteDone(savedOwnerScope);
+    await localAccountCleanupSaga.run(savedOwnerScope, localAccountCleanupTasks());
+    await credentialMutations.run(() => credentialStore.clear());
+    return { outcome: 'deleted' };
+  }
+  const verifiedConnection = await persistVerifiedConnection(
+    {
+      baseUrl: mobileAuth.baseUrl,
+      username: refreshed.account.username,
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAt: refreshed.expiresAt,
+      deviceId: refreshed.deviceId,
+    },
+    {
+      store: {
+        async save(candidate) {
+          await credentialMutations.run(() => credentialStore.save(candidate));
+        },
+      },
+      async verify(candidate) {
+        const client = new HermesApiClient(candidate.baseUrl, candidate.accessToken);
+        assertMobileHandshake(
+          await client.request<unknown>('/api/mobile/v1/handshake'),
+        );
+      },
+    },
+  );
+  if (!isCurrent()) return { outcome: 'stale' };
+  if (hasNativeIOSContext) {
+    await HermesIOSContext.activateOwnerScope(
+      `${verifiedConnection.baseUrl}|${verifiedConnection.username}`,
+    );
+  }
+  return { outcome: 'authenticated', connection: verifiedConnection };
+}
+
 async function unregisterApnsBeforeLogout(
   client: HermesApiClient,
   rawDeviceId = '',
@@ -757,6 +935,14 @@ async function unregisterApnsBeforeLogout(
   } finally {
     abortController.abort();
   }
+}
+
+function invalidatedSessionError(error: unknown): string {
+  // A cleartext http:// base URL saved before the transport hardening can
+  // never restore; say why instead of claiming the login expired.
+  return savedSessionFailureIsCleartextBaseUrl(error)
+    ? CLEARTEXT_BASEURL_ERROR
+    : SESSION_EXPIRED_ERROR;
 }
 
 function authenticationErrorMessage(error: unknown): string {

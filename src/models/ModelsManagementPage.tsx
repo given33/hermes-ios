@@ -5,23 +5,31 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-react-native';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   StyleSheet,
   View,
 } from 'react-native';
+import Reanimated, {
+  Easing,
+  FadeIn,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
-import {
-  HermesCloudApi,
-  type CustomModelConfiguration,
-  type CustomModelConnectionResult,
+import type {
+  CustomModelConfiguration,
+  CustomModelConnectionResult,
 } from '../api/HermesCloudApi';
+import { hermesCloudApiFor } from '../api/hermes-api-registry';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
 import { ScreenState } from '../components/ui/ScreenState';
+import { MOTION, useMotion } from '../design/motion';
 import { useTheme } from '../design/ThemeProvider';
 import {
   PreviewBadge,
@@ -29,7 +37,7 @@ import {
   PreviewPage,
   PreviewSegmented,
   PreviewText,
-} from '../preview/PreviewPrimitives';
+} from '../studio/PreviewPrimitives';
 
 interface ModelsManagementPageProps {
   client: HermesApiClient;
@@ -51,7 +59,8 @@ export function ModelsManagementPage({
   profile,
 }: ModelsManagementPageProps) {
   const { tokens } = useTheme();
-  const api = useMemo(() => new HermesCloudApi(client), [client]);
+  const motion = useMotion();
+  const api = useMemo(() => hermesCloudApiFor(client), [client]);
   const chinese = locale === 'zh';
   const [apiKey, setApiKey] = useState('');
   const [apiKeyPreview, setApiKeyPreview] = useState('');
@@ -64,6 +73,19 @@ export function ModelsManagementPage({
   const [model, setModel] = useState('');
   const [operation, setOperation] = useState<ModelOperationState>(null);
   const [reasoningEffort, setReasoningEffort] = useState<CustomModelConfiguration['reasoningEffort']>('medium');
+  // Disclosure chevron rotates with the shared control timing instead of the
+  // previous instant transform swap; withTiming retargets mid-flight, so fast
+  // taps stay interruptible, and Reduce Motion collapses it to a snap.
+  const chevronTurns = useSharedValue(0);
+  useEffect(() => {
+    chevronTurns.value = withTiming(detectedExpanded ? 180 : 0, {
+      duration: motion.duration(MOTION.duration.control),
+      easing: Easing.bezier(...MOTION.easing.standard),
+    });
+  }, [chevronTurns, detectedExpanded, motion]);
+  const chevronStyle = useAnimatedStyle(() => ({
+    transform: [{ rotate: `${chevronTurns.value}deg` }],
+  }));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -98,6 +120,13 @@ export function ModelsManagementPage({
     setDetectedExpanded(false);
     setDetectedModels([]);
   };
+
+  // Stable handler so the memoized detected-model rows keep identical props
+  // while unrelated form fields re-render the page on every keystroke.
+  const selectDetectedModel = useCallback((entry: string) => {
+    setModel(entry);
+    setDetectedExpanded(false);
+  }, []);
 
   const discover = async () => {
     setOperation({
@@ -181,7 +210,11 @@ export function ModelsManagementPage({
   return (
     <PreviewPage title={chinese ? '模型' : 'Models'}>
       <PreviewCard title={chinese ? '当前模型' : 'Current model'}>
-        <View style={styles.fields}>
+        {/* Loaded form fades in over the loading state instead of popping. */}
+        <Reanimated.View
+          entering={motion.animate(FadeIn.duration(MOTION.duration.transition))}
+          style={styles.fields}
+        >
           <PreviewText variant="label">Base URL</PreviewText>
           <NativeInput
             autoCapitalize="none"
@@ -224,11 +257,9 @@ export function ModelsManagementPage({
                 {detectedModels.length ? (
                   <>
                     <PreviewBadge tone="outline">{String(detectedModels.length)}</PreviewBadge>
-                    <ChevronDown
-                      color={tokens.colors.textSecondary}
-                      size={15}
-                      style={{ transform: [{ rotate: detectedExpanded ? '180deg' : '0deg' }] }}
-                    />
+                    <Reanimated.View style={chevronStyle}>
+                      <ChevronDown color={tokens.colors.textSecondary} size={15} />
+                    </Reanimated.View>
                   </>
                 ) : null}
               </IOSPressable>
@@ -243,21 +274,23 @@ export function ModelsManagementPage({
                 </IOSPressable>
               ) : null}
             </View>
-            {detectedExpanded ? detectedModels.map((entry) => (
-              <IOSPressable
-                key={entry}
-                onPress={() => {
-                  setModel(entry);
-                  setDetectedExpanded(false);
-                }}
-                style={[styles.detectedRow, { borderTopColor: tokens.colors.border }]}
+            {detectedExpanded ? (
+              <Reanimated.View
+                entering={motion.animate(FadeIn.duration(MOTION.duration.transition))}
               >
-                {model === entry
-                  ? <CheckCircle2 color={tokens.colors.success} size={16} />
-                  : <View style={[styles.emptyCircle, { borderColor: tokens.colors.textTertiary }]} />}
-                <PreviewText variant="mono">{entry}</PreviewText>
-              </IOSPressable>
-            )) : null}
+                {detectedModels.map((entry) => (
+                  <DetectedModelRow
+                    borderColor={tokens.colors.border}
+                    emptyColor={tokens.colors.textTertiary}
+                    entry={entry}
+                    key={entry}
+                    onSelect={selectDetectedModel}
+                    selected={model === entry}
+                    selectedColor={tokens.colors.success}
+                  />
+                ))}
+              </Reanimated.View>
+            ) : null}
           </View>
 
           {!detectedModels.length ? (
@@ -302,7 +335,8 @@ export function ModelsManagementPage({
             </NativeButton>
           </View>
           {operation ? (
-            <View
+            <Reanimated.View
+              entering={motion.animate(FadeIn.duration(MOTION.duration.control))}
               style={[
                 styles.operation,
                 {
@@ -321,13 +355,44 @@ export function ModelsManagementPage({
                   ? <CheckCircle2 color={tokens.colors.success} size={17} />
                   : <AlertCircle color={tokens.colors.destructive} size={17} />}
               <PreviewText>{operation.message}</PreviewText>
-            </View>
+            </Reanimated.View>
           ) : null}
-        </View>
+        </Reanimated.View>
       </PreviewCard>
     </PreviewPage>
   );
 }
+
+// Memoized row: model catalogs can run to hundreds of entries, and every
+// keystroke in the surrounding form re-renders this page. With a stable
+// onSelect the untouched rows bail out in memo() instead of re-rendering.
+const DetectedModelRow = memo(function DetectedModelRow({
+  borderColor,
+  emptyColor,
+  entry,
+  onSelect,
+  selected,
+  selectedColor,
+}: {
+  borderColor: string;
+  emptyColor: string;
+  entry: string;
+  onSelect(entry: string): void;
+  selected: boolean;
+  selectedColor: string;
+}) {
+  return (
+    <IOSPressable
+      onPress={() => onSelect(entry)}
+      style={[styles.detectedRow, { borderTopColor: borderColor }]}
+    >
+      {selected
+        ? <CheckCircle2 color={selectedColor} size={16} />
+        : <View style={[styles.emptyCircle, { borderColor: emptyColor }]} />}
+      <PreviewText variant="mono">{entry}</PreviewText>
+    </IOSPressable>
+  );
+});
 
 function modelConnectionFailure(
   label: string,

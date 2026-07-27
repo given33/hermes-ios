@@ -31,6 +31,21 @@ export interface IOSContextCapabilities {
   liveActivity: boolean;
   backgroundTasks: boolean;
   apns: boolean;
+  photos?: boolean;
+  voiceInput?: boolean;
+  voiceOutput?: boolean;
+}
+
+export interface IOSVoiceTranscript {
+  isFinal: boolean;
+  text: string;
+  timestamp: number;
+}
+
+export interface IOSVoiceState {
+  error?: string;
+  state: 'failed' | 'idle' | 'interrupted' | 'listening' | 'speaking';
+  timestamp: number;
 }
 
 export interface IOSCoordinate {
@@ -124,6 +139,14 @@ export interface IOSContextNativeModule {
     eventName: 'onBackgroundWake',
     listener: (event: { reason?: string; timestamp?: number; wakeId?: string }) => void,
   ): { remove(): void };
+  addListener(
+    eventName: 'onVoiceTranscript',
+    listener: (event: IOSVoiceTranscript) => void,
+  ): { remove(): void };
+  addListener(
+    eventName: 'onVoiceState',
+    listener: (event: IOSVoiceState) => void,
+  ): { remove(): void };
   getCapabilities(): Promise<IOSContextCapabilities>;
   getNativeViewContract?(): {
     version: number;
@@ -146,15 +169,22 @@ export interface IOSContextNativeModule {
   getPowerSnapshot(): Promise<IOSPowerSnapshot>;
   getDeviceSnapshot(): Promise<Record<string, unknown>>;
   openDeviceSettings(): Promise<boolean>;
+  getVoiceAuthorization(): Promise<Record<'microphone' | 'speech', IOSAuthorizationState>>;
+  requestVoiceAuthorization(): Promise<Record<'microphone' | 'speech', IOSAuthorizationState>>;
+  startVoiceRecognition(locale?: string | null): Promise<boolean>;
+  stopVoiceRecognition(): Promise<string>;
+  speakText(text: string, locale?: string | null, rate?: number | null): Promise<boolean>;
+  stopSpeaking(): Promise<boolean>;
+  getVoiceState(): Promise<{ recording: boolean; speaking: boolean }>;
   getInstallationIdentifier(): Promise<string>;
   enqueueContextEvents(events: readonly Record<string, unknown>[]): Promise<number>;
-  readPendingEvents(limit: number, scope?: string): Promise<IOSContextEvent[]>;
+  readPendingEvents(limit: number, scope: string): Promise<IOSContextEvent[]>;
   readPendingEventsByKind(
     limit: number,
     kinds: readonly string[],
-    scope?: string,
+    scope: string,
   ): Promise<IOSContextEvent[]>;
-  acknowledgeEvents(ids: readonly string[], cursor?: number, scope?: string): Promise<number>;
+  acknowledgeEvents(ids: readonly string[], cursor: number | undefined, scope: string): Promise<number>;
   setOwnerScope(scope: string): Promise<void>;
   setPermissionCollectionReady?(scope: string, ready: boolean): Promise<void>;
   activateOwnerScope(scope: string): Promise<number>;
@@ -242,6 +272,7 @@ export interface IOSContextNativeModule {
   ): Promise<string>;
   deleteDecryptedAttachment(uri: string): Promise<boolean>;
   deleteAttachmentEncryptionKey(owner: string): Promise<boolean>;
+  getAttachmentOutboxRootUri?(): string;
 }
 
 const nativeModule = requireOptionalNativeModule<IOSContextNativeModule>('HermesIOSContext');
@@ -289,13 +320,26 @@ export const HermesIOSContext = {
   getPowerSnapshot: () => requireContextModule().getPowerSnapshot(),
   getDeviceSnapshot: () => requireContextModule().getDeviceSnapshot(),
   openDeviceSettings: () => requireContextModule().openDeviceSettings(),
+  getVoiceAuthorization: () => requireContextModule().getVoiceAuthorization(),
+  requestVoiceAuthorization: () => requireContextModule().requestVoiceAuthorization(),
+  startVoiceRecognition: (locale?: string | null) =>
+    requireContextModule().startVoiceRecognition(locale),
+  stopVoiceRecognition: () => requireContextModule().stopVoiceRecognition(),
+  speakText: (text: string, locale?: string | null, rate?: number | null) =>
+    requireContextModule().speakText(text, locale, rate),
+  stopSpeaking: () => requireContextModule().stopSpeaking(),
+  getVoiceState: () => requireContextModule().getVoiceState(),
   getInstallationIdentifier: () => requireContextModule().getInstallationIdentifier(),
   enqueueContextEvents: (events: readonly Record<string, unknown>[]) =>
     requireContextModule().enqueueContextEvents(events),
-  readPendingEvents: (limit = 100, scope?: string) => requireContextModule().readPendingEvents(limit, scope),
-  readPendingEventsByKind: (limit = 100, kinds: readonly string[] = [], scope?: string) =>
+  // The native queue rejects reads and acknowledgements whose scope is not
+  // the active owner scope, so every caller must say which account it is
+  // draining rather than implicitly touching all of them.
+  readPendingEvents: (limit: number, scope: string) =>
+    requireContextModule().readPendingEvents(limit, scope),
+  readPendingEventsByKind: (limit: number, kinds: readonly string[], scope: string) =>
     requireContextModule().readPendingEventsByKind(limit, kinds, scope),
-  acknowledgeEvents: (ids: readonly string[], cursor?: number, scope?: string) =>
+  acknowledgeEvents: (ids: readonly string[], cursor: number | undefined, scope: string) =>
     requireContextModule().acknowledgeEvents(ids, cursor, scope),
   setOwnerScope: (scope: string) => requireContextModule().setOwnerScope(scope),
   setPermissionCollectionReady: (scope: string, ready: boolean) => {
@@ -374,6 +418,12 @@ export const HermesIOSContext = {
     requireContextModule().deleteDecryptedAttachment(uri),
   deleteAttachmentEncryptionKey: (owner: string) =>
     requireContextModule().deleteAttachmentEncryptionKey(owner),
+  getAttachmentOutboxRootUri: (): string | null => {
+    const module = requireContextModule();
+    return typeof module.getAttachmentOutboxRootUri === 'function'
+      ? module.getAttachmentOutboxRootUri()
+      : null;
+  },
   subscribeLocation: (listener: (event: IOSLocationSnapshot) => void) =>
     requireContextModule().addListener('onLocation', listener),
   subscribeMotion: (listener: (event: IOSMotionSnapshot) => void) =>
@@ -384,6 +434,10 @@ export const HermesIOSContext = {
     listener: (event: { reason?: string; timestamp?: number; wakeId?: string }) => void,
   ) =>
     requireContextModule().addListener('onBackgroundWake', listener),
+  subscribeVoiceTranscript: (listener: (event: IOSVoiceTranscript) => void) =>
+    requireContextModule().addListener('onVoiceTranscript', listener),
+  subscribeVoiceState: (listener: (event: IOSVoiceState) => void) =>
+    requireContextModule().addListener('onVoiceState', listener),
 };
 
 export interface IOSTodayPlace {

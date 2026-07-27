@@ -16,14 +16,9 @@ const productionChatSimulator = resolve(
   'src/preview/production-chat-simulator.ts',
 );
 const previewRoot = resolve(projectRoot, 'src/preview');
-const productionPreviewAllowlist = new Set(
+const studioRoot = resolve(projectRoot, 'src/studio');
+const productionPreviewReplacements = new Set(
   [
-    'FrontendPreviewApp.tsx',
-    'PreviewChatPage.tsx',
-    'PreviewMemoryPage.tsx',
-    'PreviewPrimitives.tsx',
-    'frontend-preview-contract.ts',
-    'in-flight-action-gate.ts',
     'production-fixtures.ts',
     'production-chat-simulator.ts',
     'production-route-stubs.tsx',
@@ -35,6 +30,21 @@ const importPattern = /(?:import|export)\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["
 
 for (const required of [entry, productionFixtures, productionRoutes, productionLocalization, productionChatSimulator]) {
   if (!existsSync(required)) fail(`required production source is missing: ${relative(projectRoot, required)}`);
+}
+for (const requiredStudioModule of [
+  'FrontendPreviewApp.tsx',
+  'PreviewChatPage.tsx',
+  'PreviewMemoryPage.tsx',
+  'PreviewPrimitives.tsx',
+]) {
+  const expected = resolve(studioRoot, requiredStudioModule);
+  if (!existsSync(expected)) {
+    fail(`required Studio product source is missing: ${relative(projectRoot, expected)}`);
+  }
+  const legacy = resolve(previewRoot, requiredStudioModule);
+  if (existsSync(legacy)) {
+    fail(`product source moved back into preview: ${relative(projectRoot, legacy)}`);
+  }
 }
 const metro = readFileSync(resolve(projectRoot, 'metro.config.js'), 'utf8');
 for (const marker of [
@@ -63,7 +73,7 @@ while (pending.length) {
     const target = resolveProductionImport(current, specifier);
     if (!target) continue;
     const normalized = relative(projectRoot, target).replaceAll('\\', '/');
-    if (isWithin(previewRoot, target) && !productionPreviewAllowlist.has(target)) {
+    if (isWithin(previewRoot, target) && !productionPreviewReplacements.has(target)) {
       fail(`unapproved preview module is reachable from production entry: ${normalized}`);
     }
     if (
@@ -77,7 +87,7 @@ while (pending.length) {
   }
 }
 
-console.log(`Hermes production source graph is fixture-free (${visited.size} modules checked).`);
+console.log(`Hermes Studio production source graph is preview-fixture-free (${visited.size} modules checked).`);
 
 function isWithin(root, candidate) {
   const pathFromRoot = relative(root, candidate);

@@ -15,6 +15,9 @@ final class HermesAttachmentVault {
     // Plaintext upload files are deliberately ephemeral. Remove anything left
     // by a process kill before accepting work in this app process.
     try? FileManager.default.removeItem(at: plaintextCacheRoot)
+    // A failed migration is safe to retry on the next launch: the legacy
+    // Documents root stays an accepted encrypt source until it drains.
+    try? migrateLegacyOutbox()
   }
 
   func encrypt(owner: String, sourceURI: String, targetURI: String) throws -> [String: Any] {
@@ -26,6 +29,7 @@ final class HermesAttachmentVault {
     }
     let source = try fileURL(sourceURI)
     let target = try fileURL(targetURI)
+    try requireAllowedSource(source)
     try requireDescendant(target, of: encryptedOutboxRoot)
     guard source.standardizedFileURL != target.standardizedFileURL else {
       throw HermesAttachmentVaultError.invalidPath
@@ -106,11 +110,8 @@ final class HermesAttachmentVault {
 
   @discardableResult
   func deleteDecryptedFile(uri: String) throws -> Bool {
-    let target = try fileURL(uri).standardizedFileURL
-    let rootPath = plaintextCacheRoot.standardizedFileURL.path + "/"
-    guard target.path.hasPrefix(rootPath) else {
-      throw HermesAttachmentVaultError.invalidPath
-    }
+    let target = try fileURL(uri)
+    try requireDescendant(target, of: plaintextCacheRoot)
     guard FileManager.default.fileExists(atPath: target.path) else { return false }
     try FileManager.default.removeItem(at: target)
     return true
@@ -127,12 +128,14 @@ final class HermesAttachmentVault {
     if FileManager.default.fileExists(atPath: ownerPlaintextCache.path) {
       try FileManager.default.removeItem(at: ownerPlaintextCache)
     }
-    let ownerEncryptedOutbox = encryptedOutboxRoot.appendingPathComponent(
-      "owner-\(account)",
-      isDirectory: true
-    )
-    if FileManager.default.fileExists(atPath: ownerEncryptedOutbox.path) {
-      try FileManager.default.removeItem(at: ownerEncryptedOutbox)
+    for outboxRoot in [encryptedOutboxRoot, legacyEncryptedOutboxRoot] {
+      let ownerEncryptedOutbox = outboxRoot.appendingPathComponent(
+        "owner-\(account)",
+        isDirectory: true
+      )
+      if FileManager.default.fileExists(atPath: ownerEncryptedOutbox.path) {
+        try FileManager.default.removeItem(at: ownerEncryptedOutbox)
+      }
     }
     keychainLock.lock()
     defer { keychainLock.unlock() }
@@ -162,8 +165,69 @@ final class HermesAttachmentVault {
   }
 
   private var encryptedOutboxRoot: URL {
+    // Application Support is never listed by UIFileSharingEnabled, unlike
+    // Documents, where the Files app would show (and let the user delete or
+    // copy) every encrypted envelope in the outbox.
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+      .appendingPathComponent("hermes-outbox", isDirectory: true)
+  }
+
+  private var legacyEncryptedOutboxRoot: URL {
     FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
       .appendingPathComponent("hermes-outbox", isDirectory: true)
+  }
+
+  var outboxRootURI: String {
+    encryptedOutboxRoot.absoluteString
+  }
+
+  // Attachment sources may only come from locations the app itself stages:
+  // picker caches, the temporary directory, and outbox roots holding files
+  // from builds that predate encryption. Encrypt-and-return on arbitrary
+  // container paths would let hijacked JS exfiltrate any local file.
+  private func requireAllowedSource(_ source: URL) throws {
+    let allowedRoots = [
+      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0],
+      URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
+      encryptedOutboxRoot,
+      legacyEncryptedOutboxRoot,
+    ]
+    guard allowedRoots.contains(where: { isDescendant(source, of: $0) }) else {
+      throw HermesAttachmentVaultError.invalidPath
+    }
+  }
+
+  // Builds before this one kept the encrypted outbox under Documents. Move it
+  // once; entries already present at the new root were written by newer code
+  // and win, merging per owner and per request directory.
+  private func migrateLegacyOutbox() throws {
+    let fileManager = FileManager.default
+    guard fileManager.fileExists(atPath: legacyEncryptedOutboxRoot.path) else { return }
+    try fileManager.createDirectory(
+      at: encryptedOutboxRoot.deletingLastPathComponent(),
+      withIntermediateDirectories: true,
+      attributes: [.protectionKey: FileProtectionType.complete]
+    )
+    try mergeLegacyEntry(from: legacyEncryptedOutboxRoot, to: encryptedOutboxRoot, depth: 2)
+  }
+
+  private func mergeLegacyEntry(from source: URL, to target: URL, depth: Int) throws {
+    let fileManager = FileManager.default
+    guard fileManager.fileExists(atPath: target.path) else {
+      try fileManager.moveItem(at: source, to: target)
+      return
+    }
+    guard depth > 0 else { return }
+    for name in try fileManager.contentsOfDirectory(atPath: source.path) {
+      try? mergeLegacyEntry(
+        from: source.appendingPathComponent(name),
+        to: target.appendingPathComponent(name),
+        depth: depth - 1
+      )
+    }
+    if try fileManager.contentsOfDirectory(atPath: source.path).isEmpty {
+      try fileManager.removeItem(at: source)
+    }
   }
 
   private func normalizeOwner(_ owner: String) throws -> String {
@@ -269,9 +333,19 @@ final class HermesAttachmentVault {
     return url.standardizedFileURL
   }
 
+  private func isDescendant(_ candidate: URL, of root: URL) -> Bool {
+    // Resolve symlinks on both sides before comparing: iOS containers live
+    // under /private/var while callers commonly hand over /var/... URIs, and
+    // a symlink planted inside the tree must not smuggle a path outside it.
+    // Component comparison also avoids "/rootX" matching a "/root" prefix.
+    let rootComponents = root.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+    let candidateComponents = candidate.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+    return candidateComponents.count > rootComponents.count
+      && Array(candidateComponents.prefix(rootComponents.count)) == rootComponents
+  }
+
   private func requireDescendant(_ candidate: URL, of root: URL) throws {
-    let rootPath = root.standardizedFileURL.path + "/"
-    guard candidate.standardizedFileURL.path.hasPrefix(rootPath) else {
+    guard isDescendant(candidate, of: root) else {
       throw HermesAttachmentVaultError.invalidPath
     }
   }

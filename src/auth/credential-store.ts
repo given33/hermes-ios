@@ -3,7 +3,10 @@ import {
   ACCESS_EXPIRES_AT_STORAGE_KEY,
   ACCESS_TOKEN_STORAGE_KEY,
   BASE_URL_STORAGE_KEY,
+  BIOMETRIC_CREDENTIAL_PROTECTION,
+  CREDENTIAL_PROTECTION_STORAGE_KEY,
   CREDENTIAL_STORAGE_KEYS,
+  DEVICE_CREDENTIAL_PROTECTION,
   DEVICE_ID_STORAGE_KEY,
   LEGACY_ACCESS_EXPIRES_AT_STORAGE_KEY,
   LEGACY_ACCESS_TOKEN_STORAGE_KEY,
@@ -35,7 +38,20 @@ export interface SecureStoreAdapter {
   getItemAsync(key: string, options?: SecureStoreOptions): Promise<string | null>;
   setItemAsync(key: string, value: string, options?: SecureStoreOptions): Promise<void>;
   deleteItemAsync(key: string, options?: SecureStoreOptions): Promise<void>;
+  /** expo-secure-store capability probe; absent on the web session adapter. */
+  canUseBiometricAuthentication?(): boolean;
 }
+
+// expo-secure-store shows these strings in the Face ID / Touch ID system
+// prompt when a biometric-protected item is opened.
+const SESSION_UNLOCK_OPTIONS: SecureStoreOptions = {
+  requireAuthentication: true,
+  authenticationPrompt: '使用 Face ID 解锁 Hermes 连接',
+};
+const REMEMBERED_PASSWORD_OPTIONS: SecureStoreOptions = {
+  requireAuthentication: true,
+  authenticationPrompt: '使用 Face ID 读取已保存的密码',
+};
 
 export interface CredentialWriter {
   save(connection: SavedConnection): Promise<void>;
@@ -85,13 +101,32 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
   }
 
   async readRefreshToken(): Promise<string | null> {
-    const currentKey = await this.secureStore.getItemAsync(
-      REFRESH_TOKEN_POINTER_STORAGE_KEY,
-    );
+    const [currentKey, protection] = await Promise.all([
+      this.secureStore.getItemAsync(REFRESH_TOKEN_POINTER_STORAGE_KEY),
+      this.secureStore.getItemAsync(CREDENTIAL_PROTECTION_STORAGE_KEY),
+    ]);
+    // A biometric-protected item triggers the Face ID prompt on read; the
+    // options only localize that prompt. Device-protected items stay
+    // non-interactive so pre-biometric installs keep restoring silently.
+    const options = protection === BIOMETRIC_CREDENTIAL_PROTECTION
+      ? SESSION_UNLOCK_OPTIONS
+      : undefined;
     if (isRefreshTokenKey(currentKey)) {
-      return this.secureStore.getItemAsync(currentKey);
+      return this.secureStore.getItemAsync(currentKey, options);
     }
-    return this.secureStore.getItemAsync(REFRESH_TOKEN_STORAGE_KEY);
+    return this.secureStore.getItemAsync(REFRESH_TOKEN_STORAGE_KEY, options);
+  }
+
+  /**
+   * True when the persisted refresh token carries a biometric ACL, read from
+   * the unprotected mode flag so cold start can decide to show the unlock
+   * screen without opening any protected item.
+   */
+  async sessionUnlockRequired(): Promise<boolean> {
+    const protection = await this.secureStore.getItemAsync(
+      CREDENTIAL_PROTECTION_STORAGE_KEY,
+    ).catch(() => null);
+    return protection === BIOMETRIC_CREDENTIAL_PROTECTION;
   }
 
   readUsername(): Promise<string | null> {
@@ -124,7 +159,12 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
         username: preference.username,
       };
     }
-    const password = await this.secureStore.getItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY);
+    // Biometric-protected item: this read triggers the Face ID / Touch ID
+    // prompt, so callers must only reach here from an explicit user action.
+    const password = await this.secureStore.getItemAsync(
+      REMEMBERED_PASSWORD_STORAGE_KEY,
+      REMEMBERED_PASSWORD_OPTIONS,
+    );
     const enabled = Boolean(password);
     return {
       enabled,
@@ -149,14 +189,38 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     if (!normalizedUsername || !password) {
       throw new Error('Invalid remembered Hermes login');
     }
-    await Promise.all([
-      this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, normalizedUsername),
-      this.secureStore.setItemAsync(REMEMBER_LOGIN_STORAGE_KEY, '1'),
-      this.secureStore.setItemAsync(
-        REMEMBERED_PASSWORD_STORAGE_KEY,
-        password,
-      ),
-    ]);
+    // The password is only ever persisted behind a Face ID / Touch ID ACL.
+    // Without enrolled biometrics the preference is rolled back and the
+    // failure surfaced instead of silently writing an unprotected copy.
+    if (this.secureStore.canUseBiometricAuthentication?.() !== true) {
+      await Promise.allSettled([
+        this.secureStore.setItemAsync(REMEMBER_LOGIN_STORAGE_KEY, '0'),
+        this.secureStore.deleteItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY),
+      ]);
+      throw new Error('Biometric protection unavailable for the remembered Hermes password');
+    }
+    // Delete first so an unprotected copy from an older build can never
+    // shadow the biometric item in the keychain search order.
+    await this.secureStore.deleteItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY).catch(() => undefined);
+    try {
+      await Promise.all([
+        this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, normalizedUsername),
+        this.secureStore.setItemAsync(REMEMBER_LOGIN_STORAGE_KEY, '1'),
+        this.secureStore.setItemAsync(
+          REMEMBERED_PASSWORD_STORAGE_KEY,
+          password,
+          REMEMBERED_PASSWORD_OPTIONS,
+        ),
+      ]);
+    } catch (error) {
+      // Enrolment changed between the capability probe and the write; roll
+      // the preference back rather than leaving a flag with no protected item.
+      await Promise.allSettled([
+        this.secureStore.setItemAsync(REMEMBER_LOGIN_STORAGE_KEY, '0'),
+        this.secureStore.deleteItemAsync(REMEMBERED_PASSWORD_STORAGE_KEY),
+      ]);
+      throw error;
+    }
   }
 
   readAccessToken(): Promise<string | null> {
@@ -179,9 +243,9 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     try {
       await this.secureStore.setItemAsync(BASE_URL_STORAGE_KEY, connection.baseUrl);
       await this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, connection.username);
-      // Session credentials stay in the Keychain, but are device-unlock
-      // protected instead of requiring a fresh biometric prompt on every app
-      // launch. The account password remains biometric-protected separately.
+      // The short-lived access token and session metadata stay device-unlock
+      // protected so foreground refreshes never prompt; only the long-lived
+      // refresh token written below carries a biometric ACL.
       await this.secureStore.deleteItemAsync(ACCESS_TOKEN_STORAGE_KEY).catch(() => undefined);
       await this.secureStore.setItemAsync(
         ACCESS_TOKEN_STORAGE_KEY,
@@ -197,13 +261,17 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
         await this.secureStore.deleteItemAsync(DEVICE_ID_STORAGE_KEY);
       }
       refreshTokenKey = createRefreshTokenKey();
-      await this.secureStore.setItemAsync(
+      const protection = await this.writeRefreshTokenItem(
         refreshTokenKey,
         connection.refreshToken,
       );
       await this.secureStore.setItemAsync(
         REFRESH_TOKEN_POINTER_STORAGE_KEY,
         refreshTokenKey,
+      );
+      await this.secureStore.setItemAsync(
+        CREDENTIAL_PROTECTION_STORAGE_KEY,
+        protection,
       );
       await this.secureStore.deleteItemAsync(REFRESH_TOKEN_STORAGE_KEY);
       await this.secureStore.setItemAsync(
@@ -236,13 +304,17 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     );
     const nextKey = createRefreshTokenKey();
     try {
-      await this.secureStore.setItemAsync(
+      const protection = await this.writeRefreshTokenItem(
         nextKey,
         normalizedRefreshToken,
       );
       await this.secureStore.setItemAsync(
         REFRESH_TOKEN_POINTER_STORAGE_KEY,
         nextKey,
+      );
+      await this.secureStore.setItemAsync(
+        CREDENTIAL_PROTECTION_STORAGE_KEY,
+        protection,
       );
       await this.secureStore.deleteItemAsync(ACCESS_TOKEN_STORAGE_KEY).catch(() => undefined);
       await this.secureStore.setItemAsync(
@@ -299,6 +371,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       ACCESS_TOKEN_STORAGE_KEY,
       REFRESH_TOKEN_STORAGE_KEY,
       REFRESH_TOKEN_POINTER_STORAGE_KEY,
+      CREDENTIAL_PROTECTION_STORAGE_KEY,
       ACCESS_EXPIRES_AT_STORAGE_KEY,
       DEVICE_ID_STORAGE_KEY,
       SESSION_STORAGE_VERSION_KEY,
@@ -326,6 +399,27 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     if (results.some(({ status }) => status === 'rejected')) {
       throw new Error('Unable to clear Hermes session');
     }
+  }
+
+  /**
+   * Writes a refresh-token item behind a Face ID / Touch ID ACL whenever the
+   * device can evaluate biometrics, falling back to a device-unlock item
+   * otherwise, and reports which protection was actually applied. Fresh
+   * random keys mean a protected item is never updated in place, and adding
+   * one never prompts — only the cold-start read does.
+   */
+  private async writeRefreshTokenItem(key: string, refreshToken: string): Promise<string> {
+    if (this.secureStore.canUseBiometricAuthentication?.()) {
+      try {
+        await this.secureStore.setItemAsync(key, refreshToken, SESSION_UNLOCK_OPTIONS);
+        return BIOMETRIC_CREDENTIAL_PROTECTION;
+      } catch {
+        // Biometric enrolment changed between the capability check and the
+        // write. Fall through to the device-unlock item so login still works.
+      }
+    }
+    await this.secureStore.setItemAsync(key, refreshToken);
+    return DEVICE_CREDENTIAL_PROTECTION;
   }
 
   private deleteAll(refreshTokenKey = ''): Promise<PromiseSettledResult<void>[]> {

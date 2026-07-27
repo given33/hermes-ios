@@ -49,9 +49,11 @@ final class HermesContextEventQueue {
   }
 
   func isCurrentOwnerScope(_ scope: String) -> Bool {
-    ioQueue.sync {
-      !scope.isEmpty && (loadRelayStateUnlocked()["ownerScope"] as? String) == scope
-    }
+    ioQueue.sync { isCurrentOwnerScopeUnlocked(scope) }
+  }
+
+  private func isCurrentOwnerScopeUnlocked(_ scope: String) -> Bool {
+    !scope.isEmpty && (loadRelayStateUnlocked()["ownerScope"] as? String) == scope
   }
 
   func enqueue(
@@ -146,12 +148,16 @@ final class HermesContextEventQueue {
     }
   }
 
-  func read(limit: Int, kinds: Set<String>? = nil, scope: String? = nil) -> [[String: Any]] {
+  // Reads and acknowledgements are strictly owner-scoped: the caller must
+  // present the currently active scope, and a stale or foreign scope drains
+  // nothing. Cross-scope maintenance only happens through the explicit
+  // deleteOwnerScope lifecycle path.
+  func read(limit: Int, kinds: Set<String>? = nil, scope: String) -> [[String: Any]] {
     ioQueue.sync {
       flushDeferredUnlocked()
-      guard limit > 0 else { return [] }
+      guard limit > 0, isCurrentOwnerScopeUnlocked(scope) else { return [] }
       let events = loadUnlocked().filter { event in
-        if let scope, (event["owner_scope"] as? String) != scope { return false }
+        guard (event["owner_scope"] as? String) == scope else { return false }
         guard let kinds else { return true }
         return kinds.contains(event["kind"] as? String ?? "")
       }
@@ -159,12 +165,13 @@ final class HermesContextEventQueue {
     }
   }
 
-  func acknowledge(ids: Set<String>, cursor: Int?, scope: String? = nil) -> Int {
+  func acknowledge(ids: Set<String>, cursor: Int?, scope: String) -> Int {
     ioQueue.sync {
       flushDeferredUnlocked()
+      guard isCurrentOwnerScopeUnlocked(scope) else { return 0 }
       let events = loadUnlocked()
       let remaining = events.filter { event in
-        if let scope, (event["owner_scope"] as? String) != scope { return true }
+        if (event["owner_scope"] as? String) != scope { return true }
         if let id = event["id"] as? String, ids.contains(id) { return false }
         if let cursor, let sequence = event["sequence"] as? Int, sequence <= cursor { return false }
         return true

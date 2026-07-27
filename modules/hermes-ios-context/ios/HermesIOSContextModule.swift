@@ -33,12 +33,14 @@ public final class HermesIOSContextModule: Module {
   private let screenTime = HermesScreenTimeService.shared
   private let liveActivity = HermesLiveActivityService.shared
   private let attachmentVault = HermesAttachmentVault.shared
+  private let voice = HermesVoiceService.shared
   private var relayWakeObserver: NSObjectProtocol?
 
   public func definition() -> ModuleDefinition {
     Name("HermesIOSContext")
     Events("onLocation", "onMotion", "onVisit")
     Events("onBackgroundWake", "onWatchMessage")
+    Events("onVoiceTranscript", "onVoiceState")
     lifecycleDefinitions()
     locationDefinitions()
     deviceDefinitions()
@@ -50,6 +52,7 @@ public final class HermesIOSContextModule: Module {
     screenTimeDefinitions()
     liveActivityDefinitions()
     attachmentVaultDefinitions()
+    voiceDefinitions()
     viewDefinitions()
   }
 
@@ -79,6 +82,13 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("deleteAttachmentEncryptionKey") { (owner: String) throws -> Bool in
       try self.attachmentVault.deleteKey(owner: owner)
+    }
+
+    // The vault owns the outbox location (Application Support, outside the
+    // UIFileSharingEnabled Documents tree); JS asks instead of guessing so
+    // both sides always agree on where envelopes belong.
+    Function("getAttachmentOutboxRootUri") { () -> String in
+      self.attachmentVault.outboxRootURI
     }
   }
 
@@ -116,6 +126,12 @@ public final class HermesIOSContextModule: Module {
       self.watch.onMessage = { [weak self] payload in
         self?.sendEvent("onWatchMessage", payload)
       }
+      self.voice.onTranscript = { [weak self] payload in
+        self?.sendEvent("onVoiceTranscript", payload)
+      }
+      self.voice.onState = { [weak self] payload in
+        self?.sendEvent("onVoiceState", payload)
+      }
     }
 
     OnDestroy {
@@ -127,6 +143,12 @@ public final class HermesIOSContextModule: Module {
       self.motion.onMotion = nil
       self.location.onVisit = nil
       self.watch.onMessage = nil
+      self.voice.onTranscript = nil
+      self.voice.onState = nil
+      Task { @MainActor in
+        _ = self.voice.stopRecognition()
+        _ = self.voice.stopSpeaking()
+      }
     }
   }
 
@@ -151,6 +173,9 @@ public final class HermesIOSContextModule: Module {
         "liveActivity": HermesLiveActivityService.isAvailable,
         "backgroundTasks": true,
         "apns": true,
+        "photos": true,
+        "voiceInput": true,
+        "voiceOutput": true,
       ]
     }.runOnQueue(.main)
 
@@ -189,6 +214,40 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("getLocationMode") { () -> String in
       self.location.mode.rawValue
+    }.runOnQueue(.main)
+  }
+
+  @ModuleDefinitionBuilder
+  private func voiceDefinitions() -> ModuleDefinition {
+    AsyncFunction("getVoiceAuthorization") { () -> [String: String] in
+      self.voice.authorizationSnapshot()
+    }.runOnQueue(.main)
+
+    AsyncFunction("requestVoiceAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await self.voice.requestAuthorization() }
+    }.runOnQueue(.main)
+
+    AsyncFunction("startVoiceRecognition") { (locale: String?) throws -> Bool in
+      try self.voice.startRecognition(localeIdentifier: locale)
+    }.runOnQueue(.main)
+
+    AsyncFunction("stopVoiceRecognition") { () -> String in
+      self.voice.stopRecognition()
+    }.runOnQueue(.main)
+
+    AsyncFunction("speakText") { (text: String, locale: String?, rate: Double?) throws -> Bool in
+      try self.voice.speak(text: text, localeIdentifier: locale, rate: rate)
+    }.runOnQueue(.main)
+
+    AsyncFunction("stopSpeaking") { () -> Bool in
+      self.voice.stopSpeaking()
+    }.runOnQueue(.main)
+
+    AsyncFunction("getVoiceState") { () -> [String: Bool] in
+      [
+        "recording": self.voice.isRecording,
+        "speaking": self.voice.isSpeaking,
+      ]
     }.runOnQueue(.main)
   }
 
@@ -235,7 +294,7 @@ public final class HermesIOSContextModule: Module {
       self.eventQueue.installationIdentifier
     }
 
-    AsyncFunction("readPendingEvents") { (limit: Int, scope: String?) -> [[String: Any]] in
+    AsyncFunction("readPendingEvents") { (limit: Int, scope: String) -> [[String: Any]] in
       self.eventQueue.read(limit: limit, scope: scope)
     }
 
@@ -243,7 +302,7 @@ public final class HermesIOSContextModule: Module {
       try self.eventQueue.enqueueBatch(events)
     }
 
-    AsyncFunction("acknowledgeEvents") { (ids: [String], cursor: Int?, scope: String?) -> Int in
+    AsyncFunction("acknowledgeEvents") { (ids: [String], cursor: Int?, scope: String) -> Int in
       self.eventQueue.acknowledge(ids: Set(ids), cursor: cursor, scope: scope)
     }
 
@@ -270,7 +329,7 @@ public final class HermesIOSContextModule: Module {
       return deleted
     }.runOnQueue(.main)
 
-    AsyncFunction("readPendingEventsByKind") { (limit: Int, kinds: [String], scope: String?) -> [[String: Any]] in
+    AsyncFunction("readPendingEventsByKind") { (limit: Int, kinds: [String], scope: String) -> [[String: Any]] in
       self.eventQueue.read(limit: limit, kinds: Set(kinds), scope: scope)
     }
 

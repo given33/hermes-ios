@@ -22,7 +22,7 @@ import {
   PreviewModal,
   PreviewPage,
   PreviewText,
-} from '../preview/PreviewPrimitives';
+} from '../studio/PreviewPrimitives';
 
 interface AccountPageProps {
   client?: HermesApiClient;

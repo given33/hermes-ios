@@ -8,7 +8,7 @@ import test from 'node:test';
 import {
   cleanupOwnedTemporaryAttachments,
   isUriInsideDirectory,
-} from '../src/preview/attachment-draft-lifecycle';
+} from '../src/api/attachment-draft-lifecycle';
 
 test('attachment cleanup deletes real owned cache files and preserves external originals', () => {
   const sandbox = mkdtempSync(join(tmpdir(), 'hermes-attachment-cleanup-'));

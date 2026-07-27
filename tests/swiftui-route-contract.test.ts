@@ -6,6 +6,7 @@ import {
   encodeHermesSwiftUIRouteSnapshot,
   HERMES_SWIFTUI_ROUTE_ACTIONS,
   HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+  isHermesSwiftUIRouteSnapshot,
   type HermesSwiftUIRouteSnapshot,
 } from '../src/app/swiftui-route-contract';
 
@@ -26,6 +27,36 @@ test('SwiftUI route snapshots serialize with the versioned server-data contract'
   assert.deepEqual(JSON.parse(encodeHermesSwiftUIRouteSnapshot(snapshot)), snapshot);
 });
 
+test('SwiftUI route snapshots reject drift before crossing the native bridge', () => {
+  assert.equal(isHermesSwiftUIRouteSnapshot({ version: 2, route: 'sessions' }), false);
+  assert.equal(isHermesSwiftUIRouteSnapshot({
+    version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+    route: 'sessions',
+    sessions: 'not-an-array',
+  }), false);
+  assert.equal(isHermesSwiftUIRouteSnapshot({
+    version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+    route: 'models',
+    detectedModels: ['valid', 42],
+  }), false);
+  assert.throws(
+    () => encodeHermesSwiftUIRouteSnapshot({
+      version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+      route: 'system',
+      system: [],
+    } as unknown as HermesSwiftUIRouteSnapshot),
+    /Invalid Hermes SwiftUI route snapshot/,
+  );
+});
+
+test('route snapshots reject fields absent from the generated cross-language contract', () => {
+  assert.equal(isHermesSwiftUIRouteSnapshot({
+    version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
+    route: 'sessions',
+    unexpectedField: [],
+  }), false);
+});
+
 test('SwiftUI route actions reject unknown names and malformed payloads', () => {
   assert.deepEqual(
     decodeHermesSwiftUIRouteAction(
@@ -43,6 +74,20 @@ test('SwiftUI route actions reject unknown names and malformed payloads', () => 
   );
   assert.equal(
     decodeHermesSwiftUIRouteAction('session.delete', '{"route":42}'),
+    null,
+  );
+  assert.equal(
+    decodeHermesSwiftUIRouteAction(
+      HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete,
+      '{"route":"sessions","unexpected":true}',
+    ),
+    null,
+  );
+  assert.equal(
+    decodeHermesSwiftUIRouteAction(
+      HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanMove,
+      '{"route":"kanban","position":1.5}',
+    ),
     null,
   );
 });

@@ -119,73 +119,248 @@ export function previewTurnMessages({
       updatedAt: completedAt,
     }];
   }
-  const roles: Array<{
+  // Multi-member hosted team: the manager plans, two workers run in
+  // parallel, the reviewer rejects once, both workers rework, the reviewer
+  // passes, the manager hands off, and the reporter publishes one answer.
+  // Stages with `streamRunning` first emit a running snapshot under the same
+  // id so the roster live states (typing/thinking/executing/reviewing/
+  // reporting) are driven by upserted fixture events, exactly like SSE.
+  interface TeamStageFixture {
     avatarRole: NonNullable<ChatMessage['avatarRole']>;
+    completeOffset: number;
     content: string;
+    handoffTo?: string[];
+    key: string;
+    memberId: string;
     name: string;
+    rawRoleStage: string;
+    roleLabel: string;
     roleStage: NonNullable<ChatMessage['roleStage']>;
+    runningContent?: string;
+    startOffset: number;
     statusText: string;
-  }> = [
+    streamRunning?: boolean;
+  }
+  const managerName = isChinese ? 'Hermes 调度员' : 'Hermes Manager';
+  const dbb3Name = isChinese ? 'DBB3 执行员' : 'DBB3 Worker';
+  const pcName = isChinese ? 'PC/WSL 执行员' : 'PC/WSL Worker';
+  const reviewerName = isChinese ? 'Hermes 审阅员' : 'Hermes Reviewer';
+  const reporterName = isChinese ? 'Hermes 汇报员' : 'Hermes Reporter';
+  const stages: TeamStageFixture[] = [
     {
       avatarRole: 'dispatcher',
-      content: isChinese ? '已完成难度评估和任务拆分，正在把执行步骤交给 Worker。' : 'Difficulty assessed and the task plan has been dispatched to Worker.',
-      name: isChinese ? 'Hermes 调度员' : 'Hermes Manager',
+      completeOffset: 720,
+      content: isChinese
+        ? '已完成难度评估：拆分为 DBB3 部署与 PC/WSL 验证两个子任务，并行派发给两名执行员。'
+        : 'Difficulty assessed: split into DBB3 deployment and PC/WSL verification, dispatched to both workers in parallel.',
+      handoffTo: ['dbb3-worker', 'pc-worker'],
+      key: 'manager-plan',
+      memberId: 'dbb3-manager',
+      name: managerName,
+      rawRoleStage: 'manager_planning',
+      roleLabel: isChinese ? 'Hermes 调度员 · 规划' : 'Hermes Manager · Planning',
       roleStage: 'dispatcher',
-      statusText: isChinese ? '规划与调度完成' : 'Planning and dispatch completed',
+      startOffset: 0,
+      statusText: isChinese ? '规划与派发完成' : 'Planning and dispatch completed',
+      streamRunning: true,
     },
     {
       avatarRole: 'dbb3-worker',
-      content: isChinese ? '已按计划完成实现与验证，并提交执行结果和产物清单。' : 'Implementation and validation are complete, with results and artifacts submitted.',
-      name: 'Hermes Worker',
+      completeOffset: 1_980,
+      content: isChinese
+        ? '部署完成：服务已在 DBB3 重启并通过健康检查。'
+        : 'Deployment done: the service restarted on DBB3 and passed health checks.',
+      handoffTo: ['reviewer'],
+      key: 'dbb3-run',
+      memberId: 'dbb3-worker',
+      name: dbb3Name,
+      rawRoleStage: 'worker:dbb3-worker',
+      roleLabel: isChinese ? 'DBB3 执行员 · 执行' : 'DBB3 Worker · Execution',
       roleStage: 'worker',
+      startOffset: 760,
       statusText: isChinese ? '执行完成' : 'Execution completed',
+      streamRunning: true,
+    },
+    {
+      avatarRole: 'pc-worker',
+      completeOffset: 2_160,
+      content: isChinese
+        ? '本地验证完成：WSL 网关连通，冒烟用例全部通过。'
+        : 'Local verification done: the WSL gateway is reachable and smoke tests pass.',
+      handoffTo: ['reviewer'],
+      key: 'pc-run',
+      memberId: 'pc-worker',
+      name: pcName,
+      rawRoleStage: 'worker:pc-worker',
+      roleLabel: isChinese ? 'PC/WSL 执行员 · 执行' : 'PC/WSL Worker · Execution',
+      roleStage: 'worker',
+      startOffset: 800,
+      statusText: isChinese ? '执行完成' : 'Execution completed',
+      streamRunning: true,
     },
     {
       avatarRole: 'reviewer',
-      content: isChinese ? '已复核执行证据、异常路径和完成标准，本轮审阅通过。' : 'Evidence, failure paths, and completion criteria were reviewed. The review passed.',
-      name: isChinese ? 'Hermes 审阅员' : 'Hermes Reviewer',
+      completeOffset: 3_000,
+      content: isChinese
+        ? '审阅未通过（第 1 轮返工）：缺少回滚验证证据，请两名执行员补齐后重新提交。'
+        : 'Review rejected (rework round 1): rollback verification evidence is missing; both workers must resubmit.',
+      handoffTo: ['dbb3-worker', 'pc-worker'],
+      key: 'review-reject',
+      memberId: 'reviewer',
+      name: reviewerName,
+      rawRoleStage: 'reviewer:rework-request:1',
+      roleLabel: isChinese ? 'Hermes 审阅员 · 退回返工' : 'Hermes Reviewer · Rework requested',
       roleStage: 'reviewer',
-      statusText: isChinese ? '审阅通过' : 'Review passed',
+      startOffset: 2_200,
+      statusText: isChinese ? '第 1 轮返工已退回' : 'Rework round 1 requested',
+      streamRunning: true,
+    },
+    {
+      avatarRole: 'dbb3-worker',
+      completeOffset: 3_900,
+      content: isChinese
+        ? '返工完成：已补充回滚演练记录与回执哈希。'
+        : 'Rework done: rollback drill log and receipt hash attached.',
+      handoffTo: ['reviewer'],
+      key: 'dbb3-rework',
+      memberId: 'dbb3-worker',
+      name: dbb3Name,
+      rawRoleStage: 'worker:dbb3-worker:rework:1',
+      roleLabel: isChinese ? 'DBB3 执行员 · 第 1 轮返工' : 'DBB3 Worker · Rework round 1',
+      roleStage: 'worker',
+      startOffset: 3_040,
+      statusText: isChinese ? '返工完成' : 'Rework completed',
+      streamRunning: true,
+    },
+    {
+      avatarRole: 'pc-worker',
+      completeOffset: 4_000,
+      content: isChinese
+        ? '返工完成：本地回滚脚本验证通过并附执行日志。'
+        : 'Rework done: the local rollback script passed with logs attached.',
+      handoffTo: ['reviewer'],
+      key: 'pc-rework',
+      memberId: 'pc-worker',
+      name: pcName,
+      rawRoleStage: 'worker:pc-worker:rework:1',
+      roleLabel: isChinese ? 'PC/WSL 执行员 · 第 1 轮返工' : 'PC/WSL Worker · Rework round 1',
+      roleStage: 'worker',
+      startOffset: 3_080,
+      statusText: isChinese ? '返工完成' : 'Rework completed',
+      streamRunning: true,
+    },
+    {
+      avatarRole: 'reviewer',
+      completeOffset: 4_560,
+      content: isChinese
+        ? '返工复审通过：证据完整，交给 Hermes 调度员汇总交接。'
+        : 'Rework re-review passed: evidence is complete; handing off to the Hermes Manager.',
+      handoffTo: ['dbb3-manager'],
+      key: 'review-pass',
+      memberId: 'reviewer',
+      name: reviewerName,
+      rawRoleStage: 'reviewer:rework:1',
+      roleLabel: isChinese ? 'Hermes 审阅员 · 返工复审' : 'Hermes Reviewer · Rework re-review',
+      roleStage: 'reviewer',
+      startOffset: 4_040,
+      statusText: isChinese ? '返工复审通过' : 'Rework re-review passed',
+    },
+    {
+      avatarRole: 'dispatcher',
+      completeOffset: 5_000,
+      content: isChinese
+        ? '结构化交接已生成：包含计划、双执行结果、审阅结论与 1 轮返工记录。'
+        : 'Structured handoff ready: plan, both worker results, the review verdict, and 1 rework round.',
+      handoffTo: ['default'],
+      key: 'manager-handoff',
+      memberId: 'dbb3-manager',
+      name: managerName,
+      rawRoleStage: 'manager_handoff',
+      roleLabel: isChinese ? 'Hermes 调度员 · 交接' : 'Hermes Manager · Handoff',
+      roleStage: 'dispatcher',
+      runningContent: isChinese ? '正在汇总执行与审阅证据…' : 'Collecting execution and review evidence…',
+      startOffset: 4_600,
+      statusText: isChinese ? '交接完成' : 'Handoff completed',
+      streamRunning: true,
     },
     {
       avatarRole: 'reporter',
-      content: isChinese ? '任务已完成。这里汇总展示经过调度、执行和审阅确认后的最终结果。' : 'Task completed. This is the final result verified through planning, execution, and review.',
-      name: isChinese ? 'Hermes 汇报员' : 'Hermes Reporter',
+      completeOffset: 5_750,
+      content: isChinese
+        ? '任务完成：DBB3 部署与 PC/WSL 验证均通过审阅，含 1 轮返工修复，详情见交接记录。'
+        : 'Task complete: DBB3 deployment and PC/WSL verification passed review after 1 rework round; see the handoff record.',
+      key: 'reporter',
+      memberId: 'default',
+      name: reporterName,
+      rawRoleStage: 'reporter',
+      roleLabel: isChinese ? 'Hermes · 最终汇报' : 'Hermes · Final report',
       roleStage: 'reporter',
+      startOffset: 5_040,
       statusText: isChinese ? '最终汇报完成' : 'Final report completed',
+      streamRunning: true,
     },
   ];
-  return roles.map((definition, index) => {
-    const messageStartedAt = startedAt + index * 380;
-    const completedAt = messageStartedAt + 360;
+  const messageFor = (stage: TeamStageFixture, running: boolean): ChatMessage => {
+    const messageStartedAt = startedAt + stage.startOffset;
+    const completedAt = startedAt + stage.completeOffset;
+    const durationMs = stage.completeOffset - stage.startOffset;
     return {
-      activities: [{
+      activities: running ? [] : [{
         category: 'workflow',
         completedAt,
-        duration: '0.4s',
-        durationMs: 360,
-        id: `${turnId}-${definition.roleStage}-status`,
+        duration: `${(durationMs / 1000).toFixed(1)}s`,
+        durationMs,
+        id: `${turnId}-${stage.key}-status`,
         name: isChinese ? '运行状态' : 'Runtime status',
-        output: definition.statusText,
-        preview: definition.statusText,
+        output: stage.statusText,
+        preview: stage.statusText,
         startedAt: messageStartedAt,
         status: 'completed',
       }],
-      avatarRole: definition.avatarRole,
-      completedAt,
-      content: definition.content,
+      avatarRole: stage.avatarRole,
+      completedAt: running ? undefined : completedAt,
+      content: running ? stage.runningContent ?? '' : stage.content,
       createdAt: messageStartedAt,
-      durationMs: 360,
-      firstTokenAt: messageStartedAt,
-      id: `${turnId}-${definition.roleStage}`,
+      durationMs: running ? undefined : durationMs,
+      firstTokenAt: running && !stage.runningContent ? undefined : messageStartedAt + 120,
+      handoffTarget: running ? undefined : stage.handoffTo?.join(', '),
+      id: `${turnId}-${stage.key}`,
+      memberId: stage.memberId,
       model: 'preview/local-hermes',
-      name: definition.name,
+      name: stage.name,
+      rawRoleStage: running && stage.key === 'review-reject' ? 'reviewer' : stage.rawRoleStage,
       role: 'assistant',
-      roleStage: definition.roleStage,
+      roleLabel: stage.roleLabel,
+      roleStage: stage.roleStage,
       runtimeTurnId: turnId,
       startedAt: messageStartedAt,
-      status: 'completed',
-      updatedAt: completedAt,
+      status: running ? 'running' : 'completed',
+      updatedAt: running ? messageStartedAt : completedAt,
     };
+  };
+  const stageByKey = new Map(stages.map((stage) => [stage.key, stage]));
+  const playback: Array<[key: string, running: boolean]> = [
+    ['manager-plan', true],
+    ['manager-plan', false],
+    ['dbb3-run', true],
+    ['pc-run', true],
+    ['dbb3-run', false],
+    ['pc-run', false],
+    ['review-reject', true],
+    ['review-reject', false],
+    ['dbb3-rework', true],
+    ['pc-rework', true],
+    ['dbb3-rework', false],
+    ['pc-rework', false],
+    ['review-pass', false],
+    ['manager-handoff', true],
+    ['manager-handoff', false],
+    ['reporter', true],
+    ['reporter', false],
+  ];
+  return playback.flatMap(([key, running]) => {
+    const stage = stageByKey.get(key);
+    if (!stage || (running && !stage.streamRunning)) return [];
+    return [messageFor(stage, running)];
   });
 }

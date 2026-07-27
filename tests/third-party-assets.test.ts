@@ -9,6 +9,7 @@ import { HERMES_STUDIO_BSL_1_1 } from '../src/legal/third-party-notices';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (path: string) => readFileSync(resolve(projectRoot, path), 'utf8');
+const normalizeNewlines = (value: string) => value.replace(/\r\n?/g, '\n');
 
 test('the Hermes Studio runtime asset is minimal, pinned, and carries its BSL notice', () => {
   const asset = readFileSync(
@@ -36,7 +37,10 @@ test('the Hermes Studio runtime asset is minimal, pinned, and carries its BSL no
   assert.match(runtimeNotice, /Business Source License 1\.1/);
   assert.match(runtimeNotice, /EKKOLearnAI/);
   assert.match(runtimeNotice, /2029-05-10/);
-  assert.equal(HERMES_STUDIO_BSL_1_1.trim(), license.trim());
+  assert.equal(
+    normalizeNewlines(HERMES_STUDIO_BSL_1_1).trim(),
+    normalizeNewlines(license).trim(),
+  );
   assert.match(account, /第三方授权/);
   assert.match(account, /HERMES_STUDIO_BSL_1_1/);
   assert.match(gitignore, /^\/vendor\/hermes-studio-ui\/$/m);

@@ -37,6 +37,9 @@ test('signed iOS builds declare native context privacy and background capabiliti
     'NSLocationWhenInUseUsageDescription',
     'NSMotionUsageDescription',
     'NSRemindersFullAccessUsageDescription',
+    'NSMicrophoneUsageDescription',
+    'NSSpeechRecognitionUsageDescription',
+    'NSPhotoLibraryUsageDescription',
   ]) {
     assert.equal(typeof infoPlist[key], 'string', `${key} is declared`);
   }
@@ -44,6 +47,50 @@ test('signed iOS builds declare native context privacy and background capabiliti
   assert.deepEqual(entitlements['com.apple.security.application-groups'], [
     'group.app.sunstone1029.fig1171.hermes',
   ]);
+});
+
+test('native voice input and read-aloud stay behind explicit iOS permissions', () => {
+  const bridge = read('index.ts');
+  const module = read('ios/HermesIOSContextModule.swift');
+  const service = read('ios/HermesVoiceService.swift');
+  const podspec = read('ios/HermesIOSContext.podspec');
+  const chat = [
+    readFileSync(resolve(root, 'src/studio/PreviewChatPage.tsx'), 'utf8'),
+    readFileSync(resolve(root, 'src/studio/chat/chat-attachments.ts'), 'utf8'),
+    readFileSync(resolve(root, 'src/studio/chat/useChatAttachmentController.ts'), 'utf8'),
+    readFileSync(resolve(root, 'src/studio/chat/useHermesVoice.ts'), 'utf8'),
+  ].join('\n');
+
+  for (const operation of [
+    'getVoiceAuthorization',
+    'requestVoiceAuthorization',
+    'startVoiceRecognition',
+    'stopVoiceRecognition',
+    'speakText',
+    'stopSpeaking',
+  ]) {
+    assert.match(bridge, new RegExp(operation));
+    assert.match(module, new RegExp(`AsyncFunction\\("${operation}"\\)`));
+  }
+  assert.match(module, /Events\("onVoiceTranscript", "onVoiceState"\)/);
+  assert.match(bridge, /subscribeVoiceTranscript/);
+  assert.match(bridge, /subscribeVoiceState/);
+  assert.match(service, /SFSpeechAudioBufferRecognitionRequest/);
+  assert.match(service, /AVSpeechSynthesizer/);
+  assert.match(service, /AVAudioSession\.interruptionNotification/);
+  assert.match(service, /requiresOnDeviceRecognition = true/);
+  assert.match(service, /DispatchQueue\.main\.asyncAfter\(deadline: \.now\(\) \+ 55/);
+  assert.match(service, /recognitionGeneration == generation/);
+  assert.match(service, /if inputTapInstalled/);
+  assert.match(service, /activeUtterance === utterance/);
+  assert.match(podspec, /'AVFoundation'/);
+  assert.match(podspec, /'Speech'/);
+  assert.match(chat, /requestVoiceAuthorization/);
+  assert.match(chat, /startVoiceRecognition/);
+  assert.match(chat, /stopVoiceRecognition/);
+  assert.match(chat, /speakText/);
+  assert.match(chat, /requestMediaLibraryPermissionsAsync/);
+  assert.match(chat, /requestCameraPermissionsAsync/);
 });
 
 test('native context exposes independently callable collectors and event streams', () => {
@@ -108,10 +155,14 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   assert.match(queue, /func appendUnlocked/);
   assert.match(queue, /func enqueueBatch/);
   assert.match(queue, /handle\.seekToEnd\(\)/);
-  assert.match(queue, /func acknowledge\(ids: Set<String>, cursor: Int\?, scope: String\? = nil\)/);
+  // Reads and acknowledgements demand the active owner scope; a missing or
+  // stale scope must never drain another account's events.
+  assert.match(queue, /func acknowledge\(ids: Set<String>, cursor: Int\?, scope: String\)/);
+  assert.match(queue, /guard limit > 0, isCurrentOwnerScopeUnlocked\(scope\) else \{ return \[\] \}/);
+  assert.match(queue, /guard isCurrentOwnerScopeUnlocked\(scope\) else \{ return 0 \}/);
   assert.match(
     module,
-    /readPendingEventsByKind"\) \{ \(limit: Int, kinds: \[String\], scope: String\?\)/,
+    /readPendingEventsByKind"\) \{ \(limit: Int, kinds: \[String\], scope: String\)/,
   );
   assert.match(module, /read\(limit: limit, kinds: Set\(kinds\), scope: scope\)/);
   assert.match(queue, /previousScope\.isEmpty && !scope\.isEmpty/);
@@ -156,6 +207,35 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   assert.deepEqual(expoConfig.apple.appDelegateSubscribers, [
     'HermesIOSContextAppDelegateSubscriber',
   ]);
+});
+
+test('attachment vault keeps a non-shared outbox root and symlink-safe containment', () => {
+  const vault = read('ios/HermesAttachmentVault.swift');
+  const module = read('ios/HermesIOSContextModule.swift');
+  const bridge = read('index.ts');
+  const chat = [
+    readFileSync(resolve(root, 'src/studio/PreviewChatPage.tsx'), 'utf8'),
+    readFileSync(resolve(root, 'src/studio/chat/chat-attachments.ts'), 'utf8'),
+  ].join('\n');
+  const purge = readFileSync(resolve(root, 'src/api/local-account-purge.ts'), 'utf8');
+
+  // The encrypted outbox must live outside the UIFileSharingEnabled Documents
+  // tree, with a one-time migration away from the legacy location, and JS asks
+  // the vault for the root instead of rebuilding the path.
+  assert.match(vault, /applicationSupportDirectory, in: \.userDomainMask/);
+  assert.match(vault, /func migrateLegacyOutbox\(\)/);
+  assert.match(vault, /legacyEncryptedOutboxRoot/);
+  assert.match(module, /Function\("getAttachmentOutboxRootUri"\)/);
+  assert.match(bridge, /getAttachmentOutboxRootUri/);
+  assert.match(chat, /attachmentOutboxRoot\(/);
+  assert.match(purge, /attachmentOutboxRoot\(/);
+  assert.doesNotMatch(chat, /Paths\.document,\s*'hermes-outbox'/);
+  // Containment resolves symlinks on both sides and compares whole path
+  // components; encrypt only reads sources the app itself staged.
+  assert.match(vault, /resolvingSymlinksInPath\(\)/);
+  assert.match(vault, /candidateComponents\.prefix\(rootComponents\.count\)\) == rootComponents/);
+  assert.match(vault, /try requireAllowedSource\(source\)/);
+  assert.doesNotMatch(vault, /\.path\.hasPrefix\(rootPath\)/);
 });
 
 test('native power changes are durably collected across the account lifecycle', () => {

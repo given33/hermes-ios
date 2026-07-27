@@ -23,6 +23,7 @@ import {
   BUILTIN_THEME_ORDER,
   type BuiltinThemeName,
 } from './theme-presets';
+import { HermesThemeApi } from './theme-api';
 import {
   getThemeEffectPlanQueue,
   startThemeReconciliation,
@@ -80,18 +81,22 @@ export function ThemeProvider({
     stateRef.current = state;
   }, [state]);
 
+  // The design layer owns the theme/font endpoints; the raw transport client
+  // is wrapped here rather than growing product methods of its own.
+  const themeApi = useMemo(() => new HermesThemeApi(client), [client]);
+
   const effectExecutor = useMemo<ThemeStateEffectExecutor>(
     () => ({
       writeTheme: (value) => preferenceStore.writeTheme(value),
       writeFont: (value) => preferenceStore.writeFont(value),
       async putTheme(value) {
-        await client.setTheme(value);
+        await themeApi.setTheme(value);
       },
       async putFont(value) {
-        await client.setFontPref(value);
+        await themeApi.setFontPref(value);
       },
     }),
-    [client, preferenceStore],
+    [preferenceStore, themeApi],
   );
 
   const effectQueue = useMemo(
@@ -108,7 +113,7 @@ export function ThemeProvider({
     setReady(false);
     const reconciliation = startThemeReconciliation({
       store: preferenceStore,
-      client,
+      client: themeApi,
       effects: effectExecutor,
       queue: effectQueue,
       getState: () => stateRef.current,
@@ -122,7 +127,7 @@ export function ThemeProvider({
         reconciliationRef.current = null;
       }
     };
-  }, [client, commitPlan, effectExecutor, effectQueue, preferenceStore]);
+  }, [commitPlan, effectExecutor, effectQueue, preferenceStore, themeApi]);
 
   const setTheme = useCallback(
     async (name: string) => {

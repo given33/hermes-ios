@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  HERMES_CLEARTEXT_BASE_URL_ERROR_CODE,
   HermesApiClient,
   HermesApiError,
+  HermesCleartextBaseUrlError,
   normalizeBaseUrl,
 } from '../src/api/HermesApiClient';
 import { assertMobileHandshake } from '../src/api/hermes-types';
+import { HermesThemeApi } from '../src/design/theme-api';
 
 interface FetchCall {
   url: string;
@@ -32,9 +35,17 @@ test('normalizes the fixed server URL and rejects unsafe base URLs', () => {
     normalizeBaseUrl(' https://daxueshenmai.top/ '),
     'https://daxueshenmai.top',
   );
-  assert.equal(normalizeBaseUrl('http://hermes.test:8080'), 'http://hermes.test:8080');
+  // Cleartext HTTP stays usable for local development targets only: loopback
+  // addresses and mDNS `.local` hosts never leave the developer's machine or LAN.
+  assert.equal(normalizeBaseUrl('http://localhost:8080'), 'http://localhost:8080');
+  assert.equal(normalizeBaseUrl('http://127.0.0.1:3000'), 'http://127.0.0.1:3000');
+  assert.equal(normalizeBaseUrl('http://[::1]:8080'), 'http://[::1]:8080');
+  assert.equal(normalizeBaseUrl('http://mac-studio.local:3000'), 'http://mac-studio.local:3000');
 
   for (const unsafe of [
+    'http://hermes.test:8080',
+    'http://192.168.1.20:3000',
+    'http://daxueshenmai.top',
     'file:///tmp/hermes',
     'javascript:alert(1)',
     'https://user:password@hermes.test',
@@ -47,6 +58,43 @@ test('normalizes the fixed server URL and rejects unsafe base URLs', () => {
   ]) {
     assert.throws(() => normalizeBaseUrl(unsafe), /base url/i);
   }
+});
+
+test('EXPO_PUBLIC_HERMES_ALLOW_HTTP=1 is the only escape hatch for LAN dev servers', () => {
+  assert.throws(() => normalizeBaseUrl('http://192.168.1.20:3000'), /https/i);
+  process.env.EXPO_PUBLIC_HERMES_ALLOW_HTTP = '1';
+  try {
+    assert.equal(normalizeBaseUrl('http://192.168.1.20:3000'), 'http://192.168.1.20:3000');
+  } finally {
+    delete process.env.EXPO_PUBLIC_HERMES_ALLOW_HTTP;
+  }
+  assert.throws(() => normalizeBaseUrl('http://192.168.1.20:3000'), /https/i);
+});
+
+test('an http:// base URL without the cleartext opt-in throws the typed terminal error', () => {
+  // The session-restore policy classifies this exact type/code as terminal;
+  // a bare Error here would demote the rejection to a transient failure and
+  // reintroduce the permanent cold-start restore lockout.
+  let thrown: unknown;
+  try {
+    new HermesApiClient('http://192.168.1.20:3000', 'mobile-secret');
+  } catch (error) {
+    thrown = error;
+  }
+  assert.ok(thrown instanceof HermesCleartextBaseUrlError);
+  assert.equal(thrown.name, 'HermesCleartextBaseUrlError');
+  assert.equal(thrown.code, HERMES_CLEARTEXT_BASE_URL_ERROR_CODE);
+  // The message names both remediations for anyone reading logs.
+  assert.match(thrown.message, /https/i);
+  assert.match(thrown.message, /EXPO_PUBLIC_HERMES_ALLOW_HTTP=1/);
+  assert.throws(() => normalizeBaseUrl('http://daxueshenmai.top'), HermesCleartextBaseUrlError);
+  // The typed error is reserved for the cleartext-transport verdict; other
+  // invalid base URLs keep their own messages.
+  assert.throws(
+    () => normalizeBaseUrl('file:///tmp/hermes'),
+    (error: unknown) => error instanceof Error
+      && !(error instanceof HermesCleartextBaseUrlError),
+  );
 });
 
 test('rejects cross-origin request paths before bearer credentials reach fetch', async () => {
@@ -405,66 +453,6 @@ test('attachment helper builds only same-origin encoded URLs without credentials
   );
 });
 
-test('each WebSocket URL mints a fresh ticket and contains only ticket plus optional profile', async () => {
-  const calls: FetchCall[] = [];
-  let ticketNumber = 0;
-  const client = new HermesApiClient(
-    'https://hermes.test',
-    'mobile-secret',
-    async (input, init) => {
-      calls.push({ url: String(input), init: init ?? {} });
-      ticketNumber += 1;
-      return jsonResponse('https://hermes.test/api/auth/ws-ticket', {
-        ticket: `ticket-${ticketNumber}`,
-        ttl_seconds: 30,
-      });
-    },
-  );
-
-  const socketOne = new URL(await client.createWebSocketUrl('/api/ws', '审阅 / reviewer'));
-  const socketTwo = new URL(await client.createWebSocketUrl('/api/events'));
-
-  assert.equal(calls.length, 2);
-  for (const call of calls) {
-    assert.equal(new URL(call.url).pathname, '/api/auth/ws-ticket');
-    assert.equal(call.init.method, 'POST');
-    assert.equal(new Headers(call.init.headers).get('Authorization'), 'Bearer mobile-secret');
-  }
-  assert.equal(socketOne.protocol, 'wss:');
-  assert.equal(socketOne.pathname, '/api/ws');
-  assert.deepEqual([...socketOne.searchParams.keys()].sort(), ['profile', 'ticket']);
-  assert.equal(socketOne.searchParams.get('ticket'), 'ticket-1');
-  assert.equal(socketOne.searchParams.get('profile'), '审阅 / reviewer');
-  assert.equal(socketTwo.protocol, 'wss:');
-  assert.equal(socketTwo.pathname, '/api/events');
-  assert.deepEqual([...socketTwo.searchParams.keys()], ['ticket']);
-  assert.equal(socketTwo.searchParams.get('ticket'), 'ticket-2');
-  assert.doesNotMatch(`${socketOne}\n${socketTwo}`, /mobile-secret/);
-});
-
-test('WebSocket URL converts http to ws and rejects every other socket path', async () => {
-  let calls = 0;
-  const client = new HermesApiClient(
-    'http://hermes.test',
-    'mobile-secret',
-    async () => {
-      calls += 1;
-      return jsonResponse('http://hermes.test/api/auth/ws-ticket', {
-        ticket: 'short-lived',
-        ttl_seconds: 30,
-      });
-    },
-  );
-
-  const socket = new URL(await client.createWebSocketUrl('/api/events'));
-  assert.equal(socket.protocol, 'ws:');
-  await assert.rejects(
-    client.createWebSocketUrl('/api/other' as '/api/ws'),
-    /websocket path/i,
-  );
-  assert.equal(calls, 1);
-});
-
 test('dashboard theme and font methods use the canonical GET and PUT endpoints', async () => {
   const calls: FetchCall[] = [];
   const client = new HermesApiClient(
@@ -484,11 +472,14 @@ test('dashboard theme and font methods use the canonical GET and PUT endpoints',
       return jsonResponse(url, responseBody);
     },
   );
+  // The endpoints live in the design layer's HermesThemeApi; the transport
+  // client carries no product methods of its own.
+  const themeApi = new HermesThemeApi(client);
 
-  assert.deepEqual(await client.getThemes(), { active: 'default', themes: [] });
-  assert.deepEqual(await client.setTheme('mono'), { ok: true, theme: 'mono' });
-  assert.deepEqual(await client.getFontPref(), { font: 'theme' });
-  assert.deepEqual(await client.setFontPref('inter'), { ok: true, font: 'inter' });
+  assert.deepEqual(await themeApi.getThemes(), { active: 'default', themes: [] });
+  assert.deepEqual(await themeApi.setTheme('mono'), { ok: true, theme: 'mono' });
+  assert.deepEqual(await themeApi.getFontPref(), { font: 'theme' });
+  assert.deepEqual(await themeApi.setFontPref('inter'), { ok: true, font: 'inter' });
 
   assert.deepEqual(
     calls.map((call) => ({
@@ -525,3 +516,133 @@ test('dashboard theme and font methods use the canonical GET and PUT endpoints',
     ],
   );
 });
+
+test('identical in-flight GETs share one network request and settle together', async () => {
+  const calls: FetchCall[] = [];
+  let releaseFirst: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async (input, init) => {
+      calls.push({ url: String(input), init: init ?? {} });
+      const sequence = calls.length;
+      await gate;
+      return jsonResponse(String(input), { sequence });
+    },
+  );
+
+  const first = client.request<{ sequence: number }>('/api/status', { query: { limit: 2 } });
+  const second = client.request<{ sequence: number }>('/api/status', { query: { limit: 2 } });
+  const other = client.request<{ sequence: number }>('/api/status', { query: { limit: 3 } });
+  releaseFirst?.();
+  const [firstResult, secondResult, otherResult] = await Promise.all([first, second, other]);
+
+  // Two identical concurrent GETs rode one fetch; the different query did not.
+  assert.equal(calls.filter(({ url }) => url.includes('limit=2')).length, 1);
+  assert.equal(calls.filter(({ url }) => url.includes('limit=3')).length, 1);
+  assert.deepEqual(firstResult, secondResult);
+  assert.notDeepEqual(firstResult, otherResult);
+
+  // The in-flight entry is evicted on settle: the same GET afterwards is a
+  // fresh network request, not a cached reply.
+  await client.request('/api/status', { query: { limit: 2 } });
+  assert.equal(calls.filter(({ url }) => url.includes('limit=2')).length, 2);
+});
+
+test('GET coalescing skips requests that differ by method, headers, or abort signal', async () => {
+  const calls: FetchCall[] = [];
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async (input, init) => {
+      calls.push({ url: String(input), init: init ?? {} });
+      await gate;
+      return jsonResponse(String(input), { ok: true });
+    },
+  );
+
+  const plain = client.request('/api/cron/jobs');
+  // A caller-supplied header set must not ride the plain flight: replies can
+  // legitimately differ (content negotiation), and sharing would hand one
+  // caller a response negotiated for the other.
+  const negotiated = client.request('/api/cron/jobs', {
+    headers: { Accept: 'text/plain' },
+  });
+  // POST bodies are mutations; two concurrent POSTs must both reach the server.
+  const firstPost = client.request('/api/cron/jobs', { method: 'POST', body: '{}' });
+  const secondPost = client.request('/api/cron/jobs', { method: 'POST', body: '{}' });
+  release?.();
+  await Promise.all([plain, negotiated, firstPost, secondPost]);
+
+  assert.equal(calls.length, 4);
+});
+
+test('aborting one caller never cancels a lookalike GET from another surface', async () => {
+  const calls: FetchCall[] = [];
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async (input, init) => {
+      calls.push({ url: String(input), init: init ?? {} });
+      await gate;
+      if (init?.signal?.aborted) throw abortLikeError();
+      return jsonResponse(String(input), { ok: true });
+    },
+  );
+
+  const controller = new AbortController();
+  const shared = client.request<{ ok: boolean }>('/api/sessions');
+  const abortable = client.request<{ ok: boolean }>('/api/sessions', {
+    signal: controller.signal,
+  });
+  controller.abort();
+  release?.();
+
+  // The signal-carrying request kept its own connection and died alone; the
+  // plain polling GET (and both were "identical" URLs) still resolved.
+  await assert.rejects(abortable, /abort/i);
+  assert.deepEqual(await shared, { ok: true });
+  assert.equal(calls.length, 2);
+});
+
+test('a failed shared GET is not replayed to later callers from the dedup map', async () => {
+  const calls: FetchCall[] = [];
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async (input) => {
+      calls.push({ url: String(input), init: {} });
+      if (calls.length === 1) {
+        return jsonResponse(String(input), { detail: 'boom' }, { status: 503 });
+      }
+      return jsonResponse(String(input), { ok: true });
+    },
+  );
+
+  const first = client.request('/api/system/stats');
+  const second = client.request('/api/system/stats');
+  // Concurrent callers legitimately share the failure they raced...
+  await assert.rejects(first, (error: unknown) => {
+    assert.ok(error instanceof HermesApiError);
+    assert.equal(error.status, 503);
+    return true;
+  });
+  await assert.rejects(second, HermesApiError);
+  assert.equal(calls.length, 1);
+
+  // ...but the settled rejection is evicted, so a later caller gets a fresh
+  // request instead of the stale error.
+  assert.deepEqual(await client.request('/api/system/stats'), { ok: true });
+  assert.equal(calls.length, 2);
+});
+
+function abortLikeError(): Error {
+  const error = new Error('The operation was aborted');
+  error.name = 'AbortError';
+  return error;
+}

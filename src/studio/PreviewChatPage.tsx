@@ -1,0 +1,778 @@
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+} from 'react';
+import {
+  Keyboard,
+  useWindowDimensions,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import type { HermesApiClient } from '../api/HermesApiClient';
+import type { SidebarGatewayStatus } from '../app/NativeShell';
+import {
+  hermesCloudApiFor,
+  sharedConversationLocalStore,
+} from '../api/hermes-api-registry';
+import {
+  HOSTED_TURN_RETRY_DELAY_MS,
+} from '../api/hosted-turn-delivery-state';
+import {
+  type HermesChatViewMessage as ChatMessage,
+  type ConversationCollaborationState,
+} from '../api/chat-view-model';
+import { useTheme } from '../design/ThemeProvider';
+import type { HermesNotificationTarget } from '../notifications/notification-target';
+import {
+  resolveComposerFontSize,
+} from './chat/chat-attachments';
+import {
+  serverFailure,
+} from './chat/chat-domain';
+import { ChatPageShell } from './chat/ChatPageShell';
+import { useChatPageState } from './chat/useChatPageState';
+import { useHostedTurnDeliveryService } from './chat/useHostedTurnDeliveryService';
+import { useHermesVoice } from './chat/useHermesVoice';
+import { useHostedConversationStream } from './chat/useHostedConversationStream';
+import { useConversationIndexLifecycle } from './chat/useConversationIndexLifecycle';
+import { useChatScrollController } from './chat/useChatScrollController';
+import { useOptimisticConversationState } from './chat/useOptimisticConversationState';
+import { useConversationSnapshotController } from './chat/useConversationSnapshotController';
+import { useConversationIndexController } from './chat/useConversationIndexController';
+import { useHostedCancellationController } from './chat/useHostedCancellationController';
+import { useHostedOutboxReplayController } from './chat/useHostedOutboxReplayController';
+import { useChatAttachmentController } from './chat/useChatAttachmentController';
+import { useHostedInterventionController } from './chat/useHostedInterventionController';
+import { useHostedSendController } from './chat/useHostedSendController';
+import { useConversationActionsController } from './chat/useConversationActionsController';
+import { useChatComposerNavigationController } from './chat/useChatComposerNavigationController';
+import { useMobileConsoleController } from './chat/useMobileConsoleController';
+import {
+  useChatSendAction,
+  useCollaborationStateUpdater,
+  useMentionMemberAction,
+  useRelayCheckAction,
+} from './chat/useChatPageActions';
+import { useChatAttachmentLifecycle } from './chat/useChatAttachmentLifecycle';
+
+const HOSTED_TURN_VISIBILITY_GRACE_MS = 20_000;
+const RECONNECT_MAX_ATTEMPTS = 5;
+const HOSTED_TURN_REQUEST_TIMEOUT_MS = 20_000;
+const HOSTED_TURN_CANCEL_TIMEOUT_MS = 5_000;
+
+interface ChatPreviewPageProps {
+  cacheOwner?: string;
+  client?: HermesApiClient;
+  fixtureMode?: boolean;
+  gatewayStatuses?: readonly SidebarGatewayStatus[];
+  locale?: 'en' | 'zh';
+  notify(message: string): void;
+  notificationTarget?: HermesNotificationTarget | null;
+  openNavigation?(): void;
+  onPreferredConversationConsumed?(conversationId: string): void;
+  preferredConversationId?: string;
+  profile?: string;
+}
+
+export function ChatPreviewPage({
+  cacheOwner = '',
+  client,
+  fixtureMode = false,
+  gatewayStatuses = [],
+  locale = 'zh',
+  notify,
+  notificationTarget,
+  openNavigation,
+  onPreferredConversationConsumed,
+  preferredConversationId = '',
+  profile = 'default',
+}: ChatPreviewPageProps) {
+  const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const { tokens } = useTheme();
+  const cloudApi = useMemo(() => client ? hermesCloudApiFor(client) : null, [client]);
+  const localStore = useMemo(
+    () => cacheOwner ? sharedConversationLocalStore() : null,
+    [cacheOwner],
+  );
+  const hostedTurnDeliveryService = useHostedTurnDeliveryService({
+    cacheOwner,
+    cloudApi,
+    isChinese: locale === 'zh',
+    localStore,
+    profile,
+    requestTimeoutMs: HOSTED_TURN_REQUEST_TIMEOUT_MS,
+  });
+  const {
+    activeConversationId, activeConversationIdRef, activeHostedTurnIdRef,
+    attachmentOwnerRef, attachments, attachmentsOpen, attachmentsRef,
+    cancelHostedTurnInFlightRef, cancelledPendingSendKeysRef, cancellingHostedTurn,
+    collaborationState, collaborationStateByConversationRef, composerInputRef,
+    content, contentRef, conversationIndexRef, conversations,
+    conversationSyncGenerationRef, historyCollapsed, historyModalOpen,
+    hostedEventCursorRef, hostedRunning, hostedTurnDeliveryClaimsRef, messages,
+    mountedRef, pendingAttachmentCleanup, pendingChatSendRef, pendingTurn,
+    sendOperationGenerationRef, sendSubmissionGateRef, sending,
+    setActiveConversationId, setActiveHostedTurnId, setAttachments,
+    setAttachmentsOpen, setCancellingHostedTurn, setCollaborationState,
+    setContent, setConversations, setHistoryCollapsed, setHistoryModalOpen,
+    setHostedRunning, setMessages, setSending,
+  } = useChatPageState(cacheOwner);
+  const pendingPhase = pendingTurn.state.phase;
+  const pendingPhaseStartedAt = pendingTurn.state.phaseStartedAt;
+  const reconnectAttempt = pendingTurn.state.reconnectAttempt;
+  const setReconnectAttempt = pendingTurn.setReconnectAttempt;
+  const pendingPhaseRef = pendingTurn.phaseRef;
+  const firstTokenAtRef = pendingTurn.firstTokenAtRef;
+  const pendingTurnActiveRef = pendingTurn.activeRef;
+  const isChinese = locale === 'zh';
+  const {
+    beginOptimisticHostedTurn,
+    clearOptimisticHostedTurn,
+    clearOptimisticPendingTurn,
+    hostedTurnVisibilityFailuresRef,
+    optimisticHostedTurnConfirmedRef,
+    optimisticHostedTurnDeadlineRef,
+    optimisticHostedTurnIdRef,
+    optimisticHostedTurnTimeoutRef,
+    optimisticMessagesByConversationRef,
+    optimisticMessagesRef,
+    optimisticPendingByConversationRef,
+    replaceOptimisticMessages,
+  } = useOptimisticConversationState({
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    cacheOwner,
+    isChinese,
+    localStore,
+    profile,
+    setActiveHostedTurnId,
+    setHostedRunning,
+    setMessages,
+    setSending,
+    visibilityGraceMs: HOSTED_TURN_VISIBILITY_GRACE_MS,
+  });
+  const compact = width <= 560;
+  const mentionMember = useMentionMemberAction({
+    composerInputRef,
+    contentRef,
+    setContent,
+  });
+  const shellSplit = width >= 768;
+  const showHistory = width > 900;
+  const showCollaborationHeaderCount = width >= 1_180;
+  const safeAreaBottom = insets.bottom;
+  const safeAreaLeft = shellSplit ? 0 : insets.left;
+  const safeAreaRight = shellSplit ? 0 : insets.right;
+  const safeAreaTop = shellSplit ? 0 : insets.top;
+  const {
+    autoFollowStreamRef,
+    composerKeyboardStyle,
+    handleStreamScroll,
+    keepLatestVisible,
+    keyboardAvoidanceEnabled,
+    keyboardRootStyle,
+    pauseStreamAutoFollow,
+    showScrollToBottom,
+    streamRef,
+  } = useChatScrollController(safeAreaBottom);
+  const {
+    filteredSlashCommands,
+    openNavigationAfterKeyboard,
+    openSlashCommand,
+    selectSlashCommand,
+    setSlashMenuOpen,
+    slashMenuOpen,
+  } = useChatComposerNavigationController({
+    cloudApi,
+    composerInputRef,
+    content,
+    contentRef,
+    keyboardAvoidanceEnabled,
+    openNavigation,
+    profile,
+    setContent,
+  });
+  const attachmentCount = attachments.length;
+  const composingIntervention = hostedRunning
+    && attachmentCount === 0
+    && content.trim().startsWith('@');
+  const canCancelHostedTurn = (hostedRunning || sending) && !composingIntervention;
+  const pendingStartedAt = pendingPhaseStartedAt;
+  const displayMessages = messages;
+  const collaborationStartIndex = collaborationState === 'active'
+    ? displayMessages.findIndex((message) => (
+        message.role !== 'user' && message.roleStage && message.roleStage !== 'chat'
+      ))
+    : -1;
+  const inputFontSize = resolveComposerFontSize(content);
+  const { cleanupAttachmentSources, updateAttachments } = useChatAttachmentLifecycle({
+    attachmentOwnerRef,
+    attachmentsRef,
+    cacheOwner,
+    clearOptimisticHostedTurn,
+    mountedRef,
+    pendingAttachmentCleanup,
+    setAttachments,
+  });
+
+  const updatePendingPhase = pendingTurn.updatePhase;
+  const resetPendingStateMachine = pendingTurn.reset;
+
+  const updateConversationCollaborationState = useCollaborationStateUpdater({
+    activeConversationIdRef,
+    collaborationStateByConversationRef,
+    setCollaborationState,
+  });
+
+  const {
+    applyConversation,
+    commitConversationIndex,
+    loadConversation,
+  } = useConversationSnapshotController({
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    cacheOwner,
+    clearOptimisticHostedTurn,
+    clearOptimisticPendingTurn,
+    cloudApi,
+    conversationIndexRef,
+    conversationSyncGenerationRef,
+    firstTokenAtRef,
+    hostedEventCursorRef,
+    hostedTurnVisibilityFailuresRef,
+    isChinese,
+    localStore,
+    optimisticHostedTurnConfirmedRef,
+    optimisticHostedTurnDeadlineRef,
+    optimisticHostedTurnIdRef,
+    optimisticHostedTurnTimeoutRef,
+    optimisticMessagesByConversationRef,
+    optimisticMessagesRef,
+    optimisticPendingByConversationRef,
+    pendingPhaseRef,
+    pendingTurnActiveRef,
+    reconnectAttempt,
+    replaceOptimisticMessages,
+    setActiveConversationId,
+    setActiveHostedTurnId,
+    setConversations,
+    setHostedRunning,
+    setMessages,
+    setReconnectAttempt,
+    setSending,
+    updateConversationCollaborationState,
+    updatePendingPhase,
+  });
+
+  const {
+    cancelPendingSend,
+    deliverAndReconcilePendingCancellation,
+    finalizePendingSend,
+    handleOutboxFailure,
+  } = useHostedCancellationController({
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    applyConversation,
+    cacheOwner,
+    cancelTimeoutMs: HOSTED_TURN_CANCEL_TIMEOUT_MS,
+    cancelledKeysRef: cancelledPendingSendKeysRef,
+    cloudApi,
+    isChinese,
+    localStore,
+    maxReconnectAttempts: RECONNECT_MAX_ATTEMPTS,
+    mountedRef,
+    notify,
+    optimisticMessagesByConversationRef,
+    optimisticMessagesRef,
+    optimisticPendingByConversationRef,
+    pendingChatSendRef,
+    pendingTurnActiveRef,
+    replaceOptimisticMessages,
+    resetPendingStateMachine,
+    sendOperationGenerationRef,
+    setActiveHostedTurnId,
+    setHostedRunning,
+    setMessages,
+    setReconnectAttempt,
+    setSending,
+    updatePendingPhase,
+  });
+
+  const {
+    acceptPendingOutboxItem,
+    deliverPendingEnqueue,
+    deliverPendingIntervention,
+    interventionReplayService,
+    replayDurableOutboxes,
+    settleAcceptedOutboxItem,
+  } = useHostedOutboxReplayController({
+    acceptFailureCleanupDelayMs: HOSTED_TURN_RETRY_DELAY_MS,
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    attachmentsRef,
+    beginOptimisticHostedTurn,
+    cacheOwner,
+    cloudApi,
+    conversationSyncGenerationRef,
+    deliverAndReconcilePendingCancellation,
+    finalizePendingSend,
+    handleOutboxFailure,
+    hostedTurnDeliveryClaimsRef,
+    hostedTurnDeliveryService,
+    isChinese,
+    loadConversation,
+    localStore,
+    maxReconnectAttempts: RECONNECT_MAX_ATTEMPTS,
+    mountedRef,
+    optimisticMessagesByConversationRef,
+    optimisticMessagesRef,
+    optimisticPendingByConversationRef,
+    pendingTurnActiveRef,
+    profile,
+    setActiveConversationId,
+    setActiveHostedTurnId,
+    setHostedRunning,
+    setMessages,
+    setReconnectAttempt,
+    setSending,
+    updateConversationCollaborationState,
+    updatePendingPhase,
+  });
+
+  const { sendIntervention } = useHostedInterventionController({
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    applyConversation,
+    cacheOwner,
+    cloudApi,
+    contentRef,
+    conversationIndexRef,
+    deliverPendingIntervention,
+    interventionReplayService,
+    isChinese,
+    localStore,
+    notify,
+    setContent,
+    setMessages,
+    setSending,
+    setSlashMenuOpen,
+  });
+
+  const hostedSend = useHostedSendController({
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    attachments,
+    attachmentsRef,
+    autoFollowStreamRef,
+    beginOptimisticHostedTurn,
+    cacheOwner,
+    cancellation: {
+      deliverAndReconcilePendingCancellation,
+      finalizePendingSend,
+      handleOutboxFailure,
+    },
+    cancelledPendingSendKeysRef,
+    cancellingHostedTurn,
+    cleanupAttachmentSources,
+    client,
+    cloudAvailable: Boolean(cloudApi),
+    commitConversationIndex,
+    contentRef,
+    conversationIndexRef,
+    conversationSyncGenerationRef,
+    firstTokenAtRef,
+    fixtureMode,
+    hostedRunning,
+    hostedTurnDeliveryClaimsRef,
+    hostedTurnVisibilityFailuresRef,
+    intervention: { sendIntervention },
+    isChinese,
+    loadConversation,
+    localStore,
+    messages,
+    notify,
+    optimisticMessagesByConversationRef,
+    optimisticMessagesRef,
+    optimisticPendingByConversationRef,
+    outbox: {
+      acceptPendingOutboxItem,
+      deliverPendingEnqueue,
+      settleAcceptedOutboxItem,
+    },
+    pendingChatSendRef,
+    pendingTurnActiveRef,
+    profile,
+    replaceOptimisticMessages,
+    sendOperationGenerationRef,
+    sendSubmissionGateRef,
+    sending,
+    setActiveConversationId,
+    setActiveHostedTurnId,
+    setContent,
+    setHostedRunning,
+    setMessages,
+    setReconnectAttempt,
+    setSending,
+    setSlashMenuOpen,
+    updateAttachments,
+    updateConversationCollaborationState,
+    updatePendingPhase,
+  });
+
+  const { consoleRunning, executeConsoleCommand } = useMobileConsoleController({
+    activeConversationIdRef,
+    applyConversation,
+    cloudApi,
+    contentRef,
+    isChinese,
+    notify,
+    profile,
+    setActiveConversationId,
+    setContent,
+    setMessages,
+    setSlashMenuOpen,
+  });
+  const canSend = Boolean(content.trim() || attachmentCount > 0)
+    && (!sending || composingIntervention)
+    && !cancellingHostedTurn
+    && !consoleRunning;
+  const {
+    openConversation,
+    refreshConversationHistory,
+    refreshConversationIndex,
+    resetHydration,
+  } = useConversationIndexController({
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    applyConversation,
+    cacheOwner,
+    clearOptimisticHostedTurn,
+    cloudApi,
+    commitConversationIndex,
+    conversationIndexRef,
+    conversationSyncGenerationRef,
+    fixtureMode,
+    isChinese,
+    loadConversation,
+    localStore,
+    notify,
+    optimisticMessagesByConversationRef,
+    optimisticMessagesRef,
+    optimisticPendingByConversationRef,
+    pendingTurnActiveRef,
+    profile,
+    requestTimeoutMs: HOSTED_TURN_REQUEST_TIMEOUT_MS,
+    setActiveConversationId,
+    setActiveHostedTurnId,
+    setCollaborationState,
+    setConversations,
+    setHostedRunning,
+    setMessages,
+    setSending,
+  });
+
+  const {
+    readRepliesAloud,
+    speakingMessageId,
+    toggleMessageSpeech,
+    toggleReadRepliesAloud,
+    toggleVoiceInput,
+    voiceError,
+    voiceState,
+  } = useHermesVoice({
+    applyTranscript: useCallback((next: string) => {
+      contentRef.current = next;
+      setContent(next);
+    }, []),
+    describeError: useCallback(
+      (error: unknown) => serverFailure(error, isChinese),
+      [isChinese],
+    ),
+    focusComposer: useCallback(() => composerInputRef.current?.focus(), []),
+    getDraft: useCallback(() => contentRef.current, []),
+    isChinese,
+    messages,
+    notify,
+  });
+
+  const checkApiRelay = useRelayCheckAction({ cloudApi, isChinese, notify });
+
+  useEffect(() => {
+    conversationSyncGenerationRef.current.invalidateAll();
+    resetHydration();
+    conversationIndexRef.current = [];
+    collaborationStateByConversationRef.current = new Map();
+    hostedEventCursorRef.current = new Map();
+    optimisticMessagesByConversationRef.current = new Map();
+    optimisticPendingByConversationRef.current = new Map();
+    optimisticMessagesRef.current = [];
+    activeConversationIdRef.current = '';
+    activeHostedTurnIdRef.current = '';
+    clearOptimisticHostedTurn();
+    resetPendingStateMachine();
+    setConversations([]);
+    setActiveConversationId('');
+    setActiveHostedTurnId('');
+    setMessages([]);
+    setCollaborationState('single');
+    setHostedRunning(false);
+    setSending(false);
+  }, [cacheOwner, clearOptimisticHostedTurn, resetHydration, resetPendingStateMachine]);
+
+  const notifyConversationLifecycleError = useCallback((error: unknown) => {
+    notify(serverFailure(error, isChinese));
+  }, [isChinese, notify]);
+
+  useConversationIndexLifecycle({
+    activeConversationIdRef,
+    notificationConversationId: notificationTarget?.conversationId,
+    notificationIdentity: notificationTarget?.notificationId,
+    onError: notifyConversationLifecycleError,
+    onPreferredConversationConsumed,
+    preferredConversationId,
+    refreshConversationIndex,
+    replayDurableOutboxes,
+  });
+
+  useHostedConversationStream({
+    activeConversationId,
+    activeConversationIdRef,
+    applyConversation,
+    cloudApi,
+    cursorRef: hostedEventCursorRef,
+    generation: conversationSyncGenerationRef.current,
+    hostedRunning,
+    loadConversation,
+    requestTimeoutMs: HOSTED_TURN_REQUEST_TIMEOUT_MS,
+  });
+
+  const {
+    branchFromMessage,
+    cancelActiveHostedTurn,
+    createConversation,
+    selectConversation,
+  } = useConversationActionsController({
+    activeConversationIdRef,
+    activeHostedTurnIdRef,
+    applyConversation,
+    attachmentsRef,
+    autoFollowStreamRef,
+    cacheOwner,
+    cancelHostedTurnInFlightRef,
+    cancelTimeoutMs: HOSTED_TURN_CANCEL_TIMEOUT_MS,
+    cancellation: {
+      cancelPendingSend,
+      deliverAndReconcilePendingCancellation,
+    },
+    cleanupAttachmentSources,
+    clearOptimisticHostedTurn,
+    clearOptimisticPendingTurn,
+    cloudApi,
+    collaborationStateByConversationRef,
+    commitConversationIndex,
+    contentRef,
+    conversationIndexRef,
+    conversationSyncGenerationRef,
+    hostedRunning,
+    isChinese,
+    localStore,
+    notify,
+    openConversation,
+    optimisticMessagesByConversationRef,
+    optimisticMessagesRef,
+    optimisticPendingByConversationRef,
+    pendingChatSendRef,
+    pendingTurnActiveRef,
+    profile,
+    resetPendingStateMachine,
+    sendOperationGenerationRef,
+    sending,
+    setActiveConversationId,
+    setActiveHostedTurnId,
+    setCancellingHostedTurn,
+    setCollaborationState,
+    setContent,
+    setHostedRunning,
+    setMessages,
+    setSending,
+    setSlashMenuOpen,
+    updateAttachments,
+  });
+
+  const requestSend = useChatSendAction({
+    attachmentsRef,
+    canCancelHostedTurn,
+    cancelActiveHostedTurn,
+    contentRef,
+    executeConsoleCommand,
+    hostedRequestSend: hostedSend.requestSend,
+    isChinese,
+    notify,
+    setContent,
+    setSlashMenuOpen,
+  });
+
+  const {
+    openAttachmentPicker,
+    openStoredAttachment,
+    pickFile,
+    pickPhoto,
+    previewAttachment,
+    removeAttachment,
+    shareAttachment,
+  } = useChatAttachmentController({
+    cleanupAttachmentSources,
+    cloudApi,
+    composerInputRef,
+    isChinese,
+    keepLatestVisible,
+    keyboardAvoidanceEnabled,
+    notify,
+    pendingAttachmentCleanup,
+    setAttachmentsOpen,
+    updateAttachments,
+  });
+
+  return (
+    <ChatPageShell
+      attachmentsOpen={attachmentsOpen}
+      backgroundColor={tokens.colors.background}
+      compact={compact}
+      composerKeyboardStyle={composerKeyboardStyle}
+      composerProps={{
+        actions: {
+          onCancelHostedTurn: () => { void cancelActiveHostedTurn(); },
+          onContentChange: (next) => {
+            contentRef.current = next;
+            setContent(next);
+            setSlashMenuOpen(next.trimStart().startsWith('/'));
+          },
+          onFocus: () => {
+            keyboardAvoidanceEnabled.value = 1;
+            keepLatestVisible(false);
+          },
+          onOpenAttachmentPicker: openAttachmentPicker,
+          onOpenSlashCommand: openSlashCommand,
+          onPreviewAttachment: (attachment) => { void previewAttachment(attachment); },
+          onRemoveAttachment: removeAttachment,
+          onSelectSlashCommand: selectSlashCommand,
+          onSend: requestSend,
+          onShareAttachment: (attachment) => { void shareAttachment(attachment); },
+          onToggleReadRepliesAloud: toggleReadRepliesAloud,
+          onToggleVoiceInput: () => { void toggleVoiceInput(); },
+        },
+        inputRef: composerInputRef,
+        model: {
+          attachments,
+          canCancelHostedTurn,
+          canSend,
+          cancellingHostedTurn,
+          collaborationState,
+          content,
+          filteredSlashCommands,
+          hostedRunning,
+          inputFontSize,
+          isChinese,
+          pendingPhase,
+          readRepliesAloud,
+          reconnectAttempt,
+          sending,
+          slashMenuOpen,
+          voiceError,
+          voiceState,
+        },
+      }}
+      headerProps={{
+        collaborationState,
+        compact,
+        gatewayStatuses,
+        isChinese,
+        messages: displayMessages,
+        onMentionMember: mentionMember,
+        onOpenConversations: () => {
+          keyboardAvoidanceEnabled.value = 0;
+          composerInputRef.current?.blur();
+          Keyboard.dismiss();
+          if (showHistory) setHistoryCollapsed((current) => !current);
+          else setHistoryModalOpen(true);
+        },
+        onOpenNavigation: openNavigationAfterKeyboard,
+        safeAreaLeft,
+        safeAreaRight,
+        safeAreaTop,
+        sending,
+        showCollaborationHeaderCount,
+      }}
+      historyCollapsed={historyCollapsed}
+      historyModalOpen={historyModalOpen}
+      historyProps={{
+        activeId: activeConversationId,
+        conversations,
+        isChinese,
+        onCheckRelay: checkApiRelay,
+        onNew: createConversation,
+        onRefresh: refreshConversationHistory,
+        onSelect: (id) => { void selectConversation(id); },
+      }}
+      isChinese={isChinese}
+      keyboardRootStyle={keyboardRootStyle}
+      modalHistoryProps={{
+        activeId: activeConversationId,
+        conversations,
+        isChinese,
+        onCheckRelay: checkApiRelay,
+        onClose: () => setHistoryModalOpen(false),
+        onNew: () => {
+          void createConversation();
+          setHistoryModalOpen(false);
+        },
+        onRefresh: refreshConversationHistory,
+        onSelect: (id) => {
+          void selectConversation(id);
+          setHistoryModalOpen(false);
+        },
+      }}
+      onCloseAttachments={() => setAttachmentsOpen(false)}
+      onCloseHistory={() => setHistoryModalOpen(false)}
+      onComposerLayout={() => keepLatestVisible(false)}
+      onPickFile={() => { void pickFile(); }}
+      onPickPhoto={(camera) => { void pickPhoto(camera); }}
+      safeAreaLeft={safeAreaLeft}
+      safeAreaRight={safeAreaRight}
+      showHistory={showHistory}
+      streamProps={{
+        collaborationStartIndex,
+        collaborationState,
+        compact,
+        hostedRunning,
+        isChinese,
+        keepLatestVisible,
+        messages: displayMessages,
+        onBranch: branchFromMessage,
+        onInspectActivity: pauseStreamAutoFollow,
+        onJumpToLatest: () => {
+          autoFollowStreamRef.current = true;
+          keepLatestVisible(true, true);
+        },
+        onMentionMember: mentionMember,
+        onOpenAttachment: openStoredAttachment,
+        onScroll: handleStreamScroll,
+        onToggleSpeech: toggleMessageSpeech,
+        pendingPhase,
+        pendingStartedAt,
+        reconnectAttempt,
+        safeAreaBottom,
+        sending,
+        showScrollToBottom,
+        slashMenuOpen,
+        speakingMessageId,
+        streamRef,
+      }}
+    />
+  );
+}
+
+// Component structure ported from OpenMinis AIChatView.inputBar at
+// OpenMinis/OpenMinis@9cf3a855. See THIRD_PARTY_NOTICES.md (GPL-3.0).

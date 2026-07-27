@@ -1,6 +1,32 @@
-export const HERMES_ORIGIN = (
-  process.env.EXPO_PUBLIC_HERMES_URL ?? 'https://daxueshenmai.top'
-).replace(/\/$/, '');
+import { cleartextHttpAllowed } from './api/HermesApiClient';
+
+// Bearer-token traffic must never travel over cleartext HTTP outside local
+// development; this applies normalizeBaseUrl's transport rule to the build
+// -time origin override before any client is constructed from it. The
+// verdict is recorded instead of thrown: a module-scope throw crashes the
+// bundle at import time with a red screen and no recovery UI.
+export function hermesOriginTransportError(origin: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    // Malformed overrides keep failing where they are consumed today.
+    return null;
+  }
+  if (parsed.protocol === 'http:' && !cleartextHttpAllowed(parsed.hostname)) {
+    return 'EXPO_PUBLIC_HERMES_URL must use https:// outside local development. '
+      + 'Rebuild with an https:// origin, or launch a development build with '
+      + 'EXPO_PUBLIC_HERMES_ALLOW_HTTP=1 to allow cleartext HTTP.';
+  }
+  return null;
+}
+
+export const HERMES_ORIGIN =
+  (process.env.EXPO_PUBLIC_HERMES_URL ?? 'https://daxueshenmai.top').replace(/\/$/, '');
+
+// Non-null when the configured origin violates the transport rule above. The
+// app shell renders a config-error screen from it instead of booting auth.
+export const HERMES_ORIGIN_TRANSPORT_ERROR = hermesOriginTransportError(HERMES_ORIGIN);
 
 export const GITHUB_REPOSITORY =
   process.env.EXPO_PUBLIC_GITHUB_REPOSITORY ?? 'given33/hermes-ios';

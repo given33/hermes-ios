@@ -113,6 +113,16 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(report, /accountGenerationKey/);
   assert.match(report, /let accountGeneration = suite\?\.integer/);
   assert.match(read('native-extensions/HermesDeviceActivityReport/Info.plist'), /report-extension/);
+
+  // Screen Time payloads cross the App Group as sealed envelopes: shared-suite
+  // plists are cleartext on disk. The extensions read the key from the shared
+  // Keychain access group but never create it, and drop the write rather than
+  // persist cleartext when it is absent.
+  for (const extension of [monitor, report]) {
+    assert.match(extension, /HermesScreenTimeCrypto\.seal/);
+    assert.match(extension, /kSecAttrAccessGroup as String: "group\.app\.sunstone1029\.fig1171\.hermes"/);
+    assert.doesNotMatch(extension, /SecItemAdd/);
+  }
 });
 
 test('native context absorbs DeviceActivity extension events', () => {
@@ -124,6 +134,12 @@ test('native context absorbs DeviceActivity extension events', () => {
   assert.match(service, /device-activity-summary-latest/);
   assert.match(service, /Self\.generation\(of: \$0\)/);
   assert.match(service, /setAccountGeneration/);
+  // The host provisions the App Group Keychain key before monitoring can arm
+  // and is the only side that opens envelopes; plaintext dictionaries from
+  // pre-encryption extension builds drain once through the same decode path.
+  assert.match(service, /HermesScreenTimeCrypto\.open/);
+  assert.match(service, /HermesScreenTimeCrypto\.provisionKey\(\)/);
+  assert.match(service, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.match(module, /getScreenTimeSnapshot/);
   assert.match(module, /View\(HermesScreenTimeReportView\.self\)/);
   const provider = read('src/context/IOSContextProvider.tsx');

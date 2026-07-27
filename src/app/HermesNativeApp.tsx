@@ -1,15 +1,16 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, type PropsWithChildren } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { LoginScreen } from '../auth/LoginScreen';
+import { HERMES_ORIGIN_TRANSPORT_ERROR } from '../config';
 import {
   NotificationProvider,
   useTaskNotificationTarget,
 } from '../notifications/NotificationProvider';
-import { FrontendPreviewApp } from '../preview/FrontendPreviewApp';
+import { FrontendPreviewApp } from '../studio/FrontendPreviewApp';
 import { IOSContextProvider } from '../context/IOSContextProvider';
 import {
   FrontendPreviewThemeProvider,
@@ -44,6 +45,8 @@ export function HermesNativeApp() {
               </View>
             </ThemedNativeSurface>
           </FrontendPreviewThemeProvider>
+        ) : HERMES_ORIGIN_TRANSPORT_ERROR ? (
+          <ConfigErrorScreen message={HERMES_ORIGIN_TRANSPORT_ERROR} />
         ) : (
           <AuthProvider>
             <NotificationProvider>
@@ -88,6 +91,18 @@ function NativeAuthRoot() {
         </View>
       </ThemedNativeSurface>
     </ThemeProvider>
+  );
+}
+
+// A cleartext EXPO_PUBLIC_HERMES_URL used to throw while src/config.ts was
+// imported, taking the bundle down before any UI could mount. The recorded
+// transport error renders here instead, keeping the remediation readable.
+function ConfigErrorScreen({ message }: { message: string }) {
+  return (
+    <View accessibilityRole="alert" style={styles.configError}>
+      <Text style={styles.configErrorTitle}>配置错误</Text>
+      <Text style={styles.configErrorText}>{message}</Text>
+    </View>
   );
 }
 
@@ -137,5 +152,21 @@ const styles = StyleSheet.create({
   },
   themedSurface: {
     flex: 1,
+  },
+  configError: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 12,
+    padding: 32,
+  },
+  configErrorTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '600',
+  },
+  configErrorText: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 15,
+    lineHeight: 22,
   },
 });

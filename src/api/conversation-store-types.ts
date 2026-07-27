@@ -1,0 +1,106 @@
+import type {
+  CollaborationMessage,
+  HostedTurnEnqueueInput,
+  JsonRecord,
+  SingleConversation,
+} from './HermesCloudApi';
+
+export interface ConversationCacheSnapshot {
+  version: 4;
+  owner: string;
+  activeConversationId: string;
+  conversations: SingleConversation[];
+  syncedAt: number;
+}
+
+export interface ConversationCacheReconciliation {
+  conversations: SingleConversation[];
+  downloadIds: string[];
+}
+
+export interface HostedTurnOutboxItem {
+  attempts?: number;
+  cancelledAt?: number;
+  deliveryAcceptedAt?: number;
+  deliveryTerminalAt?: number;
+  foregroundFailedAt?: number;
+  reconciliationAttempts?: number;
+  reconciliationExhaustedAt?: number;
+  conversationId: string;
+  conversationPending?: boolean;
+  conversationProfile?: string;
+  conversationTitle?: string;
+  input: HostedTurnEnqueueInput;
+  lastError?: string;
+  nextAttemptAt?: number;
+  purpose?: 'hosted-turn-cancel' | 'message';
+  pendingAttachments?: HostedTurnPendingAttachment[];
+  queuedAt: number;
+}
+
+export interface PendingEnqueueMutationResult {
+  item: HostedTurnOutboxItem | null;
+  updated: boolean;
+}
+
+export interface HostedTurnPendingAttachment {
+  encryption?: 'aes-gcm-v1';
+  id: string;
+  kind: 'file' | 'image';
+  mimeType?: string | null;
+  name: string;
+  ownedTemporary?: boolean;
+  size?: number | null;
+  sourceUri?: string;
+  uri: string;
+  uploaded?: JsonRecord;
+}
+
+export interface CollaborationRoomOutboxItem {
+  content: string;
+  profiles: string[];
+  queuedAt: number;
+  requestId: string;
+  roomId: string;
+}
+
+export interface HostedInterventionOutboxItem {
+  attempts?: number;
+  content: string;
+  conversationId: string;
+  deliveryAcceptedAt?: number;
+  lastError?: string;
+  message: CollaborationMessage;
+  messageId: string;
+  nextAttemptAt?: number;
+  queuedAt: number;
+  turnId: string;
+}
+
+export interface PendingInterventionMutationResult {
+  item: HostedInterventionOutboxItem | null;
+  updated: boolean;
+}
+
+export interface OptimisticConversationLedgerItem {
+  conversationId: string;
+  messages: CollaborationMessage[];
+  pendingTurn?: OptimisticPendingTurn;
+  updatedAt: number;
+}
+
+export interface OptimisticPendingTurn {
+  attempt: number;
+  lastError?: string;
+  phase: 'executing' | 'reconnecting' | 'thinking';
+  phaseStartedAt: number;
+  turnId?: string;
+  updatedAt: number;
+  userMessageId: string;
+}
+
+export interface ConversationStorageAdapter {
+  getItem(key: string): Promise<string | null>;
+  removeItem(key: string): Promise<void>;
+  setItem(key: string, value: string): Promise<void>;
+}

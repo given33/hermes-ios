@@ -49,13 +49,19 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+import Reanimated, {
+  FadeIn,
+  FadeOut,
+  SlideInLeft,
+  SlideOutLeft,
+} from 'react-native-reanimated';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
-import {
-  HermesCloudApi,
-  type CustomModelConfiguration,
-  type CustomModelConnectionResult,
+import type {
+  CustomModelConfiguration,
+  CustomModelConnectionResult,
 } from '../api/HermesCloudApi';
+import { hermesCloudApiFor } from '../api/hermes-api-registry';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSContextMenu } from '../components/ios/IOSContextMenu';
 import { IOSPressable } from '../components/ios/IOSPressable';
@@ -65,6 +71,7 @@ import { NativeInput } from '../components/ui/NativeInput';
 import { ScreenState } from '../components/ui/ScreenState';
 import { StudioProfileAvatar } from '../components/studio/StudioProfileAvatar';
 import { multiplyAlpha } from '../design/control-contracts';
+import { MOTION, useMotion } from '../design/motion';
 import { useTheme } from '../design/ThemeProvider';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import {
@@ -92,7 +99,7 @@ import {
   PreviewSettingRow,
   PreviewText,
   PreviewToggle,
-} from './PreviewPrimitives';
+} from '../studio/PreviewPrimitives';
 
 export interface PreviewPageProps {
   gatewayStatuses?: readonly {
@@ -107,415 +114,9 @@ export interface PreviewPageProps {
   serverOnline?: boolean;
 }
 
-export function ChatPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
-  const { width } = useWindowDimensions();
-  const { tokens } = useTheme();
-  const [draft, setDraft] = useState('');
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const [attachmentsOpen, setAttachmentsOpen] = useState(false);
-  const [attachmentCount, setAttachmentCount] = useState(0);
-  const [model, setModel] = useState('claude-sonnet-4');
-  const [reasoning, setReasoning] = useState<'low' | 'medium' | 'high'>('medium');
-  const isChinese = locale === 'zh';
-  const terminalFontSize = terminalFontSizeForWidth(width - 24);
-  const terminalLineHeight = terminalFontSize * (width < 1024 ? 1.02 : 1.15);
-  const terminalFont = 'HermesTerminal-JetBrainsMono-400-Normal';
-  const terminalBold = 'HermesTerminal-JetBrainsMono-700-Normal';
-  const terminalBackground = tokens.terminal.background;
-  const terminalForeground = tokens.terminal.foreground;
-  const terminalMuted = terminalForeground.startsWith('#')
-    ? `${terminalForeground}99`
-    : terminalForeground;
-  const openModelPicker = () => {
-    if (Platform.OS !== 'ios') {
-      notify(isChinese ? '模型选择仅在 iOS 可用' : 'Model selection is available on iOS');
-      return;
-    }
-    const models = PREVIEW_MODELS.map((item) => item.model);
-    ActionSheetIOS.showActionSheetWithOptions(
-      {
-        cancelButtonIndex: models.length,
-        options: [...models, isChinese ? '取消' : 'Cancel'],
-        title: isChinese ? '选择模型' : 'Select model',
-      },
-      (index) => {
-        const selected = models[index];
-        if (selected) setModel(selected);
-      },
-    );
-  };
-  const modelPanel = (
-    <View style={styles.modelPanelContent}>
-      <NativeButton
-        contentStyle={styles.fullWidthButton}
-        onPress={() => notify(isChinese ? '已新建对话' : 'New chat created')}
-        outlined
-        prefix={<MessageSquarePlus />}
-        style={styles.fullWidthPressable}
-      >
-        {isChinese ? '新建对话' : 'New chat'}
-      </NativeButton>
-      <PreviewCard style={styles.chatSideCard}>
-        <View style={styles.chatSideRow}>
-          <View style={styles.chatSideCopy}>
-            <PreviewText variant="label">{isChinese ? '模型' : 'Model'}</PreviewText>
-            <IOSPressable haptic="selection" onPress={openModelPicker} style={styles.modelPickerRow}>
-              <PreviewText numberOfLines={1} style={styles.chatSideCopy}>{model}</PreviewText>
-              <ChevronDown color={tokens.colors.textSecondary} size={14} />
-            </IOSPressable>
-          </View>
-          <PreviewBadge tone="success">{isChinese ? '在线' : 'LIVE'}</PreviewBadge>
-        </View>
-      </PreviewCard>
-      <PreviewCard style={styles.chatSideCard}>
-        <View style={styles.chatSideRow}>
-          <View style={styles.chatSideCopy}>
-            <PreviewText variant="label">{isChinese ? '工具事件流' : 'Tool events'}</PreviewText>
-            <PreviewText numberOfLines={1} variant="tiny">
-              {isChinese ? '等待下一次工具调用' : 'Waiting for the next tool call'}
-            </PreviewText>
-          </View>
-          <PreviewBadge tone="success">{isChinese ? '在线' : 'LIVE'}</PreviewBadge>
-        </View>
-      </PreviewCard>
-      <PreviewCard style={styles.chatSideCard} title={isChinese ? '推理强度' : 'Reasoning effort'}>
-        <PreviewSegmented<'low' | 'medium' | 'high'>
-          onChange={setReasoning}
-          options={[
-            { label: isChinese ? '低' : 'Low', value: 'low' },
-            { label: isChinese ? '中' : 'Medium', value: 'medium' },
-            { label: isChinese ? '高' : 'High', value: 'high' },
-          ]}
-          value={reasoning}
-        />
-      </PreviewCard>
-    </View>
-  );
-
-  const pickPhoto = async (camera: boolean) => {
-    const result = camera
-      ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1 })
-      : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 1 });
-    if (!result.canceled) {
-      setAttachmentCount((count) => count + result.assets.length);
-      setAttachmentsOpen(false);
-      notify(isChinese ? `已选择 ${result.assets.length} 张图片` : `${result.assets.length} image selected`);
-    }
-  };
-
-  const pickFile = async () => {
-    const result = await DocumentPicker.getDocumentAsync({ multiple: true });
-    if (!result.canceled) {
-      setAttachmentCount((count) => count + result.assets.length);
-      setAttachmentsOpen(false);
-      notify(isChinese ? `已选择 ${result.assets.length} 个文件` : `${result.assets.length} file selected`);
-    }
-  };
-
-  const sendPreview = () => {
-    if (!draft.trim() && attachmentCount === 0) return;
-    notify(isChinese ? '消息已发送' : 'Message sent');
-    setDraft('');
-    setAttachmentCount(0);
-  };
-
-  return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={0}
-      style={styles.chatRoot}
-    >
-      <View style={styles.chatMain}>
-        <View
-          style={[
-            styles.chatHeader,
-            { borderBottomColor: tokens.colors.border },
-          ]}
-        >
-          <PreviewText
-            numberOfLines={1}
-            style={{ fontFamily: WEBUI_FONT_FAMILIES.RulesExpandedBold }}
-            variant="heading"
-          >
-            {isChinese ? '单聊' : 'Chat'}
-          </PreviewText>
-          {width < 1024 ? (
-            <IOSPressable
-              accessibilityLabel={isChinese ? '打开模型与工具' : 'Open model and tools'}
-              onPress={() => setToolsOpen(true)}
-              pressedStyle={{ backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.05) }}
-              style={[
-                styles.modelToolsButton,
-                {
-                  backgroundColor: 'transparent',
-                  borderColor: multiplyAlpha(tokens.colors.foreground, 0.2),
-                },
-              ]}
-            >
-              <PanelRight color={tokens.colors.textSecondary} size={13} />
-              <PreviewText variant="tiny">
-                {isChinese ? '模型与工具' : 'Model & tools'}
-              </PreviewText>
-            </IOSPressable>
-          ) : null}
-        </View>
-        <View
-          style={[
-            styles.terminalWindow,
-            {
-              backgroundColor: terminalBackground,
-              shadowColor: '#000000',
-            },
-          ]}
-        >
-          <ScrollView
-            contentContainerStyle={styles.terminalTranscript}
-            decelerationRate="normal"
-            keyboardDismissMode="interactive"
-            keyboardShouldPersistTaps="handled"
-            scrollEventThrottle={8}
-            showsVerticalScrollIndicator
-            style={styles.terminalScroll}
-          >
-            <TerminalLine bold color={terminalForeground} fontFamily={terminalBold} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {'⚕  HERMES AGENT  v0.9.3'}
-            </TerminalLine>
-            <TerminalLine color={terminalMuted} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {'model  anthropic/claude-sonnet-4  ·  profile  default'}
-            </TerminalLine>
-            <TerminalLine color={terminalMuted} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {'cwd    ~/.hermes-ios'}
-            </TerminalLine>
-            <TerminalSpacer lineHeight={terminalLineHeight} />
-            <TerminalLine color={terminalForeground} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {isChinese
-                ? '欢迎使用 Hermes Agent！输入消息，或使用 /help 查看命令。'
-                : 'Welcome to Hermes Agent! Type your message or /help for commands.'}
-            </TerminalLine>
-            <TerminalSpacer lineHeight={terminalLineHeight} />
-            <TerminalLine color="#87ceeb" fontFamily={terminalBold} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {'❯  '}{isChinese ? '帮我检查当前项目的状态。' : 'Check the current project status.'}
-            </TerminalLine>
-            <TerminalSpacer lineHeight={terminalLineHeight} />
-            <TerminalLine color="#ffd700" fontFamily={terminalBold} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {'⚕  Hermes Agent'}
-            </TerminalLine>
-            <TerminalLine color={terminalForeground} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {isChinese
-                ? '我先查看工作目录和 Git 状态。'
-                : 'I will inspect the working directory and Git status.'}
-            </TerminalLine>
-            <TerminalLine color={terminalForeground} fontFamily={terminalFont} fontSize={terminalFontSize} lineHeight={terminalLineHeight}>
-              {isChinese
-                ? '$ git status --short'
-                : '$ git status --short'}
-            </TerminalLine>
-          </ScrollView>
-
-          <View style={styles.terminalInputChrome}>
-            <TerminalStatusBar
-              fontFamily={terminalFont}
-              fontSize={terminalFontSize}
-              layoutWidth={width - 40}
-              lineHeight={terminalLineHeight}
-            />
-            <TerminalRule
-              fontFamily={terminalFont}
-              fontSize={terminalFontSize}
-              lineHeight={terminalLineHeight}
-            />
-            {attachmentCount > 0 ? (
-              <View style={styles.terminalAttachmentRow}>
-                <Paperclip color="#87ceeb" size={terminalFontSize + 3} />
-                <PreviewText style={{ color: '#87ceeb', fontFamily: terminalBold, fontSize: terminalFontSize }}>
-                  {isChinese ? `${attachmentCount} 个附件` : `${attachmentCount} attachment${attachmentCount === 1 ? '' : 's'}`}
-                </PreviewText>
-              </View>
-            ) : null}
-            <View style={styles.terminalInputRow}>
-              <PreviewText style={{ color: terminalForeground, fontFamily: terminalFont, fontSize: terminalFontSize, lineHeight: terminalLineHeight }}>
-                {'❯ '}
-              </PreviewText>
-              <TextInput
-                autoCapitalize="none"
-                autoCorrect={false}
-                blurOnSubmit={false}
-                multiline
-                onChangeText={setDraft}
-                onSubmitEditing={sendPreview}
-                placeholder={isChinese ? '输入消息' : 'Type a message'}
-                placeholderTextColor="#888888"
-                returnKeyType="send"
-                selectionColor={terminalForeground}
-                style={[
-                  styles.terminalInput,
-                  {
-                    color: terminalForeground,
-                    fontFamily: terminalFont,
-                    fontSize: terminalFontSize,
-                    lineHeight: terminalLineHeight,
-                  },
-                ]}
-                submitBehavior="submit"
-                value={draft}
-              />
-              <IOSPressable
-                accessibilityLabel={isChinese ? '添加附件' : 'Add attachment'}
-                hitSlop={8}
-                onPress={() => setAttachmentsOpen(true)}
-                scaleTo={0.9}
-                style={styles.terminalIconButton}
-              >
-                <Paperclip color={terminalMuted} size={terminalFontSize + 5} />
-              </IOSPressable>
-            </View>
-            {width >= 1024 ? (
-              <TerminalRule
-                fontFamily={terminalFont}
-                fontSize={terminalFontSize}
-                lineHeight={terminalLineHeight}
-              />
-            ) : null}
-          </View>
-
-          <IOSPressable
-            accessibilityLabel={isChinese ? '复制上一条回复' : 'Copy last response'}
-            onPress={() => notify(isChinese ? '已复制上一条回复' : 'Last response copied')}
-            style={[styles.copyLastButton, { borderColor: `${terminalForeground}55` }]}
-          >
-            <Copy color={terminalForeground} size={terminalFontSize + 2} />
-            {width >= 400 ? (
-              <PreviewText style={{ color: terminalForeground, fontFamily: terminalFont, fontSize: terminalFontSize }}>
-                {isChinese ? '复制上一条回复' : 'copy last response'}
-              </PreviewText>
-            ) : null}
-          </IOSPressable>
-        </View>
-      </View>
-      {width >= 1024 ? (
-        <View style={[styles.modelPanel, { borderLeftColor: tokens.colors.border }]}> 
-          {modelPanel}
-        </View>
-      ) : null}
-      <PreviewModal onClose={() => setToolsOpen(false)} open={toolsOpen} title={isChinese ? '模型与工具' : 'Model & Tools'}>
-        {modelPanel}
-      </PreviewModal>
-      <PreviewModal onClose={() => setAttachmentsOpen(false)} open={attachmentsOpen} title={isChinese ? '添加附件' : 'Add attachment'}>
-        <NativeButton onPress={() => void pickPhoto(false)} outlined prefix={<Image />}>
-          {isChinese ? '照片图库' : 'Photo library'}
-        </NativeButton>
-        <NativeButton onPress={() => void pickPhoto(true)} outlined prefix={<Camera />}>
-          {isChinese ? '拍照' : 'Take photo'}
-        </NativeButton>
-        <NativeButton onPress={() => void pickFile()} outlined prefix={<File />}>
-          {isChinese ? '系统文件' : 'System files'}
-        </NativeButton>
-      </PreviewModal>
-    </KeyboardAvoidingView>
-  );
-}
-
-function TerminalLine({
-  children,
-  color,
-  fontFamily,
-  fontSize,
-  lineHeight,
-}: {
-  bold?: boolean;
-  children: ReactNode;
-  color: string;
-  fontFamily: string;
-  fontSize: number;
-  lineHeight: number;
-}) {
-  return (
-    <PreviewText
-      style={{ color, fontFamily, fontSize, lineHeight }}
-    >
-      {children}
-    </PreviewText>
-  );
-}
-
-function TerminalSpacer({ lineHeight }: { lineHeight: number }) {
-  return <View style={{ height: lineHeight }} />;
-}
-
-function TerminalStatusBar({
-  fontFamily,
-  fontSize,
-  layoutWidth,
-  lineHeight,
-}: {
-  fontFamily: string;
-  fontSize: number;
-  layoutWidth: number;
-  lineHeight: number;
-}) {
-  const estimatedColumns = Math.floor(layoutWidth / (fontSize * 0.6));
-  const model = 'claude-sonnet-4';
-  const baseStyle = { fontFamily, fontSize, lineHeight };
-  return (
-    <View style={[styles.terminalStatusBar, { height: lineHeight }]}>
-      <Text numberOfLines={1} style={[baseStyle, styles.terminalStatusText]}>
-        <Text style={[baseStyle, styles.terminalStatusBase]}>{' ⚕ '}</Text>
-        <Text style={[baseStyle, styles.terminalStatusStrong]}>{model}</Text>
-        <Text style={[baseStyle, styles.terminalStatusDim]}>
-          {estimatedColumns < 52 ? ' · 0s ' : estimatedColumns < 76 ? ' · ' : ' │ 21.5k/200k │ '}
-        </Text>
-        {estimatedColumns >= 52 ? (
-          <Text style={[baseStyle, styles.terminalStatusGood]}>
-            {estimatedColumns < 76 ? '21%' : '██░░░░░░░░ 21%'}
-          </Text>
-        ) : null}
-        {estimatedColumns >= 52 ? (
-          <Text style={[baseStyle, styles.terminalStatusDim]}>
-            {estimatedColumns < 76 ? ' · 0s ' : ' │ 0s '}
-          </Text>
-        ) : null}
-      </Text>
-    </View>
-  );
-}
-
-function TerminalRule({
-  fontFamily,
-  fontSize,
-  lineHeight,
-}: {
-  fontFamily: string;
-  fontSize: number;
-  lineHeight: number;
-}) {
-  return (
-    <Text
-      numberOfLines={1}
-      style={{
-        color: '#CD7F32',
-        fontFamily,
-        fontSize,
-        height: lineHeight,
-        lineHeight,
-      }}
-    >
-      {'─'.repeat(180)}
-    </Text>
-  );
-}
-
-function terminalFontSizeForWidth(layoutWidth: number): number {
-  if (layoutWidth < 300) return 7;
-  if (layoutWidth < 360) return 8;
-  if (layoutWidth < 420) return 9;
-  if (layoutWidth < 520) return 10;
-  if (layoutWidth < 720) return 11;
-  if (layoutWidth < 1024) return 12;
-  return 14;
-}
-
 export function SessionsPreviewPage({ locale = 'zh', navigate, notify }: PreviewPageProps) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const { width } = useWindowDimensions();
   const chinese = locale === 'zh';
   const [query, setQuery] = useState('');
@@ -536,18 +137,35 @@ export function SessionsPreviewPage({ locale = 'zh', navigate, notify }: Preview
   return (
     <View style={[styles.historyPanel, { backgroundColor: tokens.colors.card }]}>
       {compact && showSessions ? (
-        <IOSPressable
-          accessibilityLabel={chinese ? '关闭会话列表' : 'Close session list'}
-          onPress={() => setShowSessions(false)}
-          style={[styles.historyBackdrop, { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.38) }]}
-        />
+        <Reanimated.View
+          entering={motion.animate(FadeIn.duration(MOTION.duration.transition))}
+          exiting={motion.animate(FadeOut.duration(MOTION.duration.transition))}
+          style={styles.historyBackdrop}
+        >
+          <IOSPressable
+            accessibilityLabel={chinese ? '关闭会话列表' : 'Close session list'}
+            onPress={() => setShowSessions(false)}
+            style={[styles.historyBackdropFill, { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.38) }]}
+          />
+        </Reanimated.View>
       ) : null}
       {(!compact || showSessions) ? (
-        <View style={[
-          styles.historySidebar,
-          { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border },
-          compact && styles.historySidebarCompact,
-        ]}>
+        // The overlaid session list slides on compact widths (transition
+        // band, interruptible, dropped under Reduce Motion); on wide layouts
+        // it is a permanent column and must not animate on mount.
+        <Reanimated.View
+          entering={compact
+            ? motion.animate(SlideInLeft.duration(MOTION.duration.transition))
+            : undefined}
+          exiting={compact
+            ? motion.animate(SlideOutLeft.duration(MOTION.duration.transition))
+            : undefined}
+          style={[
+            styles.historySidebar,
+            { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border },
+            compact && styles.historySidebarCompact,
+          ]}
+        >
           <View style={[styles.historySidebarHeader, { borderBottomColor: tokens.colors.border }]}>
             <NativeButton onPress={() => navigate('/chat')} prefix={<Plus />} size="sm">
               {chinese ? '新建会话' : 'New chat'}
@@ -600,7 +218,7 @@ export function SessionsPreviewPage({ locale = 'zh', navigate, notify }: Preview
             <PreviewText variant="tiny">default</PreviewText>
             <PreviewText variant="tiny">{filtered.length} sessions</PreviewText>
           </View>
-        </View>
+        </Reanimated.View>
       ) : null}
       <View style={styles.historyMain}>
         <View style={[styles.historyHeader, { borderBottomColor: tokens.colors.border }]}>
@@ -1261,302 +879,6 @@ function StudioTableRow({
   );
 }
 
-interface ModelsManagementPageProps extends PreviewPageProps {
-  client: HermesApiClient;
-  profile: string;
-}
-
-type ModelOperationState = {
-  kind: 'discover' | 'save' | 'test';
-  message: string;
-  state: 'error' | 'running' | 'success';
-} | null;
-
-export function ModelsManagementPage({
-  client,
-  locale = 'zh',
-  notify,
-  profile,
-}: ModelsManagementPageProps) {
-  const { tokens } = useTheme();
-  const api = useMemo(() => new HermesCloudApi(client), [client]);
-  const chinese = locale === 'zh';
-  const [apiKey, setApiKey] = useState('');
-  const [apiKeyPreview, setApiKeyPreview] = useState('');
-  const [apiMode, setApiMode] = useState<CustomModelConfiguration['apiMode']>('chat_completions');
-  const [baseUrl, setBaseUrl] = useState('');
-  const [contextLength, setContextLength] = useState('131072');
-  const [detectedExpanded, setDetectedExpanded] = useState(false);
-  const [detectedModels, setDetectedModels] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [model, setModel] = useState('');
-  const [operation, setOperation] = useState<ModelOperationState>(null);
-  const [reasoningEffort, setReasoningEffort] = useState<CustomModelConfiguration['reasoningEffort']>('medium');
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const current = await api.getCustomModel(profile);
-      setApiKey('');
-      setApiKeyPreview(current.apiKeyConfigured ? current.apiKeyPreview || '********' : '');
-      setApiMode(current.apiMode);
-      setBaseUrl(current.baseUrl);
-      setContextLength(String(current.contextLength || 131072));
-      setModel(current.model);
-      setReasoningEffort(current.reasoningEffort);
-    } catch (error) {
-      setOperation({ kind: 'save', message: modelPageError(error, chinese), state: 'error' });
-    } finally {
-      setLoading(false);
-    }
-  }, [api, chinese, profile]);
-
-  useEffect(() => { void load(); }, [load]);
-
-  const configuration = useCallback((): CustomModelConfiguration => ({
-    apiKey,
-    apiMode,
-    baseUrl,
-    contextLength: Number.parseInt(contextLength, 10) || 0,
-    model,
-    reasoningEffort,
-  }), [apiKey, apiMode, baseUrl, contextLength, model, reasoningEffort]);
-
-  const discover = async () => {
-    setOperation({
-      kind: 'discover',
-      message: chinese ? '正在检测可用模型…' : 'Detecting available models…',
-      state: 'running',
-    });
-    try {
-      const result = await api.discoverCustomModels(baseUrl, apiKey, profile);
-      if (!result.ok) throw new Error(modelConnectionFailure('模型检测', result));
-      setDetectedModels(result.models);
-      if (!result.models.includes(model)) setModel(result.models[0] || '');
-      setDetectedExpanded(true);
-      const message = chinese
-        ? `检测到 ${result.models.length} 个可用模型（${result.latency_ms} ms）`
-        : `Detected ${result.models.length} models in ${result.latency_ms} ms`;
-      setOperation({ kind: 'discover', message, state: 'success' });
-      notify(message);
-    } catch (error) {
-      const message = modelPageError(error, chinese);
-      setOperation({ kind: 'discover', message, state: 'error' });
-      notify(message);
-    }
-  };
-
-  const testConnection = async () => {
-    setOperation({
-      kind: 'test',
-      message: chinese ? '正在测试模型连接…' : 'Testing model connection…',
-      state: 'running',
-    });
-    try {
-      const result = await api.testCustomModel(configuration(), profile);
-      if (!result.ok || !result.reachable) {
-        throw new Error(modelConnectionFailure('连接测试', result));
-      }
-      const message = chinese
-        ? `连接成功（HTTP ${result.status}，${result.latency_ms} ms）`
-        : `Connected (HTTP ${result.status}, ${result.latency_ms} ms)`;
-      setOperation({ kind: 'test', message, state: 'success' });
-      notify(message);
-    } catch (error) {
-      const message = modelPageError(error, chinese);
-      setOperation({ kind: 'test', message, state: 'error' });
-      notify(message);
-    }
-  };
-
-  const save = async () => {
-    setOperation({
-      kind: 'save',
-      message: chinese ? '正在保存模型配置…' : 'Saving model configuration…',
-      state: 'running',
-    });
-    try {
-      const saved = await api.saveCustomModel(configuration(), profile);
-      const preview = typeof saved.api_key_preview === 'string' ? saved.api_key_preview : '';
-      if (preview) setApiKeyPreview(preview);
-      setApiKey('');
-      const message = chinese ? '模型配置已保存' : 'Model configuration saved';
-      setOperation({ kind: 'save', message, state: 'success' });
-      notify(message);
-    } catch (error) {
-      const message = modelPageError(error, chinese);
-      setOperation({ kind: 'save', message, state: 'error' });
-      notify(message);
-    }
-  };
-
-  const valid = Boolean(baseUrl.trim() && model.trim() && Number(contextLength) > 0);
-  const busy = operation?.state === 'running';
-  if (loading) {
-    return <ScreenState kind="loading" message={chinese ? '正在读取模型配置' : 'Loading model configuration'} />;
-  }
-
-  return (
-    <PreviewPage title={chinese ? '模型' : 'Models'}>
-      <PreviewCard title={chinese ? '自定义模型' : 'Custom model'}>
-        <View style={styles.modelEditorFields}>
-          <PreviewText variant="label">Base URL</PreviewText>
-          <NativeInput
-            autoCapitalize="none"
-            onChangeText={setBaseUrl}
-            placeholder="https://example.com/v1"
-            value={baseUrl}
-          />
-          <PreviewText variant="label">{chinese ? 'API 密钥' : 'API key'}</PreviewText>
-          <NativeInput
-            autoCapitalize="none"
-            onChangeText={setApiKey}
-            placeholder={apiKeyPreview
-              ? `${chinese ? '已保存' : 'Saved'} ${apiKeyPreview}`
-              : chinese ? '输入 API 密钥' : 'Enter API key'}
-            secureTextEntry
-            value={apiKey}
-          />
-
-          <View style={[styles.modelDetectionBox, { borderColor: tokens.colors.border }]}>
-            <View style={styles.modelDetectionHeader}>
-              <IOSPressable
-                disabled={busy || !baseUrl.trim()}
-                onPress={() => {
-                  if (!detectedModels.length) void discover();
-                  else setDetectedExpanded((current) => !current);
-                }}
-                style={styles.modelDetectionMain}
-              >
-                {operation?.kind === 'discover' && operation.state === 'running'
-                  ? <ActivityIndicator color={tokens.colors.foreground} size="small" />
-                  : <Search color={tokens.colors.foreground} size={16} />}
-                <PreviewText variant="label">{chinese ? '检测可用模型' : 'Detect models'}</PreviewText>
-                <View style={styles.flexSpacer} />
-                {detectedModels.length ? (
-                  <>
-                    <PreviewBadge tone="outline">{String(detectedModels.length)}</PreviewBadge>
-                    <ChevronDown
-                      color={tokens.colors.textSecondary}
-                      size={15}
-                      style={{ transform: [{ rotate: detectedExpanded ? '180deg' : '0deg' }] }}
-                    />
-                  </>
-                ) : null}
-              </IOSPressable>
-              {detectedModels.length ? (
-                <IOSPressable
-                  accessibilityLabel={chinese ? '重新检测可用模型' : 'Detect models again'}
-                  disabled={busy || !baseUrl.trim()}
-                  onPress={() => { void discover(); }}
-                  style={styles.modelRefreshButton}
-                >
-                  <RefreshCw color={tokens.colors.foreground} size={15} />
-                </IOSPressable>
-              ) : null}
-            </View>
-            {detectedExpanded ? detectedModels.map((entry) => (
-              <IOSPressable
-                key={entry}
-                onPress={() => {
-                  setModel(entry);
-                  setDetectedExpanded(false);
-                }}
-                style={[styles.modelDetectedRow, { borderTopColor: tokens.colors.border }]}
-              >
-                {model === entry
-                  ? <CheckCircle2 color={tokens.colors.success} size={16} />
-                  : <View style={[styles.modelEmptyCircle, { borderColor: tokens.colors.textTertiary }]} />}
-                <PreviewText variant="mono">{entry}</PreviewText>
-              </IOSPressable>
-            )) : null}
-          </View>
-
-          {!detectedModels.length ? (
-            <>
-              <PreviewText variant="label">{chinese ? '模型名称' : 'Model'}</PreviewText>
-              <NativeInput autoCapitalize="none" onChangeText={setModel} value={model} />
-            </>
-          ) : null}
-          <PreviewText variant="label">{chinese ? '接口协议' : 'API protocol'}</PreviewText>
-          <PreviewSegmented
-            onChange={(value) => setApiMode(value as CustomModelConfiguration['apiMode'])}
-            options={[
-              { label: 'Chat Completions', value: 'chat_completions' },
-              { label: 'Responses', value: 'codex_responses' },
-              { label: 'Anthropic', value: 'anthropic_messages' },
-            ]}
-            value={apiMode}
-          />
-          <PreviewText variant="label">{chinese ? '上下文长度' : 'Context length'}</PreviewText>
-          <NativeInput keyboardType="number-pad" onChangeText={setContextLength} value={contextLength} />
-          <PreviewText variant="label">{chinese ? '推理强度' : 'Reasoning effort'}</PreviewText>
-          <PreviewSegmented
-            onChange={(value) => setReasoningEffort(value as CustomModelConfiguration['reasoningEffort'])}
-            options={[
-              { label: chinese ? '关闭' : 'None', value: 'none' },
-              { label: chinese ? '中' : 'Medium', value: 'medium' },
-              { label: chinese ? '高' : 'High', value: 'high' },
-              { label: chinese ? '极高' : 'XHigh', value: 'xhigh' },
-            ]}
-            value={reasoningEffort as 'none' | 'medium' | 'high' | 'xhigh'}
-          />
-          <View style={styles.modelActions}>
-            <NativeButton disabled={!valid || busy} onPress={() => { void testConnection(); }} outlined>
-              {chinese ? '测试连接' : 'Test connection'}
-            </NativeButton>
-            <NativeButton disabled={!valid || busy} onPress={() => { void save(); }}>
-              {chinese ? '保存' : 'Save'}
-            </NativeButton>
-          </View>
-          {operation ? (
-            <View
-              style={[
-                styles.modelOperation,
-                {
-                  backgroundColor: tokens.colors.muted,
-                  borderColor: operation.state === 'error'
-                    ? tokens.colors.destructive
-                    : operation.state === 'success'
-                      ? tokens.colors.success
-                      : tokens.colors.border,
-                },
-              ]}
-            >
-              {operation.state === 'running'
-                ? <ActivityIndicator color={tokens.colors.foreground} size="small" />
-                : operation.state === 'success'
-                  ? <CheckCircle2 color={tokens.colors.success} size={17} />
-                  : <AlertCircle color={tokens.colors.destructive} size={17} />}
-              <PreviewText>{operation.message}</PreviewText>
-            </View>
-          ) : null}
-        </View>
-      </PreviewCard>
-    </PreviewPage>
-  );
-}
-
-function modelConnectionFailure(
-  label: string,
-  result: Pick<CustomModelConnectionResult, 'message' | 'reachable' | 'status'>,
-): string {
-  if (result.status === 401) return `${label}失败：API 密钥被拒绝（HTTP 401）`;
-  if (result.status === 403) return `${label}失败：密钥权限不足（HTTP 403）`;
-  if (result.status === 404) return `${label}失败：接口路径不存在（HTTP 404）`;
-  if (result.status === 429) return `${label}失败：请求过多（HTTP 429）`;
-  if (result.status >= 400) return `${label}失败：模型服务返回 HTTP ${result.status}`;
-  if (!result.reachable) return `${label}失败：模型服务连接超时或不可达`;
-  return `${label}失败：${result.message || '模型服务没有返回有效结果'}`;
-}
-
-function modelPageError(error: unknown, chinese: boolean): string {
-  const message = error instanceof Error && error.message
-    ? error.message
-    : chinese ? '模型操作失败，请重试' : 'Model operation failed';
-  return message.replace(/^服务器操作失败[：:]\s*/, '');
-}
-
 export function LogsPreviewPage({ notify }: PreviewPageProps) {
   const { width } = useWindowDimensions();
   const { tokens } = useTheme();
@@ -2108,6 +1430,9 @@ const styles = StyleSheet.create({
     right: 0,
     top: 0,
     zIndex: 8,
+  },
+  historyBackdropFill: {
+    flex: 1,
   },
   historySidebar: {
     borderRadius: 14,

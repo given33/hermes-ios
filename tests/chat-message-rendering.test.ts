@@ -3,10 +3,151 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
 
-const source = readFileSync(
-  resolve(process.cwd(), 'src/preview/PreviewChatPage.tsx'),
+const controllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/PreviewChatPage.tsx'),
   'utf8',
 );
+const pageStateSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useChatPageState.ts'),
+  'utf8',
+);
+const pageActionsSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useChatPageActions.ts'),
+  'utf8',
+);
+const presentationSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatPresentation.tsx'),
+  'utf8',
+);
+const collaborationPresentationSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatCollaborationPresentation.tsx'),
+  'utf8',
+);
+const headerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatHeader.tsx'),
+  'utf8',
+);
+const messageStreamSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatMessageStream.tsx'),
+  'utf8',
+);
+const chatComposerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatComposer.tsx'),
+  'utf8',
+);
+const composerPresentationSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatComposerPresentation.tsx'),
+  'utf8',
+);
+const conversationHistorySource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ConversationHistory.tsx'),
+  'utf8',
+);
+const modelToolsDrawerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatModelToolsDrawer.tsx'),
+  'utf8',
+);
+const presentationStylesSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/chat-presentation-styles.ts'),
+  'utf8',
+);
+const attachmentSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/chat-attachments.ts'),
+  'utf8',
+);
+const domainSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/chat-domain.ts'),
+  'utf8',
+);
+const deliverySource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/hosted-turn-delivery-service.ts'),
+  'utf8',
+);
+const optimisticStateSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useOptimisticConversationState.ts'),
+  'utf8',
+);
+const snapshotControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useConversationSnapshotController.ts'),
+  'utf8',
+);
+const indexControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useConversationIndexController.ts'),
+  'utf8',
+);
+const cancellationControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useHostedCancellationController.ts'),
+  'utf8',
+);
+const composerNavigationControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useChatComposerNavigationController.ts'),
+  'utf8',
+);
+const outboxReplayControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useHostedOutboxReplayController.ts'),
+  'utf8',
+);
+const attachmentControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useChatAttachmentController.ts'),
+  'utf8',
+);
+const attachmentLifecycleSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useChatAttachmentLifecycle.ts'),
+  'utf8',
+);
+const interventionControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useHostedInterventionController.ts'),
+  'utf8',
+);
+const sendControllerSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useHostedSendController.ts'),
+  'utf8',
+);
+const conversationActionsSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useConversationActionsController.ts'),
+  'utf8',
+);
+const deliveryCompositionSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/useHostedTurnDeliveryService.ts'),
+  'utf8',
+);
+const pageShellSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/ChatPageShell.tsx'),
+  'utf8',
+);
+// Chat is intentionally split into controller, presentation, and attachment
+// services. Contract assertions cover the whole production feature instead of
+// forcing every implementation detail back into one giant React component.
+const source = [
+  controllerSource,
+  pageStateSource,
+  pageActionsSource,
+  presentationSource,
+  collaborationPresentationSource,
+  headerSource,
+  messageStreamSource,
+  chatComposerSource,
+  composerPresentationSource,
+  conversationHistorySource,
+  modelToolsDrawerSource,
+  presentationStylesSource,
+  attachmentSource,
+  domainSource,
+  deliverySource,
+  optimisticStateSource,
+  snapshotControllerSource,
+  indexControllerSource,
+  cancellationControllerSource,
+  composerNavigationControllerSource,
+  outboxReplayControllerSource,
+  attachmentControllerSource,
+  attachmentLifecycleSource,
+  interventionControllerSource,
+  sendControllerSource,
+  conversationActionsSource,
+  deliveryCompositionSource,
+  pageShellSource,
+].join('\n');
 
 test('workflow activity sits above the role row and uses the Hermes Studio collapsed summary', () => {
   const messageStart = source.indexOf('function UnifiedMessage');
@@ -89,13 +230,13 @@ test('chat messages expose role avatars, local metadata, and Codex-like Markdown
   assert.match(source, /const size = compact \? 24 : 30/);
   assert.match(source, /isUser && remoteAvatar \? \(/);
   assert.match(source, /formatMessageLocalTime/);
-  assert.match(source, /messageStatusLabel/);
+  assert.doesNotMatch(source, /messageStatusLabel/);
   assert.match(source, /<Markdown style=\{markdownStyles\}>/);
   assert.match(source, /heading1:[\s\S]*heading2:[\s\S]*heading3:/);
 });
 
 test('sending is one durable idempotent enqueue with foreground outbox compensation', () => {
-  assert.match(source, /shouldRenderPendingMessage\(displayMessages, hostedRunning \|\| sending\)/);
+  assert.match(source, /shouldRenderPendingMessage\(messages, hostedRunning \|\| sending\)/);
   assert.doesNotMatch(source, /shouldRenderPendingMessage\(displayMessages, sending\)/);
   assert.match(source, /requestId: userMessageId/);
   assert.match(source, /turnId: hostedTurnId/);
@@ -119,7 +260,7 @@ test('the user message is rendered before any model or network request', () => {
   const optimisticInsert = send.indexOf('setMessages((current) => [...current, userMessage])');
   const composerClear = send.indexOf('clearQueuedComposer()');
   const durableIntent = send.indexOf('await localStore.initializePendingEnqueue(');
-  const enqueueRequest = send.indexOf('await deliverPendingEnqueue(queuedItem)');
+  const enqueueRequest = send.indexOf('await outbox.deliverPendingEnqueue(queuedItem)');
 
   assert.ok(optimisticInsert >= 0, 'the local user message is inserted');
   assert.ok(composerClear > optimisticInsert, 'the composer clears after the local insert');
@@ -138,7 +279,7 @@ test('a running hosted turn exposes the real server cancellation control', () =>
   assert.match(source, /conversationRunningHostedTurnId/);
   assert.match(source, /cancelHostedTurn\(/);
   assert.match(source, /取消当前任务/);
-  assert.match(source, /name=\{cancellingHostedTurn[\s\S]*'stop\.fill'/);
+  assert.match(source, /name=\{model\.canCancelHostedTurn \? 'stop\.circle\.fill' : 'arrow\.up\.circle\.fill'\}/);
 });
 
 test('collaboration members keep canonical distinct local avatars without excessive overlap', () => {
@@ -165,7 +306,7 @@ test('long pressing a member submits a durable intervention to the same hosted t
   assert.match(source, /onLongPress=\{\(\) => onMentionMember\(member\)\}/);
   assert.match(source, /const mention = `@\$\{message\.name\.trim\(\)\} `/);
   assert.match(source, /const composingIntervention = hostedRunning/);
-  assert.match(source, /cloudApi\.interveneHostedTurn\(/);
+  assert.match(source, /cloud\.interveneHostedTurn\(/);
   assert.match(source, /conversationId,[\s\S]*turnId,[\s\S]*trimmed,[\s\S]*messageId/);
 });
 
@@ -184,11 +325,27 @@ test('running simple chats expose elapsed time and a runtime-status fold', () =>
 });
 
 test('activity inspection pauses stream following and renders one primary body', () => {
+  const timeline = readFileSync(
+    resolve(process.cwd(), 'src/studio/WorkflowTimeline.tsx'),
+    'utf8',
+  );
+  const reasoning = readFileSync(
+    resolve(process.cwd(), 'src/studio/ReasoningSection.tsx'),
+    'utf8',
+  );
   assert.match(source, /autoFollowStreamRef/);
-  assert.match(source, /onScroll=\{handleStreamScroll\}/);
+  assert.match(source, /onScroll: handleStreamScroll/);
   assert.match(source, /onInspectActivity\(\);[\s\S]*setOpen/);
   assert.match(source, /activityDisplayContent\(activity\)/);
-  assert.match(source, /<ActivityDetail reasoning=\{isReasoning\} value=\{detailContent\}/);
-  assert.doesNotMatch(source, /<ActivityDetail label=/);
+  assert.match(source, /<ReasoningSection/);
+  assert.match(source, /<WorkflowTimeline/);
+  // The per-step fold, primary argument, clamped output, and pinned
+  // collapse state now live in the extracted timeline components.
+  assert.match(timeline, /activityPrimaryDetail\(activity\)/);
+  assert.match(timeline, /clampActivityText/);
+  assert.match(timeline, /timelineCollapseReducer/);
+  assert.match(timeline, /onToggle\(activity\.id\)/);
+  assert.match(reasoning, /reasoningPreviewLine\(text, running\)/);
+  assert.match(reasoning, /Clipboard\.setStringAsync\(text\)/);
   assert.doesNotMatch(source, /activityRuntime:/);
 });

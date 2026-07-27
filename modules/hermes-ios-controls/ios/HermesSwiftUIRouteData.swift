@@ -1,8 +1,6 @@
 import Combine
 import Foundation
 
-let hermesRouteSnapshotVersion = 1
-
 struct HermesRouteSnapshot: Decodable, Equatable {
   let version: Int
   let route: String?
@@ -30,35 +28,6 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let config: HermesConfigSnapshot
   let environment: [HermesEnvironmentSecretSnapshot]
   let system: HermesSystemSnapshot
-
-  private enum CodingKeys: String, CodingKey {
-    case version
-    case route
-    case sessions
-    case sessionContext
-    case files
-    case workflows
-    case approvals
-    case runtime
-    case analytics
-    case models
-    case modelConfirmation
-    case detectedModels
-    case operation
-    case logs
-    case cron
-    case skills
-    case integrations
-    case installations
-    case pairing
-    case achievements
-    case collaboration
-    case kanban
-    case profiles
-    case config
-    case environment
-    case system
-  }
 
   init(
     version: Int = hermesRouteSnapshotVersion,
@@ -117,7 +86,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   }
 
   init(from decoder: Decoder) throws {
-    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let container = try decoder.container(keyedBy: HermesRouteSnapshotField.self)
     version = try container.decodeIfPresent(Int.self, forKey: .version)
       ?? hermesRouteSnapshotVersion
     route = try container.decodeIfPresent(String.self, forKey: .route)
@@ -470,6 +439,7 @@ struct HermesApprovalItemSnapshot: Decodable, Equatable, Identifiable {
   let expiresAt: Double?
   let diff: String
   let diffAvailable: Bool
+  let payloadDigest: String?
 }
 
 struct HermesApprovalsSnapshot: Decodable, Equatable {
@@ -844,112 +814,6 @@ final class HermesRouteDataStore: ObservableObject {
         }
       }
     }
-  }
-}
-
-enum HermesRouteAction: String, CaseIterable {
-  case refresh = "route.refresh"
-  case sessionSelect = "session.select"
-  case sessionOpen = "session.open"
-  case sessionDelete = "session.delete"
-  case sessionRename = "session.rename"
-  case sessionCompress = "session.compress"
-  case fileSelect = "file.select"
-  case fileDelete = "file.delete"
-  case fileDownload = "file.download"
-  case fileShare = "file.share"
-  case fileImport = "file.import"
-  case folderCreate = "folder.create"
-  case modelSelect = "model.select"
-  case modelSelectCancel = "model.select.cancel"
-  case modelDiscover = "model.discover"
-  case modelSave = "model.save"
-  case modelTest = "model.test"
-  case logsFilter = "logs.filter"
-  case cronCreate = "cron.create"
-  case cronToggle = "cron.toggle"
-  case cronRun = "cron.run"
-  case cronDelete = "cron.delete"
-  case skillToggle = "skill.toggle"
-  case skillSelect = "skill.select"
-  case skillView = "skill.view"
-  case skillUpdate = "skill.update"
-  case integrationCreate = "integration.create"
-  case integrationUpdate = "integration.update"
-  case integrationToggle = "integration.toggle"
-  case integrationDelete = "integration.delete"
-  case pairingApprove = "pairing.approve"
-  case pairingRevoke = "pairing.revoke"
-  case pairingClearPending = "pairing.clear-pending"
-  case achievementsRescan = "achievements.rescan"
-  case profileCreate = "profile.create"
-  case profileUpdate = "profile.update"
-  case profileActivate = "profile.activate"
-  case profileDelete = "profile.delete"
-  case configUpdate = "config.update"
-  case configImport = "config.import"
-  case environmentDelete = "environment.delete"
-  case systemRestart = "system.restart"
-  case systemRecover = "system.recover"
-  case systemUpdate = "system.update"
-  case kanbanCreate = "kanban.create"
-  case kanbanUpdate = "kanban.update"
-  case kanbanMove = "kanban.move"
-  case kanbanDelete = "kanban.delete"
-  case collaborationSelect = "collaboration.select"
-  case collaborationCreate = "collaboration.create"
-  case collaborationDelete = "collaboration.delete"
-  case collaborationSend = "collaboration.send"
-  case workflowSelect = "workflow.select"
-  case workflowStart = "workflow.start"
-  case workflowCancel = "workflow.cancel"
-  case workflowRetry = "workflow.retry"
-  case workflowApprove = "workflow.approve"
-  case approvalSelect = "approval.select"
-  case approvalApprove = "approval.approve"
-  case approvalReject = "approval.reject"
-  case runtimeSelect = "runtime.select"
-  case runtimeCancel = "runtime.cancel"
-  case runtimeRetry = "runtime.retry"
-}
-
-struct HermesRouteActionPayload: Encodable, Equatable {
-  let route: String
-  let id: String?
-  let name: String?
-  let value: String?
-  let detail: String?
-  let targetId: String?
-  let enabled: Bool?
-  let position: Int?
-  let requestId: String?
-  let fields: [String: String]?
-  let uris: [String]?
-
-  init(
-    route: String,
-    id: String? = nil,
-    name: String? = nil,
-    value: String? = nil,
-    detail: String? = nil,
-    targetId: String? = nil,
-    enabled: Bool? = nil,
-    position: Int? = nil,
-    requestId: String? = nil,
-    fields: [String: String]? = nil,
-    uris: [String]? = nil
-  ) {
-    self.route = route
-    self.id = id
-    self.name = name
-    self.value = value
-    self.detail = detail
-    self.targetId = targetId
-    self.enabled = enabled
-    self.position = position
-    self.requestId = requestId
-    self.fields = fields
-    self.uris = uris
   }
 }
 

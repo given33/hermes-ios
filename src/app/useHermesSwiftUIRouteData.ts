@@ -8,12 +8,13 @@ import {
   conversationSessionSummary,
   createCollaborationRoomRequestId,
   createWorkflowStartRequestId,
-  HermesCloudApi,
+  type HermesCloudApi,
 } from '../api/HermesCloudApi';
+import { synchronizeConversationCache } from '../api/conversation-local-store';
 import {
-  ConversationLocalStore,
-  synchronizeConversationCache,
-} from '../api/conversation-local-store';
+  hermesCloudApiFor,
+  sharedConversationLocalStore,
+} from '../api/hermes-api-registry';
 import { WorkflowStartSingleFlight } from '../api/workflow-start-single-flight';
 import {
   decodeHermesSwiftUIRouteAction,
@@ -29,6 +30,10 @@ import {
   performHermesSwiftUIRouteAction,
   createHermesSwiftUISessionsSnapshot,
 } from './hermes-route-data';
+import {
+  initialRouteRefreshDelay,
+  nextRouteRefreshDelay,
+} from './route-refresh-policy';
 
 interface UseHermesSwiftUIRouteDataOptions {
   cacheOwner?: string;
@@ -79,9 +84,9 @@ export function useHermesSwiftUIRouteData({
   profile,
   routeId,
 }: UseHermesSwiftUIRouteDataOptions): HermesSwiftUIRouteDataController {
-  const api = useMemo(() => client ? new HermesCloudApi(client) : null, [client]);
+  const api = useMemo(() => client ? hermesCloudApiFor(client) : null, [client]);
   const localStore = useMemo(
-    () => cacheOwner ? new ConversationLocalStore() : null,
+    () => cacheOwner ? sharedConversationLocalStore() : null,
     [cacheOwner],
   );
   const workflowStartFlights = useMemo(
@@ -94,10 +99,17 @@ export function useHermesSwiftUIRouteData({
   const acknowledgedRoomRequestId = useRef('');
   const collaborationReplay = useRef<Promise<string> | null>(null);
   const operationRef = useRef<HermesSwiftUIRouteOperationSnapshot | undefined>(undefined);
+  const pollInFlight = useRef(false);
+  const resetRefreshCadence = useRef<() => void>(() => undefined);
   const [dataJson, setDataJson] = useState(() => encodeHermesSwiftUIRouteSnapshot({
     version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
     route: routeId,
   }));
+  const dataJsonRef = useRef(dataJson);
+
+  useEffect(() => {
+    dataJsonRef.current = dataJson;
+  }, [dataJson]);
   const updateOperation = useCallback((
     operation: HermesSwiftUIRouteOperationSnapshot | undefined,
   ) => {
@@ -123,7 +135,11 @@ export function useHermesSwiftUIRouteData({
           discarded += 1;
         }
       }
-      if (discarded) notify(`${discarded} 条待发群聊消息已失效，请重新选择房间发送。`);
+      if (discarded) {
+        notify(locale === 'zh'
+          ? `${discarded} 条待发群聊消息已失效，请重新选择房间发送。`
+          : `${discarded} pending room messages expired. Choose a room and send them again.`);
+      }
       if (lastAcknowledged) acknowledgedRoomRequestId.current = lastAcknowledged;
       return lastAcknowledged;
     })();
@@ -133,7 +149,7 @@ export function useHermesSwiftUIRouteData({
     } finally {
       if (collaborationReplay.current === replay) collaborationReplay.current = null;
     }
-  }, [api, cacheOwner, localStore, notify, routeId]);
+  }, [api, cacheOwner, localStore, locale, notify, routeId]);
 
   const reload = useCallback(async () => {
     if (!api) return;
@@ -154,14 +170,17 @@ export function useHermesSwiftUIRouteData({
         const sessionState = selected && !selectedId.startsWith('official:')
           ? await api.getConversationSessionState(selectedId, selected?.profile || profile)
           : undefined;
-        snapshot = createHermesSwiftUISessionsSnapshot({ sessions, sessionState });
+        snapshot = createHermesSwiftUISessionsSnapshot(
+          { sessions, sessionState },
+          locale,
+        );
       } else {
         snapshot = await loadHermesSwiftUIRouteSnapshot(
           api,
           routeId,
           profile,
           selectedItemId.current,
-          locale === 'zh',
+          locale,
         );
       }
       if (
@@ -197,7 +216,7 @@ export function useHermesSwiftUIRouteData({
           lastSuccessfulReloadAt.current,
         ));
       }
-      notify(serverErrorMessage(error));
+      notify(serverErrorMessage(error, locale));
     }
   }, [
     api,
@@ -226,19 +245,69 @@ export function useHermesSwiftUIRouteData({
     })();
     if (!api || routeId === 'models') return undefined;
 
-    const refreshInterval = routeId === 'skills' || routeId === 'mcp'
-      ? INSTALLATION_REFRESH_MS
-      : FOREGROUND_REFRESH_MS;
-    const interval = setInterval(() => {
-      if (AppState.currentState !== 'active') return;
-      if (routeId === 'system') {
-        setDataJson((current) => expireSystemRouteData(
-          current,
-          lastSuccessfulReloadAt.current,
-        ));
+    // Adaptive cadence instead of a fixed interval: the tight installation
+    // cadence applies only while an installation is actually progressing, an
+    // idle route backs off geometrically once consecutive snapshots stop
+    // changing, and any activity (payload change, user action, foreground)
+    // snaps back to the base cadence. See route-refresh-policy.ts.
+    const installationRoute = routeId === 'skills' || routeId === 'mcp';
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let disposed = false;
+    let delayMs = initialRouteRefreshDelay(
+      routeId,
+      FOREGROUND_REFRESH_MS,
+      INSTALLATION_REFRESH_MS,
+      dataJsonRef.current,
+    );
+    let lastPayload = dataJsonRef.current;
+    const schedule = (nextDelayMs: number) => {
+      if (disposed) return;
+      delayMs = nextDelayMs;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = setTimeout(() => { void tick(); }, delayMs);
+    };
+    const tick = async () => {
+      if (AppState.currentState === 'active') {
+        if (routeId === 'system') {
+          setDataJson((current) => expireSystemRouteData(
+            current,
+            lastSuccessfulReloadAt.current,
+          ));
+        }
+        // A poll never stacks onto a poll still on the wire; on a slow link
+        // the old fixed interval kept issuing identical snapshot requests.
+        if (!pollInFlight.current) {
+          pollInFlight.current = true;
+          try {
+            await reload();
+          } finally {
+            pollInFlight.current = false;
+          }
+        }
       }
-      void reload();
-    }, refreshInterval);
+      const payload = dataJsonRef.current;
+      const payloadChanged = payload !== lastPayload;
+      lastPayload = payload;
+      schedule(nextRouteRefreshDelay({
+        baseDelayMs: FOREGROUND_REFRESH_MS,
+        installationDelayMs: INSTALLATION_REFRESH_MS,
+        installationRoute,
+        payloadChanged,
+        pinned: routeId === 'system',
+        previousDelayMs: delayMs,
+        routeDataJson: payload,
+      }));
+    };
+    resetRefreshCadence.current = () => {
+      lastPayload = dataJsonRef.current;
+      schedule(initialRouteRefreshDelay(
+        routeId,
+        FOREGROUND_REFRESH_MS,
+        INSTALLATION_REFRESH_MS,
+        dataJsonRef.current,
+      ));
+    };
+    schedule(delayMs);
     const appState = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       if (routeId === 'system') {
@@ -247,11 +316,16 @@ export function useHermesSwiftUIRouteData({
           lastSuccessfulReloadAt.current,
         ));
       }
+      // Returning to the foreground is activity: refresh now and resume the
+      // base cadence rather than waiting out a backed-off idle timer.
+      resetRefreshCadence.current();
       void reload();
     });
     return () => {
+      disposed = true;
       requestVersion.current += 1;
-      clearInterval(interval);
+      if (timer !== undefined) clearTimeout(timer);
+      resetRefreshCadence.current = () => undefined;
       appState.remove();
     };
   }, [api, cacheOwner, localStore, reload, routeId]);
@@ -265,9 +339,15 @@ export function useHermesSwiftUIRouteData({
     }
     const event = decodeHermesSwiftUIRouteAction(action, payloadJson);
     if (!event) {
-      notify('无法识别页面操作，请刷新后重试。');
+      notify(locale === 'zh'
+        ? '无法识别页面操作，请刷新后重试。'
+        : 'Unrecognized page action. Refresh and try again.');
       return;
     }
+    // A user action is an activity signal: resume the base polling cadence so
+    // follow-up server state (a just-started installation, a fresh run) is
+    // observed at the tight latency instead of a backed-off idle timer.
+    resetRefreshCadence.current();
     const modelOperation = modelOperationForAction(event.action);
     if (
       event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.modelSelect
@@ -278,7 +358,7 @@ export function useHermesSwiftUIRouteData({
     if (modelOperation) {
       updateOperation({
         action: modelOperation,
-        message: modelOperationRunningMessage(modelOperation),
+        message: modelOperationRunningMessage(modelOperation, locale),
         state: 'running',
       });
     }
@@ -321,7 +401,7 @@ export function useHermesSwiftUIRouteData({
         try {
           await flight.promise;
         } catch (error) {
-          const message = serverErrorMessage(error);
+          const message = serverErrorMessage(error, locale);
           updateOperation({
             action: 'workflow.start',
             message,
@@ -373,7 +453,7 @@ export function useHermesSwiftUIRouteData({
         await reload();
         return;
       }
-      const result = await performHermesSwiftUIRouteAction(api, event, profile);
+      const result = await performHermesSwiftUIRouteAction(api, event, profile, locale);
       if (
         localStore
         && cacheOwner
@@ -414,7 +494,7 @@ export function useHermesSwiftUIRouteData({
       if (modelOperation) {
         updateOperation({
           action: modelOperation,
-          message: resultMessage || modelOperationSuccessMessage(modelOperation),
+          message: resultMessage || modelOperationSuccessMessage(modelOperation, locale),
           state: 'success',
         });
       }
@@ -423,7 +503,7 @@ export function useHermesSwiftUIRouteData({
       }
       if (resultMessage) notify(resultMessage);
     } catch (error) {
-      const message = serverErrorMessage(error);
+      const message = serverErrorMessage(error, locale);
       if (modelOperation) {
         updateOperation({ action: modelOperation, message, state: 'error' });
       }
@@ -471,18 +551,22 @@ function modelOperationForAction(
 
 function modelOperationRunningMessage(
   action: HermesSwiftUIRouteOperationSnapshot['action'],
+  locale: 'en' | 'zh',
 ): string {
-  if (action === 'model.discover') return '正在检测可用模型…';
-  if (action === 'model.test') return '正在测试模型连接…';
-  return '正在保存模型配置…';
+  const zh = locale === 'zh';
+  if (action === 'model.discover') return zh ? '正在检测可用模型…' : 'Detecting available models…';
+  if (action === 'model.test') return zh ? '正在测试模型连接…' : 'Testing model connection…';
+  return zh ? '正在保存模型配置…' : 'Saving model configuration…';
 }
 
 function modelOperationSuccessMessage(
   action: HermesSwiftUIRouteOperationSnapshot['action'],
+  locale: 'en' | 'zh',
 ): string {
-  if (action === 'model.discover') return '模型检测完成';
-  if (action === 'model.test') return '模型连接测试通过';
-  return '模型配置已保存';
+  const zh = locale === 'zh';
+  if (action === 'model.discover') return zh ? '模型检测完成' : 'Model detection finished';
+  if (action === 'model.test') return zh ? '模型连接测试通过' : 'Model connection test passed';
+  return zh ? '模型配置已保存' : 'Model configuration saved';
 }
 
 function mergeDetectedModels(dataJson: string, models: readonly string[]): string {
@@ -517,11 +601,15 @@ function mergeModelConfirmation(
   }
 }
 
-function serverErrorMessage(error: unknown): string {
+function serverErrorMessage(error: unknown, locale: 'en' | 'zh'): string {
   if (error instanceof Error && error.message) {
-    return `服务器操作失败：${error.message}`;
+    return locale === 'zh'
+      ? `服务器操作失败：${error.message}`
+      : `Server operation failed: ${error.message}`;
   }
-  return '服务器操作失败，请稍后重试。';
+  return locale === 'zh'
+    ? '服务器操作失败，请稍后重试。'
+    : 'Server operation failed. Try again later.';
 }
 
 function isPermanentRoomSendError(error: unknown): boolean {

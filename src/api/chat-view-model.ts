@@ -8,96 +8,53 @@ import {
   RUNTIME_RUN_FRESHNESS_MS,
   runningConversationRecordIsFresh,
 } from './HermesCloudApi';
+import type {
+  ConversationCollaborationState,
+  HermesChatActivity,
+  HermesChatActivityStatus,
+  HermesChatAttachment,
+  HermesChatAvatarRole,
+  HermesChatViewMessage,
+  HostedTurnVisibilityFailure,
+} from './chat-view-types';
+import {
+  isRecord,
+  numberValue,
+  stringListValue,
+  stringValue,
+  structuredText,
+  timestampValue,
+} from './chat-view-values';
+import {
+  TERMINAL_TURN_STATES,
+  calculateDurationMs,
+  firstActivityTimestamp,
+  formatDuration,
+  isTerminalStatus,
+  lastActivityTimestamp,
+  normalizeMessageStatus,
+  normalizeStatus,
+} from './chat-view-timing';
 
-export type HermesChatActivityStatus =
-  | 'cancelled'
-  | 'completed'
-  | 'failed'
-  | 'queued'
-  | 'running';
+export type {
+  ConversationCollaborationState,
+  HermesChatActivity,
+  HermesChatActivityStatus,
+  HermesChatAttachment,
+  HermesChatAvatarRole,
+  HermesChatRoleStage,
+  HermesChatViewMessage,
+  HostedTurnVisibilityFailure,
+} from './chat-view-types';
 
-export type HermesChatAvatarRole =
-  | 'dbb3-worker'
-  | 'dispatcher'
-  | 'hermes'
-  | 'pc-worker'
-  | 'reporter'
-  | 'reviewer'
-  | 'supervisor'
-  | 'user';
-
-export type HermesChatRoleStage =
-  | 'chat'
-  | 'dispatcher'
-  | 'reporter'
-  | 'reviewer'
-  | 'supervisor'
-  | 'worker';
-
-export type ConversationCollaborationState = 'active' | 'lifting' | 'single';
-
-export interface HermesChatActivity {
-  category: string;
-  completedAt?: number;
-  detail?: string;
-  duration: string;
-  durationMs?: number;
-  error?: string;
-  id: string;
-  input?: string;
-  model?: string;
-  name: string;
-  output?: string;
-  preview: string;
-  provider?: string;
-  startedAt?: number;
-  status: HermesChatActivityStatus;
-  toolName?: string;
-}
-
-export interface HermesChatViewMessage {
-  activities?: HermesChatActivity[];
-  attachments?: HermesChatAttachment[];
-  avatarRole?: HermesChatAvatarRole;
-  avatarSymbol?: string;
-  avatarUrl?: string;
-  completedAt?: number;
-  content: string;
-  createdAt?: number;
-  durationMs?: number;
-  firstTokenAt?: number;
-  handoffTarget?: string;
-  id: string;
-  model?: string;
-  name: string;
-  optimisticConfirmedAt?: number;
-  profile?: string;
-  provider?: string;
-  role: 'assistant' | 'user';
-  roleLabel?: string;
-  roleStage?: HermesChatRoleStage;
-  runtimeMessageId?: number;
-  runtimeSessionId?: string;
-  runtimeTurnId?: string;
-  senderId?: string;
-  startedAt?: number;
-  status?: string;
-  timingLabel?: string;
-  updatedAt?: number;
-}
-
-export interface HermesChatAttachment {
-  downloadUrl: string;
-  id: string;
-  mimeType?: string;
-  name: string;
-  size?: number;
-}
-
-export interface HostedTurnVisibilityFailure {
-  message: HermesChatViewMessage;
-  turnId: string;
-}
+export {
+  formatActivitySummary,
+  formatMessageLocalTime,
+  messageDurationMs,
+  messageHasExecutionTiming,
+  messageIsRunning,
+  messageStatusLabel,
+} from './chat-view-timing';
 
 export function hostedTurnVisibilityFailure(
   turnId: string,
@@ -124,13 +81,6 @@ export function hostedTurnVisibilityFailure(
     },
   };
 }
-
-const TERMINAL_TURN_STATES = new Set([
-  'cancelled',
-  'completed',
-  'failed',
-  'stopped',
-]);
 
 export function conversationMessagesToView(
   conversation: SingleConversation,
@@ -569,11 +519,15 @@ export function collaborationMessageToView(
       || stringListValue(meta.handoff_target)
       || undefined,
     id: message.id,
+    memberId: stringValue(message.member_id)
+      || stringValue(meta.member_id)
+      || undefined,
     model: [provider, model].filter(Boolean).join(' · ') || undefined,
     name,
     optimisticConfirmedAt: timestampValue(meta.optimistic_confirmed_at) || undefined,
     profile: profile || undefined,
     provider: provider || undefined,
+    rawRoleStage: stringValue(meta.role_stage) || undefined,
     role: isUser ? 'user' : 'assistant',
     roleLabel,
     roleStage,
@@ -1153,23 +1107,6 @@ function normalizeRoleStage(
   return 'chat';
 }
 
-function normalizeStatus(value: unknown): HermesChatActivityStatus {
-  const normalized = stringValue(value).toLowerCase();
-  if (normalized === 'failed' || normalized === 'error') return 'failed';
-  if (normalized === 'running' || normalized === 'streaming') return 'running';
-  if (normalized === 'queued' || normalized === 'pending' || normalized === 'starting') {
-    return 'queued';
-  }
-  if (normalized === 'cancelled' || normalized === 'canceled' || normalized === 'stopped') {
-    return 'cancelled';
-  }
-  return 'completed';
-}
-
-function normalizeMessageStatus(value: unknown): string {
-  return normalizeStatus(value);
-}
-
 function profileDisplayName(
   profile: string,
   stage: HermesChatViewMessage['roleStage'],
@@ -1309,205 +1246,4 @@ export function activityCategoryLabel(category: string, chinese = true): string 
         subagent: 'Subtask',
       };
   return labels[normalized as keyof typeof labels] || (chinese ? '工具' : 'Tool');
-}
-
-export function formatActivitySummary(
-  message: Pick<
-    HermesChatViewMessage,
-    'activities' | 'completedAt' | 'durationMs' | 'startedAt' | 'status' | 'timingLabel' | 'updatedAt'
-  >,
-  chinese = true,
-  now = Date.now(),
-): string {
-  const running = messageIsRunning(message);
-  const durationMs = messageDurationMs(message, now);
-  const prefix = message.timingLabel || (running
-    ? chinese ? '处理中' : 'Processing'
-    : chinese ? '已处理' : 'Processed');
-  if (running && /^(?:正在思考|正在重连|Thinking|Reconnecting)/i.test(prefix)) {
-    return prefix;
-  }
-  return `${prefix} ${formatCompactDuration(durationMs)}`;
-}
-
-export function messageHasExecutionTiming(
-  message: Pick<
-    HermesChatViewMessage,
-    'completedAt' | 'durationMs' | 'firstTokenAt' | 'roleStage' | 'startedAt' | 'status' | 'updatedAt'
-  >,
-): boolean {
-  if (message.roleStage === 'chat' && message.status === 'failed' && !message.firstTokenAt) {
-    return false;
-  }
-  return Boolean(
-    message.startedAt
-    || message.completedAt
-    || message.updatedAt
-    || message.durationMs
-    || message.status,
-  );
-}
-
-export function messageDurationMs(
-  message: Pick<
-    HermesChatViewMessage,
-    'activities' | 'completedAt' | 'durationMs' | 'startedAt' | 'status' | 'updatedAt'
-  >,
-  now = Date.now(),
-): number {
-  const running = messageIsRunning(message);
-  if (running && message.startedAt) return Math.max(0, now - message.startedAt);
-  if ((message.durationMs || 0) > 0) return message.durationMs || 0;
-  if (message.startedAt) {
-    return Math.max(0, (message.completedAt || message.updatedAt || now) - message.startedAt);
-  }
-  return 0;
-}
-
-export function messageIsRunning(
-  message: Pick<HermesChatViewMessage, 'activities' | 'status'>,
-): boolean {
-  const status = (message.status || '').toLowerCase();
-  if (TERMINAL_TURN_STATES.has(status)) return false;
-  return ['pending', 'queued', 'running', 'starting', 'streaming'].includes(status)
-    || Boolean(message.activities?.some(({ status: activityStatus }) => (
-      activityStatus === 'queued' || activityStatus === 'running'
-    )));
-}
-
-export function formatMessageLocalTime(
-  timestamp: number | undefined,
-  chinese = true,
-  now = Date.now(),
-): string {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return '';
-  const current = new Date(now);
-  const time = `${padTime(date.getHours())}:${padTime(date.getMinutes())}`;
-  const sameDay = date.getFullYear() === current.getFullYear()
-    && date.getMonth() === current.getMonth()
-    && date.getDate() === current.getDate();
-  if (sameDay) return time;
-  if (date.getFullYear() === current.getFullYear()) {
-    return chinese
-      ? `${date.getMonth() + 1}月${date.getDate()}日 ${time}`
-      : `${date.getMonth() + 1}/${date.getDate()} ${time}`;
-  }
-  return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${time}`;
-}
-
-export function messageStatusLabel(status: string | undefined, chinese = true): string {
-  const normalized = normalizeMessageStatus(status);
-  const labels = chinese
-    ? {
-        cancelled: '已取消',
-        completed: '已完成',
-        failed: '失败',
-        queued: '排队中',
-        running: '执行中',
-      }
-    : {
-        cancelled: 'Cancelled',
-        completed: 'Completed',
-        failed: 'Failed',
-        queued: 'Queued',
-        running: 'Running',
-      };
-  return labels[normalized as keyof typeof labels];
-}
-
-function formatCompactDuration(milliseconds: number): string {
-  const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
-function padTime(value: number): string {
-  return String(value).padStart(2, '0');
-}
-
-function isTerminalStatus(status: string): boolean {
-  return TERMINAL_TURN_STATES.has(status) || status === 'cancelled';
-}
-
-function firstActivityTimestamp(activities?: HermesChatActivity[]): number {
-  const timestamps = (activities || [])
-    .map(({ startedAt }) => startedAt)
-    .filter((value): value is number => Boolean(value));
-  return timestamps.length ? Math.min(...timestamps) : 0;
-}
-
-function lastActivityTimestamp(activities?: HermesChatActivity[]): number {
-  return Math.max(
-    0,
-    ...((activities || []).map(({ completedAt, startedAt }) => (
-      completedAt || startedAt || 0
-    ))),
-  );
-}
-
-function calculateDurationMs(
-  startedAt: number,
-  endedAt: number,
-  activities?: HermesChatActivity[],
-): number {
-  if (startedAt && endedAt) return Math.max(0, endedAt - startedAt);
-  const first = firstActivityTimestamp(activities);
-  const last = lastActivityTimestamp(activities);
-  if (first && last) return Math.max(0, last - first);
-  return Math.max(0, ...(activities || []).map(({ durationMs }) => durationMs || 0));
-}
-
-function formatDuration(milliseconds: number): string {
-  if (milliseconds <= 0) return '';
-  if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
-  return `${(milliseconds / 1_000).toFixed(1)} s`;
-}
-
-function numberValue(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : 0;
-  }
-  return 0;
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value : '';
-}
-
-function stringListValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    return value.map(stringValue).filter(Boolean).join('、');
-  }
-  return stringValue(value);
-}
-
-function structuredText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) return value.map(structuredText).filter(Boolean).join('\n');
-  if (isRecord(value)) {
-    const primary = structuredText(value.text ?? value.content);
-    if (primary) return primary;
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  }
-  return '';
-}
-
-function timestampValue(value: unknown): number {
-  const numeric = numberValue(value);
-  if (numeric > 0) return numeric < 10_000_000_000 ? numeric * 1_000 : numeric;
-  if (typeof value !== 'string' || !value.trim()) return 0;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

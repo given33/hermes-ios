@@ -12,6 +12,14 @@ export const SESSION_STORAGE_VERSION_KEY = 'hermes.native.v2.sessionVersion';
 export const SESSION_STORAGE_VERSION = '2';
 export const REMEMBER_LOGIN_STORAGE_KEY = 'hermes.native.v2.rememberLogin';
 export const REMEMBERED_PASSWORD_STORAGE_KEY = 'hermes.native.v2.rememberedPassword';
+// Records how the refresh token was actually written: 'biometric' when the
+// item carries a Face ID / Touch ID ACL, 'device' when the device has no
+// enrolled biometrics and the item is only device-unlock protected. Cold
+// start reads this flag (never the token itself) to decide whether the
+// unlock screen must run before session items are opened.
+export const CREDENTIAL_PROTECTION_STORAGE_KEY = 'hermes.native.v2.credentialProtection';
+export const BIOMETRIC_CREDENTIAL_PROTECTION = 'biometric';
+export const DEVICE_CREDENTIAL_PROTECTION = 'device';
 
 // Names used by releases before the non-interactive session migration. They
 // are intentionally not part of CREDENTIAL_STORAGE_KEYS and are never read
@@ -33,6 +41,7 @@ export const CREDENTIAL_STORAGE_KEYS = [
   ACCESS_TOKEN_STORAGE_KEY,
   REFRESH_TOKEN_STORAGE_KEY,
   REFRESH_TOKEN_POINTER_STORAGE_KEY,
+  CREDENTIAL_PROTECTION_STORAGE_KEY,
   ACCESS_EXPIRES_AT_STORAGE_KEY,
   DEVICE_ID_STORAGE_KEY,
   SESSION_STORAGE_VERSION_KEY,

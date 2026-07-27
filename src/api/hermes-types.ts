@@ -24,11 +24,6 @@ export function assertMobileHandshake(value: unknown): MobileHandshake {
   return value as MobileHandshake;
 }
 
-export interface WebSocketTicketResponse {
-  ticket: string;
-  ttl_seconds: number;
-}
-
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }

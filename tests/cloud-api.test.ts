@@ -4,6 +4,8 @@ import test from 'node:test';
 import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApiClient';
 import {
   conversationSessionSummary,
+  customApiMode,
+  customReasoningEffort,
   HermesCloudApi,
   mergeUnifiedConversationIndex,
   officialConversationPlaceholderId,
@@ -14,6 +16,22 @@ interface Call {
   options: HermesRequestOptions;
   path: string;
 }
+
+test('custom model normalization has one implementation with a pinned fallback', () => {
+  // Valid values pass through unchanged.
+  assert.equal(customApiMode('anthropic_messages'), 'anthropic_messages');
+  assert.equal(customApiMode('codex_responses'), 'codex_responses');
+  assert.equal(customReasoningEffort('none'), 'none');
+  assert.equal(customReasoningEffort('xhigh'), 'xhigh');
+  // Unknown or missing input falls back to the editor defaults; the SwiftUI
+  // route layer imports these same functions, so a form save can never flip a
+  // server-loaded 'medium' into 'none' again.
+  assert.equal(customApiMode('bogus'), 'chat_completions');
+  assert.equal(customApiMode(undefined), 'chat_completions');
+  assert.equal(customReasoningEffort('bogus'), 'medium');
+  assert.equal(customReasoningEffort(undefined), 'medium');
+  assert.equal(customReasoningEffort(''), 'medium');
+});
 
 test('conversation summaries require fresh durable run heartbeats', () => {
   const now = 1_800_000_000_000;
@@ -728,4 +746,61 @@ test('group collaboration reads and writes the modified Hermes room APIs', async
   });
   assert.match(String(roomBody.request_id), /^room-request-/);
   assert.match(String(roomBody.turn_id), /^room-turn-/);
+});
+
+test('session summaries keep preview, model precedence, and tool counts after the single-pass rewrite', () => {
+  const now = 1_800_000_000_000;
+  const summary = conversationSessionSummary({
+    created_at: now - 600_000,
+    id: 'summary-parity',
+    message_count: 0,
+    messages: [
+      {
+        content: '第一条提问',
+        id: 'u-1',
+        name: '你',
+        role: 'user',
+        // Tool activities may live under meta when the top-level array is
+        // absent; meta shadows metadata entirely (spread-merge precedence).
+        meta: {
+          activities: [
+            { category: 'terminal', command: 'ls' },
+            { category: 'status' },
+          ],
+        },
+        metadata: { activities: [{ category: 'browser' }] },
+      },
+      {
+        content: '带活动的回复',
+        id: 'a-1',
+        name: 'Hermes',
+        role: 'assistant',
+        activities: [
+          { category: 'terminal' },
+          { kind: 'reasoning' },
+          { category: 'Model' },
+          { kind: 'file-write' },
+          'not-a-record',
+        ] as never,
+        meta: { actual_model: 'glm-5', actual_provider: 'zai' },
+        metadata: { actual_model: 'shadowed', actual_provider: 'shadowed' },
+      },
+      { content: '', id: 's-1', name: '', role: 'system' },
+      { content: '收尾的追问', id: 'u-2', name: '你', role: 'user' },
+    ],
+    profile: 'default',
+    title: 'summary parity',
+    updated_at: now,
+  }, now);
+
+  // Preview: latest user/assistant message, skipping the trailing system row.
+  assert.equal(summary.preview, '收尾的追问');
+  // Model: assistant meta wins over metadata when both carry the key.
+  assert.equal(summary.model, 'zai/glm-5');
+  // Tool count: u-1 contributes 1 (terminal; status excluded; metadata list
+  // shadowed by meta), a-1 contributes 2 (terminal + file-write; reasoning,
+  // Model, and the non-record entry excluded).
+  assert.equal(summary.tool_call_count, 3);
+  assert.equal(summary.message_count, 4);
+  assert.equal(summary.is_active, false);
 });

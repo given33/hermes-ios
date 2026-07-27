@@ -1,18 +1,7 @@
 import type {
   HermesQuery,
   HermesQueryValue,
-  WebSocketTicketResponse,
 } from './hermes-types';
-import type {
-  DashboardFontResponse,
-  ThemeListResponse,
-} from '../design/theme-types';
-import {
-  assertWebSocketPath,
-  buildWebSocketUrl,
-  mintWebSocketTicket,
-  type HermesWebSocketPath,
-} from './ws-ticket';
 import { AsyncDeadlineError } from './async-deadline';
 
 export const HERMES_REQUEST_DEADLINE_MS = 30_000;
@@ -49,6 +38,43 @@ export class HermesApiError extends Error {
   }
 }
 
+export const HERMES_CLEARTEXT_BASE_URL_ERROR_CODE = 'HERMES_CLEARTEXT_BASE_URL';
+
+/**
+ * A stored or configured base URL uses cleartext http:// for a non-local host
+ * without the EXPO_PUBLIC_HERMES_ALLOW_HTTP=1 opt-in. This verdict is decided
+ * entirely on-device, so retrying can never change it: session restore must
+ * treat it as terminal and surface remediation instead of spinning forever.
+ * The dedicated class (and stable `code`) lets callers classify it without
+ * matching on the message text.
+ */
+export class HermesCleartextBaseUrlError extends Error {
+  readonly name = 'HermesCleartextBaseUrlError';
+  readonly code = HERMES_CLEARTEXT_BASE_URL_ERROR_CODE;
+
+  constructor() {
+    super(
+      'Hermes base URL must use HTTPS outside local development '
+      + '(use an https:// server URL, or allow cleartext HTTP in a development '
+      + 'build with EXPO_PUBLIC_HERMES_ALLOW_HTTP=1)',
+    );
+    Object.setPrototypeOf(this, HermesCleartextBaseUrlError.prototype);
+  }
+}
+
+// Hermes traffic always carries bearer tokens, so cleartext HTTP is confined
+// to development targets that never cross the open network: loopback hosts,
+// mDNS `.local` names, and dev builds launched with EXPO_PUBLIC_HERMES_ALLOW_HTTP=1.
+export function cleartextHttpAllowed(hostname: string): boolean {
+  if (process.env.EXPO_PUBLIC_HERMES_ALLOW_HTTP === '1') return true;
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  return normalized === 'localhost'
+    || normalized.endsWith('.localhost')
+    || normalized === '::1'
+    || /^127(?:\.\d{1,3}){3}$/.test(normalized)
+    || normalized.endsWith('.local');
+}
+
 export function normalizeBaseUrl(input: string): string {
   const candidate = input.trim();
   let url: URL;
@@ -60,6 +86,9 @@ export function normalizeBaseUrl(input: string): string {
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new Error('Hermes base URL must use HTTP or HTTPS');
+  }
+  if (url.protocol === 'http:' && !cleartextHttpAllowed(url.hostname)) {
+    throw new HermesCleartextBaseUrlError();
   }
   if (url.username || url.password) {
     throw new Error('Hermes base URL must not contain user information');
@@ -81,6 +110,8 @@ export class HermesApiClient {
   private readonly credential: string | HermesAccessTokenProvider;
   private readonly fetchImpl: typeof fetch;
   private readonly streamFetchImpl?: typeof fetch;
+  // Shared promises for identical GETs currently on the wire; see request().
+  private readonly inflightGets = new Map<string, Promise<unknown>>();
 
   constructor(
     baseUrl: string,
@@ -122,7 +153,7 @@ export class HermesApiClient {
     if (profile !== undefined) url.searchParams.set('profile', profile);
     this.assertUrlHasNoCredentials(url, this.currentCredentialSecrets());
 
-    return withRequestDeadline(async (signal) => {
+    const execute = () => withRequestDeadline(async (signal) => {
       const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
         url,
         callerHeaders,
@@ -148,6 +179,34 @@ export class HermesApiClient {
       }
       return body as T;
     }, callerSignal, deadlineMs, 'Hermes request timed out');
+
+    // Coalesce identical in-flight GETs. Route polling, the AppState listener,
+    // and pull-to-refresh routinely fire the same snapshot GET while a slower
+    // copy is still on the wire; the duplicates add radio time and parse work
+    // without ever producing fresher data than the shared reply. Only the
+    // plain polling shape joins a flight: a caller-supplied body, header set,
+    // or abort signal opts out, so requests that differ in anything but
+    // timing keep their own connection and cancelling one caller can never
+    // cancel a stranger's. Entries are evicted on settle, which also means a
+    // failed flight is shared only by the callers that raced it — later
+    // callers start a fresh request instead of inheriting the stale error.
+    const method = (requestInit.method || 'GET').toUpperCase();
+    const coalescible = method === 'GET'
+      && !requestInit.body
+      && !callerHeaders
+      && !callerSignal
+      && Object.keys(requestInit).every((key) => key === 'method');
+    if (!coalescible) return execute();
+    const key = `${deadlineMs}|${url.toString()}`;
+    const active = this.inflightGets.get(key);
+    if (active) return active as Promise<T>;
+    const flight = execute();
+    this.inflightGets.set(key, flight);
+    const evict = () => {
+      if (this.inflightGets.get(key) === flight) this.inflightGets.delete(key);
+    };
+    flight.then(evict, evict);
+    return flight;
   }
 
   async download(path: string, options: HermesRequestOptions = {}): Promise<Blob> {
@@ -227,38 +286,6 @@ export class HermesApiClient {
     mergeQuery(url, query);
     this.assertUrlHasNoCredentials(url, this.currentCredentialSecrets());
     return url.toString();
-  }
-
-  async createWebSocketUrl(path: HermesWebSocketPath, profile?: string): Promise<string> {
-    assertWebSocketPath(path);
-    const ticket = await mintWebSocketTicket(() =>
-      this.request<WebSocketTicketResponse>('/api/auth/ws-ticket', { method: 'POST' }),
-    );
-    return buildWebSocketUrl(this.baseUrl, path, ticket, profile);
-  }
-
-  getThemes(): Promise<ThemeListResponse> {
-    return this.request<ThemeListResponse>('/api/dashboard/themes');
-  }
-
-  setTheme(name: string): Promise<{ ok: boolean; theme: string }> {
-    return this.request('/api/dashboard/theme', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
-    });
-  }
-
-  getFontPref(): Promise<DashboardFontResponse> {
-    return this.request<DashboardFontResponse>('/api/dashboard/font');
-  }
-
-  setFontPref(font: string): Promise<{ ok: boolean; font: string }> {
-    return this.request('/api/dashboard/font', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ font }),
-    });
   }
 
   private createSameOriginUrl(path: string): URL {

@@ -3,18 +3,24 @@ import { Directory as ExpoDirectory, File as ExpoFile, Paths } from 'expo-file-s
 import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
 
 import { attachmentOutboxOwnerComponent } from './attachment-outbox-crypto';
+import { attachmentOutboxRoot, remapLegacyOutboxUri } from './attachment-outbox-root';
 import { cleanupOwnedTemporaryAttachments } from './attachment-draft-lifecycle';
-import { ConversationLocalStore } from './conversation-local-store';
+import { sharedConversationLocalStore } from './hermes-api-registry';
 import { runLocalAccountPurgePhases } from './local-account-purge-order';
 
 export async function purgeLocalAccountData(owner: string): Promise<void> {
-  const ownerDirectory = new ExpoDirectory(
+  const ownerDirectory = attachmentOutboxRoot(attachmentOutboxOwnerComponent(owner));
+  // Files from pre-migration builds may still sit in the old Documents root
+  // if the one-time native move was interrupted; purge covers both roots.
+  const legacyOwnerDirectory = new ExpoDirectory(
     Paths.document,
     'hermes-outbox',
     attachmentOutboxOwnerComponent(owner),
   );
-  const outboxRoot = new ExpoDirectory(Paths.document, 'hermes-outbox');
-  const outboxRootUri = outboxRoot.uri.endsWith('/') ? outboxRoot.uri : `${outboxRoot.uri}/`;
+  const outboxRoot = attachmentOutboxRoot();
+  const legacyOutboxRoot = new ExpoDirectory(Paths.document, 'hermes-outbox');
+  const outboxRootUris = [...new Set([outboxRoot.uri, legacyOutboxRoot.uri])]
+    .map((uri) => (uri.endsWith('/') ? uri : `${uri}/`));
   await runLocalAccountPurgePhases({
     async revokeEncryptionKey() {
       if (hasNativeIOSContext) {
@@ -23,7 +29,7 @@ export async function purgeLocalAccountData(owner: string): Promise<void> {
     },
     async purgeData() {
       try {
-        await new ConversationLocalStore().purge(owner, async (pending) => {
+        await sharedConversationLocalStore().purge(owner, async (pending) => {
           cleanupOwnedTemporaryAttachments(
             pending.flatMap((item) => (item.pendingAttachments || []).flatMap((attachment) => (
               attachment.sourceUri
@@ -38,14 +44,15 @@ export async function purgeLocalAccountData(owner: string): Promise<void> {
           );
           // Older builds used a short owner hash. Delete only request directories
           // referenced by this account's durable records; deleting the whole legacy
-          // owner directory could cross an old hash collision.
+          // owner directory could cross an old hash collision. Records may point at
+          // the pre-migration Documents location, so check both spellings of each URI.
           const legacyRequestDirectories = new Set<string>();
           for (const item of pending) {
             for (const attachment of item.pendingAttachments || []) {
-              if (!attachment.uri.startsWith(outboxRootUri)) continue;
-              legacyRequestDirectories.add(
-                attachment.uri.slice(0, attachment.uri.lastIndexOf('/') + 1),
-              );
+              for (const uri of new Set([attachment.uri, remapLegacyOutboxUri(attachment.uri)])) {
+                if (!outboxRootUris.some((root) => uri.startsWith(root))) continue;
+                legacyRequestDirectories.add(uri.slice(0, uri.lastIndexOf('/') + 1));
+              }
             }
           }
           for (const uri of legacyRequestDirectories) {
@@ -56,6 +63,7 @@ export async function purgeLocalAccountData(owner: string): Promise<void> {
           // in AsyncStorage. This also removes encrypted files orphaned by a process
           // kill between file installation and the outbox metadata update.
           if (ownerDirectory.exists) ownerDirectory.delete();
+          if (legacyOwnerDirectory.exists) legacyOwnerDirectory.delete();
         });
       } finally {
         for (const pickerCacheName of ['DocumentPicker', 'ImagePicker']) {

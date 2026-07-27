@@ -41,6 +41,7 @@ import {
 } from 'lucide-react-native';
 import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import Reanimated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSContextMenu } from '../components/ios/IOSContextMenu';
@@ -48,6 +49,7 @@ import { IOSPressable } from '../components/ios/IOSPressable';
 import { IOSSwipeActions } from '../components/ios/IOSSwipeActions';
 import { NativeButton } from '../components/ui/NativeButton';
 import { NativeInput } from '../components/ui/NativeInput';
+import { MOTION, useMotion } from '../design/motion';
 import { useTheme } from '../design/ThemeProvider';
 import type { PreviewPageProps } from './PreviewCorePages';
 import { PREVIEW_CONFIG_SECTIONS } from './preview-fixtures';
@@ -67,12 +69,13 @@ import {
   PreviewSettingRow,
   PreviewText,
   PreviewToggle,
-} from './PreviewPrimitives';
+} from '../studio/PreviewPrimitives';
 
 type SystemConfirm = 'restart' | 'update' | 'memory' | 'credential' | null;
 
 export function SystemPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
   const isChinese = locale === 'zh';
+  const motion = useMotion();
   const [confirm, setConfirm] = useState<SystemConfirm>(null);
   const [consoleOpen, setConsoleOpen] = useState(false);
   const [credentialOpen, setCredentialOpen] = useState(false);
@@ -104,10 +107,17 @@ export function SystemPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
       title={isChinese ? '系统监控' : 'System'}
     >
       {runningAction ? (
-        <PreviewCard title={runningAction} subtitle={isChinese ? '管理操作正在进行' : 'Administrative action in progress'}>
-          <PreviewProgress value={68} />
-          <PreviewText variant="mono">$ hermes {runningAction.toLowerCase().replaceAll(' ', '-')} --preview</PreviewText>
-        </PreviewCard>
+        // The progress card slides into and out of the flow on the transition
+        // timing instead of popping the whole page layout in one frame.
+        <Reanimated.View
+          entering={motion.animate(FadeIn.duration(MOTION.duration.transition))}
+          exiting={motion.animate(FadeOut.duration(MOTION.duration.transition))}
+        >
+          <PreviewCard title={runningAction} subtitle={isChinese ? '管理操作正在进行' : 'Administrative action in progress'}>
+            <PreviewProgress value={68} />
+            <PreviewText variant="mono">$ hermes {runningAction.toLowerCase().replaceAll(' ', '-')} --preview</PreviewText>
+          </PreviewCard>
+        </Reanimated.View>
       ) : null}
       <PreviewGrid minItemWidth={170}>
         <PreviewMetric accent="#4ade80" icon={Server} label={isChinese ? '网关' : 'Gateway'} value={isChinese ? '运行中' : 'Running'} hint="PID 18421" />
@@ -395,6 +405,7 @@ export function ProfileBuilderPreviewPage({ navigate, notify }: PreviewPageProps
 
 export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
   const isChinese = locale === 'zh';
+  const motion = useMotion();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<'form' | 'yaml'>('form');
   const [section, setSection] = useState('General');
@@ -468,11 +479,18 @@ export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
         </PreviewRow>
       </PreviewCard>
       {mode === 'yaml' ? (
-        <PreviewCard title={isChinese ? '原始 YAML 配置' : 'Raw YAML config'}>
-          <NativeInput multiline onChangeText={setYamlText} style={styles.yamlInput} value={yamlText} />
-        </PreviewCard>
+        // Form/YAML modes cross-fade on the control timing; the segmented
+        // control that drives them animates with the same shared tokens.
+        <Reanimated.View entering={motion.animate(FadeIn.duration(MOTION.duration.control))}>
+          <PreviewCard title={isChinese ? '原始 YAML 配置' : 'Raw YAML config'}>
+            <NativeInput multiline onChangeText={setYamlText} style={styles.yamlInput} value={yamlText} />
+          </PreviewCard>
+        </Reanimated.View>
       ) : (
-        <View style={styles.configLayout}>
+        <Reanimated.View
+          entering={motion.animate(FadeIn.duration(MOTION.duration.control))}
+          style={styles.configLayout}
+        >
           <PreviewCard style={styles.configSidebar} title={isChinese ? '分类' : 'Sections'}>
             {PREVIEW_CONFIG_SECTIONS.map((group) => (
               <PreviewSettingRow key={group.name} label={isChinese ? configSectionZh(group.name) : group.name} onPress={() => setSection(group.name)} trailing={section === group.name ? <Check size={16} /> : undefined} />
@@ -513,7 +531,7 @@ export function ConfigPreviewPage({ locale = 'zh', notify }: PreviewPageProps) {
               </PreviewCard>
             ))}
           </View>
-        </View>
+        </Reanimated.View>
       )}
       <ConfirmDialog
         cancelLabel={isChinese ? '取消' : 'Cancel'}

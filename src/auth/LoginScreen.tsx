@@ -32,6 +32,7 @@ import { IOSPressable } from '../components/ios/IOSPressable';
 import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { IOS_MOTION } from '../design/ios-motion';
 import { useAuth } from './AuthProvider';
+import { MAX_FACE_ID_ATTEMPTS } from './auth-state';
 import {
   INITIAL_PROVIDER_BUTTON_INTERACTION,
   LOGIN_VISUAL_CONTRACT,
@@ -58,8 +59,11 @@ export function LoginScreen() {
     rememberedLogin,
     registrationOpen,
     authenticate,
+    unlock,
     register,
     requestRegistrationCode,
+    revealRememberedPassword,
+    logout,
   } = useAuth();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -84,8 +88,11 @@ export function LoginScreen() {
   >(null);
 
   const loading = state.status === 'loading';
+  const locked = state.status === 'locked';
   const busy = state.status !== 'loading' && state.status !== 'authenticated' && state.busy;
   const error = state.status === 'provisioning' ? state.error : undefined;
+  const lockError = state.status === 'locked' ? state.error : undefined;
+  const lockAttempts = state.status === 'locked' ? state.failedAttempts : 0;
   const canSubmit =
     username.trim().length > 0
     && password.length > 0
@@ -108,6 +115,15 @@ export function LoginScreen() {
     setPassword(rememberedLogin.password);
     setRememberLogin(rememberedLogin.enabled);
   }, [rememberedLogin, state.status]);
+
+  // Fire the Face ID prompt once as soon as the lock screen appears; later
+  // attempts stay behind the explicit unlock button.
+  const autoUnlockRequested = useRef(false);
+  useEffect(() => {
+    if (!locked || autoUnlockRequested.current) return;
+    autoUnlockRequested.current = true;
+    void unlock();
+  }, [locked, unlock]);
 
   useEffect(() => {
     const animation = Animated.parallel([
@@ -142,6 +158,13 @@ export function LoginScreen() {
         void authenticate(username, password, rememberLogin);
       }
     }
+  };
+
+  const fillRememberedPassword = async () => {
+    // The biometric prompt runs inside the provider; a null result means the
+    // user cancelled or the item is gone, and manual entry continues.
+    const savedPassword = await revealRememberedPassword();
+    if (savedPassword) setPassword(savedPassword);
   };
 
   const sendRegistrationCode = async () => {
@@ -195,9 +218,7 @@ export function LoginScreen() {
             ]}
           >
             <View accessibilityRole="header" style={styles.brand}>
-              <Text style={styles.brandText}>NOUS</Text>
-              <View style={styles.brandDot} />
-              <Text style={styles.brandText}>RESEARCH</Text>
+              <Text style={styles.brandText}>HERMES AGENT</Text>
             </View>
 
             <View style={styles.cardShell}>
@@ -207,19 +228,52 @@ export function LoginScreen() {
                 style={styles.card}
               >
                 <View pointerEvents="none" style={styles.cardHighlight} />
-                <Text style={styles.heading}>{mode === 'register' ? '注册' : '登录'}</Text>
+                <Text style={styles.heading}>
+                  {locked ? '解锁' : mode === 'register' ? '注册' : '登录'}
+                </Text>
                 <Text style={styles.subtitle}>
                   {loading
                     ? '正在读取 Hermes 安全连接。'
-                    : mode === 'register'
-                      ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
-                      : '登录后继续使用 Hermes Agent 管理面板。'}
+                    : locked
+                      ? '使用 Face ID 解锁受保护的 Hermes 连接。'
+                      : mode === 'register'
+                        ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
+                        : '登录后继续使用 Hermes Agent 管理面板。'}
                 </Text>
 
                 {loading ? (
                   <View accessibilityRole="progressbar" style={styles.loadingRow}>
                     <ActivityIndicator color={LOGIN_COLORS.accent} size="small" />
                     <Text style={styles.loadingText}>正在准备</Text>
+                  </View>
+                ) : locked ? (
+                  <View style={styles.form}>
+                    <Text style={styles.formTitle}>已保存的 HERMES 连接</Text>
+                    {lockError ? (
+                      <Text accessibilityRole="alert" style={styles.errorText}>
+                        {lockError}
+                      </Text>
+                    ) : null}
+                    {lockAttempts > 0 ? (
+                      <Text style={styles.attemptText}>
+                        {`解锁失败 ${lockAttempts}/${MAX_FACE_ID_ATTEMPTS} 次`}
+                      </Text>
+                    ) : null}
+                    <ProviderButton
+                      busy={busy}
+                      disabled={busy}
+                      label={busy ? '正在解锁' : '使用 Face ID 解锁'}
+                      onPress={() => void unlock()}
+                    />
+                    <IOSPressable
+                      accessibilityRole="button"
+                      disabled={busy}
+                      onPress={() => void logout()}
+                      pressedStyle={styles.buttonPressed}
+                      style={styles.secondaryButton}
+                    >
+                      <Text style={styles.secondaryButtonText}>使用密码登录</Text>
+                    </IOSPressable>
                   </View>
                 ) : (
                   <View style={styles.form}>
@@ -395,6 +449,17 @@ export function LoginScreen() {
                           {rememberLogin ? <Text style={styles.rememberCheckmark}>✓</Text> : null}
                         </View>
                         <Text style={styles.rememberText}>记住账号和密码</Text>
+                      </IOSPressable>
+                    ) : null}
+                    {mode === 'login' && rememberedLogin.enabled && !password ? (
+                      <IOSPressable
+                        accessibilityRole="button"
+                        disabled={busy}
+                        onPress={() => void fillRememberedPassword()}
+                        pressedStyle={styles.buttonPressed}
+                        style={styles.modeSwitch}
+                      >
+                        <Text style={styles.modeSwitchText}>使用 Face ID 填充已保存的密码</Text>
                       </IOSPressable>
                     ) : null}
                     {error ? (
@@ -754,14 +819,6 @@ const styles = StyleSheet.create({
     fontSize: 16.8,
     letterSpacing: 5.376,
     lineHeight: 25.2,
-  },
-  brandDot: {
-    width: 6,
-    height: 6,
-    marginHorizontal: 9.24,
-    marginBottom: 3.024,
-    borderRadius: 1,
-    backgroundColor: LOGIN_COLORS.accent,
   },
   cardShell: {
     position: 'relative',

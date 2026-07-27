@@ -1,0 +1,205 @@
+import { HermesApiError } from '../../api/HermesApiClient';
+import {
+  parseOfficialConversationPlaceholderId,
+  type CollaborationMessage,
+  type SingleConversation,
+} from '../../api/HermesCloudApi';
+import type { OptimisticConversationLedgerItem } from '../../api/conversation-local-store';
+import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
+
+export function chatMessageToCollaborationMessage(message: ChatMessage): CollaborationMessage {
+  return {
+    completed_at: message.completedAt,
+    content: message.content,
+    created_at: message.createdAt,
+    id: message.id,
+    meta: {
+      client_optimistic: true,
+      ...(message.optimisticConfirmedAt
+        ? { optimistic_confirmed_at: message.optimisticConfirmedAt }
+        : {}),
+      ...(message.roleStage ? { role_stage: message.roleStage } : {}),
+      ...(message.runtimeTurnId ? { runtime_turn_id: message.runtimeTurnId } : {}),
+    },
+    model: message.model,
+    name: message.name,
+    profile: message.profile,
+    provider: message.provider,
+    role: message.role,
+    role_label: message.roleLabel,
+    sender_id: message.senderId,
+    sender_role: message.avatarRole,
+    started_at: message.startedAt,
+    status: message.status,
+    updated_at: message.updatedAt,
+  };
+}
+
+export function sameOptimisticMessages(
+  left: readonly ChatMessage[],
+  right: readonly ChatMessage[],
+): boolean {
+  return left.length === right.length && left.every((message, index) => {
+    const other = right[index];
+    return Boolean(other)
+      && message.id === other.id
+      && message.content === other.content
+      && message.status === other.status
+      && message.optimisticConfirmedAt === other.optimisticConfirmedAt
+      && message.updatedAt === other.updatedAt;
+  });
+}
+
+export function optimisticConversationTitle(
+  messages: readonly CollaborationMessage[],
+  chinese: boolean,
+): string {
+  const firstUserContent = messages.find(({ role }) => role === 'user')?.content?.trim();
+  return firstUserContent?.slice(0, 36) || (chinese ? '新对话' : 'New conversation');
+}
+
+function numericTimestamp(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+export function mergeOptimisticConversationSummaries(
+  conversations: readonly SingleConversation[],
+  ledgers: readonly OptimisticConversationLedgerItem[],
+  profile: string,
+  chinese: boolean,
+): SingleConversation[] {
+  const existingIds = new Set(conversations.map(({ id }) => id));
+  const optimisticOnly = ledgers.flatMap((entry) => {
+    if (existingIds.has(entry.conversationId) || !entry.messages.length) return [];
+    const createdAt = Math.min(
+      ...entry.messages.map((message) => numericTimestamp(message.created_at) || entry.updatedAt),
+    );
+    return [{
+      created_at: createdAt,
+      id: entry.conversationId,
+      message_count: entry.messages.length,
+      messages: entry.messages.map((message) => ({
+        ...message,
+        ...(message.meta ? { meta: { ...message.meta } } : {}),
+      })),
+      profile,
+      title: optimisticConversationTitle(entry.messages, chinese),
+      updated_at: entry.updatedAt,
+    } as SingleConversation];
+  });
+  return [...conversations, ...optimisticOnly].sort(
+    (left, right) => (right.updated_at || 0) - (left.updated_at || 0),
+  );
+}
+
+export function uniqueTurnId(prefix: string): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  const random = uuid || [0, 1, 2, 3]
+    .map(() => Math.random().toString(36).slice(2, 12))
+    .join('');
+  return `${prefix}-${Date.now().toString(36)}-${random}`;
+}
+
+export function stableStringHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+export function resolveConversationId(
+  requestedId: string,
+  conversations: readonly SingleConversation[],
+): string {
+  if (!requestedId) return conversations[0]?.id || '';
+  if (conversations.some(({ id }) => id === requestedId)) return requestedId;
+  if (requestedId.startsWith('official:')) {
+    const placeholder = parseOfficialConversationPlaceholderId(requestedId);
+    const sessionId = placeholder?.sessionId || requestedId.slice('official:'.length);
+    const adopted = conversations.find((conversation) => (
+      (
+        conversation.official_session_id === sessionId
+        && (
+          !placeholder?.profile
+          || (conversation.official_profile || conversation.profile) === placeholder.profile
+        )
+      )
+      || (
+        placeholder?.profile
+          ? conversation.runtime_sessions?.[placeholder.profile] === sessionId
+          : Object.values(conversation.runtime_sessions || {}).includes(sessionId)
+      )
+    ));
+    if (adopted) return adopted.id;
+  }
+  return conversations[0]?.id || '';
+}
+
+export function isConversationNotFoundError(error: unknown): boolean {
+  return isRecord(error) && (error.status === 404 || error.statusCode === 404);
+}
+
+export async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T) => Promise<R>,
+): Promise<R[]> {
+  if (!values.length) return [];
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await operation(values[index]);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, worker),
+  );
+  return results;
+}
+
+export function serverFailure(error: unknown, chinese: boolean): string {
+  if (error instanceof HermesApiError) {
+    if (error.status === 401 || error.status === 403) {
+      return chinese
+        ? `HTTP ${error.status}：Hermes 登录状态已失效，请重新登录。`
+        : `HTTP ${error.status}: Your Hermes session has expired. Sign in again.`;
+    }
+    if (error.status === 429) {
+      return chinese
+        ? 'HTTP 429：服务器请求过于频繁，请稍后重试。'
+        : 'HTTP 429: The server is receiving too many requests. Try again shortly.';
+    }
+    if (error.status >= 500) {
+      return chinese
+        ? `HTTP ${error.status}：Hermes 服务暂时不可用，请稍后重试。`
+        : `HTTP ${error.status}: Hermes is temporarily unavailable. Try again shortly.`;
+    }
+  }
+  if (error instanceof Error && error.message) {
+    return chinese ? `服务器操作失败：${error.message}` : `Server operation failed: ${error.message}`;
+  }
+  return chinese ? '服务器操作失败，请稍后重试。' : 'Server operation failed. Try again.';
+}
+
+export function isNotFoundError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'status' in error
+    && (error as { status?: unknown }).status === 404;
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

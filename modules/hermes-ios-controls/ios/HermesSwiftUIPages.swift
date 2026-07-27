@@ -448,13 +448,17 @@ private struct HermesApprovalsPage: View {
   }
 
   private func decide(_ item: HermesApprovalItemSnapshot, action: HermesRouteAction) {
+    var fields = ["revision": String(item.revision)]
+    if let payloadDigest = item.payloadDigest, !payloadDigest.isEmpty {
+      fields["payloadDigest"] = payloadDigest
+    }
     onAction(
       action,
       HermesRouteActionPayload(
         route: "approvals",
         id: item.id,
         requestId: "approval-\(UUID().uuidString.lowercased())",
-        fields: ["revision": String(item.revision)]
+        fields: fields
       )
     )
   }

@@ -7,16 +7,18 @@ function read(path: string): string {
 }
 
 test('frontend preview renders every customized route and authenticated builds may attach cloud ownership', () => {
-  const app = read('src/preview/FrontendPreviewApp.tsx');
+  const app = read('src/studio/FrontendPreviewApp.tsx');
   const previewSources = [
     app,
-    read('src/preview/PreviewChatPage.tsx'),
+    read('src/studio/PreviewChatPage.tsx'),
     read('src/preview/PreviewCorePages.tsx'),
     read('src/preview/PreviewAutomationPages.tsx'),
     read('src/preview/PreviewSettingsPages.tsx'),
     read('src/preview/PreviewPluginPages.tsx'),
-    read('src/preview/PreviewPrimitives.tsx'),
+    read('src/studio/PreviewPrimitives.tsx'),
+    read('src/studio/TeamParticipants.tsx'),
     read('src/preview/preview-fixtures.ts'),
+    read('src/studio/team-participants-model.ts'),
   ].join('\n');
 
   for (const routeId of [
@@ -53,6 +55,11 @@ test('frontend preview renders every customized route and authenticated builds m
 
   assert.match(app, /FrontendPreviewAppProps/);
   assert.match(previewSources, /HermesCloudApi/);
+  // Pages obtain product API objects from the composition root instead of
+  // constructing their own copies next to every call site.
+  assert.match(previewSources, /hermesCloudApiFor\(/);
+  assert.doesNotMatch(previewSources, /new HermesCloudApi\(/);
+  assert.doesNotMatch(previewSources, /new ConversationLocalStore\(/);
   assert.match(previewSources, /useHermesSwiftUIRouteData/);
   // Production/authenticated surfaces must not serve fixture pages as live data.
   assert.match(app, /EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
@@ -129,9 +136,9 @@ test('native runtime does not adapt Reduce Motion or Reduce Transparency', () =>
     read('src/components/ui/NativeButton.tsx'),
     read('src/components/ui/NativeInput.tsx'),
     read('src/components/ui/NativeListItem.tsx'),
-    read('src/preview/FrontendPreviewApp.tsx'),
-    read('src/preview/PreviewChatPage.tsx'),
-    read('src/preview/PreviewPrimitives.tsx'),
+    read('src/studio/FrontendPreviewApp.tsx'),
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/PreviewPrimitives.tsx'),
     read('modules/hermes-live-blur/ios/HermesLiquidGlassView.swift'),
   ].join('\n');
 
@@ -153,9 +160,65 @@ test('preview appearance persistence is limited to theme and font', () => {
   assert.doesNotMatch(previewSource, /HermesApiClient|setTheme\(value\)|setFontPref/);
 });
 
+test('the transport client carries no product endpoints and pages share one composition root', () => {
+  const apiClient = read('src/api/HermesApiClient.ts');
+  const themeApi = read('src/design/theme-api.ts');
+  const registry = read('src/api/hermes-api-registry.ts');
+
+  // Dashboard theme/font endpoints belong to the design layer; the transport
+  // client must never import design payload shapes again.
+  assert.doesNotMatch(apiClient, /theme-types|getThemes|setFontPref|dashboard\/theme/);
+  assert.match(themeApi, /api\/dashboard\/themes/);
+  assert.match(themeApi, /api\/dashboard\/font/);
+  assert.match(read('src/design/ThemeProvider.tsx'), /new HermesThemeApi\(client\)/);
+
+  // The registry is the only production module allowed to construct the
+  // product API objects; every page asks it for the shared instances.
+  assert.match(registry, /new HermesCloudApi\(client\)/);
+  assert.match(registry, /new ConversationLocalStore\(\)/);
+  for (const page of [
+    'src/app/useHermesSwiftUIRouteData.ts',
+    'src/models/ModelsManagementPage.tsx',
+    'src/api/local-account-purge.ts',
+  ]) {
+    const source = read(page);
+    assert.doesNotMatch(source, /new HermesCloudApi\(/, `${page} constructs HermesCloudApi`);
+    assert.doesNotMatch(source, /new ConversationLocalStore\(/, `${page} constructs ConversationLocalStore`);
+  }
+});
+
 test('chat preview preserves the customized collaboration single-chat contract', () => {
-  const app = read('src/preview/FrontendPreviewApp.tsx');
-  const chat = read('src/preview/PreviewChatPage.tsx');
+  const app = read('src/studio/FrontendPreviewApp.tsx');
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/useChatPageActions.ts'),
+    read('src/studio/chat/ChatPresentation.tsx'),
+    read('src/studio/chat/ChatCollaborationPresentation.tsx'),
+    read('src/studio/chat/ChatHeader.tsx'),
+    read('src/studio/chat/ChatMessageStream.tsx'),
+    read('src/studio/chat/ChatComposer.tsx'),
+    read('src/studio/chat/ChatComposerPresentation.tsx'),
+    read('src/studio/chat/ChatPageShell.tsx'),
+    read('src/studio/chat/ConversationHistory.tsx'),
+    read('src/studio/chat/ChatModelToolsDrawer.tsx'),
+    read('src/studio/chat/chat-presentation-styles.ts'),
+    read('src/studio/chat/chat-attachments.ts'),
+    read('src/studio/chat/useChatScrollController.ts'),
+    read('src/studio/chat/useConversationIndexLifecycle.ts'),
+    read('src/studio/chat/useConversationIndexController.ts'),
+    read('src/studio/chat/useConversationSnapshotController.ts'),
+    read('src/studio/chat/useOptimisticConversationState.ts'),
+    read('src/studio/chat/useHostedConversationStream.ts'),
+    read('src/studio/chat/useHostedCancellationController.ts'),
+    read('src/studio/chat/useHostedOutboxReplayController.ts'),
+    read('src/studio/chat/useChatAttachmentController.ts'),
+    read('src/studio/chat/useChatAttachmentLifecycle.ts'),
+    read('src/studio/chat/useHostedInterventionController.ts'),
+    read('src/studio/chat/useHostedSendController.ts'),
+    read('src/studio/chat/useHostedTurnDeliveryService.ts'),
+    read('src/studio/chat/useConversationActionsController.ts'),
+    read('src/studio/chat/useChatComposerNavigationController.ts'),
+  ].join('\n');
   const contextMenu = read('src/components/ios/IOSContextMenu.tsx');
   const contextMenuBridge = read('modules/hermes-context-menu/index.ts');
   const contextMenuNative = read(
@@ -189,18 +252,25 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /keyboardDismissMode="interactive"/);
   assert.match(chat, /onContentSizeChange=\{\(\) => keepLatestVisible\(true\)\}/);
   assert.match(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
+  assert.match(chat, /onFocus=\{actions\.onFocus\}/);
   assert.match(
     chat,
-    /onFocus=\{\(\) => \{[\s\S]{0,140}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,80}keepLatestVisible\(false\);/,
+    /onFocus: \(\) => \{[\s\S]{0,140}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,80}keepLatestVisible\(false\);/,
   );
   assert.match(chat, /Hermes Agent/);
   assert.doesNotMatch(chat, /当前窗口持续使用同一个会话|This window keeps using the same conversation/);
   assert.match(chat, /collaborationState !== 'single'/);
-  assert.match(chat, /accessibilityLabel=\{isChinese \? '上传图片或文件'/);
-  assert.match(chat, /haptic="light"[\s\S]{0,180}scaleTo=\{0\.88\}/);
-  assert.match(chat, /name="plus\.circle\.fill"/);
-  assert.match(chat, /size=\{27\}/);
-  assert.match(chat, /attachButton: \{[^}]*height: 38[^}]*width: 34/);
+  assert.match(chat, /accessibilityLabel=\{model\.isChinese \? '上传图片或文件'/);
+  assert.match(chat, /haptic="light"[\s\S]{0,220}scaleTo=\{0\.9\}/);
+  assert.match(chat, /accessibilityLabel=\{model\.isChinese \? '输入斜杠命令'/);
+  assert.match(chat, /filteredSlashCommands/);
+  assert.match(chat, /styles\.openMinisSlashPopup/);
+  assert.match(chat, /height: 224/);
+  assert.match(chat, /showScrollToBottom && !slashMenuOpen/);
+  assert.match(chat, /OpenMinisVoiceWaveform/);
+  assert.match(chat, /openMinisToolbar: \{[^}]*flexDirection: 'row'/);
+  assert.match(chat, /openMinisRoundControl: \{[^}]*height: 34[^}]*width: 34/);
+  assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
   assert.match(chat, /styles\.gatewayStatusLabel/);
   assert.match(chat, /styles\.gatewayStatusVersion/);
   assert.match(chat, /gatewayStatusLabel: \{[\s\S]*width: 36/);
@@ -260,10 +330,10 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(contextMenuNative, /UIAction/);
   assert.match(chat, /<SymbolView/);
   assert.match(chat, /PlatformColor\('secondarySystemBackground'\)/);
-  assert.match(chat, /<HermesLiveBlurView/);
-  assert.match(chat, /blurRadius=\{18\}/);
-  assert.match(chat, /styles\.composerFrostedTint/);
-  assert.match(chat, /multiplyAlpha\(tokens\.colors\.background, 0\.68\)/);
+  assert.match(chat, /DynamicColorIOS\(\{ dark: '#1f1f1f', light: '#ffffff' \}\)/);
+  assert.doesNotMatch(chat, /<HermesLiveBlurView/);
+  assert.match(chat, /borderColor: 'transparent', borderWidth: 0/);
+  assert.match(chat, /outlineColor: 'transparent', outlineStyle: 'solid', outlineWidth: 0/);
   assert.match(chat, /borderWidth: StyleSheet\.hairlineWidth/);
   assert.doesNotMatch(chat, /<HermesSwiftUIFrostedSurfaceView|<BlurView/);
   assert.doesNotMatch(chat, /<GlassView|isLiquidGlassAvailable\(\)/);
@@ -285,7 +355,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const delivery = await deliverPendingEnqueue\(queuedItem\);\s*queuedItem = delivery\.item;/,
+    /const delivery = await outbox\.deliverPendingEnqueue\(queuedItem\);\s*queuedItem = delivery\.item;/,
   );
   assert.match(
     chat,
@@ -293,7 +363,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const acceptedMutation = await acceptPendingOutboxItem\(queuedItem\);[\s\S]{0,700}setHostedRunning\(true\);/,
+    /const acceptedMutation = await outbox\.acceptPendingOutboxItem\(queuedItem\);[\s\S]{0,700}setHostedRunning\(true\);/,
   );
   assert.match(
     chat,
@@ -301,7 +371,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const outcome = await handleOutboxFailure\(queuedItem, responseFailure\);/,
+    /const outcome = await cancellation\.handleOutboxFailure\(queuedItem, responseFailure\);/,
   );
   assert.match(
     chat,
@@ -350,7 +420,7 @@ test('interactive preview controls never use empty callbacks or actionless butto
 test('Studio secondary surfaces keep the device, account, and compact-header contracts', () => {
   const automation = read('src/preview/PreviewAutomationPages.tsx');
   const account = read('src/auth/AccountPage.tsx');
-  const primitives = read('src/preview/PreviewPrimitives.tsx');
+  const primitives = read('src/studio/PreviewPrimitives.tsx');
 
   assert.match(automation, /输入远程设备 URL/);
   assert.match(automation, /复制配对链接/);
@@ -368,13 +438,14 @@ test('application surfaces use the shared iOS press, swipe, and haptic controls'
     'src/app/HermesNativeApp.tsx',
     'src/app/NativeShell.tsx',
     'src/auth/LoginScreen.tsx',
-    'src/preview/FrontendPreviewApp.tsx',
+    'src/studio/FrontendPreviewApp.tsx',
     'src/preview/PreviewAutomationPages.tsx',
-    'src/preview/PreviewChatPage.tsx',
+    'src/studio/PreviewChatPage.tsx',
     'src/preview/PreviewCorePages.tsx',
     'src/preview/PreviewPluginPages.tsx',
-    'src/preview/PreviewPrimitives.tsx',
+    'src/studio/PreviewPrimitives.tsx',
     'src/preview/PreviewSettingsPages.tsx',
+    'src/studio/TeamParticipants.tsx',
   ].map(read).join('\n');
   const iosPressable = read('src/components/ios/IOSPressable.tsx');
   const swipeActions = read('src/components/ios/IOSSwipeActions.tsx');
@@ -402,8 +473,18 @@ test('application surfaces use the shared iOS press, swipe, and haptic controls'
 
 test('mobile shell remains full bleed and keeps the WebUI sidebar readable without blur', () => {
   const shell = read('src/app/NativeShell.tsx');
-  const app = read('src/preview/FrontendPreviewApp.tsx');
-  const chat = read('src/preview/PreviewChatPage.tsx');
+  const app = read('src/studio/FrontendPreviewApp.tsx');
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/ChatPresentation.tsx'),
+    read('src/studio/chat/ChatHeader.tsx'),
+    read('src/studio/chat/ChatMessageStream.tsx'),
+    read('src/studio/chat/ChatComposer.tsx'),
+    read('src/studio/chat/ChatComposerPresentation.tsx'),
+    read('src/studio/chat/ConversationHistory.tsx'),
+    read('src/studio/chat/ChatModelToolsDrawer.tsx'),
+    read('src/studio/chat/chat-presentation-styles.ts'),
+  ].join('\n');
 
   assert.match(shell, /const sidebarBackground = rootBackground/);
   assert.match(shell, /backgroundColor: sidebarBackground/);
@@ -423,7 +504,7 @@ test('mobile shell remains full bleed and keeps the WebUI sidebar readable witho
 });
 
 test('secondary interfaces use the native iOS sheet transition', () => {
-  const primitives = read('src/preview/PreviewPrimitives.tsx');
+  const primitives = read('src/studio/PreviewPrimitives.tsx');
   const sheetBridge = read('modules/hermes-sheet-controller/index.ts');
   const sheetNative = read(
     'modules/hermes-sheet-controller/ios/HermesSheetControllerModule.swift',
@@ -463,7 +544,7 @@ test('cron scheduling uses the native compact iOS time picker', () => {
 });
 
 test('selection, search, switch, and progress controls use UIKit in signed builds', () => {
-  const primitives = read('src/preview/PreviewPrimitives.tsx');
+  const primitives = read('src/studio/PreviewPrimitives.tsx');
   const bridge = read('modules/hermes-ios-controls/index.ts');
   const segmented = read(
     'modules/hermes-ios-controls/ios/HermesSegmentedControlModule.swift',
@@ -496,18 +577,27 @@ test('selection, search, switch, and progress controls use UIKit in signed build
 });
 
 test('preview share, import, export, and model selection open iOS system surfaces', () => {
-  const chat = read('src/preview/PreviewChatPage.tsx');
-  const core = read('src/preview/PreviewCorePages.tsx');
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/useChatPageState.ts'),
+    read('src/studio/chat/useChatPageActions.ts'),
+    read('src/studio/chat/ChatComposer.tsx'),
+    read('src/studio/chat/useHostedSendController.ts'),
+  ].join('\n');
   const plugins = read('src/preview/PreviewPluginPages.tsx');
   const settings = read('src/preview/PreviewSettingsPages.tsx');
 
-  assert.match(chat, /haptic=\{canCancelHostedTurn \? 'medium' : canSend \? 'light' : 'none'\}/);
-  assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{canCancelHostedTurn \?[\s\S]*: requestSend\}/);
+  assert.match(chat, /haptic=\{model\.canCancelHostedTurn \? 'medium' : model\.canSend \? 'light' : 'none'\}/);
+  assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{model\.canCancelHostedTurn \?[\s\S]*: actions\.onSend\}/);
   assert.match(chat, /const currentContent = contentRef\.current/);
   assert.match(chat, /sendSubmissionGateRef\.current\.tryAcquire\(\)/);
   assert.match(chat, /setSending\(true\);\s*void send\(\)\.finally\(\(\) => sendSubmissionGateRef\.current\.release\(\)\);/);
   assert.doesNotMatch(chat, /pendingSendFrame/);
-  assert.match(core, /ActionSheetIOS\.showActionSheetWithOptions/);
+  // PreviewCorePages no longer asserts an ActionSheetIOS call: its only
+  // occurrence lived in a dead duplicate ChatPreviewPage that was never
+  // imported (the real one comes from ./PreviewChatPage) and has been
+  // deleted. The live action-sheet paths are still pinned on `chat` above
+  // and on `contextMenu`.
   assert.match(plugins, /Share\.share\(/);
   assert.match(settings, /new File\(Paths\.cache, 'hermes-config-preview\.json'\)/);
   assert.match(settings, /Sharing\.shareAsync\(file\.uri/);
@@ -517,7 +607,11 @@ test('preview share, import, export, and model selection open iOS system surface
 });
 
 test('chat continuation keeps the opened conversation Profile on every send step', () => {
-  const chat = read('src/preview/PreviewChatPage.tsx');
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/useHostedSendController.ts'),
+    read('src/studio/chat/useHostedTurnDeliveryService.ts'),
+  ].join('\n');
 
   assert.match(
     chat,
@@ -531,7 +625,10 @@ test('chat continuation keeps the opened conversation Profile on every send step
 });
 
 test('stale conversation selection is removed instead of surfacing another 404', () => {
-  const chat = read('src/preview/PreviewChatPage.tsx');
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/useConversationActionsController.ts'),
+  ].join('\n');
   assert.match(chat, /if \(isConversationNotFoundError\(error\)\) \{/);
   assert.match(chat, /conversationIndexRef\.current\.filter\([\s\S]*id !== conversationId/);
   assert.match(chat, /commitConversationIndex\(remaining, fallbackId\)/);
@@ -540,11 +637,11 @@ test('stale conversation selection is removed instead of surfacing another 404',
 
 test('Chinese preview mode translates every shared visible control surface', () => {
   const i18n = read('src/i18n/NativeLocalization.tsx');
-  const app = read('src/preview/FrontendPreviewApp.tsx');
+  const app = read('src/studio/FrontendPreviewApp.tsx');
   const button = read('src/components/ui/NativeButton.tsx');
   const input = read('src/components/ui/NativeInput.tsx');
   const dialog = read('src/components/ui/ConfirmDialog.tsx');
-  const primitives = read('src/preview/PreviewPrimitives.tsx');
+  const primitives = read('src/studio/PreviewPrimitives.tsx');
 
   assert.match(app, /<NativeLocalizationProvider locale=\{locale\}>/);
   for (const source of [button, input, dialog, primitives]) {
@@ -580,7 +677,7 @@ test('narrow admin rows use mobile-safe action layouts instead of scattered icon
 });
 
 test('sidebar system actions and status bar follow the WebUI mobile contract', () => {
-  const app = read('src/preview/FrontendPreviewApp.tsx');
+  const app = read('src/studio/FrontendPreviewApp.tsx');
   const root = read('src/app/HermesNativeApp.tsx');
 
   assert.match(app, /function SystemActionRow/);

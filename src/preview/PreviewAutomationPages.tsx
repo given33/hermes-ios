@@ -67,7 +67,7 @@ import {
   PreviewSettingRow,
   PreviewText,
   PreviewToggle,
-} from './PreviewPrimitives';
+} from '../studio/PreviewPrimitives';
 
 interface EditableMcpServer {
   active: boolean;

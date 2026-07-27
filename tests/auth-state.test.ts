@@ -16,7 +16,10 @@ import {
   ACCESS_EXPIRES_AT_STORAGE_KEY,
   ACCESS_TOKEN_STORAGE_KEY,
   BASE_URL_STORAGE_KEY,
+  BIOMETRIC_CREDENTIAL_PROTECTION,
+  CREDENTIAL_PROTECTION_STORAGE_KEY,
   CREDENTIAL_STORAGE_KEYS,
+  DEVICE_CREDENTIAL_PROTECTION,
   DEVICE_ID_STORAGE_KEY,
   LEGACY_ACCESS_TOKEN_STORAGE_KEY,
   LEGACY_BASE_URL_STORAGE_KEY,
@@ -352,7 +355,7 @@ test('Face ID cancellation remains retryable without consuming an attempt', () =
   }
 });
 
-test('SecureStore keeps the first-login session available for automatic cold-start recovery', async () => {
+test('SecureStore biometric-protects the refresh token and remembered password, keeps metadata non-interactive', async () => {
   const values = new Map<string, string>([
     [BASE_URL_STORAGE_KEY, session.baseUrl],
     [USERNAME_STORAGE_KEY, session.username],
@@ -365,7 +368,7 @@ test('SecureStore keeps the first-login session available for automatic cold-sta
     operation: 'get' | 'set' | 'delete';
     key: string;
     value?: string;
-    options?: object;
+    options?: { requireAuthentication?: boolean; authenticationPrompt?: string };
   }> = [];
   const secureStore: SecureStoreAdapter = {
     async getItemAsync(key, options) {
@@ -380,6 +383,7 @@ test('SecureStore keeps the first-login session available for automatic cold-sta
       operations.push({ operation: 'delete', key, options });
       values.delete(key);
     },
+    canUseBiometricAuthentication: () => true,
   };
   const store = new CredentialStore(secureStore);
   const sessionOptions = undefined;
@@ -390,6 +394,7 @@ test('SecureStore keeps the first-login session available for automatic cold-sta
     'hermes.native.v2.accessToken',
     'hermes.native.v2.refreshToken',
     'hermes.native.v2.refreshTokenKey',
+    'hermes.native.v2.credentialProtection',
     'hermes.native.v2.accessExpiresAt',
     'hermes.native.deviceId',
     'hermes.native.v2.sessionVersion',
@@ -446,7 +451,10 @@ test('SecureStore keeps the first-login session available for automatic cold-sta
       key === REMEMBERED_PASSWORD_STORAGE_KEY && (operation === 'get' || operation === 'set'),
   );
   assert.ok(protectedOperations.length >= 2);
-  for (const operation of protectedOperations) assert.equal(operation.options, sessionOptions);
+  for (const operation of protectedOperations) {
+    assert.equal(operation.options?.requireAuthentication, true);
+    assert.ok(operation.options?.authenticationPrompt);
+  }
   const accessTokenOperations = operations.filter(
     ({ operation, key }) =>
       key === ACCESS_TOKEN_STORAGE_KEY && (operation === 'get' || operation === 'set'),
@@ -458,12 +466,18 @@ test('SecureStore keeps the first-login session available for automatic cold-sta
   );
   assert.ok(pointerOperations.length >= 2);
   assert.ok(pointerOperations.every(({ options }) => options === undefined));
-  const rememberedPasswordOperations = operations.filter(
+  const refreshItemWrites = operations.filter(
     ({ key, operation }) =>
-      key === REMEMBERED_PASSWORD_STORAGE_KEY && (operation === 'get' || operation === 'set'),
+      key.startsWith(REFRESH_TOKEN_KEY_PREFIX) && operation === 'set',
   );
-  assert.ok(rememberedPasswordOperations.length >= 1);
-  assert.ok(rememberedPasswordOperations.every(({ options }) => options === sessionOptions));
+  assert.ok(refreshItemWrites.length >= 2);
+  assert.ok(refreshItemWrites.every(({ options }) => options?.requireAuthentication === true));
+  assert.ok(operations.some(
+    ({ key, operation, value }) =>
+      key === CREDENTIAL_PROTECTION_STORAGE_KEY
+      && operation === 'set'
+      && value === BIOMETRIC_CREDENTIAL_PROTECTION,
+  ));
   const preferenceReads = operations.filter(
     ({ key, operation }) =>
       key === REMEMBER_LOGIN_STORAGE_KEY && operation === 'get',
@@ -473,6 +487,94 @@ test('SecureStore keeps the first-login session available for automatic cold-sta
     ({ key, operation, value }) =>
       key === REMEMBER_LOGIN_STORAGE_KEY && operation === 'set' && value === '1',
   ));
+});
+
+test('remembered password is never persisted without biometric protection', async () => {
+  const values = new Map<string, string>();
+  const store = new CredentialStore({
+    async getItemAsync(key) {
+      return values.get(key) ?? null;
+    },
+    async setItemAsync(key, value) {
+      values.set(key, value);
+    },
+    async deleteItemAsync(key) {
+      values.delete(key);
+    },
+  });
+
+  await assert.rejects(
+    store.saveRememberedLogin(session.username, 'account-password', true),
+    /biometric/i,
+  );
+  assert.equal(values.has(REMEMBERED_PASSWORD_STORAGE_KEY), false);
+  assert.equal(values.get(REMEMBER_LOGIN_STORAGE_KEY), '0');
+  assert.deepEqual(await store.readRememberedLogin(), {
+    enabled: false,
+    password: '',
+    username: '',
+  });
+});
+
+test('cold start unlock requirement follows the recorded protection mode', async () => {
+  const biometricValues = new Map<string, string>();
+  const biometricStore = new CredentialStore({
+    async getItemAsync(key) {
+      return biometricValues.get(key) ?? null;
+    },
+    async setItemAsync(key, value) {
+      biometricValues.set(key, value);
+    },
+    async deleteItemAsync(key) {
+      biometricValues.delete(key);
+    },
+    canUseBiometricAuthentication: () => true,
+  });
+  assert.equal(await biometricStore.sessionUnlockRequired(), false);
+  await biometricStore.save(session);
+  assert.equal(biometricValues.get(CREDENTIAL_PROTECTION_STORAGE_KEY), BIOMETRIC_CREDENTIAL_PROTECTION);
+  assert.equal(await biometricStore.sessionUnlockRequired(), true);
+  await biometricStore.clearSession();
+  assert.equal(await biometricStore.sessionUnlockRequired(), false);
+
+  // Devices without enrolled biometrics keep the non-interactive restore.
+  const deviceValues = new Map<string, string>();
+  const deviceStore = new CredentialStore({
+    async getItemAsync(key) {
+      return deviceValues.get(key) ?? null;
+    },
+    async setItemAsync(key, value) {
+      deviceValues.set(key, value);
+    },
+    async deleteItemAsync(key) {
+      deviceValues.delete(key);
+    },
+  });
+  await deviceStore.save(session);
+  assert.equal(deviceValues.get(CREDENTIAL_PROTECTION_STORAGE_KEY), DEVICE_CREDENTIAL_PROTECTION);
+  assert.equal(await deviceStore.sessionUnlockRequired(), false);
+});
+
+test('refresh token falls back to device protection when the biometric write fails', async () => {
+  const values = new Map<string, string>();
+  const store = new CredentialStore({
+    async getItemAsync(key) {
+      return values.get(key) ?? null;
+    },
+    async setItemAsync(key, value, options) {
+      if (options?.requireAuthentication) throw new Error('biometric enrollment changed');
+      values.set(key, value);
+    },
+    async deleteItemAsync(key) {
+      values.delete(key);
+    },
+    canUseBiometricAuthentication: () => true,
+  });
+
+  await store.save(session);
+  assert.equal(values.get(CREDENTIAL_PROTECTION_STORAGE_KEY), DEVICE_CREDENTIAL_PROTECTION);
+  assert.equal(await store.sessionUnlockRequired(), false);
+  assert.equal(await store.readRefreshToken(), session.refreshToken);
 });
 
 test('legacy biometric entries are deleted without reading them before the first v2 login', async () => {
@@ -670,7 +772,7 @@ test('authenticated sessions are normalized, handshaken, and only then saved', a
   );
 });
 
-test('native auth restores one non-interactive session and keeps the complete app root', () => {
+test('native auth gates the saved session behind the Face ID lock and keeps the complete app root', () => {
   const providerSource = readFileSync(
     resolve(projectRoot, 'src/auth/AuthProvider.tsx'),
     'utf8',
@@ -690,19 +792,33 @@ test('native auth restores one non-interactive session and keeps the complete ap
 
   assert.doesNotMatch(providerSource, /\bAppState\b/);
   assert.match(providerSource, /bootstrapSavedConnection/);
-  assert.doesNotMatch(providerSource, /inspectSavedConnection/);
+  assert.match(providerSource, /inspectSavedConnection/);
   assert.match(providerSource, /result\.status === 'authenticated'/);
   assert.match(providerSource, /AccessTokenController/);
   assert.match(providerSource, /clientSession\?\.accessTokens\.dispose\(\)/);
   assert.match(providerSource, /new AbortController\(\)/);
   assert.match(providerSource, /APNS_LOGOUT_DEADLINE_MS/);
   assert.match(providerSource, /credentialMutations\.run\(\(\) => credentialStore\.clearSession\(\)\)/);
+  // Cold start only reads the unprotected preference and protection flag;
+  // the biometric-gated reads run inside unlock() / revealRememberedPassword().
+  assert.match(providerSource, /readRememberedLoginPreference\(\)/);
+  assert.match(providerSource, /sessionUnlockRequired\(\)/);
   assert.match(providerSource, /readRememberedLogin\(\)/);
-  assert.doesNotMatch(providerSource, /\bunlock\b|Face ID|FACE_ID/);
-  assert.doesNotMatch(loginSource, /\bunlock\b|Face ID|FACE ID/);
+  assert.match(providerSource, /BOOTSTRAP_LOCKED/);
+  assert.match(providerSource, /UNLOCK_STARTED/);
+  assert.match(providerSource, /UNLOCK_FAILED/);
+  assert.match(providerSource, /MAX_FACE_ID_ATTEMPTS/);
+  assert.match(providerSource, /revealRememberedPassword/);
+  assert.match(loginSource, /void unlock\(\)/);
+  assert.match(loginSource, /使用 Face ID 解锁/);
+  assert.match(loginSource, /使用密码登录/);
+  assert.match(loginSource, /MAX_FACE_ID_ATTEMPTS/);
+  assert.match(loginSource, /revealRememberedPassword/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(providerSource, /HermesIOSContext\.activateOwnerScope\(/);
   assert.match(providerSource, /runOptionalAuthEffect/);
+  assert.match(providerSource, /const volatileWebSession = new Map<string, string>\(\)/);
+  assert.doesNotMatch(providerSource, /sessionStorage|localStorage/);
   assert.match(providerSource, /currentMobileAppVersion\(\)/);
   assert.match(providerSource, /expoConfig\?\.ios\?\.buildNumber/);
   assert.match(mobileAuthSource, /\/auth\/mobile\/status/);

@@ -24,6 +24,7 @@ class MemoryStorage {
   readonly values = new Map<string, string>();
   readonly removeFailures = new Set<string>();
   readonly setFailureSubstrings = new Set<string>();
+  readonly setCalls: string[] = [];
 
   async getItem(key: string) {
     return this.values.get(key) ?? null;
@@ -38,7 +39,35 @@ class MemoryStorage {
     if ([...this.setFailureSubstrings].some((part) => key.includes(part))) {
       throw new Error('storage write failed');
     }
+    this.setCalls.push(key);
     this.values.set(key, value);
+  }
+}
+
+/**
+ * No stored key belongs to two accounts.
+ *
+ * Owner keys are a reversible hex encoding of the lowercased owner, and every
+ * key for an account (index and rows alike) is prefixed with it — so an
+ * account's keys are exactly those containing its encoding. The v1 owner HASH
+ * collided across accounts, which is the bug this guards; asserting
+ * disjointness states that property directly instead of inferring it from a
+ * total key count, which now moves whenever the shard layout changes.
+ */
+function assertOwnerKeysDisjoint(storage: MemoryStorage, owners: readonly string[]): void {
+  const encode = (owner: string) => `u${Array.from(owner.toLowerCase())
+    .map((character) => character.charCodeAt(0).toString(16).padStart(4, '0'))
+    .join('')}`;
+  const seen = new Map<string, string>();
+  for (const owner of owners) {
+    const encoded = encode(owner);
+    const keys = [...storage.values.keys()].filter((key) => key.includes(encoded));
+    assert.ok(keys.length > 0, `no stored keys for ${owner}`);
+    for (const key of keys) {
+      const other = seen.get(key);
+      assert.equal(other, undefined, `key ${key} is shared by ${other} and ${owner}`);
+      seen.set(key, owner);
+    }
   }
 }
 
@@ -135,7 +164,12 @@ test('local conversation history is isolated by server account and restores the 
 
   const restoredA = await store.read(ownerA.toUpperCase());
   const restoredB = await store.read(ownerB);
-  assert.equal(storage.values.size, 2);
+  // v4 shards each account into one index plus one row per conversation, so
+  // two single-chat accounts occupy 2 keys each (was 1 blob each under v3).
+  // The property under test is isolation, not the count — assert that
+  // directly so a future re-shard updates one number, not the guarantee.
+  assert.equal(storage.values.size, 4);
+  assertOwnerKeysDisjoint(storage, [ownerA, ownerB]);
   assert.equal(restoredA?.activeConversationId, 'chat-a');
   assert.equal(restoredA?.conversations[0].messages[0].content, 'A 的本地历史');
   assert.equal(restoredB?.activeConversationId, 'chat-b');
@@ -157,7 +191,11 @@ test('local account keys remain isolated for owners that collide under the legac
   await store.write(ownerA, [chatA], chatA.id);
   await store.write(ownerB, [chatB], chatB.id);
 
-  assert.equal(storage.values.size, 2);
+  // 2 keys per account under v4 (index + one row) — see the isolation test
+  // above. The legacy-hash collision this guards is about key OWNERSHIP, so
+  // the disjointness assertion is the one that must never weaken.
+  assert.equal(storage.values.size, 4);
+  assertOwnerKeysDisjoint(storage, [ownerA, ownerB]);
   assert.equal((await store.read(ownerA))?.conversations[0].id, 'collision-a');
   assert.equal((await store.read(ownerB))?.conversations[0].id, 'collision-b');
 });
@@ -702,4 +740,184 @@ test('official sessions are adopted through the modified Hermes flow before chat
   assert.equal(body.messages[0].timestamp, 10);
   assert.equal(body.messages[1].content, '项目状态正常');
   assert.equal((body.messages[1].meta as { activities: unknown[] }).activities.length, 2);
+});
+
+test('appending one message rewrites only that conversation row plus the index', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|append@example.test';
+  const conversations = Array.from({ length: 5 }, (_, index) => conversation(
+    `chat-${index}`,
+    100 + index,
+    [{ id: `m-${index}`, role: 'user', name: '你', content: `历史正文 ${index}` }],
+  ));
+
+  await store.write(owner, conversations, 'chat-0');
+  const indexKey = [...storage.values.keys()].find((key) => !key.includes('.row.'));
+  const changedRowKey = [...storage.values.keys()].find((key) => (
+    key.includes('.row.') && (storage.values.get(key) || '').includes('"chat-2"')
+  ));
+  assert.ok(indexKey && changedRowKey);
+  assert.equal(storage.setCalls.length, 6);
+
+  storage.setCalls.length = 0;
+  const appended = conversations.map((entry) => entry.id === 'chat-2'
+    ? {
+      ...entry,
+      updated_at: 900,
+      message_count: 2,
+      messages: [
+        ...entry.messages,
+        { id: 'm-new', role: 'assistant', name: 'Hermes', content: '新增回复' },
+      ],
+    }
+    : entry);
+  await store.write(owner, appended, 'chat-2');
+
+  // The append must touch exactly two keys: the changed conversation's row
+  // and the small index. The other four transcripts stay untouched.
+  assert.deepEqual(storage.setCalls, [changedRowKey, indexKey]);
+  const restored = await store.read(owner);
+  assert.equal(
+    restored?.conversations.find(({ id }) => id === 'chat-2')?.messages.length,
+    2,
+  );
+
+  storage.setCalls.length = 0;
+  await store.write(owner, appended, 'chat-2');
+  // A write with no conversation changes refreshes only the index (syncedAt).
+  assert.deepEqual(storage.setCalls, [indexKey]);
+
+  storage.setCalls.length = 0;
+  await store.write(owner, appended.filter(({ id }) => id !== 'chat-4'), 'chat-2');
+  assert.deepEqual(storage.setCalls, [indexKey]);
+  assert.equal(
+    [...storage.values.values()].some((value) => value.includes('"chat-4"')),
+    false,
+  );
+});
+
+test('v3 single-blob history loads unchanged and is sharded by the next write', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'blob-migration-owner';
+  const encodedOwner = `u${Array.from(owner)
+    .map((character) => character.charCodeAt(0).toString(16).padStart(4, '0'))
+    .join('')}`;
+  const blobKey = `hermes.native.conversations.v3.${encodedOwner}`;
+  storage.values.set(blobKey, JSON.stringify({
+    version: 3,
+    owner,
+    activeConversationId: 'blob-chat',
+    conversations: [conversation('blob-chat', 50, [
+      { id: 'b-1', role: 'user', name: '你', content: '升级前的历史' },
+    ])],
+    syncedAt: 50,
+  }));
+
+  const restored = await store.read(owner);
+  assert.equal(restored?.activeConversationId, 'blob-chat');
+  assert.equal(restored?.conversations[0].messages[0].content, '升级前的历史');
+  assert.equal(restored?.syncedAt, 50);
+
+  await store.write(owner, restored!.conversations, restored!.activeConversationId);
+  assert.equal(storage.values.has(blobKey), false);
+  assert.ok([...storage.values.keys()].every((key) => key.includes('conversations.v4')));
+
+  // The sharded layout must be complete on disk: a brand-new store instance
+  // (fresh process, empty stamp cache) reads the same history back.
+  const rehydrated = await new ConversationLocalStore(storage).read(owner);
+  assert.equal(rehydrated?.conversations[0].id, 'blob-chat');
+  assert.equal(rehydrated?.conversations[0].messages[0].content, '升级前的历史');
+});
+
+test('a fresh process seeds row stamps from disk and still skips clean rows', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|rehydrate@example.test';
+  const conversations = [
+    conversation('stable', 100, [
+      { id: 's-1', role: 'user', name: '你', content: '不变的会话' },
+    ]),
+    conversation('growing', 200, [
+      { id: 'g-1', role: 'user', name: '你', content: '继续任务' },
+    ]),
+  ];
+  await new ConversationLocalStore(storage).write(owner, conversations, 'growing');
+
+  const fresh = new ConversationLocalStore(storage);
+  const restored = await fresh.read(owner);
+  assert.equal(restored?.conversations.length, 2);
+  storage.setCalls.length = 0;
+
+  const appended = restored!.conversations.map((entry) => entry.id === 'growing'
+    ? {
+      ...entry,
+      updated_at: 300,
+      message_count: 2,
+      messages: [
+        ...entry.messages,
+        { id: 'g-2', role: 'assistant', name: 'Hermes', content: '已完成' },
+      ],
+    }
+    : entry);
+  await fresh.write(owner, appended, 'growing');
+
+  // read() hydrated the stamp cache, so the restart does not trigger a full
+  // rewrite: only the appended row and the index hit storage.
+  assert.equal(storage.setCalls.length, 2);
+  assert.equal(storage.setCalls.filter((key) => key.includes('.row.')).length, 1);
+  assert.ok((storage.values.get(storage.setCalls[0]) || '').includes('"g-2"'));
+});
+
+test('two live store facades merge interleaved messages instead of overwriting a stale row', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|two-consumers@example.test';
+  const chatPageStore = new ConversationLocalStore(storage);
+  const swiftRouteStore = new ConversationLocalStore(storage);
+  const baseline = conversation('shared-chat', 100, [
+    { id: 'm-1', role: 'user', name: '你', content: '开始任务', created_at: 100 },
+  ]);
+
+  await chatPageStore.write(owner, [baseline], 'shared-chat');
+  const chatPageSnapshot = await chatPageStore.read(owner);
+  const swiftRouteSnapshot = await swiftRouteStore.read(owner);
+
+  await swiftRouteStore.write(owner, [{
+    ...swiftRouteSnapshot!.conversations[0],
+    updated_at: 200,
+    message_count: 2,
+    messages: [
+      ...swiftRouteSnapshot!.conversations[0].messages,
+      {
+        id: 'm-route',
+        role: 'assistant',
+        name: 'Hermes',
+        content: 'SwiftUI 路由已刷新',
+        created_at: 200,
+      },
+    ],
+  }], 'shared-chat');
+
+  await chatPageStore.write(owner, [{
+    ...chatPageSnapshot!.conversations[0],
+    updated_at: 300,
+    message_count: 2,
+    messages: [
+      ...chatPageSnapshot!.conversations[0].messages,
+      {
+        id: 'm-chat',
+        role: 'assistant',
+        name: 'Hermes',
+        content: '聊天流收到新 token',
+        created_at: 300,
+      },
+    ],
+  }], 'shared-chat');
+
+  const restored = await new ConversationLocalStore(storage).read(owner);
+  assert.deepEqual(
+    restored!.conversations[0].messages.map(({ id }) => id),
+    ['m-1', 'm-route', 'm-chat'],
+  );
+  assert.equal(restored!.conversations[0].message_count, 3);
 });

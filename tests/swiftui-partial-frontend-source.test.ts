@@ -9,23 +9,62 @@ const read = (path: string) => readFileSync(resolve(projectRoot, path), 'utf8');
 
 test('Swift and TypeScript route action protocols remain exactly aligned', () => {
   const contract = read('src/app/swiftui-route-contract.ts');
+  const generatedContract = read('src/app/swiftui-route-actions.generated.ts');
   const swiftSource = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIRouteData.swift',
   );
-  const swiftActionEnum = swiftSource.slice(
-    swiftSource.indexOf('enum HermesRouteAction:'),
-    swiftSource.indexOf('struct HermesRouteActionPayload:'),
+  const swiftActionsSource = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIRouteActions.generated.swift',
+  );
+  const swiftPages = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift',
   );
   const typeScriptActions = new Set(
-    [...contract.matchAll(/^\s+[A-Za-z][A-Za-z0-9]*:\s*'([^']+)',?$/gm)]
+    [...generatedContract.matchAll(/^\s+[A-Za-z][A-Za-z0-9]*:\s*'([^']+)',?$/gm)]
       .map((match) => match[1]),
   );
   const swiftActions = new Set(
-    [...swiftActionEnum.matchAll(/case\s+[A-Za-z][A-Za-z0-9]*\s*=\s*"([^"]+)"/g)]
+    [...swiftActionsSource.matchAll(/case\s+[A-Za-z][A-Za-z0-9]*\s*=\s*"([^"]+)"/g)]
       .map((match) => match[1]),
   );
 
   assert.deepEqual([...swiftActions].sort(), [...typeScriptActions].sort());
+  assert.match(generatedContract, /generate-swiftui-route-actions\.mjs\. Do not edit/);
+  assert.match(swiftActionsSource, /generate-swiftui-route-actions\.mjs\. Do not edit/);
+  assert.match(generatedContract, /interface HermesSwiftUIRouteActionPayload/);
+  assert.match(generatedContract, /isHermesSwiftUIRouteActionPayload/);
+  assert.match(swiftActionsSource, /struct HermesRouteActionPayload: Encodable, Equatable/);
+  assert.doesNotMatch(contract, /interface HermesSwiftUIRouteActionPayload\s*\{/);
+  assert.doesNotMatch(swiftSource, /struct HermesRouteActionPayload\s*:/);
+  assert.match(contract, /payloadDigest\?: string/);
+  assert.match(swiftSource, /let payloadDigest: String\?/);
+  assert.match(swiftPages, /fields\["payloadDigest"\] = payloadDigest/);
+  assert.doesNotMatch(read('src/app/hermes-route-data.ts'), /renderedApprovalDigests/);
+});
+
+test('SwiftUI route snapshots stay split by product domain', () => {
+  const coordinator = read('src/app/hermes-route-data.ts');
+  const domains = [
+    'management',
+    'model-selection',
+    'models',
+    'sessions-files',
+    'support',
+    'system',
+    'workflows',
+  ];
+
+  for (const domain of domains) {
+    assert.ok(
+      existsSync(resolve(projectRoot, `src/app/route-snapshots/${domain}.ts`)),
+      `missing route snapshot domain: ${domain}`,
+    );
+  }
+  assert.ok(coordinator.split(/\r?\n/).length < 700);
+  assert.doesNotMatch(
+    coordinator,
+    /function (?:modelsSnapshot|systemSnapshot|workflowsSnapshot|filesSnapshot|integrationsSnapshot)\(/,
+  );
 });
 
 test('signed iOS builds use the partial SwiftUI frontend without replacing chat', () => {
@@ -39,7 +78,7 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
   const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
-  const preview = read('src/preview/FrontendPreviewApp.tsx');
+  const preview = read('src/studio/FrontendPreviewApp.tsx');
 
   assert.ok(
     config.apple?.modules?.includes('HermesSwiftUIPartialFrontendModule'),
@@ -76,8 +115,26 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
   assert.match(preview, /route\.routeId !== 'chat'/);
   assert.match(preview, /<ChatPreviewPage/);
   assert.match(preview, /<ChatPreviewPage[\s\S]*profile=\{profile\}/);
-  const chat = read('src/preview/PreviewChatPage.tsx');
-  assert.match(chat, /createConversation\(profile,/);
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/ChatPresentation.tsx'),
+    read('src/studio/chat/ChatHeader.tsx'),
+    read('src/studio/chat/ChatMessageStream.tsx'),
+    read('src/studio/chat/ChatComposer.tsx'),
+    read('src/studio/chat/ChatComposerPresentation.tsx'),
+    read('src/studio/chat/ConversationHistory.tsx'),
+    read('src/studio/chat/ChatModelToolsDrawer.tsx'),
+    read('src/studio/chat/chat-presentation-styles.ts'),
+    read('src/studio/chat/hosted-turn-delivery-service.ts'),
+    read('src/studio/chat/useHostedCancellationController.ts'),
+    read('src/studio/chat/useHostedOutboxReplayController.ts'),
+    read('src/studio/chat/useChatAttachmentController.ts'),
+    read('src/studio/chat/useHostedInterventionController.ts'),
+    read('src/studio/chat/useHostedSendController.ts'),
+    read('src/studio/chat/useConversationActionsController.ts'),
+    read('src/studio/chat/useChatComposerNavigationController.ts'),
+  ].join('\n');
+  assert.match(chat, /createConversation\(\s*profile,/);
   assert.match(chat, /enqueueHostedTurn\(item\.conversationId, item\.input, signal\)/);
   assert.match(chat, /persistPendingAttachments\(/);
   assert.match(chat, /upsertPendingEnqueue\(cacheOwner,/);
@@ -158,6 +215,10 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routeData, /api\.testCustomModel/);
   assert.match(routeData, /api\.discoverCustomModels/);
   assert.match(routeData, /api\.deleteModelCredential/);
+  // Custom-model normalization lives in HermesCloudApi alone; the route layer
+  // once shipped a second copy whose unknown-input fallback diverged.
+  assert.doesNotMatch(routeData, /function customApiMode/);
+  assert.doesNotMatch(routeData, /function customReasoningEffort/);
   assert.doesNotMatch(routes, /case \.env: return \.environment/);
   assert.doesNotMatch(routes, /\.environmentUpsert/);
   assert.doesNotMatch(routeData, /HERMES_SWIFTUI_ROUTE_ACTIONS\.environmentUpsert/);
@@ -278,14 +339,23 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.doesNotMatch(shell, /drawerTranslationStyle|swiftUIDrawerHost/);
 });
 
-test('the composer keeps RN controls above a relayout-safe native blur background', () => {
+test('the composer uses the source-attributed OpenMinis solid two-level surface', () => {
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
   const liveBlur = read(
     'modules/hermes-live-blur/ios/HermesLiveBlurView.swift',
   );
-  const chat = read('src/preview/PreviewChatPage.tsx');
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/ChatPresentation.tsx'),
+    read('src/studio/chat/ChatHeader.tsx'),
+    read('src/studio/chat/ChatMessageStream.tsx'),
+    read('src/studio/chat/ChatComposer.tsx'),
+    read('src/studio/chat/ChatComposerPresentation.tsx'),
+    read('src/studio/chat/ConversationHistory.tsx'),
+    read('src/studio/chat/ChatModelToolsDrawer.tsx'),
+  ].join('\n');
 
   assert.match(native, /\.fill\(\.regularMaterial\)/);
   assert.doesNotMatch(native, /Children\(\)/);
@@ -295,9 +365,10 @@ test('the composer keeps RN controls above a relayout-safe native blur backgroun
   assert.match(native, /selectedReasoning = \$0\s*props\.onReasoningChange/);
   assert.match(native, /selectedModel = \$0\s*props\.onModelChange/);
   assert.match(chat, /<View style=\{surfaceStyle\}>/);
-  assert.match(chat, /<HermesLiveBlurView/);
-  assert.match(chat, /blurRadius=\{18\}/);
-  assert.match(chat, /styles\.composerFrostedBackground/);
+  assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
+  assert.match(chat, /DynamicColorIOS\(\{ dark: '#1f1f1f', light: '#ffffff' \}\)/);
+  assert.match(chat, /styles\.openMinisToolbar/);
+  assert.doesNotMatch(chat, /<HermesLiveBlurView/);
   assert.match(chat, /borderWidth: StyleSheet\.hairlineWidth/);
   assert.match(liveBlur, /UIVisualEffectView/);
   assert.match(liveBlur, /override func layoutSubviews\(\)/);
@@ -315,7 +386,7 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
   const shell = read('src/app/NativeShell.tsx');
-  const preview = read('src/preview/FrontendPreviewApp.tsx');
+  const preview = read('src/studio/FrontendPreviewApp.tsx');
 
   assert.match(bridge, /interface HermesSwiftUIThemeProps/);
   assert.match(native, /protocol HermesThemeProviding/);
@@ -347,7 +418,10 @@ test('chat header exposes live dual-gateway status while SwiftUI keeps back sema
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
   const bridge = read('modules/hermes-ios-controls/index.ts');
-  const chat = read('src/preview/PreviewChatPage.tsx');
+  const chat = [
+    read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/ChatHeader.tsx'),
+  ].join('\n');
   const shell = read('src/app/NativeShell.tsx');
 
   assert.match(bridge, /gatewayStatusesJson: string/);
@@ -387,7 +461,7 @@ test('heavy analytics content is staged before the sidebar close signal', () => 
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
   const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
-  const preview = read('src/preview/FrontendPreviewApp.tsx');
+  const preview = read('src/studio/FrontendPreviewApp.tsx');
 
   assert.match(native, /route != \.analytics \|\| preparedAnalyticsPath == props\.path/);
   assert.match(native, /DispatchQueue\.main\.async \{/);
@@ -406,7 +480,10 @@ test('heavy analytics content is staged before the sidebar close signal', () => 
 test('SwiftUI collaboration keeps its draft and stable request until durable acknowledgement', () => {
   const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
   const controller = read('src/app/useHermesSwiftUIRouteData.ts');
-  const store = read('src/api/conversation-local-store.ts');
+  const store = [
+    read('src/api/conversation-local-store.ts'),
+    read('src/api/conversation-room-outbox.ts'),
+  ].join('\n');
 
   assert.match(routes, /collaborationPendingRequestId/);
   assert.match(routes, /collaborationPendingRoomId == roomId/);
@@ -438,6 +515,10 @@ test('SwiftUI collaboration keeps its draft and stable request until durable ack
   assert.match(controller, /removePendingRoomMessage\(cacheOwner, item\.requestId\)/);
   assert.match(controller, /isPermanentRoomSendError\(error\)/);
   assert.match(controller, /!\[401, 408, 429\]\.includes\(error\.status\)/);
+  // The queue-expiry notice follows the active locale instead of hardcoding
+  // Chinese copy, and route actions carry the locale into the data layer.
+  assert.match(controller, /条待发群聊消息已失效[\s\S]{0,160}pending room messages expired/);
+  assert.match(controller, /performHermesSwiftUIRouteAction\(api, event, profile, locale\)/);
   assert.match(store, /hermes\.native\.collaboration-room-outbox\.v1/);
 });
 
@@ -446,7 +527,7 @@ test('SwiftUI route navigation control is only rendered for the compact drawer s
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
-  const preview = read('src/preview/FrontendPreviewApp.tsx');
+  const preview = read('src/studio/FrontendPreviewApp.tsx');
 
   assert.match(bridge, /showsNavigationButton\?: boolean/);
   assert.match(preview, /compactNavigation=\{context\.compact\}/);

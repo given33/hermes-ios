@@ -24,7 +24,8 @@ import {
   HermesSwiftUIRouteView,
   hasNativeSwiftUIRoute,
 } from '../../modules/hermes-ios-controls';
-import { HermesCloudApi, type JsonRecord } from '../api/HermesCloudApi';
+import type { HermesCloudApi, JsonRecord } from '../api/HermesCloudApi';
+import { hermesCloudApiFor } from '../api/hermes-api-registry';
 import {
   MANAGED_NODE_FRESHNESS_MS,
   managedNodeGatewayStatuses,
@@ -64,7 +65,7 @@ import {
   PluginsPreviewPage,
   SkillsPreviewPage,
   WebhooksPreviewPage,
-} from './PreviewAutomationPages';
+} from '../preview/PreviewAutomationPages';
 import {
   AnalyticsPreviewPage,
   FilesPreviewPage,
@@ -73,25 +74,25 @@ import {
   PerformancePreviewPage,
   SessionsPreviewPage,
   type PreviewPageProps,
-} from './PreviewCorePages';
+} from '../preview/PreviewCorePages';
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
 import { MemoryPreviewPage } from './PreviewMemoryPage';
-import { HermesStudioSettingsPage } from './HermesStudioSettingsPage';
+import { HermesStudioSettingsPage } from '../preview/HermesStudioSettingsPage';
 import { AccountPage } from '../auth/AccountPage';
 import {
   AchievementsPreviewPage,
   CollaborationPreviewPage,
   KanbanPreviewPage,
-} from './PreviewPluginPages';
+} from '../preview/PreviewPluginPages';
 import {
   DocsPreviewPage,
   EnvPreviewPage,
   ProfileBuilderPreviewPage,
   ProfilesPreviewPage,
   SystemPreviewPage,
-} from './PreviewSettingsPages';
-import { PREVIEW_PROFILES } from './preview-fixtures';
+} from '../preview/PreviewSettingsPages';
+import { PREVIEW_PROFILES } from '../preview/preview-fixtures';
 import {
   PreviewBadge,
   PreviewChoice,
@@ -162,7 +163,7 @@ export function FrontendPreviewApp({
     setSystemSummary({ activeSessions: 0, gatewayOnline: false });
     if (!client) return undefined;
     let active = true;
-    const api = new HermesCloudApi(client);
+    const api = hermesCloudApiFor(client);
     const applySystem = (
       system: Awaited<ReturnType<HermesCloudApi['getSystem']>>,
       requestVersion: number,
@@ -220,7 +221,7 @@ export function FrontendPreviewApp({
   const selectProfile = useCallback(async (next: string) => {
     if (!next) return;
     try {
-      if (client) await new HermesCloudApi(client).setActiveProfile(next);
+      if (client) await hermesCloudApiFor(client).setActiveProfile(next);
       setProfile(next);
       setPicker(null);
       notify(locale === 'zh' ? `正在管理 Profile：${next}` : `Managing profile: ${next}`);
@@ -238,7 +239,7 @@ export function FrontendPreviewApp({
       return;
     }
     try {
-      const api = new HermesCloudApi(client);
+      const api = hermesCloudApiFor(client);
       if (action === 'update') await api.updateHermes();
       else await api.restartGateway();
       notify(action === 'update'
@@ -790,7 +791,7 @@ function FooterSlot() {
   return (
     <View style={styles.footerSlot}>
       <PreviewText style={styles.footerVersion} variant="tiny">{versionLabel}</PreviewText>
-      <PreviewText numberOfLines={1} style={styles.footerCredit} variant="tiny">Nous Research</PreviewText>
+      <PreviewText numberOfLines={1} style={styles.footerCredit} variant="tiny">Hermes Agent</PreviewText>
     </View>
   );
 }

@@ -140,5 +140,10 @@ test('native v2 uses the isolated beta identity and required Expo plugins', () =
     ],
   );
   assert.ok(Array.isArray(secureStorePlugin));
-  assert.equal(secureStorePlugin[1].faceIDPermission, undefined);
+  // Biometric-protected keychain items require a Face ID usage string, and it
+  // must be the localized one instead of the plugin's English default.
+  assert.equal(
+    secureStorePlugin[1].faceIDPermission,
+    '用于解锁 Hermes 连接并读取受保护的登录凭据。',
+  );
 });

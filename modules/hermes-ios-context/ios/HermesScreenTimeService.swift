@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import Security
 
 #if canImport(FamilyControls)
 import DeviceActivity
@@ -22,11 +24,11 @@ final class HermesScreenTimeService {
   func snapshot(hasEntitlement: Bool) -> [String: Any] {
     var result = capabilities(hasEntitlement: hasEntitlement)
     let generation = HermesContextEventQueue.shared.accountGeneration
-    let events = (sharedDefaults?.array(forKey: "device-activity-events") as? [[String: Any]] ?? [])
+    let events = decodedRecords(forKey: "device-activity-events")
+      .map(\.payload)
       .filter { Self.generation(of: $0) == generation }
-    let storedSummary = sharedDefaults?.dictionary(forKey: "device-activity-summary-latest")
-    let summary = storedSummary.flatMap {
-      Self.generation(of: $0) == generation ? $0 : nil
+    let summary = decodedSummaryRecord().flatMap {
+      Self.generation(of: $0.payload) == generation ? $0.payload : nil
     }
     result["events"] = Array(events.suffix(100))
     result["activitySummary"] = summary
@@ -40,15 +42,13 @@ final class HermesScreenTimeService {
     guard let sharedDefaults,
           !HermesContextEventQueue.shared.isCollectionSuspended,
           HermesContextEventQueue.shared.hasCurrentOwner else { return 0 }
-    let events = sharedDefaults.array(forKey: "device-activity-events") as? [[String: Any]] ?? []
-    let summary = sharedDefaults.dictionary(forKey: "device-activity-summary-latest")
+    let events = decodedRecords(forKey: "device-activity-events")
+    let summary = decodedSummaryRecord()
     if events.isEmpty, summary == nil { return 0 }
     let generation = HermesContextEventQueue.shared.accountGeneration
-    let currentEvents = events.filter { Self.generation(of: $0) == generation }
-    let currentSummary = summary.flatMap {
-      Self.generation(of: $0) == generation ? $0 : nil
-    }
-    let currentPayloads = currentEvents + (currentSummary.map { [$0] } ?? [])
+    let currentPayloads = (events + (summary.map { [$0] } ?? []))
+      .map(\.payload)
+      .filter { Self.generation(of: $0) == generation }
     let batch = currentPayloads.map { payload -> [String: Any] in
       [
         "id": Self.eventID(of: payload),
@@ -63,23 +63,54 @@ final class HermesScreenTimeService {
 
     // Extensions and the host are separate processes. Remove only the exact
     // records captured above so a callback written while persistence is in
-    // progress is not erased by the host.
-    let consumedEventIDs = Set(events.map { Self.eventID(of: $0) })
-    let latestEvents = sharedDefaults.array(forKey: "device-activity-events") as? [[String: Any]] ?? []
-    let remainingEvents = latestEvents.filter { !consumedEventIDs.contains(Self.eventID(of: $0)) }
+    // progress is not erased by the host. Entries that no longer decode
+    // (foreign shapes or torn envelopes) are dropped with the consumed batch.
+    let consumedIdentities = Set(events.map(\.identity))
+    let latestEvents = sharedDefaults.array(forKey: "device-activity-events") ?? []
+    let remainingEvents = latestEvents.filter { raw in
+      guard let record = decodeRecord(raw) else { return false }
+      return !consumedIdentities.contains(record.identity)
+    }
     if remainingEvents.isEmpty { sharedDefaults.removeObject(forKey: "device-activity-events") }
     else { sharedDefaults.set(remainingEvents, forKey: "device-activity-events") }
     if let summary {
-      let capturedID = Self.eventID(of: summary)
-      let latestSummary = sharedDefaults.dictionary(forKey: "device-activity-summary-latest")
-      if latestSummary.map({ Self.eventID(of: $0) }) == capturedID {
+      let latestSummary = decodedSummaryRecord()
+      if latestSummary?.identity == summary.identity {
         sharedDefaults.removeObject(forKey: "device-activity-summary-latest")
       }
     }
     return persisted
   }
 
+  // Extension payloads arrive as AES.GCM envelopes; bare dictionaries written
+  // by extension builds that predate the encrypted handoff drain once here.
+  // The identity is what exact-consumed removal compares, so it must be
+  // stable across re-reads of the shared suite.
+  private func decodeRecord(_ raw: Any) -> HermesScreenTimeRecord? {
+    if let sealed = raw as? String {
+      guard let payload = HermesScreenTimeCrypto.open(sealed) else { return nil }
+      return HermesScreenTimeRecord(identity: sealed, payload: payload)
+    }
+    if let payload = raw as? [String: Any] {
+      return HermesScreenTimeRecord(identity: Self.eventID(of: payload), payload: payload)
+    }
+    return nil
+  }
+
+  private func decodedRecords(forKey key: String) -> [HermesScreenTimeRecord] {
+    (sharedDefaults?.array(forKey: key) ?? []).compactMap { decodeRecord($0) }
+  }
+
+  private func decodedSummaryRecord() -> HermesScreenTimeRecord? {
+    guard let raw = sharedDefaults?.object(forKey: "device-activity-summary-latest") else { return nil }
+    return decodeRecord(raw)
+  }
+
   func setAccountGeneration(_ generation: Int) {
+    // Extensions can only seal envelopes once the shared key exists, and they
+    // never create it themselves; provision it on every path that can arm a
+    // monitoring schedule.
+    HermesScreenTimeCrypto.provisionKey()
     sharedDefaults?.set(max(0, generation), forKey: accountGenerationKey)
   }
 
@@ -194,5 +225,72 @@ private enum HermesScreenTimeError: LocalizedError {
     case .permissionRequired: return "Screen Time authorization is required."
     case .unavailable: return "Device Activity is unavailable on this build."
     }
+  }
+}
+
+private struct HermesScreenTimeRecord {
+  let identity: String
+  let payload: [String: Any]
+}
+
+// Opening half of the Screen Time handoff crypto. Shared App Group UserDefaults
+// are cleartext plists on disk, so the DeviceActivity extensions seal their
+// payloads with a key the host provisions in the shared Keychain access group.
+// Each extension target compiles a matching sealing-only copy of this helper
+// (the config plugin builds one source file per target), so the service, the
+// account, and the associated data below must stay in sync with those copies.
+private enum HermesScreenTimeCrypto {
+  private static let associatedData = Data("hermes-screen-time-v1".utf8)
+  private static let keychainLock = NSLock()
+
+  static func open(_ sealed: String) -> [String: Any]? {
+    guard let key = sharedKey(create: false),
+          let combined = Data(base64Encoded: sealed),
+          let box = try? AES.GCM.SealedBox(combined: combined),
+          let clear = try? AES.GCM.open(box, using: key, authenticating: associatedData) else {
+      return nil
+    }
+    return (try? JSONSerialization.jsonObject(with: clear)) as? [String: Any]
+  }
+
+  static func provisionKey() {
+    _ = sharedKey(create: true)
+  }
+
+  private static func sharedKey(create: Bool) -> SymmetricKey? {
+    keychainLock.lock()
+    defer { keychainLock.unlock() }
+    let selector: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: "app.hermes.screen-time",
+      kSecAttrAccount as String: "shared-activity-key-v1",
+      kSecAttrAccessGroup as String: "group.app.sunstone1029.fig1171.hermes",
+    ]
+    var query = selector
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    query[kSecReturnData as String] = true
+    var result: CFTypeRef?
+    if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+       let data = result as? Data, data.count == 32 {
+      return SymmetricKey(data: data)
+    }
+    guard create else { return nil }
+    var keyData = Data(count: 32)
+    let generated = keyData.withUnsafeMutableBytes { buffer in
+      SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+    }
+    guard generated == errSecSuccess else { return nil }
+    var insert = selector
+    insert[kSecValueData as String] = keyData
+    insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    let inserted = SecItemAdd(insert as CFDictionary, nil)
+    if inserted == errSecSuccess { return SymmetricKey(data: keyData) }
+    // Lost a provisioning race against another call; adopt the winner's key.
+    if inserted == errSecDuplicateItem,
+       SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+       let data = result as? Data, data.count == 32 {
+      return SymmetricKey(data: data)
+    }
+    return nil
   }
 }

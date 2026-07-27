@@ -42,7 +42,7 @@ import {
   PreviewSettingRow,
   PreviewText,
   PreviewToggle,
-} from './PreviewPrimitives';
+} from '../studio/PreviewPrimitives';
 
 type SettingsTab =
   | 'account'
