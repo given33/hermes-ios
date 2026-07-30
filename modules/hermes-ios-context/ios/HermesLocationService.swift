@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import OSLog
 
 enum HermesLocationMode: String {
   case automotive
@@ -12,6 +13,7 @@ enum HermesLocationMode: String {
 
 final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   static let shared = HermesLocationService()
+  private static let logger = Logger(subsystem: "app.hermes", category: "location-collector")
 
   private struct LocationManagerConfiguration {
     let activityType: CLActivityType
@@ -26,8 +28,9 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     case retry(UUID)
   }
 
-  private let manager = CLLocationManager()
+  private var manager: CLLocationManager
   private let stateLock = NSLock()
+  private var activeCollectorToken: HermesCollectorGenerationToken?
   private var authorizationGate: HermesLocationAuthorizationGate?
   private var authorizationWaiters: [HermesLocationAuthorizationGate] = []
   private var locationContinuation: CheckedContinuation<[String: Any]?, Never>?
@@ -51,14 +54,9 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   var onVisit: (([String: Any]) -> Void)?
 
   private override init() {
+    manager = CLLocationManager()
     super.init()
-    manager.delegate = self
-    manager.activityType = .other
-    manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-    manager.distanceFilter = 15
-    manager.pausesLocationUpdatesAutomatically = true
-    manager.allowsBackgroundLocationUpdates = true
-    manager.showsBackgroundLocationIndicator = false
+    configureManager(manager)
   }
 
   func requestAlwaysAuthorization() async -> String {
@@ -108,30 +106,63 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   func start() -> Bool {
     guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return false }
     guard CLLocationManager.locationServicesEnabled() else { return false }
-    let status = manager.authorizationStatus
-    guard status == .authorizedAlways else { return false }
-    manager.startMonitoringSignificantLocationChanges()
-    manager.startMonitoringVisits()
-    apply(mode: currentAdaptiveMode(), force: true)
-    return true
+    guard let token = HermesAccountLifecycle.captureCollectorGeneration() else {
+      Self.logger.error("Location collector start rejected: no active generation")
+      return false
+    }
+    var started = false
+    let current = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      if activeCollectorToken != token { activateAccountGeneration(token) }
+      guard manager.authorizationStatus == .authorizedAlways else { return }
+      removeStaleHermesRegions(keeping: token)
+      manager.startMonitoringSignificantLocationChanges()
+      manager.startMonitoringVisits()
+      apply(mode: currentAdaptiveMode(), force: true, token: token)
+      started = true
+    }
+    if !current { Self.logger.error("Location collector start rejected: stale generation") }
+    return current && started
   }
 
   func stop() {
     manager.stopUpdatingLocation()
     manager.stopMonitoringSignificantLocationChanges()
     manager.stopMonitoringVisits()
-    if let stableRegion { manager.stopMonitoring(for: stableRegion) }
+    removeStaleHermesRegions(keeping: nil)
     stableRegion = nil
   }
 
+  func activateAccountGeneration(_ token: HermesCollectorGenerationToken) {
+    guard activeCollectorToken != token else {
+      removeStaleHermesRegions(keeping: token)
+      return
+    }
+    replaceManager(activeToken: token)
+    clearAccountState()
+  }
+
   func resetAccountState() {
+    replaceManager(activeToken: nil)
+    clearAccountState()
+  }
+
+  private func clearAccountState() {
     predictedDepartureActivation?.cancel()
     predictedDepartureActivation = nil
     predictedDepartureReset?.cancel()
     predictedDepartureReset = nil
     predictedDepartureAt = nil
     resolveLocationRequest(with: nil, restoreConfiguration: false)
-    stop()
+    stateLock.lock()
+    let pendingAuthorizationGate = authorizationGate
+    let pendingAuthorizationWaiters = authorizationWaiters
+    self.authorizationGate = nil
+    self.authorizationWaiters.removeAll()
+    stateLock.unlock()
+    let authorization = HermesAuthorization.location(manager.authorizationStatus)
+    pendingAuthorizationGate?.resolve(authorization)
+    pendingAuthorizationWaiters.forEach { $0.resolve(authorization) }
+    requestedAlwaysUpgrade = false
     lastLocation = nil
     stableSamples.removeAll()
     mode = .stationary
@@ -148,15 +179,27 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     predictedDepartureReset = nil
     predictedDepartureAt = date
     guard let date else {
-      if mode == .predictedDeparture { apply(mode: .stationary, force: true) }
+      if mode == .predictedDeparture, let token = activeCollectorToken {
+        apply(mode: .stationary, force: true, token: token)
+      }
+      return
+    }
+    guard let collectorToken = activeCollectorToken else {
+      Self.logger.error("Predicted departure rejected: no active generation")
+      predictedDepartureAt = nil
       return
     }
     let activation = DispatchWorkItem { [weak self] in
-      guard let self, self.predictedDepartureAt == date else { return }
-      self.predictedDepartureActivation = nil
-      if self.mode == .stationary || self.mode == .predictedDeparture {
-        self.apply(mode: .predictedDeparture, force: true)
+      guard let self else { return }
+      let accepted = HermesAccountLifecycle.performIfCurrentCollectorGeneration(collectorToken) {
+        guard self.activeCollectorToken == collectorToken,
+              self.predictedDepartureAt == date else { return }
+        self.predictedDepartureActivation = nil
+        if self.mode == .stationary || self.mode == .predictedDeparture {
+          self.apply(mode: .predictedDeparture, force: true, token: collectorToken)
+        }
       }
+      if !accepted { Self.logger.error("Predicted departure callback rejected: stale generation") }
     }
     predictedDepartureActivation = activation
     let activationDelay = date.timeIntervalSinceNow - 30 * 60
@@ -169,12 +212,17 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       )
     }
     let reset = DispatchWorkItem { [weak self] in
-      guard let self, self.predictedDepartureAt == date else { return }
-      self.predictedDepartureAt = nil
-      self.predictedDepartureReset = nil
-      if self.mode == .predictedDeparture {
-        self.apply(mode: .stationary, force: true)
+      guard let self else { return }
+      let accepted = HermesAccountLifecycle.performIfCurrentCollectorGeneration(collectorToken) {
+        guard self.activeCollectorToken == collectorToken,
+              self.predictedDepartureAt == date else { return }
+        self.predictedDepartureAt = nil
+        self.predictedDepartureReset = nil
+        if self.mode == .predictedDeparture {
+          self.apply(mode: .stationary, force: true, token: collectorToken)
+        }
       }
+      if !accepted { Self.logger.error("Predicted departure reset rejected: stale generation") }
     }
     predictedDepartureReset = reset
     DispatchQueue.main.asyncAfter(
@@ -183,7 +231,23 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     )
   }
 
-  func applyMotionActivity(_ activity: String) {
+  func applyMotionActivity(
+    _ activity: String,
+    collectorToken token: HermesCollectorGenerationToken
+  ) {
+    let accepted = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      guard activeCollectorToken == token else { return }
+      applyMotionActivityUnlocked(activity, token: token)
+    }
+    if !accepted {
+      Self.logger.error("Location motion adaptation rejected: stale generation")
+    }
+  }
+
+  private func applyMotionActivityUnlocked(
+    _ activity: String,
+    token: HermesCollectorGenerationToken
+  ) {
     let next: HermesLocationMode
     switch activity {
     case "automotive": next = .automotive
@@ -193,14 +257,29 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     case "stationary": next = currentAdaptiveMode(now: Date()) == .predictedDeparture ? .predictedDeparture : .stationary
     default: return
     }
-    apply(mode: next)
+    apply(mode: next, token: token)
   }
 
   func requestCurrent(forceFresh: Bool = false) async -> [String: Any]? {
     guard CLLocationManager.locationServicesEnabled() else { return nil }
+    guard let collectorToken = HermesAccountLifecycle.captureCollectorGeneration() else {
+      Self.logger.error("Current location request rejected: no active generation")
+      return nil
+    }
+    var generationReady = false
+    let current = HermesAccountLifecycle.performIfCurrentCollectorGeneration(collectorToken) {
+      if activeCollectorToken != collectorToken { activateAccountGeneration(collectorToken) }
+      generationReady = true
+    }
+    guard current, generationReady else {
+      Self.logger.error("Current location request rejected: stale generation")
+      return nil
+    }
     let status = manager.authorizationStatus
     guard status == .authorizedAlways || status == .authorizedWhenInUse else { return nil }
-    if !forceFresh, let lastLocation, abs(lastLocation.timestamp.timeIntervalSinceNow) < 20 {
+    if !forceFresh, let lastLocation,
+       collectorToken.accepts(lastLocation.timestamp),
+       abs(lastLocation.timestamp.timeIntervalSinceNow) < 20 {
       return Self.payload(
         lastLocation,
         authorization: status,
@@ -210,48 +289,57 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     }
     await requestTemporaryFullAccuracyIfNeeded()
     return await withCheckedContinuation { continuation in
-      // A second foreground refresh supersedes the first one. Resolve the old
-      // continuation before installing the new token so a late callback or
-      // timeout from the old request cannot finish the replacement request.
-      resolveLocationRequest(with: nil)
-      let token = UUID()
-      let requestedAt = Date()
-      stateLock.lock()
-      locationContinuation = continuation
-      locationRequestForceFresh = forceFresh
-      locationRequestBestPayload = nil
-      locationRequestBestAccuracy = .greatestFiniteMagnitude
-      locationRequestStartedAt = requestedAt
-      locationRequestToken = token
-      let timeout = DispatchWorkItem { [weak self] in
-        guard let self else { return }
-        self.resolveLocationRequest(
-          with: self.bestLocationPayload(matching: token),
-          matching: token
-        )
-      }
-      locationTimeout = timeout
-      stateLock.unlock()
-      DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
-      DispatchQueue.main.async { [weak self] in
-        guard let self, self.isCurrentLocationRequest(token) else { return }
-        if forceFresh {
-          self.stateLock.lock()
-          if self.locationRequestToken == token {
-            self.requestLocationConfiguration = LocationManagerConfiguration(
-              activityType: self.manager.activityType,
-              desiredAccuracy: self.manager.desiredAccuracy,
-              distanceFilter: self.manager.distanceFilter,
-              pausesLocationUpdatesAutomatically: self.manager.pausesLocationUpdatesAutomatically
-            )
-            self.manager.activityType = .otherNavigation
-            self.manager.desiredAccuracy = kCLLocationAccuracyBest
-            self.manager.distanceFilter = kCLDistanceFilterNone
-            self.manager.pausesLocationUpdatesAutomatically = false
-          }
-          self.stateLock.unlock()
+      var installed = false
+      let stillCurrent = HermesAccountLifecycle.performIfCurrentCollectorGeneration(collectorToken) {
+        guard activeCollectorToken == collectorToken else { return }
+        // A second foreground refresh supersedes the first one. Resolve the old
+        // continuation before installing the new token so a late callback or
+        // timeout from the old request cannot finish the replacement request.
+        resolveLocationRequest(with: nil)
+        let requestToken = UUID()
+        let requestedAt = Date()
+        stateLock.lock()
+        locationContinuation = continuation
+        locationRequestForceFresh = forceFresh
+        locationRequestBestPayload = nil
+        locationRequestBestAccuracy = .greatestFiniteMagnitude
+        locationRequestStartedAt = requestedAt
+        locationRequestToken = requestToken
+        let timeout = DispatchWorkItem { [weak self] in
+          guard let self else { return }
+          self.resolveLocationRequest(
+            with: self.bestLocationPayload(matching: requestToken),
+            matching: requestToken
+          )
         }
-        self.issueLocationRequest(token)
+        locationTimeout = timeout
+        stateLock.unlock()
+        installed = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: timeout)
+        DispatchQueue.main.async { [weak self] in
+          guard let self, self.isCurrentLocationRequest(requestToken) else { return }
+          if forceFresh {
+            self.stateLock.lock()
+            if self.locationRequestToken == requestToken {
+              self.requestLocationConfiguration = LocationManagerConfiguration(
+                activityType: self.manager.activityType,
+                desiredAccuracy: self.manager.desiredAccuracy,
+                distanceFilter: self.manager.distanceFilter,
+                pausesLocationUpdatesAutomatically: self.manager.pausesLocationUpdatesAutomatically
+              )
+              self.manager.activityType = .otherNavigation
+              self.manager.desiredAccuracy = kCLLocationAccuracyBest
+              self.manager.distanceFilter = kCLDistanceFilterNone
+              self.manager.pausesLocationUpdatesAutomatically = false
+            }
+            self.stateLock.unlock()
+          }
+          self.issueLocationRequest(requestToken)
+        }
+      }
+      if !stillCurrent || !installed {
+        Self.logger.error("Current location request rejected after authorization: stale generation")
+        continuation.resume(returning: nil)
       }
     }
   }
@@ -266,7 +354,30 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     ]
   }
 
+  func mapLocationStatus() -> [String: Any] {
+    let authorization = authorizationSnapshot()
+    let location = lastLocation
+    let isFresh = location.map {
+      abs($0.timestamp.timeIntervalSinceNow) < 5 * 60
+    } ?? false
+    var result: [String: Any] = [
+      "backgroundLocation": authorization["background"] as? Bool ?? false,
+      "lastLocationStatus": location == nil ? "unavailable" : (isFresh ? "available" : "stale"),
+      "locationAuthorization": authorization["status"] as? String ?? "notDetermined",
+      "preciseLocation": authorization["accuracy"] as? String == "full",
+    ]
+    if let location {
+      result["lastLocationAccuracy"] = location.horizontalAccuracy
+      result["lastLocationAt"] = location.timestamp.timeIntervalSince1970 * 1000
+    }
+    return result
+  }
+
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard manager === self.manager, activeCollectorToken != nil else {
+      Self.logger.error("Authorization callback rejected: inactive manager")
+      return
+    }
     let status = manager.authorizationStatus
     guard status != .notDetermined else { return }
     if status == .authorizedWhenInUse && !requestedAlwaysUpgrade {
@@ -304,100 +415,215 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   }
 
   func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-    let usable = locations.filter {
-      $0.horizontalAccuracy >= 0
-        && abs($0.timestamp.timeIntervalSinceNow) < 5 * 60
-        && CLLocationCoordinate2DIsValid($0.coordinate)
-    }
-    guard let location = usable.last else { return }
-    lastLocation = location
-    updateStableCenter(with: location)
-    let payload = Self.payload(
-      location,
-      authorization: manager.authorizationStatus,
-      accuracyAuthorization: manager.accuracyAuthorization,
-      mode: mode
-    )
-    let disposition = pendingLocationDisposition(for: location, payload: payload)
-    if case .retry(let token) = disposition {
-      scheduleLocationRetry(token)
-    }
-    HermesContextEventQueue.shared.enqueue(
-      type: "location",
-      payload: payload,
-      occurredAt: location.timestamp
-    ) { [weak self] in
-      self?.onLocation?(payload)
-      guard let self else { return }
-      if case .resolve(let token) = disposition {
-        self.resolveLocationRequest(with: payload, matching: token)
+    withCurrentCollector(manager, source: "location") { token in
+      let usable = locations.filter {
+        $0.horizontalAccuracy >= 0
+          && token.accepts($0.timestamp)
+          && CLLocationCoordinate2DIsValid($0.coordinate)
+      }
+      guard let location = usable.last else {
+        Self.logger.error("Location callback rejected: invalid or out-of-generation timestamp")
+        return
+      }
+      lastLocation = location
+      updateStableCenter(with: location, token: token)
+      let payload = Self.payload(
+        location,
+        authorization: manager.authorizationStatus,
+        accuracyAuthorization: manager.accuracyAuthorization,
+        mode: mode
+      )
+      let disposition = pendingLocationDisposition(for: location, payload: payload)
+      if case .retry(let requestToken) = disposition {
+        scheduleLocationRetry(requestToken)
+      }
+      HermesContextEventQueue.shared.enqueue(
+        type: "location",
+        payload: payload,
+        occurredAt: location.timestamp,
+        accountGeneration: token.lifecycleEpoch
+      ) { [weak self] in
+        self?.onLocation?(payload)
+        guard let self else { return }
+        if case .resolve(let requestToken) = disposition {
+          self.resolveLocationRequest(with: payload, matching: requestToken)
+        }
       }
     }
   }
 
   func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-    stateLock.lock()
-    let token = locationRequestToken
-    let bestPayload = locationRequestBestPayload
-    stateLock.unlock()
-    guard let token else { return }
-    if (error as? CLError)?.code == .locationUnknown {
-      scheduleLocationRetry(token)
-      return
+    withCurrentCollector(manager, source: "location-error") { _ in
+      stateLock.lock()
+      let requestToken = locationRequestToken
+      let bestPayload = locationRequestBestPayload
+      stateLock.unlock()
+      guard let requestToken else { return }
+      if (error as? CLError)?.code == .locationUnknown {
+        scheduleLocationRetry(requestToken)
+        return
+      }
+      resolveLocationRequest(with: bestPayload, matching: requestToken)
     }
-    resolveLocationRequest(with: bestPayload, matching: token)
   }
 
   func locationManager(_ manager: CLLocationManager, didVisit visit: CLVisit) {
-    let arrivedAt = visit.arrivalDate == .distantPast
-      ? nil
-      : visit.arrivalDate.timeIntervalSince1970 * 1000
-    let departedAt = visit.departureDate == .distantFuture
-      ? nil
-      : visit.departureDate.timeIntervalSince1970 * 1000
-    let indoorConfidence = visit.horizontalAccuracy >= 35 ? 0.75 : 0.35
-    let payload: [String: Any] = [
-      "accuracy": visit.horizontalAccuracy,
-      "arrivedAt": hermesNullable(arrivedAt),
-      "departedAt": hermesNullable(departedAt),
-      "latitude": visit.coordinate.latitude,
-      "longitude": visit.coordinate.longitude,
-      "indoor": indoorConfidence >= 0.6,
-      "indoorConfidence": indoorConfidence,
-      "timestamp": (departedAt ?? arrivedAt) ?? Date().timeIntervalSince1970 * 1000,
-    ]
-    let eventDate = (departedAt ?? arrivedAt)
-      .map { Date(timeIntervalSince1970: $0 / 1000) } ?? Date()
-    HermesContextEventQueue.shared.enqueue(
-      type: "place-visit",
-      payload: payload,
-      occurredAt: eventDate
-    ) { [weak self] in self?.onVisit?(payload) }
-    if departedAt == nil {
-      apply(mode: .stationary)
-      installStableRegion(center: visit.coordinate, accuracy: visit.horizontalAccuracy)
-      manager.stopUpdatingLocation()
+    withCurrentCollector(manager, source: "visit") { token in
+      let arrivalDate = visit.arrivalDate == .distantPast ? nil : visit.arrivalDate
+      let departureDate = visit.departureDate == .distantFuture ? nil : visit.departureDate
+      guard let eventDate = departureDate ?? arrivalDate,
+            token.accepts(eventDate),
+            arrivalDate.map { token.accepts($0) } ?? true,
+            CLLocationCoordinate2DIsValid(visit.coordinate) else {
+        Self.logger.error("Visit callback rejected: invalid or out-of-generation timestamp")
+        return
+      }
+      let arrivedAt = arrivalDate.map { $0.timeIntervalSince1970 * 1000 }
+      let departedAt = departureDate.map { $0.timeIntervalSince1970 * 1000 }
+      let indoorConfidence = visit.horizontalAccuracy >= 35 ? 0.75 : 0.35
+      let payload: [String: Any] = [
+        "accuracy": visit.horizontalAccuracy,
+        "arrivedAt": hermesNullable(arrivedAt),
+        "departedAt": hermesNullable(departedAt),
+        "latitude": visit.coordinate.latitude,
+        "longitude": visit.coordinate.longitude,
+        "indoor": indoorConfidence >= 0.6,
+        "indoorConfidence": indoorConfidence,
+        "timestamp": eventDate.timeIntervalSince1970 * 1000,
+      ]
+      HermesContextEventQueue.shared.enqueue(
+        type: "place-visit",
+        payload: payload,
+        occurredAt: eventDate,
+        accountGeneration: token.lifecycleEpoch
+      ) { [weak self] in self?.onVisit?(payload) }
+      if departedAt == nil {
+        apply(mode: .stationary, token: token)
+        installStableRegion(
+          center: visit.coordinate,
+          accuracy: visit.horizontalAccuracy,
+          token: token
+        )
+        manager.stopUpdatingLocation()
+      }
     }
   }
 
   func locationManager(_ manager: CLLocationManager, didEnterRegion region: CLRegion) {
-    recordRegionEvent("entered", region: region)
-    apply(mode: .stationary)
-    manager.stopUpdatingLocation()
+    withCurrentRegion(manager, region: region, source: "region-entry") { token in
+      recordRegionEvent("entered", region: region, token: token)
+      apply(mode: .stationary, token: token)
+      manager.stopUpdatingLocation()
+    }
   }
 
   func locationManager(_ manager: CLLocationManager, didExitRegion region: CLRegion) {
-    recordRegionEvent("exited", region: region)
-    stableSamples.removeAll(keepingCapacity: true)
-    apply(mode: .walking, force: true)
+    withCurrentRegion(manager, region: region, source: "region-exit") { token in
+      recordRegionEvent("exited", region: region, token: token)
+      stableSamples.removeAll(keepingCapacity: true)
+      apply(mode: .walking, force: true, token: token)
+    }
   }
 
   func locationManager(_ manager: CLLocationManager, monitoringDidFailFor region: CLRegion?, withError error: Error) {
-    HermesContextEventQueue.shared.enqueue(type: "location-monitoring", payload: [
-      "error": error.localizedDescription,
-      "region": region?.identifier ?? "",
-      "status": "failed",
-    ])
+    withCurrentCollector(manager, source: "region-monitoring-error") { token in
+      if let region, !isCurrentRegion(region, token: token) {
+        Self.logger.error("Region monitoring callback rejected: stale namespace")
+        return
+      }
+      HermesContextEventQueue.shared.enqueue(
+        type: "location-monitoring",
+        payload: [
+          "error": error.localizedDescription,
+          "region": region?.identifier ?? "",
+          "status": "failed",
+        ],
+        accountGeneration: token.lifecycleEpoch
+      )
+    }
+  }
+
+  private func configureManager(_ manager: CLLocationManager) {
+    manager.delegate = self
+    manager.activityType = .other
+    manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+    manager.distanceFilter = 15
+    manager.pausesLocationUpdatesAutomatically = true
+    manager.allowsBackgroundLocationUpdates = true
+    manager.showsBackgroundLocationIndicator = false
+  }
+
+  private func replaceManager(activeToken token: HermesCollectorGenerationToken?) {
+    let previous = manager
+    previous.stopUpdatingLocation()
+    previous.stopMonitoringSignificantLocationChanges()
+    previous.stopMonitoringVisits()
+    for region in previous.monitoredRegions where isHermesRegion(region) {
+      previous.stopMonitoring(for: region)
+    }
+    previous.delegate = nil
+    manager = CLLocationManager()
+    configureManager(manager)
+    activeCollectorToken = token
+    stableRegion = nil
+  }
+
+  private func removeStaleHermesRegions(keeping token: HermesCollectorGenerationToken?) {
+    for region in manager.monitoredRegions where isHermesRegion(region) {
+      if let token, region.identifier.hasPrefix("\(token.regionNamespace).") { continue }
+      manager.stopMonitoring(for: region)
+      if stableRegion?.identifier == region.identifier { stableRegion = nil }
+    }
+    if let token, stableRegion == nil {
+      stableRegion = manager.monitoredRegions.first {
+        $0.identifier == "\(token.regionNamespace).stable-place"
+      } as? CLCircularRegion
+    }
+  }
+
+  private func isHermesRegion(_ region: CLRegion) -> Bool {
+    region.identifier == "hermes.stable-place"
+      || region.identifier.hasPrefix("app.hermes.")
+  }
+
+  private func isCurrentRegion(
+    _ region: CLRegion,
+    token: HermesCollectorGenerationToken
+  ) -> Bool {
+    region.identifier.hasPrefix("\(token.regionNamespace).")
+  }
+
+  private func withCurrentCollector(
+    _ callbackManager: CLLocationManager,
+    source: String,
+    operation: (HermesCollectorGenerationToken) -> Void
+  ) {
+    guard callbackManager === manager, let token = activeCollectorToken else {
+      Self.logger.error("\(source, privacy: .public) callback rejected: inactive manager")
+      return
+    }
+    let accepted = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      guard callbackManager === manager, activeCollectorToken == token else { return }
+      operation(token)
+    }
+    if !accepted {
+      Self.logger.error("\(source, privacy: .public) callback rejected: stale generation")
+    }
+  }
+
+  private func withCurrentRegion(
+    _ callbackManager: CLLocationManager,
+    region: CLRegion,
+    source: String,
+    operation: (HermesCollectorGenerationToken) -> Void
+  ) {
+    withCurrentCollector(callbackManager, source: source) { token in
+      guard isCurrentRegion(region, token: token) else {
+        Self.logger.error("\(source, privacy: .public) callback rejected: stale region namespace")
+        return
+      }
+      operation(token)
+    }
   }
 
   private func requestTemporaryFullAccuracyIfNeeded() async {
@@ -529,7 +755,15 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     continuation?.resume(returning: payload)
   }
 
-  private func apply(mode next: HermesLocationMode, force: Bool = false) {
+  private func apply(
+    mode next: HermesLocationMode,
+    force: Bool = false,
+    token: HermesCollectorGenerationToken
+  ) {
+    guard activeCollectorToken == token else {
+      Self.logger.error("Location mode update rejected: stale generation")
+      return
+    }
     guard force || next != mode else { return }
     mode = next
     switch next {
@@ -560,13 +794,20 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       manager.pausesLocationUpdatesAutomatically = true
     }
     manager.startUpdatingLocation()
-    HermesContextEventQueue.shared.enqueue(type: "location-mode", payload: [
-      "mode": next.rawValue,
-      "predictedDepartureAt": hermesNullable(predictedDepartureAt?.timeIntervalSince1970.times(1_000)),
-    ])
+    HermesContextEventQueue.shared.enqueue(
+      type: "location-mode",
+      payload: [
+        "mode": next.rawValue,
+        "predictedDepartureAt": hermesNullable(predictedDepartureAt?.timeIntervalSince1970.times(1_000)),
+      ],
+      accountGeneration: token.lifecycleEpoch
+    )
   }
 
-  private func updateStableCenter(with location: CLLocation) {
+  private func updateStableCenter(
+    with location: CLLocation,
+    token: HermesCollectorGenerationToken
+  ) {
     guard mode == .stationary, location.horizontalAccuracy <= 100 else {
       if mode != .stationary { stableSamples.removeAll(keepingCapacity: true) }
       return
@@ -583,11 +824,20 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     let longitude = stableSamples.map(\.coordinate.longitude).reduce(0, +) / Double(stableSamples.count)
     installStableRegion(
       center: CLLocationCoordinate2D(latitude: latitude, longitude: longitude),
-      accuracy: stableSamples.map(\.horizontalAccuracy).max() ?? 100
+      accuracy: stableSamples.map(\.horizontalAccuracy).max() ?? 100,
+      token: token
     )
   }
 
-  private func installStableRegion(center: CLLocationCoordinate2D, accuracy: CLLocationAccuracy) {
+  private func installStableRegion(
+    center: CLLocationCoordinate2D,
+    accuracy: CLLocationAccuracy,
+    token: HermesCollectorGenerationToken
+  ) {
+    guard activeCollectorToken == token else {
+      Self.logger.error("Stable region install rejected: stale generation")
+      return
+    }
     guard CLLocationManager.isMonitoringAvailable(for: CLCircularRegion.self) else { return }
     if let stableRegion,
        CLLocation(latitude: stableRegion.center.latitude, longitude: stableRegion.center.longitude)
@@ -599,7 +849,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     let region = CLCircularRegion(
       center: center,
       radius: radius,
-      identifier: "hermes.stable-place"
+      identifier: "\(token.regionNamespace).stable-place"
     )
     region.notifyOnEntry = true
     region.notifyOnExit = true
@@ -608,14 +858,22 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
     manager.stopUpdatingLocation()
   }
 
-  private func recordRegionEvent(_ state: String, region: CLRegion) {
+  private func recordRegionEvent(
+    _ state: String,
+    region: CLRegion,
+    token: HermesCollectorGenerationToken
+  ) {
     var payload: [String: Any] = ["identifier": region.identifier, "state": state]
     if let circular = region as? CLCircularRegion {
       payload["latitude"] = circular.center.latitude
       payload["longitude"] = circular.center.longitude
       payload["radius"] = circular.radius
     }
-    HermesContextEventQueue.shared.enqueue(type: "geofence", payload: payload)
+    HermesContextEventQueue.shared.enqueue(
+      type: "geofence",
+      payload: payload,
+      accountGeneration: token.lifecycleEpoch
+    )
   }
 
   private static func payload(

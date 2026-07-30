@@ -1,6 +1,7 @@
 import type { HermesSwiftUIModelSnapshot } from '../swiftui-route-contract';
 import {
   customApiMode,
+  customModelApiKeyAction,
   customReasoningEffort,
   type CustomModelConfiguration,
 } from '../../api/HermesCloudApi';
@@ -193,6 +194,10 @@ export function customModelConfiguration(
   const source = fields || {};
   const contextLength = Number.parseInt(source.contextLength || '', 10);
   const configuration: CustomModelConfiguration = {
+    apiKeyAction: customModelApiKeyAction(source.apiKey, {
+      deleteRequested: source.apiKeyAction === 'delete',
+      preview: source.apiKeyPreview,
+    }),
     apiMode: customApiMode(source.apiMode),
     baseUrl: source.baseUrl?.trim() || '',
     contextLength: Number.isFinite(contextLength) ? contextLength : 0,

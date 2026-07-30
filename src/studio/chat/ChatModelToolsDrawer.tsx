@@ -18,6 +18,7 @@ import Reanimated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -28,6 +29,7 @@ import {
 import { NativeButton } from '../../components/ui/NativeButton';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { IOS_MOTION } from '../../design/ios-motion';
+import { MOTION, useMotion } from '../../design/motion';
 import { resolveSwiftUIThemeProps } from '../../design/swiftui-theme';
 import { useTheme } from '../../design/ThemeProvider';
 import { PreviewBadge, PreviewSegmented } from '../PreviewPrimitives';
@@ -49,12 +51,14 @@ export function ModelToolsDrawer({
 }) {
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
+  const motion = useMotion();
   const [mounted, setMounted] = useState(open);
   const [modelOpen, setModelOpen] = useState(false);
   const [model, setModel] = useState('claude-sonnet-4');
   const [reasoning, setReasoning] = useState<'low' | 'medium' | 'high'>('medium');
   const [toolsEnabled, setToolsEnabled] = useState(true);
   const translateX = useSharedValue(256);
+  const panelOpacity = useSharedValue(open ? 1 : 0);
   const openModelPicker = () => {
     const models = ['claude-sonnet-4', 'gpt-5.6-sol'] as const;
     if (Platform.OS !== 'ios') {
@@ -78,6 +82,14 @@ export function ModelToolsDrawer({
     if (open) {
       setMounted(true);
       requestAnimationFrame(() => {
+        if (motion.reduceMotion) {
+          translateX.value = 0;
+          panelOpacity.value = withTiming(1, {
+            duration: MOTION.fade.reduced,
+          });
+          return;
+        }
+        panelOpacity.value = 1;
         translateX.value = withSpring(0, {
           damping: IOS_MOTION.spring.damping,
           mass: IOS_MOTION.spring.mass,
@@ -86,6 +98,14 @@ export function ModelToolsDrawer({
         });
       });
     } else if (mounted) {
+      if (motion.reduceMotion) {
+        panelOpacity.value = withTiming(0, {
+          duration: MOTION.fade.reduced,
+        }, (finished) => {
+          if (finished) runOnJS(setMounted)(false);
+        });
+        return;
+      }
       translateX.value = withSpring(256, {
         damping: IOS_MOTION.spring.damping,
         mass: IOS_MOTION.spring.mass,
@@ -95,16 +115,21 @@ export function ModelToolsDrawer({
         if (finished) runOnJS(setMounted)(false);
       });
     }
-  }, [mounted, open, translateX]);
+  }, [motion.reduceMotion, mounted, open, panelOpacity, translateX]);
 
-  const animatedStyle = useAnimatedStyle(() => ({ transform: [{ translateX: translateX.value }] }));
+  const animatedStyle = useAnimatedStyle(() => ({
+    opacity: panelOpacity.value,
+    transform: [{ translateX: motion.reduceMotion ? 0 : translateX.value }],
+  }));
   const backdropStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(
-      translateX.value,
-      [0, 256],
-      [1, 0],
-      Extrapolation.CLAMP,
-    ),
+    opacity: motion.reduceMotion
+      ? panelOpacity.value
+      : interpolate(
+          translateX.value,
+          [0, 256],
+          [1, 0],
+          Extrapolation.CLAMP,
+        ),
   }));
 
   if (Platform.OS === 'ios' && hasNativeSwiftUIModelTools) {

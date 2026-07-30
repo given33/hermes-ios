@@ -14,6 +14,11 @@ export type JsonRecord = Record<string, unknown>;
  * authenticated `HermesApiClient` owned by `hermes-api-registry.ts`.
  */
 export interface HermesCloudTransport {
+  consumeDownload<T>(
+    path: string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    options?: HermesRequestOptions,
+  ): Promise<T>;
   download(path: string, options?: HermesRequestOptions): Promise<Blob>;
   json<T>(
     path: string,

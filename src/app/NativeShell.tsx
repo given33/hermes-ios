@@ -66,7 +66,9 @@ import {
 } from 'react-native';
 import Reanimated, {
   Easing,
+  FadeIn,
   FadeInRight,
+  FadeOut,
   FadeOutLeft,
   useAnimatedStyle,
   useSharedValue,
@@ -87,6 +89,7 @@ import { resolveNativeFontStack } from '../design/native-font-faces';
 import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
+import { MOTION, useMotion } from '../design/motion';
 import {
   composeRouteRegistry,
   type ComposedNavigationItem,
@@ -296,6 +299,7 @@ export function NativeShell({
 }: NativeShellProps) {
   const insets = useSafeAreaInsets();
   const layout = useAdaptiveLayout();
+  const motion = useMotion();
   const useSwiftUISidebar =
     Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
   const { tokens } = useTheme();
@@ -314,7 +318,10 @@ export function NativeShell({
     () => createNativeShellState(layout.mode, resolvedInitialPath),
   );
   const referenceCompactSidebar = Platform.OS === 'ios' || Platform.OS === 'web';
-  const compactSidebarWidth = Math.min(270, Math.max(220, layout.width - 96));
+  const compactSidebarWidth = Math.min(
+    SHELL_METRICS.sidebarWidth,
+    Math.max(220, layout.width - 96),
+  );
   const drawerExtent = state.mode === 'compact' && referenceCompactSidebar
     ? compactSidebarWidth
     : SHELL_METRICS.sidebarWidth + insets.left;
@@ -356,10 +363,10 @@ export function NativeShell({
 
   useEffect(() => {
     sidebarWidth.value = withTiming(visibleSidebarWidth, {
-      duration: IOS_MOTION.duration.rail,
+      duration: motion.duration(IOS_MOTION.duration.rail),
       easing: IOS_NAVIGATION_EASING,
     });
-  }, [sidebarWidth, state.collapsed, state.mode, visibleSidebarWidth]);
+  }, [motion, sidebarWidth, state.collapsed, state.mode, visibleSidebarWidth]);
 
   const clearPendingSidebarSelection = useCallback(() => {
     pendingSidebarPath.current = null;
@@ -721,8 +728,14 @@ export function NativeShell({
               </View>
             ) : (
               <Reanimated.View
-                entering={PAGE_ENTERING}
-                exiting={PAGE_EXITING}
+                entering={motion.fade(
+                  PAGE_ENTERING,
+                  FadeIn.duration(MOTION.fade.reduced),
+                )}
+                exiting={motion.fade(
+                  PAGE_EXITING,
+                  FadeOut.duration(MOTION.fade.reduced),
+                )}
                 key={activeRoute.path}
                 style={styles.routeStage}
               >

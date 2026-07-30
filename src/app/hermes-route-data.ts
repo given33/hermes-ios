@@ -329,6 +329,13 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       await api.updateSkillContent(payload.id, payload.detail || '', profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.installationRollback:
+      if (!payload.id) return 'none';
+      await api.rollbackManagedInstallation(
+        payload.id,
+        payload.requestId || `ios-rollback-${payload.id}-${Date.now().toString(36)}`,
+      );
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.achievementsRescan:
       await api.rescanAchievements();
       return 'reload';

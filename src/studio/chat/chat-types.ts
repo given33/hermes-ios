@@ -2,9 +2,11 @@ import type { HostedTurnOutboxItem } from '../../api/conversation-local-store';
 import type { HostedTurnEnqueueResponse } from '../../api/HermesCloudApi';
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
 
-export type PendingPhase = 'thinking' | 'reconnecting' | 'executing';
+export type PendingPhase = 'thinking' | 'reconnecting' | 'executing' | 'cancel_requested';
 
 export interface ChatAttachment {
+  draftPersistent?: boolean;
+  encryption?: 'aes-gcm-chunked-v2' | 'aes-gcm-v1';
   id: string;
   kind: 'file' | 'image';
   mimeType?: string | null;
@@ -20,7 +22,14 @@ export interface HostedTurnDelivery {
 }
 
 export type PendingCancellationDeliveryResult =
-  | { outcome: 'cleanup-pending' | 'retry-scheduled' | 'settled' }
+  | {
+      outcome:
+        | 'cancel-accepted'
+        | 'cleanup-pending'
+        | 'completed-before-cancel'
+        | 'retry-scheduled'
+        | 'settled';
+    }
   | { error: string; outcome: 'failed' };
 
 export interface PendingChatSend {

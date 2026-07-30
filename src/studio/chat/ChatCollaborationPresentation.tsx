@@ -1,6 +1,7 @@
 import { Text, View } from 'react-native';
 import Reanimated, {
   Easing,
+  FadeIn,
   FadeInUp,
   LinearTransition,
 } from 'react-native-reanimated';
@@ -12,6 +13,7 @@ import type {
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { StudioRoleAvatar } from '../../components/studio/StudioRoleAvatar';
 import { IOS_MOTION } from '../../design/ios-motion';
+import { MOTION, useMotion } from '../../design/motion';
 import { useTheme } from '../../design/ThemeProvider';
 import { styles } from './chat-presentation-styles';
 import { PendingDot } from './ChatPresentation';
@@ -112,11 +114,17 @@ export function CollaborationLiftNotice({
   state: Exclude<ConversationCollaborationState, 'single'>;
 }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const lifted = state === 'active';
   return (
     <Reanimated.View
-      entering={FadeInUp.duration(IOS_MOTION.duration.content).easing(IOS_DECELERATE_EASING)}
-      layout={LinearTransition.duration(IOS_MOTION.duration.control).easing(IOS_STANDARD_EASING)}
+      entering={motion.fade(
+        FadeInUp.duration(IOS_MOTION.duration.content).easing(IOS_DECELERATE_EASING),
+        FadeIn.duration(MOTION.fade.reduced),
+      )}
+      layout={motion.animate(
+        LinearTransition.duration(IOS_MOTION.duration.control).easing(IOS_STANDARD_EASING),
+      )}
       style={[
         styles.collaborationLiftNotice,
         { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border },

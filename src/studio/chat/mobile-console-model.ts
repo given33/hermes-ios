@@ -9,6 +9,36 @@ export function isRemoteConsoleCommand(value: string): boolean {
   return command.startsWith('/') && !isStopSlashCommand(command);
 }
 
+export function consoleInvocationOwnsActiveView(
+  activeConversationId: string,
+  invocationConversationId: string,
+  activeGeneration: number,
+  invocationGeneration: number,
+): boolean {
+  return Boolean(invocationConversationId)
+    && activeConversationId === invocationConversationId
+    && activeGeneration === invocationGeneration;
+}
+
+export interface ConsoleInvocationScope {
+  conversationId: string;
+  generation: number;
+}
+
+export function consoleInvocationBlocksActiveView(
+  scopes: Iterable<ConsoleInvocationScope>,
+  activeConversationId: string,
+  activeGeneration: number,
+): boolean {
+  for (const scope of scopes) {
+    if (
+      scope.generation === activeGeneration
+      && scope.conversationId === activeConversationId
+    ) return true;
+  }
+  return false;
+}
+
 export function mobileConsoleResultText(
   result: MobileConsoleResult,
   isChinese: boolean,

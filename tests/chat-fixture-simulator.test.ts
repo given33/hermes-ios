@@ -8,11 +8,13 @@ import {
 } from '../src/preview/chat-fixture-simulator';
 
 test('frontend fixture history keeps complete resumable transcripts', () => {
-  const conversations = previewConversationHistory(true);
+  const accountGeneration = 'acctgen_frontend_preview';
+  const conversations = previewConversationHistory(true, accountGeneration);
   assert.equal(conversations.length, 4);
   assert.ok(conversations.every((conversation) => (
     conversation.messages.length === conversation.message_count
     && conversation.messages.length >= 4
+    && conversation.account_generation === accountGeneration
   )));
   assert.deepEqual(
     conversations[0]?.messages.map(({ role }) => role),

@@ -20,6 +20,11 @@ import {
 } from '../../api/conversation-local-store';
 import type { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
 import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
+import { accountGenerationFromOwnerScope } from '../../auth/account-identity';
+import {
   conversationMessagesToView,
   type ConversationCollaborationState,
   type HermesChatViewMessage as ChatMessage,
@@ -38,13 +43,14 @@ import {
 interface ConversationIndexControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
   activeHostedTurnIdRef: MutableRefObject<string>;
-  applyConversation(conversation: SingleConversation): void;
+  applyConversation(conversation: SingleConversation, expectedOwnerEpoch?: number): void;
   cacheOwner: string;
   clearOptimisticHostedTurn(): void;
   cloudApi: HermesCloudApi | null;
   commitConversationIndex(
     conversations: readonly SingleConversation[],
     activeId?: string,
+    expectedOwnerEpoch?: number,
   ): void;
   conversationIndexRef: MutableRefObject<SingleConversation[]>;
   conversationSyncGenerationRef: MutableRefObject<ConversationSyncGeneration>;
@@ -103,13 +109,19 @@ export function useConversationIndexController({
   setSending,
 }: ConversationIndexControllerOptions) {
   const hydratedCacheOwnerRef = useRef('');
-  const refreshGateRef = useRef(new AsyncSingleFlight());
+  const refreshGateRef = useRef({
+    epoch: -1,
+    gate: new AsyncSingleFlight(),
+    owner: '',
+  });
 
   const openConversation = useCallback(async (
     conversationId: string,
     expectedGeneration = 0,
   ) => {
     if (!conversationId) return null;
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return null;
     const cached = conversationIndexRef.current.find(({ id }) => id === conversationId);
     if (!cloudApi) {
       if (!cached || !isCompleteConversation(cached)) return null;
@@ -119,7 +131,7 @@ export function useConversationIndexController({
       ) {
         return cached;
       }
-      applyConversation(cached);
+      applyConversation(cached, ownerEpoch);
       return cached;
     }
     if (conversationId.startsWith('official:')) {
@@ -129,6 +141,9 @@ export function useConversationIndexController({
         placeholder?.profile || profile,
         placeholder?.title || '',
       );
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+        return result.conversation;
+      }
       if (
         expectedGeneration
         && !conversationSyncGenerationRef.current.isActiveCurrent(expectedGeneration)
@@ -140,7 +155,7 @@ export function useConversationIndexController({
         result.conversation,
         conversationId,
       );
-      applyConversation(result.conversation);
+      applyConversation(result.conversation, ownerEpoch);
       return result.conversation;
     }
     if (cached && isCompleteConversation(cached)) {
@@ -150,12 +165,13 @@ export function useConversationIndexController({
       ) {
         return cached;
       }
-      applyConversation(cached);
+      applyConversation(cached, ownerEpoch);
       return cached;
     }
     return loadConversation(conversationId, expectedGeneration);
   }, [
     applyConversation,
+    cacheOwner,
     cloudApi,
     conversationIndexRef,
     conversationSyncGenerationRef,
@@ -167,6 +183,8 @@ export function useConversationIndexController({
     preferredId = '',
     signal?: AbortSignal,
   ) => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     const indexGeneration = conversationSyncGenerationRef.current.advanceIndex();
     const syncGeneration = conversationSyncGenerationRef.current.active();
     let localConversations = conversationIndexRef.current;
@@ -180,7 +198,10 @@ export function useConversationIndexController({
         localStore.readOptimisticConversations(cacheOwner),
         localStore.readPendingInterventions(cacheOwner),
       ]);
-      if (!conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)) return;
+      if (
+        !conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)
+        || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      ) return;
       if (shouldHydrateCache) hydratedCacheOwnerRef.current = cacheOwner;
       const liveOptimisticLedgers = [
         ...optimisticMessagesByConversationRef.current.entries(),
@@ -240,7 +261,9 @@ export function useConversationIndexController({
           localConversations,
         );
         const immediate = localConversations.find(({ id }) => id === immediateId);
-        if (immediate && isCompleteConversation(immediate)) applyConversation(immediate);
+        if (immediate && isCompleteConversation(immediate)) {
+          applyConversation(immediate, ownerEpoch);
+        }
       } else if (shouldHydrateCache && mergedOptimisticLedgers.length) {
         localConversations = mergeOptimisticConversationSummaries(
           [],
@@ -252,12 +275,16 @@ export function useConversationIndexController({
         conversationIndexRef.current = localConversations;
         setConversations(localConversations);
         const immediate = localConversations[0];
-        if (immediate) applyConversation(immediate);
+        if (immediate) applyConversation(immediate, ownerEpoch);
       }
     }
     if (!cloudApi) {
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       if (fixtureMode) {
-        const fixtureHistory = previewConversationHistory(isChinese);
+        const fixtureHistory = previewConversationHistory(
+          isChinese,
+          accountGenerationFromOwnerScope(cacheOwner),
+        );
         const merged = new Map(
           fixtureHistory.map((conversation) => [conversation.id, conversation]),
         );
@@ -274,7 +301,7 @@ export function useConversationIndexController({
       );
       const active = localConversations.find(({ id }) => id === activeId);
       if (active) {
-        applyConversation(active);
+        applyConversation(active, ownerEpoch);
       } else {
         activeConversationIdRef.current = '';
         activeHostedTurnIdRef.current = '';
@@ -288,7 +315,10 @@ export function useConversationIndexController({
       return;
     }
     const result = await cloudApi.getUnifiedConversations(profile, signal);
-    if (!conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)) return;
+    if (
+      !conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)
+      || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+    ) return;
     const reconciliation = reconcileConversationCache(localConversations, result.conversations);
     const optimisticSummaries = [...optimisticMessagesByConversationRef.current.entries()].map(
       ([conversationId, optimisticMessages]) => ({
@@ -330,7 +360,10 @@ export function useConversationIndexController({
         }
       },
     );
-    if (!conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)) return;
+    if (
+      !conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)
+      || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+    ) return;
     const synchronized = mergeOptimisticConversationSummaries(
       mergeDownloadedConversations(
         reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
@@ -344,7 +377,7 @@ export function useConversationIndexController({
       requestedActiveId || synchronized[0]?.id || '',
       synchronized,
     );
-    commitConversationIndex(synchronized, activeId);
+    commitConversationIndex(synchronized, activeId, ownerEpoch);
     if (!activeId) {
       activeConversationIdRef.current = '';
       activeHostedTurnIdRef.current = '';
@@ -386,22 +419,54 @@ export function useConversationIndexController({
     setSending,
   ]);
 
-  const refreshConversationIndex = useCallback((preferredId = '') => (
-    refreshGateRef.current.run(() => withAbortableDeadline(
+  const refreshConversationIndex = useCallback((preferredId = '') => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return Promise.resolve();
+    if (
+      refreshGateRef.current.owner !== cacheOwner
+      || refreshGateRef.current.epoch !== ownerEpoch
+    ) {
+      refreshGateRef.current = {
+        epoch: ownerEpoch,
+        gate: new AsyncSingleFlight(),
+        owner: cacheOwner,
+      };
+    }
+    const gate = refreshGateRef.current.gate;
+    return gate.run(() => withAbortableDeadline(
       (signal) => loadConversationIndex(preferredId, signal),
       requestTimeoutMs,
       'Hermes conversation index refresh timed out',
-    ))
-  ), [loadConversationIndex, requestTimeoutMs]);
+    )).catch((error) => {
+      // An index request from a deleted account lifecycle is no longer user-visible.
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return undefined;
+      throw error;
+    });
+  }, [cacheOwner, loadConversationIndex, requestTimeoutMs]);
 
   const refreshConversationHistory = useCallback(() => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     void refreshConversationIndex(activeConversationIdRef.current)
-      .then(() => notify(isChinese ? '会话历史已刷新' : 'Conversation history refreshed'))
-      .catch((error) => notify(serverFailure(error, isChinese)));
-  }, [activeConversationIdRef, isChinese, notify, refreshConversationIndex]);
+      .then(() => {
+        if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          notify(isChinese ? '会话历史已刷新' : 'Conversation history refreshed');
+        }
+      })
+      .catch((error) => {
+        if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          notify(serverFailure(error, isChinese));
+        }
+      });
+  }, [activeConversationIdRef, cacheOwner, isChinese, notify, refreshConversationIndex]);
 
   const resetHydration = useCallback(() => {
     hydratedCacheOwnerRef.current = '';
+    refreshGateRef.current = {
+      epoch: -1,
+      gate: new AsyncSingleFlight(),
+      owner: '',
+    };
   }, []);
 
   return {

@@ -17,6 +17,7 @@ export interface RegistrationCodeDelivery {
 export interface MobileAuthAccount {
   username: string;
   displayName: string;
+  accountGeneration: string;
 }
 
 export interface MobileDeviceIdentity {
@@ -278,6 +279,7 @@ function parseSession(value: unknown): MobileAuthSession {
   const tokenType = value.token_type;
   const username = value.account.username;
   const displayName = value.account.display_name;
+  const accountGeneration = value.account.account_generation;
   const deviceId = value.device_id;
   if (
     typeof accessToken !== 'string' || !accessToken.trim()
@@ -286,6 +288,7 @@ function parseSession(value: unknown): MobileAuthSession {
     || typeof tokenType !== 'string' || tokenType.toLowerCase() !== 'bearer'
     || typeof username !== 'string' || !username.trim()
     || typeof displayName !== 'string'
+    || typeof accountGeneration !== 'string' || !accountGeneration.trim()
     || typeof deviceId !== 'string' || !deviceId.trim()
   ) {
     throw new Error('Hermes returned an invalid authentication session');
@@ -295,7 +298,11 @@ function parseSession(value: unknown): MobileAuthSession {
     refreshToken: refreshToken.trim(),
     expiresAt,
     deviceId: deviceId.trim(),
-    account: { username: username.trim(), displayName },
+    account: {
+      username: username.trim(),
+      displayName,
+      accountGeneration: accountGeneration.trim(),
+    },
   };
 }
 

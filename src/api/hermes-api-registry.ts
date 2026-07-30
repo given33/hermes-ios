@@ -9,10 +9,14 @@ import { ConversationLocalStore } from './conversation-local-store';
 // (the client and AsyncStorage hold all state), which makes sharing safe.
 const cloudApiByClient = new WeakMap<HermesApiClient, HermesCloudApi>();
 
-export function hermesCloudApiFor(client: HermesApiClient): HermesCloudApi {
+export function hermesCloudApiFor(client: HermesApiClient, owner?: string): HermesCloudApi {
   const existing = cloudApiByClient.get(client);
-  if (existing) return existing;
+  if (existing) {
+    if (owner !== undefined) existing.bindManagedResourceOwner(owner);
+    return existing;
+  }
   const api = new HermesCloudApi(client);
+  if (owner !== undefined) api.bindManagedResourceOwner(owner);
   cloudApiByClient.set(client, api);
   return api;
 }

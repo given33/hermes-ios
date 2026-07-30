@@ -9,6 +9,7 @@ import type {
   ConversationCompressionResponse,
   ConversationForkResponse,
   ConversationSessionState,
+  ConversationSessionEntriesResponse,
   HostedTurnEnqueueInput,
   HostedTurnEnqueueResponse,
   NativeUpload,
@@ -44,14 +45,39 @@ export class HermesConversationsCloudApi {
     );
   }
 
+  getConversationSessionEntries(
+    conversationId: string,
+    cursor = 0,
+    limit = 500,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.request<ConversationSessionEntriesResponse>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/session-entries`,
+      {
+        query: {
+          cursor: String(Math.max(0, Math.floor(cursor))),
+          limit: String(Math.min(2_000, Math.max(1, Math.floor(limit)))),
+        },
+        signal,
+      },
+    );
+  }
+
   openHostedConversationEvents(
     conversationId: string,
     cursor: number,
     signal: AbortSignal,
+    expectedAccountGeneration: string,
   ) {
     return this.transport.openEventStream(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-events`,
-      { query: { cursor: Math.max(0, Math.floor(cursor)) }, signal },
+      {
+        query: {
+          cursor: Math.max(0, Math.floor(cursor)),
+          expected_account_generation: expectedAccountGeneration,
+        },
+        signal,
+      },
     );
   }
 
@@ -239,13 +265,14 @@ export class HermesConversationsCloudApi {
     conversationId: string,
     turnId: string,
     reason: string,
+    requestId = `cancel-${turnId}`,
     signal?: AbortSignal,
   ) {
     return this.transport.json<JsonRecord>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}`
       + `/hosted-turns/${encodeURIComponent(turnId)}/cancel`,
       'POST',
-      { reason },
+      { reason, request_id: requestId },
       { signal },
     );
   }
@@ -277,7 +304,7 @@ export class HermesConversationsCloudApi {
     context: ConversationAttachmentUploadContext,
     signal?: AbortSignal,
   ) {
-    const body = await boundedUploadBody(upload.uri, upload.name);
+    const body = await boundedUploadBody(upload.uri, upload.name, signal);
     return this.transport.request<JsonRecord>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/attachments`,
       {
@@ -287,6 +314,7 @@ export class HermesConversationsCloudApi {
           'X-Filename': encodeURIComponent(upload.name),
           'X-Message-ID': context.messageId || '',
           'X-Profile': context.profile || '',
+          ...(upload.sha256 ? { 'X-Content-SHA256': upload.sha256 } : {}),
           'X-Turn-ID': context.turnId || '',
           'X-Upload-ID': context.uploadId,
         },
@@ -296,11 +324,15 @@ export class HermesConversationsCloudApi {
     );
   }
 
-  downloadConversationAttachment(downloadUrl: string) {
+  consumeConversationAttachment<T>(
+    downloadUrl: string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ) {
     if (!downloadUrl.startsWith(`${COLLABORATION}/single/conversations/`)) {
       throw new Error('Invalid conversation attachment URL');
     }
-    return this.transport.download(downloadUrl);
+    return this.transport.consumeDownload(downloadUrl, consume, { signal });
   }
 }
 

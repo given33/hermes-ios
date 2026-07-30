@@ -44,6 +44,7 @@ import { IOSContextMenu } from '../../components/ios/IOSContextMenu';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
 import { IOS_MOTION } from '../../design/ios-motion';
+import { MOTION, useMotion } from '../../design/motion';
 import { useTheme } from '../../design/ThemeProvider';
 import { ReasoningSection } from '../ReasoningSection';
 import { AnimatedChevron, WorkflowTimeline } from '../WorkflowTimeline';
@@ -97,6 +98,7 @@ export function UnifiedMessage({
   speaking: boolean;
 }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const [copied, setCopied] = useState<'message' | 'model' | 'sender' | null>(null);
   const isUser = message.role === 'user';
   const metadata = isUser
@@ -217,13 +219,18 @@ export function UnifiedMessage({
   ];
   return (
     <Reanimated.View
-      entering={FadeInUp
-        .delay(Math.min(index, 8) * 35)
-        .duration(IOS_MOTION.duration.content)
-        .easing(IOS_DECELERATE_EASING)}
-      layout={LinearTransition
-        .duration(IOS_MOTION.duration.control)
-        .easing(IOS_STANDARD_EASING)}
+      entering={motion.fade(
+        FadeInUp
+          .delay(Math.min(index, 8) * 35)
+          .duration(IOS_MOTION.duration.content)
+          .easing(IOS_DECELERATE_EASING),
+        FadeIn.duration(MOTION.fade.reduced),
+      )}
+      layout={motion.animate(
+        LinearTransition
+          .duration(IOS_MOTION.duration.control)
+          .easing(IOS_STANDARD_EASING),
+      )}
       style={[
         styles.messageEnvelope,
         isUser ? styles.userMessageEnvelope : styles.agentMessageEnvelope,
@@ -325,6 +332,7 @@ function MessageAvatar({
   onLongPress?: () => void;
 }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const avatarRole = message.avatarRole || (isUser ? 'user' : 'hermes');
   const remoteAvatar = message.avatarUrl && /^(?:data:|file:|https?:)/.test(message.avatarUrl);
   const size = compact ? 24 : 30;
@@ -365,7 +373,10 @@ export function PendingMessage({
   startedAt: number;
 }) {
   const { tokens } = useTheme();
-  const statusText = phase === 'reconnecting'
+  const motion = useMotion();
+  const statusText = phase === 'cancel_requested'
+    ? (isChinese ? '正在取消' : 'Cancelling')
+    : phase === 'reconnecting'
     ? (isChinese
         ? `正在重连 (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`
         : `Reconnecting (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`)
@@ -395,10 +406,13 @@ export function PendingMessage({
   };
   return (
     <Reanimated.View
-      entering={FadeInUp
-        .delay(index * 35)
-        .duration(IOS_MOTION.duration.content)
-        .easing(IOS_DECELERATE_EASING)}
+      entering={motion.fade(
+        FadeInUp
+          .delay(index * 35)
+          .duration(IOS_MOTION.duration.content)
+          .easing(IOS_DECELERATE_EASING),
+        FadeIn.duration(MOTION.fade.reduced),
+      )}
       style={[styles.messageEnvelope, styles.agentMessageEnvelope]}
     >
       <View style={[styles.message, styles.agentMessage]}>
@@ -427,9 +441,14 @@ export function PendingMessage({
 
 export function PendingDot({ delay }: { delay: number }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const scale = useSharedValue(0.7);
   useEffect(() => {
     cancelAnimation(scale);
+    if (motion.reduceMotion) {
+      scale.value = 0.85;
+      return undefined;
+    }
     scale.value = withRepeat(
       withSequence(
         withTiming(0.7, {
@@ -449,7 +468,7 @@ export function PendingDot({ delay }: { delay: number }) {
       false,
     );
     return () => cancelAnimation(scale);
-  }, [delay, scale]);
+  }, [delay, motion.reduceMotion, scale]);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
   return <Reanimated.View style={[styles.pendingDot, { backgroundColor: tokens.colors.primary }, animatedStyle]} />;
 }
@@ -464,6 +483,7 @@ function RoleActivityGroup({
   onInspectActivity(): void;
 }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const [open, setOpen] = useState(false);
   const [openPinnedByUser, setOpenPinnedByUser] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -548,14 +568,16 @@ function RoleActivityGroup({
       {open ? (
         <Reanimated.View
           entering={FadeIn
-            .duration(IOS_MOTION.duration.control)
+            .duration(motion.fadeDuration(IOS_MOTION.duration.control))
             .easing(IOS_DECELERATE_EASING)}
           exiting={FadeOut
-            .duration(IOS_MOTION.duration.press)
+            .duration(motion.fadeDuration(IOS_MOTION.duration.press))
             .easing(IOS_STANDARD_EASING)}
-          layout={LinearTransition
-            .duration(IOS_MOTION.duration.control)
-            .easing(IOS_STANDARD_EASING)}
+          layout={motion.animate(
+            LinearTransition
+              .duration(IOS_MOTION.duration.control)
+              .easing(IOS_STANDARD_EASING),
+          )}
           style={styles.activityTimeline}
         >
           {reasoningText ? (
@@ -658,10 +680,11 @@ function createMessageMarkdownStyles(
 
 export function LiveDot({ busy }: { busy: boolean }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const pulse = useSharedValue(1);
   useEffect(() => {
     cancelAnimation(pulse);
-    pulse.value = busy
+    pulse.value = busy && !motion.reduceMotion
       ? withRepeat(withSequence(
           withTiming(1.28, {
             duration: 700,
@@ -677,7 +700,7 @@ export function LiveDot({ busy }: { busy: boolean }) {
           easing: IOS_STANDARD_EASING,
         });
     return () => cancelAnimation(pulse);
-  }, [busy, pulse]);
+  }, [busy, motion.reduceMotion, pulse]);
   const animatedStyle = useAnimatedStyle(() => ({ transform: [{ scale: pulse.value }] }));
   return <Reanimated.View style={[styles.liveDot, { backgroundColor: tokens.colors.success }, animatedStyle]} />;
 }

@@ -22,6 +22,9 @@ export interface HostedTurnOutboxItem {
   attempts?: number;
   cancelledAt?: number;
   deliveryAcceptedAt?: number;
+  deliveryLeaseExpiresAt?: number;
+  deliveryLeaseOwner?: string;
+  deliveryLeaseToken?: string;
   deliveryTerminalAt?: number;
   foregroundFailedAt?: number;
   reconciliationAttempts?: number;
@@ -30,6 +33,7 @@ export interface HostedTurnOutboxItem {
   conversationPending?: boolean;
   conversationProfile?: string;
   conversationTitle?: string;
+  draftClaim?: ConversationDraftClaim;
   input: HostedTurnEnqueueInput;
   lastError?: string;
   nextAttemptAt?: number;
@@ -38,18 +42,40 @@ export interface HostedTurnOutboxItem {
   queuedAt: number;
 }
 
+export interface ConversationDraftClaim {
+  attachments: ConversationDraftClaimAttachment[];
+  content: string;
+  requestId: string;
+}
+
+export interface ConversationDraftClaimAttachment {
+  id: string;
+  uri: string;
+}
+
+export type PendingEnqueueInitializationRecovery =
+  | 'none'
+  | 'optimistic-ledger-replay';
+
+export interface PendingEnqueueInitializationResult
+  extends PendingEnqueueMutationResult {
+  durable: boolean;
+  recovery: PendingEnqueueInitializationRecovery;
+}
+
 export interface PendingEnqueueMutationResult {
   item: HostedTurnOutboxItem | null;
   updated: boolean;
 }
 
 export interface HostedTurnPendingAttachment {
-  encryption?: 'aes-gcm-v1';
+  encryption?: 'aes-gcm-chunked-v2' | 'aes-gcm-v1';
   id: string;
   kind: 'file' | 'image';
   mimeType?: string | null;
   name: string;
   ownedTemporary?: boolean;
+  sha256?: string;
   size?: number | null;
   sourceUri?: string;
   uri: string;
@@ -92,7 +118,7 @@ export interface OptimisticConversationLedgerItem {
 export interface OptimisticPendingTurn {
   attempt: number;
   lastError?: string;
-  phase: 'executing' | 'reconnecting' | 'thinking';
+  phase: 'cancel_requested' | 'executing' | 'reconnecting' | 'thinking';
   phaseStartedAt: number;
   turnId?: string;
   updatedAt: number;

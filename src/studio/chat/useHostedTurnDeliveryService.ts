@@ -43,6 +43,8 @@ export function useHostedTurnDeliveryService({
                   {
                     mimeType: attachment.mimeType,
                     name: attachment.name,
+                    sha256: attachment.sha256,
+                    size: attachment.size,
                     uri: plaintextUri,
                   },
                   {

@@ -1,4 +1,5 @@
 import type { HermesCloudTransport, JsonRecord } from './transport';
+import { ManagedResourceCatalogController } from '../managed-resource-catalog';
 
 /**
  * Capability-extension endpoints: skills, managed installations, plugins,
@@ -17,33 +18,127 @@ export type ManagedInstallationRequest = {
   locality?: 'ios-relay' | 'network' | 'node' | 'portable' | 'server' | 'workers';
   profile?: string;
   project_name?: string;
+  source_ref?: string;
   request_id: string;
   scope?: 'auto' | 'fleet' | 'server' | 'workers';
   targets?: readonly ('dbb3' | 'server' | 'wsl')[];
 };
 
+export interface ManagedResourceRecord {
+  resource_id: string;
+  kind: 'mcp' | 'project' | 'skill';
+  name: string;
+  source_type: 'builtin' | 'git' | 'local' | 'managed' | 'npm';
+  source_uri: string;
+  source_ref: string;
+  resolved_commit_or_version: string;
+  content_hash: string;
+  scope: 'account' | 'node' | 'project' | 'server';
+  target_nodes: string[];
+  loaded_nodes: string[];
+  aggregate_state: 'failed' | 'partial' | 'pending' | 'rolled_back' | 'verified';
+  node_receipts: Record<string, JsonRecord>;
+  policy_version: string;
+  tree_sha: string;
+  tools: string[];
+  permissions: string[];
+  last_verified_at: string;
+  rollback_available: boolean;
+  enabled: boolean;
+  trust_state: string;
+  health: string;
+  conflicts: JsonRecord[];
+  installed_at: string;
+  updated_at: string;
+  operation_id: string;
+}
+
+export interface ManagedResourceCatalog {
+  account_generation: string;
+  resources: ManagedResourceRecord[];
+  diagnostics: JsonRecord[];
+  events: Array<{ cursor: number; resource: ManagedResourceRecord; created_at: string }>;
+  cursor: number;
+  reset_cursor?: boolean;
+  reset_reason?: string;
+  has_more: boolean;
+}
+
 export class HermesExtensionsCloudApi {
-  constructor(private readonly transport: HermesCloudTransport) {}
+  constructor(
+    private readonly transport: HermesCloudTransport,
+    private readonly managedResources = new ManagedResourceCatalogController(),
+  ) {}
+
+  bindManagedResourceOwner(owner: string): void {
+    this.managedResources.bindOwner(owner);
+  }
 
   getSkills(profile = 'default') {
     return Promise.all([
       this.transport.request<JsonRecord[]>('/api/skills', { profile }),
       this.transport.request<JsonRecord[]>('/api/tools/toolsets', { profile }),
       this.getManagedInstallations('skill', profile),
-    ]).then(([skills, toolsets, installations]) => ({ skills, toolsets, installations }));
+    ]).then(async ([skills, toolsets, installations]) => {
+      // Read operation state first. When a background install becomes terminal,
+      // this same reload observes its catalog commit instead of waiting one poll.
+      const resources = await this.getManagedResourceCatalog();
+      return {
+        skills: mergeManagedSkills(skills, resources),
+        toolsets,
+        installations,
+        resourceCatalog: resources,
+      };
+    });
+  }
+
+  getManagedResources(cursor = 0, limit = 500, signal?: AbortSignal) {
+    return this.transport.request<ManagedResourceCatalog>(
+      '/api/plugins/collaboration/managed-resources',
+      { query: { cursor: String(Math.max(0, Math.floor(cursor))), limit: String(limit) }, signal },
+    );
+  }
+
+  openManagedResourceEvents(cursor = 0, signal?: AbortSignal) {
+    return this.transport.openEventStream(
+      '/api/plugins/collaboration/managed-resources/events',
+      { query: { cursor: String(Math.max(0, Math.floor(cursor))) }, signal },
+    );
+  }
+
+  private getManagedResourceCatalog(limit = 500, signal?: AbortSignal) {
+    return this.managedResources.refresh(
+      (cursor, pageLimit, pageSignal) => this.getManagedResources(
+        cursor,
+        pageLimit,
+        pageSignal,
+      ),
+      limit,
+      signal,
+    );
   }
 
   getManagedInstallations(kind = '', profile = 'default', limit = 50) {
-    return this.transport.request<{ operations: JsonRecord[] }>('/api/managed-installations', {
+    return this.transport.request<{ operations: JsonRecord[] }>(
+      '/api/plugins/collaboration/managed-installations', {
       query: { kind, profile, limit: String(limit) },
-    });
+      },
+    );
   }
 
   createManagedInstallation(request: ManagedInstallationRequest) {
     return this.transport.json<{ accepted: boolean; operation: JsonRecord }>(
-      '/api/managed-installations',
+      '/api/plugins/collaboration/managed-installations',
       'POST',
       request as JsonRecord,
+    );
+  }
+
+  rollbackManagedInstallation(operationId: string, requestId: string) {
+    return this.transport.json<{ accepted: boolean; operation: JsonRecord }>(
+      `/api/plugins/collaboration/managed-installations/${encodeURIComponent(operationId)}/rollback`,
+      'POST',
+      { request_id: requestId },
     );
   }
 
@@ -88,7 +183,15 @@ export class HermesExtensionsCloudApi {
       this.transport.request<JsonRecord>('/api/mcp/servers', { query: { profile } }),
       this.transport.request<JsonRecord>('/api/mcp/catalog', { query: { profile } }),
       this.getManagedInstallations('mcp', profile),
-    ]).then(([servers, catalog, installations]) => ({ servers, catalog, installations }));
+    ]).then(async ([servers, catalog, installations]) => {
+      const resources = await this.getManagedResourceCatalog();
+      return {
+        servers: mergeManagedMcpServers(servers, resources),
+        catalog,
+        installations,
+        resourceCatalog: resources,
+      };
+    });
   }
 
   addMcpServer(server: JsonRecord, profile = 'default') {
@@ -115,4 +218,80 @@ export class HermesExtensionsCloudApi {
       },
     );
   }
+}
+
+export function mergeManagedSkills(
+  skills: JsonRecord[],
+  catalog: ManagedResourceCatalog,
+): JsonRecord[] {
+  const rows = Array.isArray(skills) ? skills.filter(isRecord) : [];
+  const resources = Array.isArray(catalog?.resources) ? catalog.resources : [];
+  const diagnostics = Array.isArray(catalog?.diagnostics) ? catalog.diagnostics : [];
+  const byName = new Map(rows.map((skill) => [String(skill.name || skill.id || ''), skill]));
+  for (const resource of resources.filter((resource) => (
+    resource.kind === 'skill' && isVerifiedManagedResource(resource)
+  ))) {
+    byName.set(resource.name, {
+      ...(byName.get(resource.name) || {}),
+      id: resource.resource_id,
+      name: resource.name,
+      description: resourceDescription(resource, diagnostics),
+      enabled: resource.enabled,
+      notes: resource.health,
+      provenance: resource.source_type,
+      source: resource.source_uri,
+    });
+  }
+  return [...byName.values()];
+}
+
+export function mergeManagedMcpServers(
+  source: JsonRecord,
+  catalog: ManagedResourceCatalog,
+): JsonRecord {
+  const current = isRecord(source) && Array.isArray(source.servers)
+    ? source.servers.filter(isRecord)
+    : [];
+  const resources = Array.isArray(catalog?.resources) ? catalog.resources : [];
+  const diagnostics = Array.isArray(catalog?.diagnostics) ? catalog.diagnostics : [];
+  const byName = new Map(current.map((server) => [String(server.name || server.id || ''), server]));
+  for (const resource of resources.filter((resource) => (
+    resource.kind === 'mcp' && isVerifiedManagedResource(resource)
+  ))) {
+    byName.set(resource.name, {
+      ...(byName.get(resource.name) || {}),
+      id: resource.resource_id,
+      name: resource.name,
+      description: resourceDescription(resource, diagnostics),
+      enabled: resource.enabled,
+      status: resource.health,
+      source: resource.source_uri,
+    });
+  }
+  return { ...(isRecord(source) ? source : {}), servers: [...byName.values()] };
+}
+
+function isVerifiedManagedResource(resource: ManagedResourceRecord): boolean {
+  return resource.aggregate_state === 'verified'
+    && resource.enabled === true
+    && resource.health === 'healthy'
+    && Object.keys(resource.node_receipts || {}).length === resource.target_nodes.length;
+}
+
+function resourceDescription(
+  resource: ManagedResourceRecord,
+  diagnostics: JsonRecord[],
+): string {
+  const loaded = resource.loaded_nodes.length
+    ? `loaded: ${resource.loaded_nodes.join(', ')}`
+    : `target: ${resource.target_nodes.join(', ') || 'pending'}`;
+  const collision = diagnostics.some((item) => (
+    item.code === 'resource_name_collision'
+    && item.name === resource.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  ));
+  return [resource.health, loaded, collision ? 'name collision' : ''].filter(Boolean).join(' · ');
+}
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

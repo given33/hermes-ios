@@ -15,6 +15,10 @@ import type {
 } from '../../api/conversation-store-types';
 import { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
 import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
+import {
   HostedTurnDeliveryClaimRegistry,
   hostedTurnDeliveryClaimKey,
   hostedTurnResponseFailure,
@@ -49,6 +53,10 @@ import {
   uniqueTurnId,
 } from './chat-domain';
 import {
+  draftClaimForComposer,
+  recoverUndurableComposer,
+} from './hosted-send-draft-state';
+import {
   HostedTurnCancelledDuringDelivery,
   type ChatAttachment,
   type PendingChatSend,
@@ -78,6 +86,7 @@ interface HostedSendControllerOptions {
   commitConversationIndex(
     conversations: readonly SingleConversation[],
     activeId?: string,
+    expectedOwnerEpoch?: number,
   ): void;
   contentRef: MutableRefObject<string>;
   conversationIndexRef: MutableRefObject<SingleConversation[]>;
@@ -111,6 +120,7 @@ interface HostedSendControllerOptions {
     conversationId: string,
     messages: readonly ChatMessage[],
     pendingTurn?: OptimisticPendingTurn | null,
+    expectedOwnerEpoch?: number,
   ): Promise<void>;
   sendOperationGenerationRef: MutableRefObject<number>;
   sendSubmissionGateRef: MutableRefObject<InFlightActionGate>;
@@ -123,7 +133,9 @@ interface HostedSendControllerOptions {
   setReconnectAttempt(attempt: number): void;
   setSending: Dispatch<SetStateAction<boolean>>;
   setSlashMenuOpen: Dispatch<SetStateAction<boolean>>;
-  updateAttachments(update: ChatAttachment[]): void;
+  updateAttachments(
+    update: ChatAttachment[] | ((current: ChatAttachment[]) => ChatAttachment[]),
+  ): void;
   updateConversationCollaborationState(
     conversationId: string,
     state: ConversationCollaborationState,
@@ -194,6 +206,8 @@ export function useHostedSendController({
   updatePendingPhase,
 }: HostedSendControllerOptions): HostedSendController {
   const send = async () => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     const currentContent = contentRef.current;
     const trimmed = currentContent.trim();
     const attachmentCount = attachments.length;
@@ -216,12 +230,6 @@ export function useHostedSendController({
     const hostedTurnId = uniqueTurnId('hosted');
     const sendingConversationId = activeConversationIdRef.current
       || `chat_${safeOutboxPathComponent(userMessageId).slice(0, 251)}`;
-    if (hadActiveConversation) {
-      hostedTurnVisibilityFailuresRef.current.delete(sendingConversationId);
-      setMessages((current) => current.filter(
-        ({ id }) => !id.startsWith('hosted-sync-failed-'),
-      ));
-    }
     const conversationProfile = (
       conversationIndexRef.current.find(
         ({ id }) => id === activeConversationIdRef.current,
@@ -248,15 +256,13 @@ export function useHostedSendController({
       pendingTurnActiveRef.current
       && sendOperationGenerationRef.current === sendGeneration
       && !cancelledPendingSendKeysRef.current.has(sendKey)
+      && isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
     );
     pendingChatSendRef.current = {
       conversationId: sendingConversationId,
       key: sendKey,
       userMessage,
     };
-    autoFollowStreamRef.current = true;
-    activeConversationIdRef.current = sendingConversationId;
-    setActiveConversationId(sendingConversationId);
     const durableOptimisticMessages = upsertChatMessage(
       optimisticMessagesByConversationRef.current.get(sendingConversationId) || [],
       userMessage,
@@ -275,33 +281,36 @@ export function useHostedSendController({
       updatedAt: Date.now(),
       userMessageId,
     });
-    if (!hadActiveConversation) {
-      commitConversationIndex([{
-        created_at: userMessageCreatedAt,
-        id: sendingConversationId,
-        message_count: 1,
-        messages: [chatMessageToCollaborationMessage(userMessage)],
-        profile: conversationProfile,
-        title: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
-        updated_at: userMessageCreatedAt,
-      }, ...conversationIndexRef.current], sendingConversationId);
-    }
-    setMessages((current) => [...current, userMessage]);
     let composerCleared = false;
+    const sentAttachmentIdentities = new Set(
+      pendingAttachments.map(({ id, uri }) => `${id}\u0000${uri}`),
+    );
     const clearQueuedComposer = () => {
       if (composerCleared) return;
       composerCleared = true;
-      contentRef.current = '';
-      setContent('');
+      if (contentRef.current === currentContent) {
+        contentRef.current = '';
+        setContent('');
+      }
       setSlashMenuOpen(false);
-      updateAttachments([]);
+      updateAttachments((current) => current.filter(
+        ({ id, uri }) => !sentAttachmentIdentities.has(`${id}\u0000${uri}`),
+      ));
     };
-    clearQueuedComposer();
-    setSending(true);
+    const restoreQueuedComposer = () => {
+      const recovered = recoverUndurableComposer(
+        { attachments: pendingAttachments, content: currentContent },
+        { attachments: attachmentsRef.current, content: contentRef.current },
+      );
+      contentRef.current = recovered.content;
+      setContent(recovered.content);
+      updateAttachments(recovered.attachments);
+      composerCleared = false;
+      return recovered;
+    };
+    // Fence overlapping send/cancel callbacks while the first durable write
+    // is in flight. User-visible optimistic state is committed afterwards.
     pendingTurnActiveRef.current = true;
-    firstTokenAtRef.current = 0;
-    setReconnectAttempt(0);
-    updatePendingPhase('thinking', userMessageCreatedAt);
     const plannedAttachments = planPendingAttachments(
       cacheOwner,
       userMessageId,
@@ -344,6 +353,7 @@ export function useHostedSendController({
       conversationPending: !hadActiveConversation,
       conversationProfile,
       conversationTitle: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
+      draftClaim: draftClaimForComposer(userMessageId, currentContent, pendingAttachments),
       input: enqueueInput,
       pendingAttachments: plannedAttachments,
       queuedAt: userMessageCreatedAt,
@@ -367,10 +377,42 @@ export function useHostedSendController({
         queuedItem,
         durableOptimisticMessages.map(chatMessageToCollaborationMessage),
         initialPendingTurn,
+        ownerEpoch,
       );
-      if (!initialization.updated || !initialization.item) return;
+      if (!isCurrentSend()) return;
+      if (!initialization.durable || !initialization.item) {
+        throw new Error('Hosted-turn outbox transaction conflicted with another pending send');
+      }
       queuedItem = initialization.item;
       enqueuePersisted = true;
+      autoFollowStreamRef.current = true;
+      activeConversationIdRef.current = sendingConversationId;
+      setActiveConversationId(sendingConversationId);
+      if (hadActiveConversation) {
+        hostedTurnVisibilityFailuresRef.current.delete(sendingConversationId);
+        setMessages((current) => current.filter(
+          ({ id }) => !id.startsWith('hosted-sync-failed-'),
+        ));
+      } else {
+        commitConversationIndex([{
+          created_at: userMessageCreatedAt,
+          id: sendingConversationId,
+          message_count: 1,
+          messages: [chatMessageToCollaborationMessage(userMessage)],
+          profile: conversationProfile,
+          title: trimmed.slice(0, 36) || (isChinese ? '新对话' : 'New conversation'),
+          updated_at: userMessageCreatedAt,
+        }, ...conversationIndexRef.current], sendingConversationId, ownerEpoch);
+      }
+      setMessages((current) => upsertChatMessage(current, userMessage));
+      setSending(true);
+      firstTokenAtRef.current = 0;
+      setReconnectAttempt(0);
+      updatePendingPhase('thinking', userMessageCreatedAt);
+      clearQueuedComposer();
+      // The request claim makes this idempotent across a kill between the
+      // outbox commit and draft cleanup. A newer, non-matching draft survives.
+      await localStore.clearDraftClaim(cacheOwner, queuedItem, ownerEpoch).catch(() => undefined);
       if (!isCurrentSend()) return;
       optimisticMessagesByConversationRef.current.set(
         sendingConversationId,
@@ -439,9 +481,12 @@ export function useHostedSendController({
         commitConversationIndex(
           upsertCachedConversation(conversationIndexRef.current, previewConversation),
           sendingConversationId,
+          ownerEpoch,
         );
-        await localStore.removePendingEnqueue(cacheOwner, userMessageId);
-        await replaceOptimisticMessages(sendingConversationId, [], null);
+        await localStore.removePendingEnqueue(cacheOwner, userMessageId, ownerEpoch);
+        if (!isCurrentSend()) return;
+        await replaceOptimisticMessages(sendingConversationId, [], null, ownerEpoch);
+        if (!isCurrentSend()) return;
         optimisticPendingByConversationRef.current.delete(sendingConversationId);
         optimisticMessagesByConversationRef.current.delete(sendingConversationId);
         optimisticMessagesRef.current = [];
@@ -461,7 +506,7 @@ export function useHostedSendController({
             ? '当前没有可用的 Hermes 服务器连接，请重新登录后重试。'
             : 'No Hermes server connection is available. Sign in again and try again.',
           retryable: false,
-        });
+        }, ownerEpoch);
         return;
       }
       let conversationId = sendingConversationId;
@@ -470,10 +515,15 @@ export function useHostedSendController({
         userMessageId,
         plannedAttachments,
       );
+      if (!isCurrentSend()) {
+        cleanupPendingAttachments({ ...queuedItem, pendingAttachments: durableAttachments });
+        return;
+      }
       const durableMutation = await localStore.upsertPendingEnqueueIfActive(cacheOwner, {
         ...queuedItem,
         pendingAttachments: durableAttachments,
-      });
+      }, ownerEpoch);
+      if (!isCurrentSend()) return;
       if (!durableMutation.updated || !durableMutation.item) return;
       queuedItem = durableMutation.item;
       cleanupAttachmentSources(pendingAttachments);
@@ -485,23 +535,20 @@ export function useHostedSendController({
       }
       pendingChatSendRef.current = { conversationId, key: sendKey, queuedItem, userMessage };
       clearQueuedComposer();
-      const delivery = await outbox.deliverPendingEnqueue(queuedItem);
+      const delivery = await outbox.deliverPendingEnqueue(queuedItem, ownerEpoch);
+      if (!isCurrentSend()) return;
       queuedItem = delivery.item;
       conversationId = queuedItem.conversationId;
       enqueueAcknowledged = true;
       hostedAccepted = delivery.response.accepted;
-      if (!isCurrentSend()) {
-        const cancelled = await localStore.cancelPendingEnqueue(
-          cacheOwner,
-          userMessageId,
-          queuedItem,
-        );
-        if (cancelled) void cancellation.deliverAndReconcilePendingCancellation(cancelled);
-        return;
-      }
       const responseFailure = hostedTurnResponseFailure(delivery.response);
       if (responseFailure) {
-        const outcome = await cancellation.handleOutboxFailure(queuedItem, responseFailure);
+        const outcome = await cancellation.handleOutboxFailure(
+          queuedItem,
+          responseFailure,
+          ownerEpoch,
+        );
+        if (!isCurrentSend()) return;
         deliveryRetryScheduled = outcome === 'retry';
         if (deliveryRetryScheduled) setSending(true);
         return;
@@ -516,10 +563,14 @@ export function useHostedSendController({
         lastError: '',
         nextAttemptAt: 0,
       };
-      const acceptedMutation = await outbox.acceptPendingOutboxItem(queuedItem);
+      const acceptedMutation = await outbox.acceptPendingOutboxItem(queuedItem, ownerEpoch);
+      if (!isCurrentSend()) return;
       if (!acceptedMutation.updated || !acceptedMutation.item) {
         if (acceptedMutation.item?.cancelledAt) {
-          void cancellation.deliverAndReconcilePendingCancellation(acceptedMutation.item);
+          void cancellation.deliverAndReconcilePendingCancellation(
+            acceptedMutation.item,
+            ownerEpoch,
+          );
         }
         return;
       }
@@ -534,19 +585,26 @@ export function useHostedSendController({
         pendingTurnActiveRef.current = true;
         pendingChatSendRef.current = null;
         cancelledPendingSendKeysRef.current.delete(sendKey);
-        await outbox.settleAcceptedOutboxItem(queuedItem);
+        await outbox.settleAcceptedOutboxItem(queuedItem, ownerEpoch);
+        if (!isCurrentSend()) return;
         const generation = conversationSyncGenerationRef.current.advanceActive();
         await loadConversation(conversationId, generation);
+        if (!isCurrentSend()) return;
       }
     } catch (error) {
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       if (!isCurrentSend() || error instanceof HostedTurnCancelledDuringDelivery) {
         if (localStore && cacheOwner && queuedItem) {
           const cancelled = await localStore.cancelPendingEnqueue(
             cacheOwner,
             userMessageId,
             queuedItem,
+            Date.now(),
+            ownerEpoch,
           );
-          if (cancelled) void cancellation.deliverAndReconcilePendingCancellation(cancelled);
+          if (cancelled && isCurrentSend()) {
+            void cancellation.deliverAndReconcilePendingCancellation(cancelled, ownerEpoch);
+          }
         }
         return;
       }
@@ -567,7 +625,9 @@ export function useHostedSendController({
             ...transportFailure,
             message: serverFailure(error, isChinese),
           },
+          ownerEpoch,
         );
+        if (!isCurrentSend()) return;
         deliveryRetryScheduled = outcome === 'retry';
         if (deliveryRetryScheduled) {
           notify(isChinese
@@ -575,28 +635,27 @@ export function useHostedSendController({
             : 'Message queued. Hermes will retry in one minute.');
         }
       } else if (!enqueueAcknowledged) {
-        if (queuedItem) {
-          try {
-            cleanupPendingAttachments(queuedItem);
-          } catch {
-            // Terminal UI state does not depend on best-effort attachment GC.
-          }
+        const recovered = restoreQueuedComposer();
+        if (localStore && cacheOwner) {
+          await localStore.writeDraft(
+            cacheOwner,
+            sendingConversationId,
+            recovered.content,
+            recovered.attachments.flatMap((attachment) => (
+              attachment.draftPersistent
+                ? [{ ...attachment, draftPersistent: true as const }]
+                : []
+            )),
+            ownerEpoch,
+          ).catch(() => undefined);
+          if (!isCurrentSend()) return;
         }
         const failure = serverFailure(error, isChinese);
-        await cancellation.finalizePendingSend(
-          pendingChatSendRef.current || {
-            conversationId: sendingConversationId,
-            key: sendKey,
-            queuedItem: queuedItem || undefined,
-            userMessage,
-          },
-          failure,
-          'failed',
-          'send-failed',
-          enqueuePersisted
-            ? (isChinese ? '连接错误' : 'Connection error')
-            : (isChinese ? '本地存储错误' : 'Local storage error'),
-        );
+        pendingChatSendRef.current = null;
+        pendingTurnActiveRef.current = false;
+        notify(isChinese
+          ? `本地存储失败，草稿已恢复：${failure}`
+          : `Local storage failed. Your draft was restored: ${failure}`);
       } else {
         const failure = serverFailure(error, isChinese);
         notify(isChinese
@@ -604,7 +663,7 @@ export function useHostedSendController({
           : `The server is still running the task. Conversation sync failed temporarily: ${failure}`);
       }
     } finally {
-      if (!enqueuePersisted || attachmentSourcesReleased) {
+      if (attachmentSourcesReleased) {
         cleanupAttachmentSources(pendingAttachments);
       }
       if (deliveryClaim) hostedTurnDeliveryClaimsRef.current.release(sendKey, deliveryClaim);
@@ -617,6 +676,8 @@ export function useHostedSendController({
   };
 
   const requestSend = () => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     const interventionRequested = hostedRunning
       && attachmentsRef.current.length === 0
       && contentRef.current.trim().startsWith('@');
@@ -626,7 +687,6 @@ export function useHostedSendController({
       || (!contentRef.current.trim() && attachmentsRef.current.length === 0)
       || !sendSubmissionGateRef.current.tryAcquire()
     ) return;
-    if (!interventionRequested) setSending(true);
     void send().finally(() => sendSubmissionGateRef.current.release());
   };
 

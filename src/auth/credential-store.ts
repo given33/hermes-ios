@@ -1,5 +1,6 @@
 import { normalizeBaseUrl } from '../api/HermesApiClient';
 import {
+  ACCOUNT_GENERATION_STORAGE_KEY,
   ACCESS_EXPIRES_AT_STORAGE_KEY,
   ACCESS_TOKEN_STORAGE_KEY,
   BASE_URL_STORAGE_KEY,
@@ -28,6 +29,10 @@ import {
   type RememberedLogin,
   type SavedConnection,
 } from './credential-contract';
+import {
+  LEGACY_ACCOUNT_GENERATION,
+  requireAccountGeneration,
+} from './account-identity';
 
 export interface SecureStoreOptions {
   requireAuthentication?: boolean;
@@ -62,6 +67,7 @@ export interface SessionTokenWriter {
     accessToken: string,
     refreshToken: string,
     expiresAt: number,
+    accountGeneration: string,
   ): Promise<void>;
 }
 
@@ -231,6 +237,10 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     return this.secureStore.getItemAsync(DEVICE_ID_STORAGE_KEY);
   }
 
+  readAccountGeneration(): Promise<string | null> {
+    return this.secureStore.getItemAsync(ACCOUNT_GENERATION_STORAGE_KEY);
+  }
+
   async readAccessExpiresAt(): Promise<number | null> {
     const stored = await this.secureStore.getItemAsync(ACCESS_EXPIRES_AT_STORAGE_KEY);
     if (stored === null) return null;
@@ -243,6 +253,10 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     try {
       await this.secureStore.setItemAsync(BASE_URL_STORAGE_KEY, connection.baseUrl);
       await this.secureStore.setItemAsync(USERNAME_STORAGE_KEY, connection.username);
+      await this.secureStore.setItemAsync(
+        ACCOUNT_GENERATION_STORAGE_KEY,
+        requireAccountGeneration(connection.accountGeneration),
+      );
       // The short-lived access token and session metadata stay device-unlock
       // protected so foreground refreshes never prompt; only the long-lived
       // refresh token written below carries a biometric ACL.
@@ -288,9 +302,11 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
     accessToken: string,
     refreshToken: string,
     expiresAt: number,
+    accountGeneration: string,
   ): Promise<void> {
     const normalizedToken = accessToken.trim();
     const normalizedRefreshToken = refreshToken.trim();
+    const normalizedGeneration = requireAccountGeneration(accountGeneration);
     if (
       !normalizedToken
       || !normalizedRefreshToken
@@ -325,6 +341,10 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
         ACCESS_EXPIRES_AT_STORAGE_KEY,
         String(expiresAt),
       );
+      await this.secureStore.setItemAsync(
+        ACCOUNT_GENERATION_STORAGE_KEY,
+        normalizedGeneration,
+      );
       if (isRefreshTokenKey(previousKey) && previousKey !== nextKey) {
         await this.secureStore.deleteItemAsync(previousKey);
       }
@@ -334,6 +354,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
         SESSION_STORAGE_VERSION,
       );
     } catch {
+      await this.deleteAll(nextKey);
       throw new Error('Unable to update Hermes token session');
     }
   }
@@ -373,6 +394,7 @@ export class CredentialStore implements CredentialWriter, SessionTokenWriter {
       REFRESH_TOKEN_POINTER_STORAGE_KEY,
       CREDENTIAL_PROTECTION_STORAGE_KEY,
       ACCESS_EXPIRES_AT_STORAGE_KEY,
+      ACCOUNT_GENERATION_STORAGE_KEY,
       DEVICE_ID_STORAGE_KEY,
       SESSION_STORAGE_VERSION_KEY,
       ...(rememberEnabled
@@ -468,6 +490,7 @@ function normalizeConnection(input: SavedConnection): SavedConnection {
   const connection = {
     baseUrl: normalizeBaseUrl(input.baseUrl),
     username: input.username.trim(),
+    accountGeneration: requireAccountGeneration(input.accountGeneration),
     accessToken: input.accessToken.trim(),
     refreshToken: input.refreshToken.trim(),
     expiresAt: input.expiresAt,

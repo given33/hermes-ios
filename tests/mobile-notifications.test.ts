@@ -17,6 +17,8 @@ import {
 } from '../src/notifications/mobile-notifications';
 import {
   buildSmartWeatherFeedbackEvent,
+  notificationDedupeKey,
+  notificationMatchesAccount,
   parseHermesNotificationPayload,
   parseHermesNotificationResponse,
 } from '../src/notifications/notification-target';
@@ -181,7 +183,10 @@ test('unified permission coordination prevents APNs from presenting a second sys
 test('Hermes notification taps accept conversation and smart-weather deep links', () => {
   const target = parseHermesNotificationPayload({
     hermes: {
+      account_generation: 'acctgen_test',
       conversation_id: 'conversation-42',
+      event_key: 'turn:conversation-42:turn-9',
+      owner_id: 'owner-a',
       turn_id: 'turn-9',
       status: 'completed',
       result: 'preview only',
@@ -189,15 +194,27 @@ test('Hermes notification taps accept conversation and smart-weather deep links'
     },
   }, 'notification-1');
   assert.deepEqual(target, {
+    accountGeneration: 'acctgen_test',
+    eventKey: 'turn:conversation-42:turn-9',
     notificationId: 'notification-1',
+    ownerId: 'owner-a',
     conversationId: 'conversation-42',
     turnId: 'turn-9',
     status: 'completed',
   });
   assert.equal(
     parseHermesNotificationPayload({
+      hermes: { conversation_id: 'conversation-old' },
+    }),
+    null,
+  );
+  assert.equal(
+    parseHermesNotificationPayload({
       hermes: {
+        account_generation: 'acctgen_test',
         conversation_id: 'conversation-42',
+        event_key: 'bad-link',
+        owner_id: 'owner-a',
         deep_link: 'https://attacker.test/conversation-42',
       },
     }),
@@ -206,7 +223,10 @@ test('Hermes notification taps accept conversation and smart-weather deep links'
   assert.equal(
     parseHermesNotificationPayload({
       hermes: {
+        account_generation: 'acctgen_test',
         conversation_id: 'conversation-42',
+        event_key: 'mismatch',
+        owner_id: 'owner-a',
         deep_link: 'hermes-agent://conversation/different',
       },
     }),
@@ -218,23 +238,40 @@ test('Hermes notification taps accept conversation and smart-weather deep links'
       notification: {
         request: {
           identifier: 'notification-2',
-          content: { data: { hermes: { conversation_id: 'conversation-8' } } },
+          content: { data: { hermes: {
+            account_generation: 'acctgen_test',
+            conversation_id: 'conversation-8',
+            event_key: 'conversation-8',
+            owner_id: 'owner-a',
+          } } },
           trigger: { type: 'push' },
         },
       },
     }),
-    { notificationId: 'notification-2', conversationId: 'conversation-8' },
+    {
+      accountGeneration: 'acctgen_test',
+      eventKey: 'conversation-8',
+      notificationId: 'notification-2',
+      ownerId: 'owner-a',
+      conversationId: 'conversation-8',
+    },
   );
   assert.deepEqual(
     parseHermesNotificationPayload({
       hermes: {
+        account_generation: 'acctgen_test',
         category: 'smart-weather',
         deep_link: 'hermes-agent://weather',
+        event_key: 'weather-event',
+        owner_id: 'owner-a',
         data: { valid_until: 1_800_000_000 },
       },
     }, 'weather-notification', 1_700_000_000_000),
     {
+      accountGeneration: 'acctgen_test',
+      eventKey: 'weather-event',
       notificationId: 'weather-notification',
+      ownerId: 'owner-a',
       conversationId: '',
       routePath: '/smart-weather',
       validUntil: 1_800_000_000_000,
@@ -243,8 +280,11 @@ test('Hermes notification taps accept conversation and smart-weather deep links'
   assert.equal(
     parseHermesNotificationPayload({
       hermes: {
+        account_generation: 'acctgen_test',
         category: 'smart-weather',
         deep_link: 'hermes-agent://weather',
+        event_key: 'expired-weather',
+        owner_id: 'owner-a',
         data: { valid_until: 1_600_000_000 },
       },
     }, 'expired-weather', 1_700_000_000_000),
@@ -252,22 +292,52 @@ test('Hermes notification taps accept conversation and smart-weather deep links'
   );
 });
 
+test('notification account fences reject old generations and scope dedupe keys', () => {
+  const target = parseHermesNotificationPayload({
+    hermes: {
+      account_generation: 'acctgen_current',
+      conversation_id: 'conversation-1',
+      event_key: 'turn:conversation-1:turn-1',
+      owner_id: 'Owner-A',
+    },
+  }, 'request-id');
+  assert.ok(target);
+  assert.equal(notificationMatchesAccount(target, 'owner-a', 'acctgen_current'), true);
+  assert.equal(notificationMatchesAccount(target, 'owner-a', 'acctgen_old'), false);
+  assert.equal(
+    notificationDedupeKey(target),
+    'owner-a\u0000acctgen_current\u0000turn:conversation-1:turn-1',
+  );
+});
+
 test('smart-weather notification feedback is persisted through the native encrypted queue', () => {
   assert.deepEqual(
-    buildSmartWeatherFeedbackEvent('weather-42', 'iphone-1', 1_700_000_000_000),
+    buildSmartWeatherFeedbackEvent('weather-42', 'iphone-1', {
+      accountGeneration: 'acctgen_test',
+      eventKey: 'weather-event',
+      ownerId: 'owner-a',
+    }, 1_700_000_000_000),
     {
-      id: 'notification-feedback:weather-42',
+      id: 'notification-feedback:weather-event',
       kind: 'notification-feedback',
+      account_generation: 'acctgen_test',
       payload: {
         action: 'opened',
+        account_generation: 'acctgen_test',
+        event_key: 'weather-event',
         notification_id: 'weather-42',
+        owner_id: 'owner-a',
         useful: true,
       },
       source_device_id: 'iphone-1',
       timestamp: 1_700_000_000_000,
     },
   );
-  assert.equal(buildSmartWeatherFeedbackEvent('', 'iphone-1'), null);
+  assert.equal(buildSmartWeatherFeedbackEvent('', 'iphone-1', {
+    accountGeneration: 'acctgen_test',
+    eventKey: 'weather-event',
+    ownerId: 'owner-a',
+  }), null);
 });
 
 test('notification provider exposes registration health and retries transient APNs failures', () => {

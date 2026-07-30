@@ -3,6 +3,8 @@ name: Build unsigned iOS IPA
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
 
@@ -86,8 +88,62 @@ jobs:
           done
           DEPENDENCY_COUNT="$(grep -c 'isa = PBXTargetDependency;' "$PROJECT_FILE")"
           test "$DEPENDENCY_COUNT" -ge 5
+          SHARED_KEYCHAIN_GROUP='$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared'
+          for target in HermesDeviceActivityMonitor HermesDeviceActivityReport; do
+            ENTITLEMENTS="ios/native-extensions/$target/$target.entitlements"
+            INFO="ios/native-extensions/$target/Info.plist"
+            test "$(plutil -extract keychain-access-groups.0 raw "$ENTITLEMENTS")" = "$SHARED_KEYCHAIN_GROUP"
+            test "$(plutil -extract com.apple.security.application-groups.0 raw "$ENTITLEMENTS")" = 'group.app.sunstone1029.fig1171.hermes'
+            test "$(plutil -extract HermesSharedKeychainAccessGroup raw "$INFO")" = "$SHARED_KEYCHAIN_GROUP"
+          done
+          grep -q 'HermesScreenTimeSpool.swift' "$PROJECT_FILE"
       - name: Install CocoaPods
         run: pod install --project-directory=ios
+      - name: Verify Release entitlement build settings
+        shell: bash
+        run: |
+          PROJECT="$(find ios -maxdepth 1 -type d -name '*.xcodeproj' -print -quit)"
+          WORKSPACE="$(find ios -maxdepth 1 -type d -name '*.xcworkspace' -print -quit)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          test -n "$PROJECT"
+          test -n "$WORKSPACE"
+          test -n "$SCHEME"
+          resolve_entitlements() {
+            local raw="$1"
+            raw="${raw#\"}"
+            raw="${raw%\"}"
+            case "$raw" in
+              '$(SRCROOT)'/*) raw="$PWD/ios/${raw#\$\(SRCROOT\)/}" ;;
+              /*) ;;
+              *) raw="$PWD/ios/$raw" ;;
+            esac
+            printf '%s\n' "$raw"
+          }
+          entitlement_setting() {
+            awk -F ' = ' '/^[[:space:]]*CODE_SIGN_ENTITLEMENTS = / { print $2; exit }'
+          }
+          MAIN_SETTING="$(xcodebuild -workspace "$WORKSPACE" -scheme "$SCHEME" \
+            -configuration Release -showBuildSettings | entitlement_setting)"
+          MAIN_ENTITLEMENTS="$(resolve_entitlements "$MAIN_SETTING")"
+          test -f "$MAIN_ENTITLEMENTS"
+          plutil -lint "$MAIN_ENTITLEMENTS"
+          test "$(plutil -extract aps-environment raw "$MAIN_ENTITLEMENTS")" = production
+          test "$(plutil -extract com.apple.developer.family-controls raw "$MAIN_ENTITLEMENTS")" = true
+          test "$(plutil -extract com.apple.security.application-groups.0 raw "$MAIN_ENTITLEMENTS")" = 'group.app.sunstone1029.fig1171.hermes'
+          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport; do
+            directory="$target"
+            entitlement_file="$target.entitlements"
+            if [ "$target" = HermesWatchExtension ]; then
+              directory=HermesWatchApp
+              entitlement_file=HermesWatchApp.entitlements
+            fi
+            SETTING="$(xcodebuild -project "$PROJECT" -target "$target" \
+              -configuration Release -showBuildSettings | entitlement_setting)"
+            ACTUAL="$(resolve_entitlements "$SETTING")"
+            EXPECTED="$PWD/ios/native-extensions/$directory/$entitlement_file"
+            test "$ACTUAL" = "$EXPECTED"
+            plutil -lint "$ACTUAL"
+          done
       - name: Verify native context autolinking
         run: node scripts/verify-ios-native-context.mjs --ios ios
       - name: Compile without code signing
@@ -113,6 +169,27 @@ jobs:
           node scripts/verify-ios-native-context.mjs \
             --ios ios \
             --derived-data "$RUNNER_TEMP/hermes-build"
+      - name: Compile and verify Simulator Release
+        shell: bash
+        run: |
+          WORKSPACE="$(find ios -maxdepth 1 -type d -name '*.xcworkspace' -print -quit)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          test -n "$WORKSPACE"
+          test -n "$SCHEME"
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/hermes-simulator-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            COMPILER_INDEX_STORE_ENABLE=NO
+          SIMULATOR_APP="$(find "$RUNNER_TEMP/hermes-simulator-build/Build/Products/Release-iphonesimulator" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$SIMULATOR_APP"
+          node scripts/verify-production-app.mjs "$SIMULATOR_APP"
       - name: Verify the compiled production app
         shell: bash
         run: |
@@ -134,6 +211,8 @@ jobs:
           BUNDLED_AMAP_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$APP_PATH/Info.plist")"
           BUNDLED_AMAP_BUNDLE="$(plutil -extract HermesAmapIOSBundleIdentifier raw "$APP_PATH/Info.plist")"
           APP_BUNDLE_IDENTIFIER="$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")"
+          SHARED_KEYCHAIN_GROUP="$(plutil -extract HermesSharedKeychainAccessGroup raw "$APP_PATH/Info.plist")"
+          test -n "$SHARED_KEYCHAIN_GROUP"
           if [ "$BUNDLED_AMAP_KEY" != "${HERMES_AMAP_IOS_API_KEY:-}" ]; then
             echo 'Compiled app map configuration does not match the build environment.' >&2
             exit 1
@@ -156,6 +235,9 @@ jobs:
             EXTENSION_PATH="$APP_PATH/PlugIns/$extension.appex"
             test -d "$EXTENSION_PATH"
             plutil -extract CFBundleIdentifier raw "$EXTENSION_PATH/Info.plist" >/dev/null
+            if [ "$extension" = 'HermesDeviceActivityMonitor' ] || [ "$extension" = 'HermesDeviceActivityReport' ]; then
+              test "$(plutil -extract HermesSharedKeychainAccessGroup raw "$EXTENSION_PATH/Info.plist")" = "$SHARED_KEYCHAIN_GROUP"
+            fi
             verify_bundle_version "$EXTENSION_PATH"
           done
           WATCH_APP="$APP_PATH/Watch/HermesWatchApp.app"
@@ -178,10 +260,12 @@ jobs:
           shasum -a 256 -c Hermes-Agent-unsigned.ipa.sha256
           SHORT_SHA="${GITHUB_SHA:0:7}"
           ARTIFACT_NAME="Hermes-Agent-build-${APP_BUILD_NUMBER}-${SHORT_SHA}"
-          printf '{"build":"%s","commit":"%s","frontend_preview":%s,"sha256":"%s"}\n' \
+          APP_MANIFEST_SHA256="$(shasum -a 256 app.base.json | awk '{print $1}')"
+          printf '{"build":"%s","commit":"%s","frontend_preview":%s,"manifest_sha256":"%s","sha256":"%s"}\n' \
             "$APP_BUILD_NUMBER" \
             "$GITHUB_SHA" \
             "$([ "$EXPO_PUBLIC_FRONTEND_PREVIEW" = "1" ] && printf true || printf false)" \
+            "$APP_MANIFEST_SHA256" \
             "$IPA_SHA256" \
             > "$RUNNER_TEMP/Hermes-Agent-build.json"
           echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"

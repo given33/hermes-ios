@@ -240,6 +240,44 @@ export class HermesApiClient {
     }, callerSignal, deadlineMs, 'Hermes download timed out');
   }
 
+  async consumeDownload<T>(
+    path: string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    options: HermesRequestOptions = {},
+  ): Promise<T> {
+    const {
+      deadlineMs = 120_000,
+      headers: callerHeaders,
+      profile,
+      query,
+      redirect: unsupportedRedirect,
+      signal: callerSignal,
+      ...requestInit
+    } = options;
+    void unsupportedRedirect;
+    const url = this.createSameOriginUrl(path);
+    mergeQuery(url, query);
+    if (profile !== undefined) url.searchParams.set('profile', profile);
+    return withRequestDeadline(async (signal) => {
+      const streamFetch = this.streamFetchImpl
+        ?? (await import('expo/fetch')).fetch as unknown as typeof fetch;
+      const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
+        url,
+        callerHeaders,
+        { ...requestInit, cache: 'no-store', method: 'GET', signal },
+        streamFetch,
+      );
+      if (!response.ok) {
+        const body = await response.text();
+        throw new HermesApiError(
+          response.status,
+          safeResponseDetail(body, response, attemptedTokens),
+        );
+      }
+      return consume(response, signal);
+    }, callerSignal, deadlineMs, 'Hermes download timed out');
+  }
+
   async openEventStream(
     path: string,
     options: Omit<HermesRequestOptions, 'deadlineMs'> = {},

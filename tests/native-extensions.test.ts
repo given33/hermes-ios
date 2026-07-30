@@ -37,7 +37,11 @@ test('native extension config declares every V4 companion target', () => {
   assert.match(workflow, /Watch\/HermesWatchApp\.app/);
   assert.match(workflow, /PlugIns\/HermesWatchExtension\.appex/);
   assert.match(workflow, /-destination 'generic\/platform=iOS'/);
+  assert.match(workflow, /-destination 'generic\/platform=iOS Simulator'/);
   assert.doesNotMatch(workflow, /-sdk iphoneos/);
+  assert.match(workflow, /Verify Release entitlement build settings/);
+  assert.match(workflow, /CODE_SIGN_ENTITLEMENTS = /);
+  assert.match(workflow, /com\.apple\.developer\.family-controls/);
   assert.match(workflow, /expo export --platform ios --output-dir/);
   assert.match(workflow, /verify-native-font-export\.mjs/);
   assert.match(workflow, /verify-production-bundle\.mjs/);
@@ -45,6 +49,7 @@ test('native extension config declares every V4 companion target', () => {
   assert.match(workflow, /ARTIFACT_NAME="Hermes-Agent-build-\$\{APP_BUILD_NUMBER\}-\$\{SHORT_SHA\}"/);
   assert.match(workflow, /Hermes-Agent-build\.json/);
   assert.match(workflow, /"frontend_preview":%s/);
+  assert.match(workflow, /"manifest_sha256":"%s"/);
   assert.match(workflow, /name: \$\{\{ steps\.package\.outputs\.artifact_name \}\}/);
   assert.match(workflow, /verify_bundle_version "\$EXTENSION_PATH"/);
   assert.match(workflow, /verify_bundle_version "\$WATCH_APP"/);
@@ -90,17 +95,25 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(watch, /CLLocationManager/);
   assert.match(watch, /HKStatisticsQuery/);
   assert.match(watch, /HKWorkoutSession/);
-  assert.match(watch, /replyHandler\(\["accepted": true\]\)/);
+  assert.match(watch, /replyHandler\(\["accepted": self\.handle\(message\)\]\)/);
   assert.match(watch, /HKLiveWorkoutBuilder/);
   assert.match(watch, /type as\? HKQuantityType/);
   assert.doesNotMatch(watch, /pausesLocationUpdatesAutomatically/);
   assert.match(watch, /CMMotionActivityManager/);
   assert.match(watch, /allowsBackgroundLocationUpdates = true/);
   assert.match(watch, /didReceiveUserInfo/);
+  assert.match(watch, /didReceiveApplicationContext/);
   assert.match(watch, /start-active-relay/);
+  assert.match(watch, /startNavigationRelay/);
+  assert.match(watch, /HermesWatchAccountFence/);
+  assert.match(watch, /send\(next, fence: fence\)/);
+  assert.match(watch, /event\["eventID"\]/);
+  assert.match(watch, /request-account-handshake/);
   assert.match(watch, /requestAuthorization\(toShare: share, read: read\)/);
   assert.ok(existsSync(resolve(projectRoot, 'native-extensions/HermesWatchApp/Extension-Info.plist')));
-  assert.match(read('native-extensions/HermesWatchApp/Extension-Info.plist'), /workout-processing/);
+  const watchInfo = read('native-extensions/HermesWatchApp/Extension-Info.plist');
+  assert.match(watchInfo, /<string>location<\/string>/);
+  assert.match(watchInfo, /workout-processing/);
 
   const monitor = read('native-extensions/HermesDeviceActivityMonitor/HermesDeviceActivityMonitor.swift');
   assert.match(monitor, /DeviceActivityMonitor/);
@@ -109,30 +122,47 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   const report = read('native-extensions/HermesDeviceActivityReport/HermesDeviceActivityReport.swift');
   assert.match(report, /DeviceActivityReportScene/);
   assert.match(report, /segment\.totalActivityDuration/);
-  assert.match(report, /device-activity-summary-latest/);
-  assert.match(report, /accountGenerationKey/);
-  assert.match(report, /let accountGeneration = suite\?\.integer/);
+  assert.match(report, /let generation = HermesScreenTimeSpool\.captureGeneration\(\)/);
+  assert.ok(
+    report.indexOf('let generation = HermesScreenTimeSpool.captureGeneration()')
+      < report.indexOf('for await item in data'),
+    'report captures generation before its asynchronous DeviceActivity traversal',
+  );
+  assert.match(report, /HermesScreenTimeSpool\.append/);
   assert.match(read('native-extensions/HermesDeviceActivityReport/Info.plist'), /report-extension/);
 
-  // Screen Time payloads cross the App Group as sealed envelopes: shared-suite
-  // plists are cleartext on disk. The extensions read the key from the shared
-  // Keychain access group but never create it, and drop the write rather than
-  // persist cleartext when it is absent.
-  for (const extension of [monitor, report]) {
-    assert.match(extension, /HermesScreenTimeCrypto\.seal/);
-    assert.match(extension, /kSecAttrAccessGroup as String: "group\.app\.sunstone1029\.fig1171\.hermes"/);
-    assert.doesNotMatch(extension, /SecItemAdd/);
+  const spool = read('native-extensions/HermesScreenTimeSpool.swift');
+  assert.match(spool, /HermesSharedKeychainAccessGroup/);
+  assert.match(spool, /kSecAttrAccessGroup as String: accessGroup/);
+  assert.match(spool, /AES\.GCM\.seal/);
+  assert.match(spool, /Darwin\.flock/);
+  assert.match(spool, /"checksum": checksum/);
+  assert.match(spool, /"sequence": sequence/);
+  assert.match(spool, /\.chunk/);
+  assert.doesNotMatch(spool, /SecItemAdd/);
+  assert.doesNotMatch(monitor, /suffix\(500\)/);
+  assert.match(read('plugins/with-hermes-native-extensions.js'), /sharedSources: \['HermesScreenTimeSpool\.swift'\]/);
+  for (const target of ['HermesDeviceActivityMonitor', 'HermesDeviceActivityReport']) {
+    const entitlements = read(`native-extensions/${target}/${target}.entitlements`);
+    const info = read(`native-extensions/${target}/Info.plist`);
+    assert.match(entitlements, /<key>keychain-access-groups<\/key>[\s\S]*\$\(AppIdentifierPrefix\)app\.sunstone1029\.fig1171\.hermes\.shared/);
+    assert.match(entitlements, /<key>com\.apple\.security\.application-groups<\/key>[\s\S]*group\.app\.sunstone1029\.fig1171\.hermes/);
+    assert.match(info, /<key>HermesSharedKeychainAccessGroup<\/key>[\s\S]*\$\(AppIdentifierPrefix\)app\.sunstone1029\.fig1171\.hermes\.shared/);
   }
+  const workflow = read('.github/workflows/ios-unsigned.yml');
+  assert.match(workflow, /plutil -extract keychain-access-groups\.0/);
+  assert.match(workflow, /grep -q 'HermesScreenTimeSpool\.swift'/);
 });
 
 test('native context absorbs DeviceActivity extension events', () => {
   const service = read('modules/hermes-ios-context/ios/HermesScreenTimeService.swift');
+  const spool = read('modules/hermes-ios-context/ios/HermesScreenTimeSpool.swift');
   const module = read('modules/hermes-ios-context/ios/HermesIOSContextModule.swift');
   assert.match(service, /consumeExtensionEvents/);
-  assert.match(service, /result\["consumedEvents"\] = consumeExtensionEvents\(\)/);
+  assert.match(service, /result\["consumedEvents"\] = 0/);
   assert.match(service, /group\.app\.sunstone1029\.fig1171\.hermes/);
   assert.match(service, /device-activity-summary-latest/);
-  assert.match(service, /Self\.generation\(of: \$0\)/);
+  assert.match(service, /Self\.generation\(of: \$0\.payload\)/);
   assert.match(service, /setAccountGeneration/);
   // The host provisions the App Group Keychain key before monitoring can arm
   // and is the only side that opens envelopes; plaintext dictionaries from
@@ -140,10 +170,18 @@ test('native context absorbs DeviceActivity extension events', () => {
   assert.match(service, /HermesScreenTimeCrypto\.open/);
   assert.match(service, /HermesScreenTimeCrypto\.provisionKey\(\)/);
   assert.match(service, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(service, /HermesSharedKeychainAccessGroup/);
+  assert.match(service, /updateSnapshotCache/);
+  assert.match(spool, /HermesScreenTimeCrypto\.open\(combined\)/);
+  assert.match(spool, /checksum == digest\(combined\)/);
+  assert.match(spool, /static func acknowledge/);
+  assert.match(spool, /appendingPathComponent\("ack"\)/);
+  assert.match(spool, /static func purgeAll/);
   assert.match(module, /getScreenTimeSnapshot/);
   assert.match(module, /View\(HermesScreenTimeReportView\.self\)/);
   const provider = read('src/context/IOSContextProvider.tsx');
   assert.match(provider, /getScreenTimeSnapshot/);
+  assert.doesNotMatch(provider, /snapshotEvent\('screen-time'/);
   assert.match(provider, /<HermesScreenTimeReportView/);
   assert.match(read('modules/hermes-ios-context/ios/HermesScreenTimeReportView.swift'), /DeviceActivityReport\(\.hermesSummary/);
 });
@@ -151,12 +189,21 @@ test('native context absorbs DeviceActivity extension events', () => {
 test('Watch location and motion are projected into the shared behavior timeline', () => {
   const relay = read('modules/hermes-ios-context/ios/HermesWatchService.swift');
   assert.match(relay, /case "watch-location"/);
-  assert.match(relay, /type: "location"/);
+  assert.match(relay, /kind: "location"/);
   assert.match(relay, /case "watch-motion"/);
-  assert.match(relay, /type: "motion"/);
-  assert.match(relay, /sourceDeviceID: sourceDeviceID/);
-  assert.match(relay, /accountGeneration/);
-  assert.match(relay, /occurredAt\.timeIntervalSince1970 \* 1000 > defaults\.double/);
+  assert.match(relay, /kind: "motion"/);
+  assert.match(relay, /"source_device_id": sourceDeviceID/);
+  assert.match(relay, /token\.accountUUID/);
+  assert.match(relay, /token\.accepts\(occurredAt\)/);
+  assert.match(relay, /normalizedEventID\(message\["eventID"\]\)/);
+  assert.match(relay, /enqueueBatch\(events\)/);
+  assert.ok(
+    relay.indexOf('enqueueBatch(events)')
+      < relay.indexOf('UserDefaults.standard.set(persistedAt, forKey: lastMessageAtKey)'),
+    'lastMessageAt advances only after the complete Watch batch is durable',
+  );
+  assert.match(relay, /"action": "watch-event-ack"/);
+  assert.match(relay, /date\.timeIntervalSinceNow <= 60/);
 });
 
 test('smart weather place rows expose arrival, departure, and dwell duration', () => {

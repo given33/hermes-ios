@@ -2,6 +2,7 @@ import type { HermesCloudTransport, JsonRecord } from './transport';
 
 export interface CustomModelConfiguration {
   apiKey?: string;
+  apiKeyAction?: 'delete' | 'preserve' | 'replace';
   apiKeyConfigured?: boolean;
   apiKeyPreview?: string;
   apiMode: 'anthropic_messages' | 'chat_completions' | 'codex_responses';
@@ -9,6 +10,21 @@ export interface CustomModelConfiguration {
   contextLength: number;
   model: string;
   reasoningEffort: 'high' | 'low' | 'max' | 'medium' | 'minimal' | 'none' | 'ultra' | 'xhigh';
+}
+
+export function customModelApiKeyAction(
+  value: string | undefined,
+  options: {
+    deleteRequested?: boolean;
+    preview?: string;
+  } = {},
+): NonNullable<CustomModelConfiguration['apiKeyAction']> {
+  if (options.deleteRequested) return 'delete';
+  const normalized = stringValue(value);
+  if (!normalized) return 'preserve';
+  const preview = stringValue(options.preview);
+  if (normalized === preview || /^[*\u2022\u00b7]+$/.test(normalized)) return 'preserve';
+  return 'replace';
 }
 
 export interface CustomModelDiscoveryResult {
@@ -124,6 +140,7 @@ export class HermesModelsCloudApi {
   async getCustomModel(profile = 'default'): Promise<CustomModelConfiguration> {
     const value = await this.transport.request<JsonRecord>('/api/model/custom', { profile });
     return {
+      apiKeyAction: 'preserve',
       apiKeyConfigured: value.api_key_configured === true,
       apiKeyPreview: stringValue(value.api_key_preview),
       apiMode: customApiMode(value.api_mode),
@@ -136,8 +153,15 @@ export class HermesModelsCloudApi {
 
   saveCustomModel(configuration: CustomModelConfiguration, profile = 'default') {
     const baseUrl = normalizeModelCatalogBaseUrl(configuration.baseUrl);
+    const apiKeyAction = configuration.apiKeyAction
+      ?? customModelApiKeyAction(configuration.apiKey);
+    const apiKey = apiKeyAction === 'replace' ? stringValue(configuration.apiKey) : '';
+    if (apiKeyAction === 'replace' && !apiKey) {
+      throw new Error('A new API key is required to replace the saved key');
+    }
     return this.transport.json<JsonRecord>('/api/model/custom', 'PUT', {
-      api_key: configuration.apiKey || '',
+      api_key: apiKey,
+      api_key_action: apiKeyAction,
       api_mode: configuration.apiMode,
       base_url: baseUrl,
       context_length: configuration.contextLength,

@@ -7,6 +7,10 @@ import {
 } from 'react';
 
 import type { ConversationLocalStore } from '../../api/conversation-local-store';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import type { OptimisticPendingTurn } from '../../api/conversation-local-store';
 import {
   conversationMessagesToView,
@@ -69,8 +73,12 @@ export function useOptimisticConversationState({
     conversationId: string,
     nextMessages: readonly ChatMessage[],
     pendingTurn?: OptimisticPendingTurn | null,
+    expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner),
   ): Promise<void> => {
     if (!conversationId) return Promise.resolve();
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) {
+      return Promise.resolve();
+    }
     const previous = optimisticMessagesByConversationRef.current.get(conversationId) || [];
     const next = nextMessages.map((message) => ({ ...message }));
     if (next.length) {
@@ -95,9 +103,12 @@ export function useOptimisticConversationState({
       next.map(chatMessageToCollaborationMessage),
       pendingTurn,
       previous.map(({ id }) => id),
+      expectedOwnerEpoch,
     ).then(async (committed) => {
+      if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return;
       if (committed) return;
       const durableLedgers = await localStore.readOptimisticConversations(cacheOwner);
+      if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return;
       const durable = durableLedgers.find(
         ({ conversationId: currentId }) => currentId === conversationId,
       );
@@ -149,6 +160,8 @@ export function useOptimisticConversationState({
   }, []);
 
   const beginOptimisticHostedTurn = useCallback((conversationId: string, turnId: string) => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     clearOptimisticHostedTurn();
     optimisticHostedTurnIdRef.current = turnId;
     optimisticHostedTurnConfirmedRef.current = false;
@@ -156,6 +169,8 @@ export function useOptimisticConversationState({
     optimisticHostedTurnTimeoutRef.current = setTimeout(() => {
       optimisticHostedTurnTimeoutRef.current = null;
       if (
+        !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+        ||
         optimisticHostedTurnIdRef.current !== turnId
         || activeConversationIdRef.current !== conversationId
       ) return;
@@ -185,6 +200,7 @@ export function useOptimisticConversationState({
   }, [
     activeConversationIdRef,
     activeHostedTurnIdRef,
+    cacheOwner,
     clearOptimisticHostedTurn,
     clearOptimisticPendingTurn,
     isChinese,

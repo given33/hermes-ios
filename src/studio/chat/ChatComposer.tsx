@@ -10,7 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import Reanimated, { Easing, FadeInUp, FadeOut } from 'react-native-reanimated';
+import Reanimated, { Easing, FadeIn, FadeInUp, FadeOut } from 'react-native-reanimated';
 
 import type { IOSVoiceState } from '../../../modules/hermes-ios-context';
 import type { ConversationCollaborationState } from '../../api/chat-view-model';
@@ -18,6 +18,7 @@ import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
 import { IOS_MOTION } from '../../design/ios-motion';
+import { MOTION, useMotion } from '../../design/motion';
 import {
   AttachmentItem,
   ComposerSurface,
@@ -60,7 +61,7 @@ interface ChatComposerActions {
   onOpenSlashCommand(): void;
   onPreviewAttachment(attachment: ChatAttachment): void;
   onRemoveAttachment(attachment: ChatAttachment): void;
-  onSelectSlashCommand(command: string): void;
+  onSelectSlashCommand(command: SlashCommandDescriptor): void;
   onSend(): void;
   onShareAttachment(attachment: ChatAttachment): void;
   onToggleReadRepliesAloud(): void;
@@ -75,6 +76,7 @@ export interface ChatComposerProps {
 
 export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const attachmentCount = model.attachments.length;
 
   return (
@@ -97,8 +99,11 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
       ) : null}
       {model.slashMenuOpen ? (
         <Reanimated.View
-          entering={FadeInUp.duration(180).easing(IOS_DECELERATE_EASING)}
-          exiting={FadeOut.duration(120).easing(IOS_STANDARD_EASING)}
+          entering={motion.fade(
+            FadeInUp.duration(180).easing(IOS_DECELERATE_EASING),
+            FadeIn.duration(MOTION.fade.reduced),
+          )}
+          exiting={FadeOut.duration(motion.fadeDuration(120)).easing(IOS_STANDARD_EASING)}
           style={[
             styles.openMinisSlashPopup,
             {
@@ -121,7 +126,7 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
                 accessibilityLabel={`${item.command} ${model.isChinese ? item.zh : item.en}`}
                 haptic="selection"
                 key={item.command}
-                onPress={() => actions.onSelectSlashCommand(item.command)}
+                onPress={() => actions.onSelectSlashCommand(item)}
                 opacityTo={0.72}
                 pressedStyle={{ backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.08) }}
                 style={styles.openMinisSlashRow}

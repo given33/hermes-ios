@@ -1,4 +1,10 @@
-import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
+import {
+  useCallback,
+  useRef,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from 'react';
 
 import { withAbortableDeadline } from '../../api/async-deadline';
 import type { ConversationLocalStore } from '../../api/conversation-local-store';
@@ -6,6 +12,10 @@ import type {
   HostedTurnOutboxItem,
   OptimisticPendingTurn,
 } from '../../api/conversation-store-types';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
 import {
   decideHostedTurnCancellationFailure,
@@ -14,6 +24,7 @@ import {
   type HostedTurnDeliveryFailure,
 } from '../../api/hosted-turn-delivery-state';
 import {
+  conversationHostedTurnCancellationAuthority,
   upsertChatMessage,
   type HermesChatViewMessage as ChatMessage,
 } from '../../api/chat-view-model';
@@ -26,6 +37,7 @@ import {
   serverFailure,
 } from './chat-domain';
 import type {
+  PendingPhase,
   PendingCancellationDeliveryResult,
   PendingChatSend,
 } from './chat-types';
@@ -33,7 +45,7 @@ import type {
 interface HostedCancellationControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
   activeHostedTurnIdRef: MutableRefObject<string>;
-  applyConversation(conversation: SingleConversation): void;
+  applyConversation(conversation: SingleConversation, expectedOwnerEpoch?: number): void;
   cacheOwner: string;
   cancelTimeoutMs: number;
   cancelledKeysRef: MutableRefObject<Set<string>>;
@@ -52,6 +64,7 @@ interface HostedCancellationControllerOptions {
     conversationId: string,
     nextMessages: readonly ChatMessage[],
     pendingTurn?: OptimisticPendingTurn | null,
+    expectedOwnerEpoch?: number,
   ): Promise<void>;
   resetPendingStateMachine(): void;
   sendOperationGenerationRef: MutableRefObject<number>;
@@ -60,13 +73,14 @@ interface HostedCancellationControllerOptions {
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   setReconnectAttempt(attempt: number): void;
   setSending: Dispatch<SetStateAction<boolean>>;
-  updatePendingPhase(phase: 'thinking' | 'reconnecting' | 'executing', startedAt?: number): void;
+  updatePendingPhase(phase: PendingPhase, startedAt?: number): void;
 }
 
 export interface HostedCancellationController {
   cancelPendingSend(): Promise<boolean>;
   deliverAndReconcilePendingCancellation(
     item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<PendingCancellationDeliveryResult>;
   finalizePendingSend(
     pending: PendingChatSend,
@@ -75,10 +89,12 @@ export interface HostedCancellationController {
     idPrefix: string,
     roleLabel: string,
     terminalOutbox?: HostedTurnOutboxItem,
+    expectedOwnerEpoch?: number,
   ): Promise<boolean>;
   handleOutboxFailure(
     source: HostedTurnOutboxItem,
     failure: HostedTurnDeliveryFailure,
+    expectedOwnerEpoch: number,
   ): Promise<'retry' | 'retry-background' | 'terminal'>;
 }
 
@@ -110,6 +126,9 @@ export function useHostedCancellationController({
   setSending,
   updatePendingPhase,
 }: HostedCancellationControllerOptions): HostedCancellationController {
+  const cancellationWorkerIdRef = useRef(
+    `ios-hosted-cancel:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+  );
   const finalizePendingSend = useCallback(async (
     pending: PendingChatSend,
     content: string,
@@ -117,7 +136,13 @@ export function useHostedCancellationController({
     idPrefix: string,
     roleLabel: string,
     terminalOutbox?: HostedTurnOutboxItem,
+    expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner),
   ): Promise<boolean> => {
+    const lifecycleCurrent = () => isConversationStorageEpochCurrent(
+      cacheOwner,
+      expectedOwnerEpoch,
+    );
+    if (!lifecycleCurrent()) return false;
     const completedAt = Date.now();
     const terminalMessage: ChatMessage = {
       avatarRole: 'hermes',
@@ -148,7 +173,9 @@ export function useHostedCancellationController({
           pending.userMessage.id,
           pending.queuedItem,
           terminalMessages,
+          expectedOwnerEpoch,
         );
+        if (!lifecycleCurrent()) return false;
         if (!cancelled?.cancelledAt) return false;
         pending.queuedItem = cancelled;
       } else if (terminalOutbox) {
@@ -157,23 +184,35 @@ export function useHostedCancellationController({
               cacheOwner,
               terminalOutbox,
               terminalMessages,
+              expectedOwnerEpoch,
             )
           : await localStore.transitionPendingEnqueueForegroundFailure(
               cacheOwner,
               terminalOutbox,
               terminalMessages,
+              expectedOwnerEpoch,
             );
+        if (!lifecycleCurrent()) return false;
         if (!transition.updated) return false;
       } else {
         await localStore.finalizeOptimisticTurn(
           cacheOwner,
           pending.conversationId,
           terminalMessages,
+          expectedOwnerEpoch,
         );
+        if (!lifecycleCurrent()) return false;
       }
     } else {
-      await replaceOptimisticMessages(pending.conversationId, finalMessages, null);
+      await replaceOptimisticMessages(
+        pending.conversationId,
+        finalMessages,
+        null,
+        expectedOwnerEpoch,
+      );
+      if (!lifecycleCurrent()) return false;
     }
+    if (!lifecycleCurrent()) return false;
     optimisticMessagesByConversationRef.current.set(pending.conversationId, finalMessages);
     optimisticPendingByConversationRef.current.delete(pending.conversationId);
     if (mountedRef.current && activeConversationIdRef.current === pending.conversationId) {
@@ -209,7 +248,13 @@ export function useHostedCancellationController({
   const handleOutboxFailure = useCallback(async (
     source: HostedTurnOutboxItem,
     failure: HostedTurnDeliveryFailure,
+    expectedOwnerEpoch: number,
   ): Promise<'retry' | 'retry-background' | 'terminal'> => {
+    const lifecycleCurrent = () => isConversationStorageEpochCurrent(
+      cacheOwner,
+      expectedOwnerEpoch,
+    );
+    if (!lifecycleCurrent()) return 'terminal';
     if (!localStore || !cacheOwner) return 'terminal';
     const decision = decideHostedTurnDeliveryFailure(source, failure);
     const pending = pendingChatSendFromOutbox(decision.item, cacheOwner);
@@ -222,11 +267,17 @@ export function useHostedCancellationController({
         'send-failed',
         isChinese ? '模型连接错误' : 'Model connection error',
         terminalItem,
+        expectedOwnerEpoch,
       );
+      if (!lifecycleCurrent()) return 'terminal';
       if (!finalized) return 'terminal';
       try {
         cleanupPendingAttachments(terminalItem);
-        await localStore.removePendingEnqueueIfActive(cacheOwner, source.input.requestId);
+        await localStore.removePendingEnqueueIfActive(
+          cacheOwner,
+          source.input.requestId,
+          expectedOwnerEpoch,
+        );
       } catch {
         // The terminal row remains a cleanup intent and is never redelivered.
       }
@@ -248,7 +299,9 @@ export function useHostedCancellationController({
         'send-failed',
         isChinese ? '连接错误' : 'Connection error',
         retryItem,
+        expectedOwnerEpoch,
       );
+      if (!lifecycleCurrent()) return 'terminal';
       return finalized ? 'retry-background' : 'terminal';
     }
     const reconnecting: OptimisticPendingTurn = {
@@ -263,7 +316,9 @@ export function useHostedCancellationController({
       cacheOwner,
       retryItem,
       reconnecting,
+      expectedOwnerEpoch,
     );
+    if (!lifecycleCurrent()) return 'terminal';
     if (!transition.updated || !transition.item) return 'terminal';
     const claimKey = hostedTurnDeliveryClaimKey(cacheOwner, source.input.requestId);
     if (cancelledKeysRef.current.has(claimKey)) return 'terminal';
@@ -295,7 +350,13 @@ export function useHostedCancellationController({
 
   const deliverPendingCancellation = useCallback(async (
     item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<PendingCancellationDeliveryResult> => {
+    const lifecycleCurrent = () => isConversationStorageEpochCurrent(
+      cacheOwner,
+      expectedOwnerEpoch,
+    );
+    if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
     if (!localStore || !cacheOwner || !cloudApi || !item.cancelledAt) {
       return {
         error: isChinese ? '取消队列不可用。' : 'Cancellation queue unavailable.',
@@ -303,13 +364,10 @@ export function useHostedCancellationController({
       };
     }
     if (item.deliveryTerminalAt) {
-      try {
-        cleanupPendingAttachments(item);
-        await localStore.removePendingEnqueue(cacheOwner, item.input.requestId);
-        return { outcome: 'settled' };
-      } catch {
-        return { outcome: 'cleanup-pending' };
-      }
+      return {
+        error: item.lastError || (isChinese ? '取消请求失败。' : 'Cancellation failed.'),
+        outcome: 'failed',
+      };
     }
     let settledItem = item;
     if (!item.deliveryAcceptedAt) {
@@ -319,23 +377,35 @@ export function useHostedCancellationController({
             item.conversationId,
             item.input.turnId,
             'Cancelled before hosted-turn delivery completed',
+            item.input.requestId,
             signal,
           ),
           cancelTimeoutMs,
           'Hermes hosted-turn cancellation timed out',
         );
-        settledItem = { ...item, deliveryAcceptedAt: Date.now(), lastError: '', nextAttemptAt: 0 };
+        if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
+        settledItem = {
+          ...item,
+          deliveryAcceptedAt: Date.now(),
+          lastError: '',
+          nextAttemptAt: 0,
+        };
       } catch (error) {
         const decision = decideHostedTurnCancellationFailure(error, item.attempts || 0);
         if (decision.outcome === 'retry') {
           try {
-            await localStore.upsertPendingEnqueue(cacheOwner, {
-              ...item,
-              attempts: decision.attempts,
-              cancelledAt: item.cancelledAt || Date.now(),
-              lastError: serverFailure(error, isChinese),
-              nextAttemptAt: decision.nextAttemptAt,
-            });
+            await localStore.upsertPendingEnqueue(
+              cacheOwner,
+              {
+                ...item,
+                attempts: decision.attempts,
+                cancelledAt: item.cancelledAt || Date.now(),
+                lastError: serverFailure(error, isChinese),
+                nextAttemptAt: decision.nextAttemptAt,
+              },
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
           } catch (persistenceError) {
             return { error: serverFailure(persistenceError, isChinese), outcome: 'failed' };
           }
@@ -350,15 +420,14 @@ export function useHostedCancellationController({
             nextAttemptAt: 0,
           };
           try {
-            await localStore.upsertPendingEnqueue(cacheOwner, terminalItem);
+            await localStore.upsertPendingEnqueue(
+              cacheOwner,
+              terminalItem,
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
           } catch (persistenceError) {
             return { error: serverFailure(persistenceError, isChinese), outcome: 'failed' };
-          }
-          try {
-            cleanupPendingAttachments(terminalItem);
-            await localStore.removePendingEnqueue(cacheOwner, item.input.requestId);
-          } catch {
-            // The marker keeps failed cancellation cleanup idempotent.
           }
           return { error: serverFailure(error, isChinese), outcome: 'failed' };
         }
@@ -371,73 +440,245 @@ export function useHostedCancellationController({
         };
       }
       try {
-        await localStore.upsertPendingEnqueue(cacheOwner, settledItem);
+        await localStore.upsertPendingEnqueue(
+          cacheOwner,
+          settledItem,
+          expectedOwnerEpoch,
+        );
+        if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
       } catch {
         return { outcome: 'cleanup-pending' };
       }
     }
-    try {
-      cleanupPendingAttachments(settledItem);
-      await localStore.removePendingEnqueue(cacheOwner, settledItem.input.requestId);
-      return { outcome: 'settled' };
-    } catch {
-      return { outcome: 'cleanup-pending' };
-    }
-  }, [cacheOwner, cancelTimeoutMs, cloudApi, isChinese, localStore]);
 
-  const deliverAndReconcilePendingCancellation = useCallback(async (
-    item: HostedTurnOutboxItem,
-  ): Promise<PendingCancellationDeliveryResult> => {
-    const result = await deliverPendingCancellation(item);
-    if (result.outcome !== 'failed') return result;
-    notify(result.error);
-    if (!cloudApi) return result;
-    const cancellationStillCurrent = () => {
-      const pendingTurn = optimisticPendingByConversationRef.current
-        .get(item.conversationId)?.turnId;
-      const activeTurn = activeHostedTurnIdRef.current;
-      return !(
-        (pendingTurn && pendingTurn !== item.input.turnId)
-        || (activeTurn && activeTurn !== item.input.turnId)
-      );
-    };
-    if (!cancellationStillCurrent()) return result;
     try {
       const refreshed = await withAbortableDeadline(
-        (signal) => cloudApi.getConversation(item.conversationId, signal),
+        (signal) => cloudApi.getConversation(settledItem.conversationId, signal),
         cancelTimeoutMs,
         'Hermes hosted-turn cancellation reconciliation timed out',
       );
-      if (activeConversationIdRef.current === item.conversationId && cancellationStillCurrent()) {
-        await replaceOptimisticMessages(item.conversationId, [], null);
-        optimisticPendingByConversationRef.current.delete(item.conversationId);
-        applyConversation(refreshed.conversation);
+      if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
+      const authority = conversationHostedTurnCancellationAuthority(
+        refreshed.conversation,
+        settledItem.input.turnId,
+      );
+      applyConversation(refreshed.conversation, expectedOwnerEpoch);
+      if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
+      if (authority === 'cancelled' || authority === 'completed' || authority === 'failed') {
+        cleanupPendingAttachments(settledItem);
+        const removed = await localStore.removePendingEnqueueIfLeaseOwned(
+          cacheOwner,
+          settledItem,
+          expectedOwnerEpoch,
+        );
+        if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
+        if (!removed) return { outcome: 'cleanup-pending' };
+        return {
+          outcome: authority === 'cancelled'
+            ? 'cancel-accepted'
+            : 'completed-before-cancel',
+        };
       }
-    } catch {
-      if (activeConversationIdRef.current === item.conversationId && cancellationStillCurrent()) {
-        activeHostedTurnIdRef.current = item.input.turnId;
-        setActiveHostedTurnId(item.input.turnId);
+      const reconciliationAttempts = authority === 'missing'
+        ? Math.max(0, settledItem.reconciliationAttempts || 0) + 1
+        : 0;
+      if (authority === 'missing' && reconciliationAttempts >= 5) {
+        const failed = {
+          ...settledItem,
+          deliveryTerminalAt: Date.now(),
+          lastError: isChinese
+            ? '服务器无法确认要取消的任务。'
+            : 'The server could not confirm the task to cancel.',
+          reconciliationAttempts,
+        };
+        await localStore.upsertPendingEnqueue(cacheOwner, failed, expectedOwnerEpoch);
+        return { error: failed.lastError, outcome: 'failed' };
+      }
+      const waiting = {
+        ...settledItem,
+        lastError: '',
+        nextAttemptAt: Date.now() + 1_000,
+        reconciliationAttempts,
+      };
+      await localStore.upsertPendingEnqueue(
+        cacheOwner,
+        waiting,
+        expectedOwnerEpoch,
+      );
+      if (!lifecycleCurrent()) return { outcome: 'cleanup-pending' };
+      if (activeConversationIdRef.current === waiting.conversationId) {
+        optimisticPendingByConversationRef.current.set(waiting.conversationId, {
+          attempt: waiting.attempts || 0,
+          phase: 'cancel_requested',
+          phaseStartedAt: waiting.cancelledAt || Date.now(),
+          turnId: waiting.input.turnId,
+          updatedAt: Date.now(),
+          userMessageId: waiting.input.message.id,
+        });
+        updatePendingPhase('cancel_requested', waiting.cancelledAt || Date.now());
         setHostedRunning(true);
         setSending(true);
       }
+      return { outcome: 'retry-scheduled' };
+    } catch {
+      try {
+        await localStore.upsertPendingEnqueue(
+          cacheOwner,
+          {
+            ...settledItem,
+            nextAttemptAt: Date.now() + 1_000,
+          },
+          expectedOwnerEpoch,
+        );
+      } catch {
+        return { outcome: 'cleanup-pending' };
+      }
+      return { outcome: 'retry-scheduled' };
     }
-    return result;
+  }, [
+    activeConversationIdRef,
+    applyConversation,
+    cacheOwner,
+    cancelTimeoutMs,
+    cloudApi,
+    isChinese,
+    localStore,
+    optimisticPendingByConversationRef,
+    setHostedRunning,
+    setSending,
+    updatePendingPhase,
+  ]);
+
+  const deliverAndReconcilePendingCancellation = useCallback(async (
+    item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<PendingCancellationDeliveryResult> => {
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) {
+      return { outcome: 'cleanup-pending' };
+    }
+    let deliveryItem = item;
+    let leaseAcquiredHere = false;
+    if (!deliveryItem.deliveryLeaseToken && localStore) {
+      const claimed = await localStore.claimPendingEnqueueByRequest(
+        cacheOwner,
+        deliveryItem.input.requestId,
+        cancellationWorkerIdRef.current,
+        Date.now(),
+        5 * 60_000,
+        expectedOwnerEpoch,
+      );
+      if (!claimed) return { outcome: 'retry-scheduled' };
+      deliveryItem = claimed;
+      leaseAcquiredHere = true;
+    }
+    let result: PendingCancellationDeliveryResult;
+    try {
+      result = await deliverPendingCancellation(deliveryItem, expectedOwnerEpoch);
+      if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return result;
+      if (result.outcome !== 'failed') return result;
+      notify(result.error);
+      if (!cloudApi) return result;
+      const cancellationStillCurrent = () => {
+        const pendingTurn = optimisticPendingByConversationRef.current
+          .get(item.conversationId)?.turnId;
+        const activeTurn = activeHostedTurnIdRef.current;
+        return !(
+          (pendingTurn && pendingTurn !== item.input.turnId)
+          || (activeTurn && activeTurn !== item.input.turnId)
+        );
+      };
+      if (!cancellationStillCurrent()) return result;
+      try {
+        const refreshed = await withAbortableDeadline(
+          (signal) => cloudApi.getConversation(item.conversationId, signal),
+          cancelTimeoutMs,
+          'Hermes hosted-turn cancellation reconciliation timed out',
+        );
+        if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return result;
+        const authority = conversationHostedTurnCancellationAuthority(
+          refreshed.conversation,
+          deliveryItem.input.turnId,
+        );
+        applyConversation(refreshed.conversation, expectedOwnerEpoch);
+        if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return result;
+        if (authority === 'cancel_requested') {
+          const waiting = {
+            ...deliveryItem,
+            deliveryAcceptedAt: deliveryItem.deliveryAcceptedAt || Date.now(),
+            deliveryTerminalAt: 0,
+            lastError: '',
+            nextAttemptAt: Date.now() + 1_000,
+          };
+          await localStore?.upsertPendingEnqueue(cacheOwner, waiting, expectedOwnerEpoch);
+          if (
+            activeConversationIdRef.current === deliveryItem.conversationId
+            && cancellationStillCurrent()
+          ) {
+            updatePendingPhase('cancel_requested', deliveryItem.cancelledAt || Date.now());
+            setHostedRunning(true);
+            setSending(true);
+          }
+        } else {
+          cleanupPendingAttachments(deliveryItem);
+          const removed = await localStore?.removePendingEnqueueIfLeaseOwned(
+            cacheOwner,
+            deliveryItem,
+            expectedOwnerEpoch,
+          );
+          if (removed === false) return result;
+          if (
+            (authority === 'running' || authority === 'missing')
+            && activeConversationIdRef.current === deliveryItem.conversationId
+            && cancellationStillCurrent()
+          ) {
+            updatePendingPhase('executing', Date.now());
+            setHostedRunning(true);
+            setSending(true);
+          }
+        }
+      } catch {
+        if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return result;
+        if (
+          activeConversationIdRef.current === deliveryItem.conversationId
+          && cancellationStillCurrent()
+        ) {
+          activeHostedTurnIdRef.current = deliveryItem.input.turnId;
+          setActiveHostedTurnId(deliveryItem.input.turnId);
+          setHostedRunning(true);
+          setSending(true);
+        }
+      }
+      return result;
+    } finally {
+      if (leaseAcquiredHere && localStore) {
+        await localStore.releasePendingEnqueueLease(
+          cacheOwner,
+          deliveryItem,
+          expectedOwnerEpoch,
+        ).catch(() => false);
+      }
+    }
   }, [
     activeConversationIdRef,
     activeHostedTurnIdRef,
     applyConversation,
+    cacheOwner,
     cancelTimeoutMs,
     cloudApi,
     deliverPendingCancellation,
+    localStore,
     notify,
     optimisticPendingByConversationRef,
     replaceOptimisticMessages,
     setActiveHostedTurnId,
     setHostedRunning,
     setSending,
+    updatePendingPhase,
   ]);
 
   const cancelPendingSend = useCallback(async (): Promise<boolean> => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return false;
     const conversationId = activeConversationIdRef.current;
     const persistedPending = optimisticPendingByConversationRef.current.get(conversationId);
     const userMessageId = pendingChatSendRef.current?.userMessage.id
@@ -450,45 +691,68 @@ export function useHostedCancellationController({
     const key = pendingChatSendRef.current?.key
       || hostedTurnDeliveryClaimKey(cacheOwner, userMessageId);
     cancelledKeysRef.current.add(key);
-    let queuedItem = pendingChatSendRef.current?.queuedItem;
-    const pending = { conversationId, key, queuedItem, userMessage };
-    const finalized = await finalizePendingSend(
-      pending,
-      isChinese ? '任务已取消。' : 'Task cancelled.',
-      'cancelled',
-      'cancelled',
-      isChinese ? '已取消' : 'Cancelled',
-    );
-    if (!finalized) {
+    const queuedItem = pendingChatSendRef.current?.queuedItem;
+    if (!localStore || !queuedItem) {
       cancelledKeysRef.current.delete(key);
       return false;
     }
-    queuedItem = pending.queuedItem;
+    const cancelled = await localStore.cancelPendingEnqueue(
+      cacheOwner,
+      queuedItem.input.requestId,
+      queuedItem,
+      Date.now(),
+      ownerEpoch,
+    );
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return false;
+    if (!cancelled?.cancelledAt) {
+      cancelledKeysRef.current.delete(key);
+      return false;
+    }
+    pendingChatSendRef.current = {
+      conversationId,
+      key,
+      queuedItem: cancelled,
+      userMessage,
+    };
     sendOperationGenerationRef.current += 1;
-    resetPendingStateMachine();
+    const cancelRequested: OptimisticPendingTurn = {
+      attempt: cancelled.attempts || 0,
+      phase: 'cancel_requested',
+      phaseStartedAt: cancelled.cancelledAt,
+      turnId: cancelled.input.turnId,
+      updatedAt: Date.now(),
+      userMessageId,
+    };
+    optimisticPendingByConversationRef.current.set(conversationId, cancelRequested);
+    await replaceOptimisticMessages(
+      conversationId,
+      optimisticMessagesByConversationRef.current.get(conversationId) || [userMessage],
+      cancelRequested,
+      ownerEpoch,
+    );
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return false;
     if (mountedRef.current && activeConversationIdRef.current === conversationId) {
-      setSending(false);
-      setHostedRunning(false);
+      updatePendingPhase('cancel_requested', cancelled.cancelledAt);
+      setSending(true);
+      setHostedRunning(true);
     }
-    if (queuedItem?.cancelledAt) {
-      await deliverAndReconcilePendingCancellation(queuedItem);
-    }
+    await deliverAndReconcilePendingCancellation(cancelled, ownerEpoch);
     return true;
   }, [
     activeConversationIdRef,
     cacheOwner,
     cancelledKeysRef,
     deliverAndReconcilePendingCancellation,
-    finalizePendingSend,
-    isChinese,
+    localStore,
     mountedRef,
     optimisticMessagesByConversationRef,
     optimisticPendingByConversationRef,
     pendingChatSendRef,
-    resetPendingStateMachine,
+    replaceOptimisticMessages,
     sendOperationGenerationRef,
     setHostedRunning,
     setSending,
+    updatePendingPhase,
   ]);
 
   return {

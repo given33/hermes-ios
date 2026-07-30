@@ -127,17 +127,47 @@ export function managedInstallationsSnapshot(
     ? source.installations
     : {};
   const rows = Array.isArray(container.operations) ? container.operations : [];
-  return rows.flatMap((entry): HermesSwiftUIManagedInstallationSnapshot[] => {
-    if (!isRecord(entry) || stringValue(entry.kind) !== kind) return [];
+  const normalizedRows = rows.filter(isRecord);
+  const rollbacksByInstallation = new Map(
+    normalizedRows
+      .filter((entry) => stringValue(entry.action) === 'rollback')
+      .map((entry) => [stringValue(entry.rollback_of), entry]),
+  );
+  const resourceCatalog = isRecord(source) && isRecord(source.resourceCatalog)
+    ? source.resourceCatalog
+    : {};
+  const resources = Array.isArray(resourceCatalog.resources)
+    ? resourceCatalog.resources.filter(isRecord)
+    : [];
+  return normalizedRows.flatMap((installation): HermesSwiftUIManagedInstallationSnapshot[] => {
+    if (
+      stringValue(installation.kind) !== kind
+      || stringValue(installation.action) === 'rollback'
+    ) return [];
+    const installId = stringValue(installation.id);
+    const entry = rollbacksByInstallation.get(installId) || installation;
     const id = stringValue(entry.id);
     if (!id) return [];
+    const resource = resources.find((candidate) => (
+      stringValue(candidate.install_operation_id) === installId
+      || stringValue(candidate.operation_id) === id
+    ));
     const targets = Array.isArray(entry.targets) ? entry.targets : [];
     return [{
       id,
-      identifier: stringValue(entry.identifier),
+      identifier: stringValue(installation.identifier),
       kind,
-      state: stringValue(entry.state),
+      state: stringValue(resource?.aggregate_state)
+        || stringValue(entry.aggregate_state)
+        || stringValue(entry.state),
       error: stringValue(entry.error),
+      health: stringValue(resource?.health),
+      version: stringValue(resource?.resolved_commit_or_version),
+      tools: stringArray(resource?.tools),
+      permissions: stringArray(resource?.permissions),
+      lastVerifiedAt: stringValue(resource?.last_verified_at),
+      rollbackAvailable: resource?.rollback_available === true
+        && stringValue(entry.action) !== 'rollback',
       targets: targets.flatMap((target) => {
         if (!isRecord(target)) return [];
         const nodeId = stringValue(target.node_id);

@@ -11,6 +11,11 @@ import type {
   OptimisticPendingTurn,
 } from '../../api/conversation-store-types';
 import { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
+import { accountGenerationFromOwnerScope } from '../../auth/account-identity';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
 import {
   conversationRunningHostedTurnId,
@@ -21,14 +26,17 @@ import {
   isConversationNotFoundError,
   serverFailure,
 } from './chat-domain';
-import type { ChatAttachment, PendingChatSend } from './chat-types';
+import type { PendingChatSend } from './chat-types';
+import type { PendingPhase } from './chat-types';
 import type { HostedCancellationController } from './useHostedCancellationController';
 
 interface ConversationActionsControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
   activeHostedTurnIdRef: MutableRefObject<string>;
-  applyConversation(conversation: SingleConversation): void;
-  attachmentsRef: MutableRefObject<ChatAttachment[]>;
+  applyConversation(
+    conversation: SingleConversation,
+    expectedOwnerEpoch?: number,
+  ): void | Promise<void>;
   autoFollowStreamRef: MutableRefObject<boolean>;
   cacheOwner: string;
   cancelHostedTurnInFlightRef: MutableRefObject<boolean>;
@@ -37,7 +45,6 @@ interface ConversationActionsControllerOptions {
     HostedCancellationController,
     'cancelPendingSend' | 'deliverAndReconcilePendingCancellation'
   >;
-  cleanupAttachmentSources(items: readonly ChatAttachment[]): void;
   clearOptimisticHostedTurn(): void;
   clearOptimisticPendingTurn(conversationId: string): Promise<void>;
   cloudApi: HermesCloudApi | null;
@@ -47,8 +54,8 @@ interface ConversationActionsControllerOptions {
   commitConversationIndex(
     conversations: readonly SingleConversation[],
     activeId?: string,
-  ): void;
-  contentRef: MutableRefObject<string>;
+    expectedOwnerEpoch?: number,
+  ): void | Promise<void>;
   conversationIndexRef: MutableRefObject<SingleConversation[]>;
   conversationSyncGenerationRef: MutableRefObject<ConversationSyncGeneration>;
   hostedRunning: boolean;
@@ -69,12 +76,11 @@ interface ConversationActionsControllerOptions {
   setActiveHostedTurnId: Dispatch<SetStateAction<string>>;
   setCancellingHostedTurn: Dispatch<SetStateAction<boolean>>;
   setCollaborationState: Dispatch<SetStateAction<ConversationCollaborationState>>;
-  setContent: Dispatch<SetStateAction<string>>;
   setHostedRunning: Dispatch<SetStateAction<boolean>>;
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   setSending: Dispatch<SetStateAction<boolean>>;
   setSlashMenuOpen: Dispatch<SetStateAction<boolean>>;
-  updateAttachments(update: ChatAttachment[]): void;
+  updatePendingPhase(phase: PendingPhase, startedAt?: number): void;
 }
 
 export interface ConversationActionsController {
@@ -89,19 +95,16 @@ export function useConversationActionsController({
   activeConversationIdRef,
   activeHostedTurnIdRef,
   applyConversation,
-  attachmentsRef,
   autoFollowStreamRef,
   cacheOwner,
   cancelHostedTurnInFlightRef,
   cancelTimeoutMs,
   cancellation,
-  cleanupAttachmentSources,
   clearOptimisticHostedTurn,
   clearOptimisticPendingTurn,
   cloudApi,
   collaborationStateByConversationRef,
   commitConversationIndex,
-  contentRef,
   conversationIndexRef,
   conversationSyncGenerationRef,
   hostedRunning,
@@ -122,41 +125,63 @@ export function useConversationActionsController({
   setActiveHostedTurnId,
   setCancellingHostedTurn,
   setCollaborationState,
-  setContent,
   setHostedRunning,
   setMessages,
   setSending,
   setSlashMenuOpen,
-  updateAttachments,
+  updatePendingPhase,
 }: ConversationActionsControllerOptions): ConversationActionsController {
-  const resetComposer = () => {
-    contentRef.current = '';
-    setContent('');
+  const prepareComposerNavigation = () => {
     setSlashMenuOpen(false);
-    cleanupAttachmentSources(attachmentsRef.current);
-    updateAttachments([]);
   };
 
   const createConversation = async () => {
-    autoFollowStreamRef.current = true;
-    clearOptimisticHostedTurn();
-    optimisticMessagesRef.current = [];
-    setCollaborationState('single');
-    resetPendingStateMachine();
-    resetComposer();
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+    prepareComposerNavigation();
     if (cloudApi) {
       try {
         const result = await cloudApi.createConversation(
           profile,
           isChinese ? '新对话' : 'New conversation',
         );
-        applyConversation(result.conversation);
-        resetComposer();
+        if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+        if (
+          String(result.conversation.account_generation || '').trim()
+          !== accountGenerationFromOwnerScope(cacheOwner)
+        ) {
+          throw new Error('New conversation crossed its account generation');
+        }
+        await commitConversationIndex(
+          [
+            result.conversation,
+            ...conversationIndexRef.current.filter(
+              ({ id }) => id !== result.conversation.id,
+            ),
+          ],
+          result.conversation.id,
+          ownerEpoch,
+        );
+        if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+        autoFollowStreamRef.current = true;
+        clearOptimisticHostedTurn();
+        optimisticMessagesRef.current = [];
+        setCollaborationState('single');
+        resetPendingStateMachine();
+        await applyConversation(result.conversation, ownerEpoch);
+        prepareComposerNavigation();
       } catch (error) {
-        notify(serverFailure(error, isChinese));
+        if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          notify(serverFailure(error, isChinese));
+        }
       }
       return;
     }
+    autoFollowStreamRef.current = true;
+    clearOptimisticHostedTurn();
+    optimisticMessagesRef.current = [];
+    setCollaborationState('single');
+    resetPendingStateMachine();
     sendOperationGenerationRef.current += 1;
     pendingChatSendRef.current = null;
     pendingTurnActiveRef.current = false;
@@ -171,6 +196,8 @@ export function useConversationActionsController({
 
   const cancelActiveHostedTurn = async () => {
     const conversationId = activeConversationIdRef.current;
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     if (cancelHostedTurnInFlightRef.current) return;
     if (
       pendingTurnActiveRef.current
@@ -178,7 +205,8 @@ export function useConversationActionsController({
       && !activeHostedTurnIdRef.current
     ) {
       await cancellation.cancelPendingSend();
-      notify(isChinese ? '已取消任务' : 'Task cancelled');
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+      notify(isChinese ? '正在取消任务' : 'Cancelling task');
       return;
     }
     if (!cloudApi || !conversationId) return;
@@ -194,6 +222,7 @@ export function useConversationActionsController({
           cancelTimeoutMs,
           'Hermes hosted-turn lookup timed out',
         );
+        if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
         turnId = conversationRunningHostedTurnId(refreshed.conversation);
       }
       if (!turnId) {
@@ -233,19 +262,34 @@ export function useConversationActionsController({
         queuedAt: cancelledAt,
       };
       if (localStore && cacheOwner) {
-        await localStore.upsertPendingEnqueue(cacheOwner, cancellationItem);
+        await localStore.upsertPendingEnqueue(cacheOwner, cancellationItem, ownerEpoch);
+        if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       }
       if (activeConversationIdRef.current === conversationId) {
-        activeHostedTurnIdRef.current = '';
-        clearOptimisticHostedTurn();
-        setActiveHostedTurnId('');
-        setHostedRunning(false);
-        setSending(false);
-        resetPendingStateMachine();
-        await clearOptimisticPendingTurn(conversationId);
+        const currentPending = optimisticPendingByConversationRef.current.get(conversationId);
+        optimisticPendingByConversationRef.current.set(conversationId, {
+          attempt: cancellationItem.attempts || 0,
+          phase: 'cancel_requested',
+          phaseStartedAt: cancelledAt,
+          turnId,
+          updatedAt: cancelledAt,
+          userMessageId: currentPending?.userMessageId || cancellationItem.input.message.id,
+        });
+        updatePendingPhase('cancel_requested', cancelledAt);
+        setHostedRunning(true);
+        setSending(true);
       }
-      notify(isChinese ? '已取消任务' : 'Task cancelled');
-      await cancellation.deliverAndReconcilePendingCancellation(cancellationItem);
+      notify(isChinese ? '正在取消任务' : 'Cancelling task');
+      const result = await cancellation.deliverAndReconcilePendingCancellation(
+        cancellationItem,
+        ownerEpoch,
+      );
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+      if (result.outcome === 'cancel-accepted') {
+        notify(isChinese ? '任务已取消' : 'Task cancelled');
+      } else if (result.outcome === 'completed-before-cancel') {
+        notify(isChinese ? '任务已在取消前结束' : 'Task finished before cancellation');
+      }
     } catch (error) {
       try {
         const refreshed = await withAbortableDeadline(
@@ -253,8 +297,9 @@ export function useConversationActionsController({
           cancelTimeoutMs,
           'Hermes hosted-turn reconciliation timed out',
         );
+        if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
         if (activeConversationIdRef.current === conversationId) {
-          applyConversation(refreshed.conversation);
+          applyConversation(refreshed.conversation, ownerEpoch);
         }
         if (!conversationRunningHostedTurnId(refreshed.conversation)) {
           notify(isChinese ? '任务已结束' : 'Task already finished');
@@ -263,21 +308,28 @@ export function useConversationActionsController({
       } catch {
         // Keep the original cancellation error when reconciliation also fails.
       }
-      notify(serverFailure(error, isChinese));
+      if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+        notify(serverFailure(error, isChinese));
+      }
     } finally {
       cancelHostedTurnInFlightRef.current = false;
-      setCancellingHostedTurn(false);
+      if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+        setCancellingHostedTurn(false);
+      }
     }
   };
 
   const selectConversation = async (conversationId: string) => {
     if (!conversationId || conversationId === activeConversationIdRef.current) return;
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     if (
       pendingTurnActiveRef.current
       && !hostedRunning
       && !activeHostedTurnIdRef.current
     ) {
       await cancellation.cancelPendingSend();
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     }
     autoFollowStreamRef.current = true;
     activeHostedTurnIdRef.current = '';
@@ -293,17 +345,18 @@ export function useConversationActionsController({
     optimisticMessagesRef.current = [
       ...(optimisticMessagesByConversationRef.current.get(conversationId) || []),
     ];
-    resetComposer();
+    prepareComposerNavigation();
     const generation = conversationSyncGenerationRef.current.advanceActive();
     try {
       await openConversation(conversationId, generation);
     } catch (error) {
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       if (isConversationNotFoundError(error)) {
         const remaining = conversationIndexRef.current.filter(
           ({ id }) => id !== conversationId,
         );
         const fallbackId = remaining[0]?.id || '';
-        commitConversationIndex(remaining, fallbackId);
+        commitConversationIndex(remaining, fallbackId, ownerEpoch);
         if (fallbackId) {
           await openConversation(fallbackId, generation);
         } else {
@@ -320,11 +373,13 @@ export function useConversationActionsController({
 
   const branchFromMessage = async (message: ChatMessage) => {
     const conversationId = activeConversationIdRef.current;
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
     if (
       !cloudApi
       || !conversationId
       || !message.runtimeMessageId
       || !message.runtimeSessionId
+      || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
     ) return;
     if (sending || hostedRunning) {
       notify(isChinese
@@ -341,10 +396,13 @@ export function useConversationActionsController({
           profile: message.profile || profile,
         },
       );
-      applyConversation(response.conversation);
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+      applyConversation(response.conversation, ownerEpoch);
       notify(isChinese ? '已从所选消息创建分支。' : 'Created a branch from this message.');
     } catch (error) {
-      notify(serverFailure(error, isChinese));
+      if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+        notify(serverFailure(error, isChinese));
+      }
     }
   };
 

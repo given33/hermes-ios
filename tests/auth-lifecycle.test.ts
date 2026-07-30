@@ -11,6 +11,7 @@ import {
 import type { SavedConnection } from '../src/auth/credential-contract';
 
 const connection: SavedConnection = {
+  accountGeneration: 'acctgen_generation_a',
   accessToken: 'access-a',
   baseUrl: 'https://hermes.example',
   expiresAt: 2_000_000_000,
@@ -23,6 +24,19 @@ test('auth lifecycle identity rejects old connection and generation callbacks', 
   assert.equal(isCurrentAuthLifecycle({ ...connection }, connection, 3, 3), false);
   assert.equal(isCurrentAuthLifecycle(connection, connection, 4, 3), false);
   assert.equal(isCurrentAuthLifecycle(null, connection, 3, 3), false);
+});
+
+test('auth session identity rejects a same-name replacement account generation', () => {
+  assert.equal(isCurrentAuthSession(connection, connection, 3, 3), true);
+  assert.equal(
+    isCurrentAuthSession(
+      { ...connection, accountGeneration: 'acctgen_generation_b' },
+      connection,
+      3,
+      3,
+    ),
+    false,
+  );
 });
 
 test('credential mutations remain ordered after a failed operation', async () => {

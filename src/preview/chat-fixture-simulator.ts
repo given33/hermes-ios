@@ -1,7 +1,10 @@
 import type { HermesChatViewMessage as ChatMessage } from '../api/chat-view-model';
 import type { CollaborationMessage, SingleConversation } from '../api/HermesCloudApi';
 
-export function previewConversationHistory(isChinese: boolean): SingleConversation[] {
+export function previewConversationHistory(
+  isChinese: boolean,
+  accountGeneration: string,
+): SingleConversation[] {
   const now = Date.now();
   const definitions = [
     {
@@ -49,6 +52,7 @@ export function previewConversationHistory(isChinese: boolean): SingleConversati
       updated_at: updatedAt - (definition.turns.length - turnIndex - 1) * 1_000,
     }));
     return {
+      account_generation: accountGeneration,
       created_at: updatedAt - 60_000,
       id: `preview-history-${index}`,
       message_count: messages.length,

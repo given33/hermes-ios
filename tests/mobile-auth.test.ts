@@ -17,6 +17,7 @@ interface FetchCall {
 }
 
 const initialConnection: SavedConnection = {
+  accountGeneration: 'acctgen_generation_a',
   baseUrl: 'https://hermes.test',
   username: 'owner',
   accessToken: 'access-one',
@@ -35,7 +36,11 @@ function tokenResponse(
     token_type: 'Bearer',
     expires_at: expiresAt,
     device_id: 'ios-test-device',
-    account: { username: 'owner', display_name: 'Owner' },
+    account: {
+      username: 'owner',
+      display_name: 'Owner',
+      account_generation: 'acctgen_generation_a',
+    },
   };
 }
 
@@ -49,7 +54,11 @@ function session(
     refreshToken,
     expiresAt,
     deviceId: 'ios-test-device',
-    account: { username: 'owner', displayName: 'Owner' },
+    account: {
+      username: 'owner',
+      displayName: 'Owner',
+      accountGeneration: 'acctgen_generation_a',
+    },
   };
 }
 
@@ -240,6 +249,44 @@ test('refresh uses only the protected refresh token and validates the token sess
   const malformed = new MobileAuthApiClient('https://hermes.test', async (input) =>
     jsonResponse(String(input), { access_token: 'incomplete' }));
   await assert.rejects(malformed.login('owner', 'password'), /invalid authentication session/i);
+
+  const missingGeneration = new MobileAuthApiClient('https://hermes.test', async (input) => {
+    const response = tokenResponse();
+    response.account = { username: 'owner', display_name: 'Owner' };
+    return jsonResponse(String(input), response);
+  });
+  await assert.rejects(
+    missingGeneration.login('owner', 'password'),
+    /invalid authentication session/i,
+  );
+});
+
+test('token refresh rejects a same-name replacement generation before persisting tokens', async () => {
+  let writes = 0;
+  const controller = new AccessTokenController(initialConnection, {
+    now: () => 100,
+    store: {
+      async saveSessionTokens() {
+        writes += 1;
+      },
+    },
+    async refresh() {
+      return {
+        ...session('replacement-access', 'replacement-refresh', 2_000),
+        account: {
+          username: 'owner',
+          displayName: 'Owner',
+          accountGeneration: 'acctgen_generation_b',
+        },
+      };
+    },
+  });
+
+  await assert.rejects(
+    controller.getAccessToken({ forceRefresh: true }),
+    /different account generation/i,
+  );
+  assert.equal(writes, 0);
 });
 
 test('authentication errors redact submitted secrets and reject redirected origins', async () => {

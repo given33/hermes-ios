@@ -15,7 +15,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import Reanimated, {
   Easing,
+  FadeIn,
   FadeInRight,
+  FadeOut,
   FadeOutRight,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -40,6 +42,7 @@ import { resolveNativeFontStack } from '../design/native-font-faces';
 import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
+import { MOTION, useMotion } from '../design/motion';
 import { SmartWeatherPage } from '../context/SmartWeatherPage';
 import { NativeLocalizationProvider } from '../i18n/NativeLocalization';
 import {
@@ -125,6 +128,7 @@ export function FrontendPreviewApp({
 }: FrontendPreviewAppProps = {}) {
   const insets = useSafeAreaInsets();
   const { tokens } = useTheme();
+  const motion = useMotion();
   const useSwiftUIRoutes =
     Platform.OS === 'ios' && hasNativeSwiftUIRoute;
   const [locale, setLocale] = useState<NativeRouteLocale>('zh');
@@ -319,12 +323,18 @@ export function FrontendPreviewApp({
 
       {toast ? (
         <Reanimated.View
-          entering={FadeInRight
-            .duration(IOS_MOTION.duration.toast)
-            .easing(Easing.bezier(...IOS_MOTION.curve.decelerate))}
-          exiting={FadeOutRight
-            .duration(IOS_MOTION.duration.control)
-            .easing(Easing.bezier(...IOS_MOTION.curve.standard))}
+          entering={motion.fade(
+            FadeInRight
+              .duration(IOS_MOTION.duration.toast)
+              .easing(Easing.bezier(...IOS_MOTION.curve.decelerate)),
+            FadeIn.duration(MOTION.fade.reduced),
+          )}
+          exiting={motion.fade(
+            FadeOutRight
+              .duration(IOS_MOTION.duration.control)
+              .easing(Easing.bezier(...IOS_MOTION.curve.standard)),
+            FadeOut.duration(MOTION.fade.reduced),
+          )}
           pointerEvents="none"
           style={[
             styles.toast,

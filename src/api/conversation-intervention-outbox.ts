@@ -37,6 +37,7 @@ export class HostedInterventionOutboxRepository {
   async initialize(
     owner: string,
     item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch?: number,
   ): Promise<PendingInterventionMutationResult> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedItem = normalizePendingIntervention(item);
@@ -61,11 +62,15 @@ export class HostedInterventionOutboxRepository {
         // The outbox is authoritative. Hydration reconstructs this optimistic
         // message if the best-effort ledger write is interrupted.
       }
-    });
+    }, expectedOwnerEpoch);
     return result;
   }
 
-  async upsert(owner: string, item: HostedInterventionOutboxItem): Promise<void> {
+  async upsert(
+    owner: string,
+    item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch?: number,
+  ): Promise<void> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedItem = normalizePendingIntervention(item);
     if (!normalizedOwner || !normalizedItem) return;
@@ -75,10 +80,10 @@ export class HostedInterventionOutboxRepository {
         ...current.filter(({ messageId }) => messageId !== normalizedItem.messageId),
         normalizedItem,
       ]);
-    });
+    }, expectedOwnerEpoch);
   }
 
-  async remove(owner: string, messageId: string): Promise<void> {
+  async remove(owner: string, messageId: string, expectedOwnerEpoch?: number): Promise<void> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedMessageId = stringValue(messageId);
     if (!normalizedOwner || !normalizedMessageId) return;
@@ -88,13 +93,14 @@ export class HostedInterventionOutboxRepository {
         normalizedOwner,
         current.filter(({ messageId: currentId }) => currentId !== normalizedMessageId),
       );
-    });
+    }, expectedOwnerEpoch);
   }
 
   async fail(
     owner: string,
     item: HostedInterventionOutboxItem,
     error: string,
+    expectedOwnerEpoch?: number,
   ): Promise<void> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedItem = normalizePendingIntervention(item);
@@ -112,7 +118,7 @@ export class HostedInterventionOutboxRepository {
         normalizedOwner,
         current.filter(({ messageId }) => messageId !== normalizedItem.messageId),
       );
-    });
+    }, expectedOwnerEpoch);
   }
 
   private async readInTransaction(owner: string): Promise<HostedInterventionOutboxItem[]> {

@@ -84,16 +84,34 @@ export interface IOSPowerSnapshot {
 }
 
 export interface IOSContextEvent {
+  account_generation: string;
   id: string;
   kind: 'health' | 'location' | 'motion' | 'place-visit' | 'power' | string;
   payload: Record<string, unknown>;
   source_device_id?: string;
+  lifecycle_epoch: number;
   sequence: number;
   timestamp: number;
 }
 
+export interface IOSContextEventClaim {
+  token: string;
+  events: IOSContextEvent[];
+}
+
+export interface IOSOwnerScopeDeletionResult {
+  accountGeneration: string;
+  deletedCount: number;
+  deletedWasCurrent: boolean;
+  lifecycleEpoch: number;
+}
+
 export interface IOSHealthSummary {
   authorization: IOSAuthorizationState;
+  domainAuthorization?: Partial<Record<
+    'activity' | 'heart' | 'oxygen' | 'sleep',
+    'available' | 'limited' | 'unavailable'
+  >>;
   heartRateBpm: number | null;
   oxygenSaturation: number | null;
   restingHeartRateBpm?: number | null;
@@ -178,6 +196,7 @@ export interface IOSContextNativeModule {
   getVoiceState(): Promise<{ recording: boolean; speaking: boolean }>;
   getInstallationIdentifier(): Promise<string>;
   enqueueContextEvents(events: readonly Record<string, unknown>[]): Promise<number>;
+  claimPendingEvents(limit: number, scope: string): Promise<IOSContextEventClaim>;
   readPendingEvents(limit: number, scope: string): Promise<IOSContextEvent[]>;
   readPendingEventsByKind(
     limit: number,
@@ -185,10 +204,19 @@ export interface IOSContextNativeModule {
     scope: string,
   ): Promise<IOSContextEvent[]>;
   acknowledgeEvents(ids: readonly string[], cursor: number | undefined, scope: string): Promise<number>;
-  setOwnerScope(scope: string): Promise<void>;
+  acknowledgeEventClaim(
+    token: string,
+    ids: readonly string[],
+    cursor: number | undefined,
+    scope: string,
+  ): Promise<number>;
+  setOwnerScope(scope: string, accountGeneration: string): Promise<void>;
   setPermissionCollectionReady?(scope: string, ready: boolean): Promise<void>;
-  activateOwnerScope(scope: string): Promise<number>;
-  deleteOwnerScope(scope: string): Promise<number>;
+  activateOwnerScope(scope: string, accountGeneration: string): Promise<number>;
+  deleteOwnerScope(
+    scope: string,
+    accountGeneration: string,
+  ): Promise<IOSOwnerScopeDeletionResult>;
   getCommandCursor(): Promise<string>;
   hasCompletedCommand(id: string): Promise<boolean>;
   getCommandExecutionResult(id: string): Promise<Record<string, unknown> | null>;
@@ -254,6 +282,11 @@ export interface IOSContextNativeModule {
   stopScreenTimeMonitoring(identifier: string): Promise<void>;
   updateLiveActivity(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   scheduleBackgroundTasks(): Promise<void>;
+  setBackgroundRelayReady(
+    scope: string,
+    accountGeneration: string,
+    ready: boolean,
+  ): Promise<boolean>;
   listPendingRelayWakes(): Promise<Array<{ reason: string; wakeId: string }>>;
   completeBackgroundRelay(wakeId: string, success: boolean): Promise<void>;
   encryptAttachment(
@@ -262,8 +295,9 @@ export interface IOSContextNativeModule {
     targetUri: string,
   ): Promise<{
     encryptedBytes: number;
-    format: 'aes-gcm-v1';
+    format: 'aes-gcm-chunked-v2';
     plaintextBytes: number;
+    sha256: string;
   }>;
   decryptAttachmentForUpload(
     owner: string,
@@ -272,6 +306,8 @@ export interface IOSContextNativeModule {
   ): Promise<string>;
   deleteDecryptedAttachment(uri: string): Promise<boolean>;
   deleteAttachmentEncryptionKey(owner: string): Promise<boolean>;
+  writeProtectedAccountExport(contents: string, filename: string): Promise<string>;
+  deleteProtectedAccountExport(uri: string): Promise<boolean>;
   getAttachmentOutboxRootUri?(): string;
 }
 
@@ -279,6 +315,18 @@ const nativeModule = requireOptionalNativeModule<IOSContextNativeModule>('Hermes
 export interface HermesNativeMapProviderStatus {
   activeProvider: 'amap' | 'mapkit';
   amapConfigured: boolean;
+  apiKeyConfigured: boolean;
+  backgroundLocation: boolean;
+  bundleIdentifier: string;
+  bundleIdentifierMatches: boolean;
+  configuredBundleIdentifier: string;
+  error?: string;
+  lastLocationAccuracy?: number;
+  lastLocationAt?: number;
+  lastLocationStatus: 'available' | 'stale' | 'unavailable';
+  locationAuthorization: IOSAuthorizationState;
+  phase: 'unconfigured' | 'requestingPermission' | 'initializing' | 'ready' | 'degraded' | 'failed';
+  preciseLocation: boolean;
   privacyConsent: boolean;
 }
 
@@ -332,6 +380,8 @@ export const HermesIOSContext = {
   getInstallationIdentifier: () => requireContextModule().getInstallationIdentifier(),
   enqueueContextEvents: (events: readonly Record<string, unknown>[]) =>
     requireContextModule().enqueueContextEvents(events),
+  claimPendingEvents: (limit: number, scope: string) =>
+    requireContextModule().claimPendingEvents(limit, scope),
   // The native queue rejects reads and acknowledgements whose scope is not
   // the active owner scope, so every caller must say which account it is
   // draining rather than implicitly touching all of them.
@@ -341,15 +391,24 @@ export const HermesIOSContext = {
     requireContextModule().readPendingEventsByKind(limit, kinds, scope),
   acknowledgeEvents: (ids: readonly string[], cursor: number | undefined, scope: string) =>
     requireContextModule().acknowledgeEvents(ids, cursor, scope),
-  setOwnerScope: (scope: string) => requireContextModule().setOwnerScope(scope),
+  acknowledgeEventClaim: (
+    token: string,
+    ids: readonly string[],
+    cursor: number | undefined,
+    scope: string,
+  ) => requireContextModule().acknowledgeEventClaim(token, ids, cursor, scope),
+  setOwnerScope: (scope: string, accountGeneration: string) =>
+    requireContextModule().setOwnerScope(scope, accountGeneration),
   setPermissionCollectionReady: (scope: string, ready: boolean) => {
     const module = requireContextModule();
     return typeof module.setPermissionCollectionReady === 'function'
       ? module.setPermissionCollectionReady(scope, ready)
       : Promise.resolve();
   },
-  activateOwnerScope: (scope: string) => requireContextModule().activateOwnerScope(scope),
-  deleteOwnerScope: (scope: string) => requireContextModule().deleteOwnerScope(scope),
+  activateOwnerScope: (scope: string, accountGeneration: string) =>
+    requireContextModule().activateOwnerScope(scope, accountGeneration),
+  deleteOwnerScope: (scope: string, accountGeneration: string) =>
+    requireContextModule().deleteOwnerScope(scope, accountGeneration),
   getCommandCursor: () => requireContextModule().getCommandCursor(),
   hasCompletedCommand: (id: string) => requireContextModule().hasCompletedCommand(id),
   getCommandExecutionResult: (id: string) =>
@@ -407,6 +466,8 @@ export const HermesIOSContext = {
   stopScreenTimeMonitoring: (identifier: string) => requireContextModule().stopScreenTimeMonitoring(identifier),
   updateLiveActivity: (payload: Record<string, unknown>) => requireContextModule().updateLiveActivity(payload),
   scheduleBackgroundTasks: () => requireContextModule().scheduleBackgroundTasks(),
+  setBackgroundRelayReady: (scope: string, accountGeneration: string, ready: boolean) =>
+    requireContextModule().setBackgroundRelayReady(scope, accountGeneration, ready),
   listPendingRelayWakes: () => requireContextModule().listPendingRelayWakes(),
   completeBackgroundRelay: (wakeId: string, success: boolean) =>
     requireContextModule().completeBackgroundRelay(wakeId, success),
@@ -418,6 +479,10 @@ export const HermesIOSContext = {
     requireContextModule().deleteDecryptedAttachment(uri),
   deleteAttachmentEncryptionKey: (owner: string) =>
     requireContextModule().deleteAttachmentEncryptionKey(owner),
+  writeProtectedAccountExport: (contents: string, filename: string) =>
+    requireContextModule().writeProtectedAccountExport(contents, filename),
+  deleteProtectedAccountExport: (uri: string) =>
+    requireContextModule().deleteProtectedAccountExport(uri),
   getAttachmentOutboxRootUri: (): string | null => {
     const module = requireContextModule();
     return typeof module.getAttachmentOutboxRootUri === 'function'
@@ -453,7 +518,9 @@ export interface HermesStandardMapProps extends ViewProps {
   amapPrivacyConsentGranted?: boolean;
   centerOnUserRequest?: number;
   onLocationPress?(event: NativeSyntheticEvent<Record<string, never>>): void;
+  onProviderStatus?(event: NativeSyntheticEvent<HermesNativeMapProviderStatus>): void;
   places: readonly IOSTodayPlace[];
+  providerResetRequest?: number;
   showsUserLocation?: boolean;
   track: readonly IOSCoordinate[];
 }
@@ -486,6 +553,15 @@ export function getNativeMapProviderStatus(): HermesNativeMapProviderStatus {
   return nativeMapModule?.getProviderStatus?.() ?? {
     activeProvider: 'mapkit',
     amapConfigured: false,
+    apiKeyConfigured: false,
+    backgroundLocation: false,
+    bundleIdentifier: '',
+    bundleIdentifierMatches: false,
+    configuredBundleIdentifier: '',
+    lastLocationStatus: 'unavailable',
+    locationAuthorization: 'notDetermined',
+    phase: 'unconfigured',
+    preciseLocation: false,
     privacyConsent: false,
   };
 }
@@ -496,6 +572,15 @@ export async function setNativeMapPrivacyConsent(
   return nativeMapModule?.setAmapPrivacyConsent?.(granted) ?? {
     activeProvider: 'mapkit',
     amapConfigured: false,
+    apiKeyConfigured: false,
+    backgroundLocation: false,
+    bundleIdentifier: '',
+    bundleIdentifierMatches: false,
+    configuredBundleIdentifier: '',
+    lastLocationStatus: 'unavailable',
+    locationAuthorization: 'notDetermined',
+    phase: 'unconfigured',
+    preciseLocation: false,
     privacyConsent: false,
   };
 }

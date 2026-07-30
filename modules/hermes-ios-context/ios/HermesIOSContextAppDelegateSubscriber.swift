@@ -1,4 +1,5 @@
 import CoreLocation
+import CryptoKit
 import ExpoModulesCore
 import UIKit
 
@@ -9,6 +10,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     HermesBackgroundService.shared.register()
     resumePowerMonitoringIfEligible()
     resumeLocationIfEligible()
+    _ = HermesHealthService.shared.resumeBackgroundCollection()
   }
 
   public func applicationDidBecomeActive(_ application: UIApplication) {
@@ -17,6 +19,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     HermesBackgroundService.shared.schedule()
     resumePowerMonitoringIfEligible()
     resumeLocationIfEligible()
+    _ = HermesHealthService.shared.resumeBackgroundCollection()
   }
 
   public func applicationDidEnterBackground(_ application: UIApplication) {
@@ -42,8 +45,10 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     if let tombstone = Self.accountDeletionTombstone(userInfo) {
       _ = HermesAccountLifecycle.deleteOwnerScope(
         tombstone.ownerScope,
+        accountGeneration: tombstone.accountGeneration,
         requestedAt: tombstone.requestedAt
       )
+      _ = try? HermesAttachmentVault.shared.deleteKey(owner: tombstone.ownerScope)
       completionHandler(.newData)
       return
     }
@@ -51,12 +56,23 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
       completionHandler(.noData)
       return
     }
-    HermesContextEventQueue.shared.enqueue(type: "apns-wake", payload: [
+    guard let fence = Self.notificationFence(userInfo),
+          let token = HermesContextEventQueue.shared.currentCollectorGenerationToken(),
+          token.accepts(ownerID: fence.ownerID, accountGeneration: fence.accountGeneration) else {
+      completionHandler(.noData)
+      return
+    }
+    let persisted = HermesContextEventQueue.shared.enqueue(type: "apns-wake", payload: [
       "receivedAt": Date().timeIntervalSince1970 * 1000,
+      "eventKey": fence.eventKey,
       "userInfo": userInfo.reduce(into: [String: Any]()) { result, entry in
         result[String(describing: entry.key)] = hermesJSONSafe(entry.value)
       },
-    ])
+    ], accountGeneration: token.lifecycleEpoch, eventID: Self.apnsEventID(fence))
+    guard persisted else {
+      completionHandler(.failed)
+      return
+    }
     HermesBackgroundService.shared.schedule()
     HermesBackgroundService.shared.notifyRelayWake(reason: "remote-notification") { success in
       completionHandler(success ? .newData : .failed)
@@ -115,12 +131,13 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   private static func accountDeletionTombstone(
     _ userInfo: [AnyHashable: Any]
-  ) -> (ownerScope: String, requestedAt: Double)? {
+  ) -> (ownerScope: String, accountGeneration: String, requestedAt: Double)? {
     guard let hermes = userInfo["hermes"] as? [String: Any],
           hermes["category"] as? String == "account-deletion",
           let data = hermes["data"] as? [String: Any],
           data["action"] as? String == "delete-account-data",
           let ownerScope = data["owner_scope"] as? String,
+          let accountGeneration = data["account_generation"] as? String,
           let requestedAt = normalizedEpochMilliseconds(data["requested_at"]),
           let validUntil = normalizedEpochMilliseconds(data["valid_until"]),
           requestedAt <= validUntil,
@@ -128,8 +145,50 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
       return nil
     }
     let normalized = ownerScope.trimmingCharacters(in: .whitespacesAndNewlines)
-    return normalized.isEmpty ? nil : (normalized, requestedAt)
+    let normalizedGeneration = accountGeneration.trimmingCharacters(in: .whitespacesAndNewlines)
+    return normalized.isEmpty || normalizedGeneration.isEmpty
+      ? nil
+      : (normalized, normalizedGeneration, requestedAt)
   }
+
+  private static func notificationFence(
+    _ userInfo: [AnyHashable: Any]
+  ) -> (ownerID: String, accountGeneration: String, eventKey: String)? {
+    guard let hermes = userInfo["hermes"] as? [String: Any],
+          let ownerID = boundedAPNSIdentifier(hermes["owner_id"]),
+          let accountGeneration = boundedAPNSIdentifier(hermes["account_generation"]),
+          let eventKey = boundedAPNSIdentifier(hermes["event_key"]) else {
+      return nil
+    }
+    if let data = hermes["data"] as? [String: Any],
+       data["valid_until"] != nil,
+       let validUntil = normalizedEpochMilliseconds(data["valid_until"]),
+       validUntil <= Date().timeIntervalSince1970 * 1000 {
+      return nil
+    }
+    return (ownerID, accountGeneration, eventKey)
+  }
+
+  private static func apnsEventID(
+    _ fence: (ownerID: String, accountGeneration: String, eventKey: String)
+  ) -> String {
+    let source = "\(fence.ownerID)\0\(fence.accountGeneration)\0\(fence.eventKey)"
+    let digest = SHA256.hash(data: Data(source.utf8))
+      .map { String(format: "%02x", $0) }
+      .joined()
+    return "apns-wake:\(digest)"
+  }
+}
+
+private func boundedAPNSIdentifier(_ value: Any?) -> String? {
+  guard let value = value as? String else { return nil }
+  let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !normalized.isEmpty,
+        normalized.count <= 256,
+        normalized.unicodeScalars.allSatisfy({ $0.value >= 32 && $0.value != 127 }) else {
+    return nil
+  }
+  return normalized
 }
 
 private func normalizedEpochMilliseconds(_ value: Any?) -> Double? {

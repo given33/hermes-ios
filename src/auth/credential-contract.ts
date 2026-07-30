@@ -7,6 +7,7 @@ export const REFRESH_TOKEN_STORAGE_KEY = 'hermes.native.v2.refreshToken';
 export const REFRESH_TOKEN_POINTER_STORAGE_KEY = 'hermes.native.v2.refreshTokenKey';
 export const REFRESH_TOKEN_KEY_PREFIX = 'hermes.native.v2.refreshToken.';
 export const ACCESS_EXPIRES_AT_STORAGE_KEY = 'hermes.native.v2.accessExpiresAt';
+export const ACCOUNT_GENERATION_STORAGE_KEY = 'hermes.native.v2.accountGeneration';
 export const DEVICE_ID_STORAGE_KEY = 'hermes.native.deviceId';
 export const SESSION_STORAGE_VERSION_KEY = 'hermes.native.v2.sessionVersion';
 export const SESSION_STORAGE_VERSION = '2';
@@ -43,6 +44,7 @@ export const CREDENTIAL_STORAGE_KEYS = [
   REFRESH_TOKEN_POINTER_STORAGE_KEY,
   CREDENTIAL_PROTECTION_STORAGE_KEY,
   ACCESS_EXPIRES_AT_STORAGE_KEY,
+  ACCOUNT_GENERATION_STORAGE_KEY,
   DEVICE_ID_STORAGE_KEY,
   SESSION_STORAGE_VERSION_KEY,
   REMEMBER_LOGIN_STORAGE_KEY,
@@ -58,6 +60,7 @@ export interface RememberedLogin {
 export interface SavedConnection {
   baseUrl: string;
   username: string;
+  accountGeneration: string;
   accessToken: string;
   refreshToken: string;
   expiresAt: number;

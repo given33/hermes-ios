@@ -196,6 +196,12 @@ struct HermesManagedInstallationSnapshot: Decodable, Equatable, Identifiable {
   let kind: String
   let state: String
   let error: String
+  let health: String
+  let version: String
+  let tools: [String]
+  let permissions: [String]
+  let lastVerifiedAt: String
+  let rollbackAvailable: Bool
   let targets: [HermesManagedInstallationTargetSnapshot]
 }
 

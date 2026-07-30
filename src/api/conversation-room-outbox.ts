@@ -18,6 +18,7 @@ const ROOM_OUTBOX_PREFIX = 'hermes.native.collaboration-room-outbox.v1';
 export type ConversationSerializedWrite = (
   owner: string,
   operation: () => Promise<void>,
+  expectedOwnerEpoch?: number,
 ) => Promise<void>;
 
 export class CollaborationRoomOutboxRepository {
@@ -39,7 +40,11 @@ export class CollaborationRoomOutboxRepository {
     );
   }
 
-  async upsert(owner: string, item: CollaborationRoomOutboxItem): Promise<void> {
+  async upsert(
+    owner: string,
+    item: CollaborationRoomOutboxItem,
+    expectedOwnerEpoch?: number,
+  ): Promise<void> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedItem = normalizePendingRoomMessage(item);
     if (!normalizedOwner || !normalizedItem) return;
@@ -59,10 +64,10 @@ export class CollaborationRoomOutboxRepository {
         owner: normalizedOwner,
         items: next,
       }));
-    });
+    }, expectedOwnerEpoch);
   }
 
-  async remove(owner: string, requestId: string): Promise<void> {
+  async remove(owner: string, requestId: string, expectedOwnerEpoch?: number): Promise<void> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedRequestId = stringValue(requestId);
     if (!normalizedOwner || !normalizedRequestId) return;
@@ -80,7 +85,7 @@ export class CollaborationRoomOutboxRepository {
         owner: normalizedOwner,
         items: current.filter(({ requestId: currentId }) => currentId !== normalizedRequestId),
       }));
-    });
+    }, expectedOwnerEpoch);
   }
 }
 

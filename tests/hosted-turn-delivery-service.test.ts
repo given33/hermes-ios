@@ -12,6 +12,12 @@ import {
   type HostedTurnOutboxPort,
 } from '../src/studio/chat/hosted-turn-delivery-service';
 import { HostedTurnCancelledDuringDelivery } from '../src/studio/chat/chat-types';
+import {
+  beginConversationStorageOwnerActivation,
+  beginConversationStorageOwnerPurge,
+  captureConversationStorageEpoch,
+  completeConversationStorageOwnerActivation,
+} from '../src/api/conversation-storage-coordinator';
 
 function pendingItem(overrides: Partial<HostedTurnOutboxItem> = {}): HostedTurnOutboxItem {
   return {
@@ -96,7 +102,7 @@ test('a deleted conversation is re-homed once without changing request identity'
     requestTimeoutMs: 1_000,
   });
 
-  const result = await service.deliverPendingEnqueue(pendingItem());
+  const result = await service.deliverPendingEnqueue(pendingItem(), 0);
 
   assert.equal(attempts, 2);
   assert.equal(result.item.conversationId, 'chat_request-1');
@@ -132,7 +138,10 @@ test('a lost outbox claim stops delivery before any server call', async () => {
   });
 
   await assert.rejects(
-    service.deliverPendingEnqueue(pendingItem({ conversationId: '', conversationPending: true })),
+    service.deliverPendingEnqueue(
+      pendingItem({ conversationId: '', conversationPending: true }),
+      0,
+    ),
     HostedTurnCancelledDuringDelivery,
   );
   assert.equal(serverCalls, 0);
@@ -173,9 +182,53 @@ test('an accepted intervention records acknowledgement before removing the inten
     turnId: 'turn-1',
   };
 
-  await service.deliverPendingIntervention(item);
+  await service.deliverPendingIntervention(item, 0);
 
   assert.deepEqual(calls, ['conversation-1:turn-1:@Worker inspect this:message-2']);
   assert.ok(state.savedInterventions[0].deliveryAcceptedAt);
   assert.deepEqual(state.removedInterventions, ['message-2']);
+});
+
+test('an old delivery cannot persist after same-owner purge and reactivation', async () => {
+  const owner = 'delivery-owner-epoch-interleaving';
+  const expectedOwnerEpoch = captureConversationStorageEpoch(owner);
+  const state = ports();
+  let releaseCreate!: () => void;
+  let createStarted!: () => void;
+  const createGate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+  const started = new Promise<void>((resolve) => { createStarted = resolve; });
+  const cloud: HostedTurnCloudPort = {
+    async createConversation() {
+      createStarted();
+      await createGate;
+    },
+    async enqueueHostedTurn() { return { accepted: true } as never; },
+    async interveneHostedTurn() { return { accepted: true }; },
+    async uploadConversationAttachment() { return {}; },
+  };
+  const service = createHostedTurnDeliveryService({
+    attachments,
+    cacheOwner: owner,
+    cloud,
+    isChinese: false,
+    outbox: state.outbox,
+    profile: 'default',
+    requestTimeoutMs: 5_000,
+  });
+
+  const delivery = service.deliverPendingEnqueue(
+    pendingItem({ conversationId: '', conversationPending: true }),
+    expectedOwnerEpoch,
+  );
+  await started;
+  beginConversationStorageOwnerPurge(owner);
+  const newEpoch = beginConversationStorageOwnerActivation(owner);
+  completeConversationStorageOwnerActivation(owner, newEpoch);
+  releaseCreate();
+
+  await assert.rejects(delivery, /lifecycle changed/i);
+  assert.equal(
+    state.persisted.some(({ conversationPending }) => conversationPending === false),
+    false,
+  );
 });

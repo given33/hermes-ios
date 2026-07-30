@@ -19,7 +19,6 @@ import {
   hasNativeIOSContext,
   hasNativeScreenTimeReportView,
   type IOSContextEvent as NativeIOSContextEvent,
-  type IOSHealthSummary,
 } from '../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../api/HermesApiClient';
 import { withDeadline } from '../api/async-deadline';
@@ -30,6 +29,11 @@ import {
   type IOSIntelligenceSnapshot,
 } from './IOSIntelligenceApi';
 import { predictedDepartureTimestamp } from './ios-command-contract';
+import {
+  awaitCurrentIOSContext,
+  IOSContextLifecycleCoordinator,
+  type IOSContextLifecycleCapture,
+} from './ios-context-lifecycle';
 import { buildCollectionSnapshotEvents, snapshotEvent } from './ios-snapshot-events';
 import {
   canCollectIOSPermission,
@@ -42,6 +46,7 @@ import {
 } from './ios-permission-coordinator';
 
 interface IOSContextProviderProps extends PropsWithChildren {
+  accountGeneration: string;
   client: HermesApiClient;
   deviceId: string;
   ownerScope: string;
@@ -77,11 +82,18 @@ export function useIOSPermissionCoordinator(): IOSPermissionContextValue {
   return useContext(IOSPermissionContext);
 }
 
-export function IOSContextProvider({ children, client, deviceId, ownerScope }: IOSContextProviderProps) {
+export function IOSContextProvider({
+  accountGeneration,
+  children,
+  client,
+  deviceId,
+  ownerScope,
+}: IOSContextProviderProps) {
   const apiRef = useRef(new IOSIntelligenceApi(client));
+  const lifecycleRef = useRef(new IOSContextLifecycleCoordinator());
   const commandCursorRef = useRef('');
-  const runningRef = useRef(false);
-  const commandsRunningRef = useRef(false);
+  const runningRef = useRef<symbol | null>(null);
+  const commandsRunningRef = useRef<symbol | null>(null);
   const permissionSnapshotRef = useRef(initialIOSPermissionSnapshot());
   const permissionSettingsOpenedRef = useRef(false);
   const [permissionSnapshot, setPermissionSnapshot] = useState(initialIOSPermissionSnapshot);
@@ -108,53 +120,65 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     apiRef.current = new IOSIntelligenceApi(client);
   }, [client]);
 
-  const flushPendingEvents = useCallback(async () => {
+  const flushPendingEvents = useCallback(async (capture: IOSContextLifecycleCapture) => {
     if (!hasNativeIOSContext || runningRef.current) return;
-    runningRef.current = true;
+    const runToken = Symbol('ios-event-flush');
+    runningRef.current = runToken;
+    const lifecycle = lifecycleRef.current;
+    const api = apiRef.current;
     try {
-      if (!await hasUsableNetwork()) return;
+      if (!await awaitCurrentIOSContext(lifecycle, capture, hasUsableNetwork)) return;
       while (true) {
-        const pending = await HermesIOSContext.readPendingEvents(EVENT_BATCH_SIZE, ownerScope);
+        const claim = await awaitCurrentIOSContext(
+          lifecycle,
+          capture,
+          () => HermesIOSContext.claimPendingEvents(EVENT_BATCH_SIZE, ownerScope),
+        );
+        const pending = claim.events;
         if (!pending.length) break;
         const events = pending.map(normalizeNativeEvent);
         const cursor = String(Math.max(...pending.map((event) => event.sequence)));
-        await apiRef.current.uploadEvents({ cursor, deviceId, events });
-        await HermesIOSContext.acknowledgeEvents(
-          pending.map((event) => event.id),
-          Number(cursor),
-          ownerScope,
+        await awaitCurrentIOSContext(
+          lifecycle,
+          capture,
+          () => api.uploadEvents({ cursor, deviceId, events }, capture.signal),
+        );
+        await awaitCurrentIOSContext(
+          lifecycle,
+          capture,
+          () => HermesIOSContext.acknowledgeEventClaim(
+            claim.token,
+            pending.map((event) => event.id),
+            Number(cursor),
+            ownerScope,
+          ),
         );
         if (pending.length < EVENT_BATCH_SIZE) break;
       }
     } finally {
-      runningRef.current = false;
+      if (runningRef.current === runToken) runningRef.current = null;
     }
   }, [deviceId, ownerScope]);
 
-  const syncSnapshots = useCallback(async () => {
+  const syncSnapshots = useCallback(async (capture: IOSContextLifecycleCapture) => {
     if (!hasNativeIOSContext) return;
+    const lifecycle = lifecycleRef.current;
     const now = Date.now();
-    const dayAgo = now - 24 * 60 * 60_000;
     const monthAhead = now + 31 * 24 * 60 * 60_000;
     const permission = permissionSnapshotRef.current;
-    const [capabilities, power, health, calendar, reminders, device, screenTime, watch] = await Promise.all([
-      HermesIOSContext.getCapabilities(),
-      HermesIOSContext.getPowerSnapshot(),
-      canCollectIOSPermission(permission, 'health')
-        ? HermesIOSContext.getHealthSummary(dayAgo, now).catch(() => null)
-        : Promise.resolve(null),
-      canCollectIOSPermission(permission, 'calendar')
-        ? HermesIOSContext.listCalendarEvents(now - 24 * 60 * 60_000, monthAhead).catch(() => [])
-        : Promise.resolve([]),
-      canCollectIOSPermission(permission, 'reminders')
-        ? HermesIOSContext.listReminders(false).catch(() => [])
-        : Promise.resolve([]),
-      HermesIOSContext.getDeviceSnapshot().catch(() => null),
-      canCollectIOSPermission(permission, 'screenTime')
-        ? HermesIOSContext.getScreenTimeSnapshot().catch(() => null)
-        : Promise.resolve(null),
-      HermesIOSContext.getWatchSnapshot().catch(() => null),
-    ]);
+    const [capabilities, power, calendar, reminders, device, watch] =
+      await awaitCurrentIOSContext(lifecycle, capture, () => Promise.all([
+        HermesIOSContext.getCapabilities(),
+        HermesIOSContext.getPowerSnapshot(),
+        canCollectIOSPermission(permission, 'calendar')
+          ? HermesIOSContext.listCalendarEvents(now - 24 * 60 * 60_000, monthAhead).catch(() => [])
+          : Promise.resolve([]),
+        canCollectIOSPermission(permission, 'reminders')
+          ? HermesIOSContext.listReminders(false).catch(() => [])
+          : Promise.resolve([]),
+        HermesIOSContext.getDeviceSnapshot().catch(() => null),
+        HermesIOSContext.getWatchSnapshot().catch(() => null),
+      ]));
     const events: IOSContextEvent[] = [
       snapshotEvent('power', now, { ...power }, '', deviceId),
       snapshotEvent('device', now, {
@@ -167,41 +191,52 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
           phase: permission.phase,
         },
       }, '', deviceId),
-      ...(screenTime ? [snapshotEvent('screen-time', now, { ...screenTime }, '', deviceId)] : []),
       ...(watch ? [snapshotEvent('watch', now, { ...watch }, '', deviceId)] : []),
-      ...healthEvents(now, health).map((event) => ({
-        ...event,
-        source_device_id: deviceId,
-        payload: { ...event.payload, source_device_id: deviceId },
-      })),
       ...buildCollectionSnapshotEvents('calendar', calendar, now, deviceId),
       ...buildCollectionSnapshotEvents('reminder', reminders, now, deviceId),
     ];
     // Every context sample reaches the native AES-GCM queue before the first
     // network attempt. A failed upload therefore follows the same cursor/ACK
     // recovery path as background location and Watch events.
-    await HermesIOSContext.enqueueContextEvents(events as unknown as Record<string, unknown>[]);
-    await flushPendingEvents();
+    await awaitCurrentIOSContext(
+      lifecycle,
+      capture,
+      () => HermesIOSContext.enqueueContextEvents(
+        events as unknown as Record<string, unknown>[],
+      ),
+    );
+    await flushPendingEvents(capture);
   }, [deviceId, flushPendingEvents]);
 
-  const executeCommands = useCallback(async () => {
+  const executeCommands = useCallback(async (capture: IOSContextLifecycleCapture) => {
     if (!hasNativeIOSContext
       || !canStartIOSCollection(permissionSnapshotRef.current)
       || commandsRunningRef.current) return;
-    commandsRunningRef.current = true;
+    const runToken = Symbol('ios-command-run');
+    commandsRunningRef.current = runToken;
+    const lifecycle = lifecycleRef.current;
+    const api = apiRef.current;
+    const runCurrent = <T,>(operation: () => Promise<T>) => (
+      awaitCurrentIOSContext(lifecycle, capture, operation)
+    );
     try {
-      if (!await hasUsableNetwork()) return;
-      const storedCommands = (await HermesIOSContext.readPendingCommands())
+      if (!await runCurrent(hasUsableNetwork)) return;
+      const storedCommands = (await runCurrent(
+        () => HermesIOSContext.readPendingCommands(),
+      ))
         .filter((command) => (
           command._relay_device_id === deviceId
           && command._relay_owner_scope === ownerScope
         ))
         .map(parseStoredCommand)
         .filter((command): command is PersistedIOSDeviceCommand => command !== null);
-      const response = await apiRef.current.pullCommands(deviceId, commandCursorRef.current).catch((error) => {
-        if (!storedCommands.length) throw error;
-        return { commands: [] as IOSDeviceCommand[], cursor: commandCursorRef.current };
-      });
+      const response = await runCurrent(() => (
+        api.pullCommands(deviceId, commandCursorRef.current, capture.signal)
+          .catch((error) => {
+            if (!storedCommands.length) throw error;
+            return { commands: [] as IOSDeviceCommand[], cursor: commandCursorRef.current };
+          })
+      ));
       const serverCommands: PersistedIOSDeviceCommand[] = (response.commands || []).map((command) => ({
         ...command,
         _relay_device_id: deviceId,
@@ -210,14 +245,14 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
       const commands = [...storedCommands, ...serverCommands]
         .filter((command, index, all) => all.findIndex((candidate) => candidate.id === command.id) === index);
       for (let command of commands) {
-        if (await HermesIOSContext.hasCompletedCommand(command.id)) {
+        if (await runCurrent(() => HermesIOSContext.hasCompletedCommand(command.id))) {
           // Do not treat command ids as the server pull cursor.
-          await HermesIOSContext.removePendingCommand(command.id);
+          await runCurrent(() => HermesIOSContext.removePendingCommand(command.id));
           continue;
         }
 
         const recoveredResult = command._relay_execution_status === 'executing'
-          ? await HermesIOSContext.getCommandExecutionResult(command.id)
+          ? await runCurrent(() => HermesIOSContext.getCommandExecutionResult(command.id))
           : null;
         if (recoveredResult) {
           command = {
@@ -226,10 +261,14 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
             _relay_execution_status: 'completed',
             _relay_result: recoveredResult,
           };
-          await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
+          await runCurrent(() => HermesIOSContext.storePendingCommand(
+            command as unknown as Record<string, unknown>,
+          ));
         } else if (command.expires_at && normalizeTimestamp(command.expires_at) <= Date.now()) {
           command = { ...command, _relay_error: 'expired', _relay_execution_status: 'failed' };
-          await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
+          await runCurrent(() => HermesIOSContext.storePendingCommand(
+            command as unknown as Record<string, unknown>,
+          ));
         } else if (
           !command._relay_execution_status
           || command._relay_execution_status === 'executing'
@@ -240,15 +279,19 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
             _relay_execution_status: 'executing',
             _relay_attempts: (command._relay_attempts || 0) + 1,
           };
-          await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
+          await runCurrent(() => HermesIOSContext.storePendingCommand(
+            command as unknown as Record<string, unknown>,
+          ));
           try {
-            const result = await executeDeviceCommand(
+            const result = await runCurrent(() => executeDeviceCommand(
               command,
-              flushPendingEvents,
+              () => flushPendingEvents(capture),
               ownerScope,
+              accountGeneration,
               permissionSnapshotRef.current,
-              () => apiRef.current.snapshot(),
-            );
+              () => api.snapshot(undefined, capture.signal),
+              runCurrent,
+            ));
             command = { ...command, _relay_execution_status: 'completed', _relay_result: result };
           } catch (error) {
             command = {
@@ -257,41 +300,57 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
               _relay_execution_status: 'failed',
             };
           }
-          await HermesIOSContext.storePendingCommand(command as unknown as Record<string, unknown>);
+          await runCurrent(() => HermesIOSContext.storePendingCommand(
+            command as unknown as Record<string, unknown>,
+          ));
         }
 
-        await apiRef.current.acknowledgeCommand(deviceId, command.id, command._relay_execution_status === 'completed'
-          ? { result: command._relay_result || {}, status: 'completed' }
-          : { error: command._relay_error || 'native command failed', status: 'failed' });
+        await runCurrent(() => api.acknowledgeCommand(
+          deviceId,
+          command.id,
+          command._relay_execution_status === 'completed'
+            ? { result: command._relay_result || {}, status: 'completed' }
+            : { error: command._relay_error || 'native command failed', status: 'failed' },
+          capture.signal,
+        ));
         // Persist completion for dedupe only; pull cursor is server-owned.
-        await HermesIOSContext.recordCommandCompletion(
+        await runCurrent(() => HermesIOSContext.recordCommandCompletion(
           command.id,
           commandCursorRef.current || command.id,
-        );
-        await HermesIOSContext.removePendingCommand(command.id);
+        ));
+        await runCurrent(() => HermesIOSContext.removePendingCommand(command.id));
       }
       if (response.cursor) {
         commandCursorRef.current = response.cursor;
-        await HermesIOSContext.recordCommandCompletion(`cursor:${response.cursor}`, response.cursor);
+        await runCurrent(() => HermesIOSContext.recordCommandCompletion(
+          `cursor:${response.cursor}`,
+          response.cursor!,
+        ));
       }
     } finally {
-      commandsRunningRef.current = false;
+      if (commandsRunningRef.current === runToken) commandsRunningRef.current = null;
     }
-  }, [deviceId, flushPendingEvents, ownerScope]);
+  }, [accountGeneration, deviceId, flushPendingEvents, ownerScope]);
 
   useEffect(() => {
     if (Platform.OS !== 'ios' || !hasNativeIOSContext || !deviceId.trim()) return undefined;
     let active = true;
+    const lifecycle = lifecycleRef.current;
+    const capture = lifecycle.activate(ownerScope, accountGeneration);
+    const current = () => active && lifecycle.isCurrent(capture);
+    const runCurrent = <T,>(operation: () => Promise<T>) => (
+      awaitCurrentIOSContext(lifecycle, capture, operation)
+    );
     let snapshotTimer: ReturnType<typeof setInterval> | undefined;
     let eventFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
     const synchronize = () => {
-      if (!active) return;
-      void flushPendingEvents().catch(() => undefined);
-      void executeCommands().catch(() => undefined);
+      if (!current()) return;
+      void flushPendingEvents(capture).catch(() => undefined);
+      void executeCommands(capture).catch(() => undefined);
     };
     const scheduleEventSync = () => {
-      if (!active || eventFlushTimer) return;
+      if (!current() || eventFlushTimer) return;
       eventFlushTimer = setTimeout(() => {
         eventFlushTimer = undefined;
         synchronize();
@@ -300,61 +359,76 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     const synchronizeFromBackgroundWake = async (event: { wakeId?: string }) => {
       let success = true;
       try {
-        if (!await hasUsableNetwork()) throw new Error('network unavailable');
-        await flushPendingEvents();
-        await executeCommands();
-        await syncSnapshots();
+        if (!await runCurrent(hasUsableNetwork)) throw new Error('network unavailable');
+        await flushPendingEvents(capture);
+        await executeCommands(capture);
+        await syncSnapshots(capture);
       } catch {
         success = false;
       } finally {
         if (event.wakeId) {
-          await HermesIOSContext.completeBackgroundRelay(event.wakeId, success).catch(() => undefined);
+          if (current()) {
+            await runCurrent(() => HermesIOSContext.completeBackgroundRelay(
+              event.wakeId!,
+              success,
+            )).catch(() => undefined);
+          }
         }
       }
     };
     const startCollectors = async () => {
-      await HermesIOSContext.setOwnerScope(ownerScope);
-      await HermesIOSContext.setPermissionCollectionReady(ownerScope, false);
-      commandCursorRef.current = await HermesIOSContext.getCommandCursor();
-      const authorization = await ensureIOSPermissions(
+      await runCurrent(() => HermesIOSContext.setOwnerScope(ownerScope, accountGeneration));
+      await runCurrent(() => HermesIOSContext.setBackgroundRelayReady(
+        ownerScope,
+        accountGeneration,
+        true,
+      ));
+      const pendingWakes = await runCurrent(
+        () => HermesIOSContext.listPendingRelayWakes(),
+      ).catch(() => []);
+      for (const wake of pendingWakes) {
+        if (!current()) return;
+        await synchronizeFromBackgroundWake(wake);
+      }
+      await runCurrent(() => HermesIOSContext.setPermissionCollectionReady(ownerScope, false));
+      const commandCursor = await runCurrent(() => HermesIOSContext.getCommandCursor());
+      commandCursorRef.current = commandCursor;
+      const authorization = await runCurrent(() => ensureIOSPermissions(
         ownerScope,
         HermesIOSContext,
-        (snapshot) => { if (active) updatePermissionSnapshot(snapshot); },
+        (snapshot) => { if (current()) updatePermissionSnapshot(snapshot); },
         permissionAttempt > 0,
-      );
-      if (!active) return;
+      ));
       updatePermissionSnapshot(authorization);
-      await HermesIOSContext.setPermissionCollectionReady(
+      await runCurrent(() => HermesIOSContext.setPermissionCollectionReady(
         ownerScope,
         canStartIOSCollection(authorization),
-      );
+      ));
       if (canCollectIOSPermission(authorization, 'screenTime')) {
-        await HermesIOSContext
-          .startScreenTimeMonitoring('hermes-daily-context', 0, 24)
+        await runCurrent(() => HermesIOSContext
+          .startScreenTimeMonitoring('hermes-daily-context', 0, 24))
           .catch(() => undefined);
+        if (!current()) return;
         setScreenTimeReportRefresh(Date.now());
       } else {
-        await HermesIOSContext
-          .stopScreenTimeMonitoring('hermes-daily-context')
+        await runCurrent(() => HermesIOSContext
+          .stopScreenTimeMonitoring('hermes-daily-context'))
           .catch(() => undefined);
       }
       if (canCollectIOSPermission(authorization, 'location')) {
-        await HermesIOSContext.startAdaptiveLocation();
+        await runCurrent(() => HermesIOSContext.startAdaptiveLocation());
       } else {
-        await HermesIOSContext.stopAdaptiveLocation().catch(() => undefined);
+        await runCurrent(() => HermesIOSContext.stopAdaptiveLocation()).catch(() => undefined);
       }
       if (canCollectIOSPermission(authorization, 'motion')) {
-        await HermesIOSContext.startMotionUpdates();
+        await runCurrent(() => HermesIOSContext.startMotionUpdates());
       } else {
-        await HermesIOSContext.stopMotionUpdates().catch(() => undefined);
+        await runCurrent(() => HermesIOSContext.stopMotionUpdates()).catch(() => undefined);
       }
-      await HermesIOSContext.scheduleBackgroundTasks().catch(() => undefined);
+      await runCurrent(() => HermesIOSContext.scheduleBackgroundTasks()).catch(() => undefined);
+      if (!current()) return;
       synchronize();
-      void syncSnapshots().catch(() => undefined);
-      const pendingWakes = await HermesIOSContext.listPendingRelayWakes().catch(() => []);
-      for (const wake of pendingWakes) {
-        await synchronizeFromBackgroundWake(wake);
-      }
+      void syncSnapshots(capture).catch(() => undefined);
     };
 
     void startCollectors().catch(() => undefined);
@@ -372,7 +446,7 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     snapshotTimer = setInterval(() => {
       if (AppState.currentState === 'active') {
         setScreenTimeReportRefresh(Date.now());
-        void syncSnapshots().catch(() => undefined);
+        void syncSnapshots(capture).catch(() => undefined);
       }
     }, SNAPSHOT_SYNC_MS);
     const appStateSubscription = AppState.addEventListener('change', (state) => {
@@ -387,7 +461,13 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     });
 
     return () => {
+      void HermesIOSContext.setBackgroundRelayReady(
+        ownerScope,
+        accountGeneration,
+        false,
+      ).catch(() => undefined);
       active = false;
+      lifecycle.invalidate(capture);
       clearInterval(foregroundTimer);
       if (snapshotTimer) clearInterval(snapshotTimer);
       if (eventFlushTimer) clearTimeout(eventFlushTimer);
@@ -408,6 +488,7 @@ export function IOSContextProvider({ children, client, deviceId, ownerScope }: I
     executeCommands,
     flushPendingEvents,
     ownerScope,
+    accountGeneration,
     permissionAttempt,
     syncSnapshots,
     updatePermissionSnapshot,
@@ -489,50 +570,24 @@ function normalizeNativeEvent(event: NativeIOSContextEvent): IOSContextEvent {
     payload.state = payload.activity;
   }
   return {
+    account_generation: event.account_generation,
     id: event.id,
     kind: event.kind,
+    lifecycle_epoch: event.lifecycle_epoch,
     source_device_id: event.source_device_id,
     timestamp: event.timestamp,
     payload,
   };
 }
 
-function healthEvents(
-  timestamp: number,
-  summary: IOSHealthSummary | null,
-): IOSContextEvent[] {
-  if (!summary) return [];
-  return [
-    snapshotEvent('health-sleep', timestamp, {
-      authorization: summary.authorization,
-      sleepMinutes: summary.sleepMinutes,
-    }),
-    snapshotEvent('health-heart', timestamp, {
-      authorization: summary.authorization,
-      heartRateBpm: summary.heartRateBpm,
-      restingHeartRateBpm: summary.restingHeartRateBpm,
-    }),
-    snapshotEvent('health-oxygen', timestamp, {
-      authorization: summary.authorization,
-      oxygenSaturation: summary.oxygenSaturation,
-    }),
-    snapshotEvent('health-activity', timestamp, {
-      activeEnergyKcal: summary.activeEnergyKcal,
-      authorization: summary.authorization,
-      distanceWalkingRunningMeters: summary.distanceWalkingRunningMeters,
-      exerciseMinutes: summary.exerciseMinutes,
-      steps: summary.steps,
-      workouts: summary.workouts || [],
-    }),
-  ];
-}
-
 async function executeDeviceCommand(
   command: IOSDeviceCommand,
   flushPendingEvents: () => Promise<void>,
   ownerScope: string,
+  accountGeneration: string,
   permissionSnapshot: IOSPermissionSnapshot,
   loadSnapshot?: () => Promise<IOSIntelligenceSnapshot>,
+  runCurrent: <T>(operation: () => Promise<T>) => Promise<T> = (operation) => operation(),
 ): Promise<Record<string, unknown>> {
   const payload = command.payload || {};
   const key = `${command.capability}:${command.action}`;
@@ -545,8 +600,8 @@ async function executeDeviceCommand(
   }
   switch (key) {
     case 'ios-location:refresh': {
-      const location = await HermesIOSContext.requestCurrentLocation();
-      await flushPendingEvents();
+      const location = await runCurrent(() => HermesIOSContext.requestCurrentLocation());
+      await runCurrent(flushPendingEvents);
       return { location };
     }
     case 'ios-location:get':
@@ -559,27 +614,27 @@ async function executeDeviceCommand(
     case 'ios-location:prepare':
     case 'ios-location:set-predicted-departure': {
       return {
-        scheduled: await HermesIOSContext.setPredictedDeparture(
+        scheduled: await runCurrent(() => HermesIOSContext.setPredictedDeparture(
           predictedDepartureTimestamp(payload),
-        ),
-        mode: await HermesIOSContext.getLocationMode(),
+        )),
+        mode: await runCurrent(() => HermesIOSContext.getLocationMode()),
       };
     }
     case 'ios-trajectory:today':
     case 'ios-trajectory:read': {
       // Pending queue is for upload only. Flush first, then serve today's
       // trajectory from the durable server snapshot (post-sync truth).
-      await flushPendingEvents();
-      const pending = await HermesIOSContext.readPendingEventsByKind(
+      await runCurrent(flushPendingEvents);
+      const pending = await runCurrent(() => HermesIOSContext.readPendingEventsByKind(
         EVENT_BATCH_SIZE,
         ['location'],
         ownerScope,
-      );
+      ));
       let snapshot: IOSIntelligenceSnapshot | null = null;
       let snapshotError = '';
       if (loadSnapshot) {
         try {
-          snapshot = await loadSnapshot();
+          snapshot = await runCurrent(loadSnapshot);
         } catch (error) {
           snapshotError = error instanceof Error ? error.message : String(error);
         }
@@ -597,22 +652,22 @@ async function executeDeviceCommand(
       };
     }
     case 'ios-trajectory:flush': {
-      await flushPendingEvents();
+      await runCurrent(flushPendingEvents);
       return { flushed: true };
     }
     case 'ios-places:today':
     case 'ios-places:read': {
-      await flushPendingEvents();
-      const pending = await HermesIOSContext.readPendingEventsByKind(
+      await runCurrent(flushPendingEvents);
+      const pending = await runCurrent(() => HermesIOSContext.readPendingEventsByKind(
         EVENT_BATCH_SIZE,
         ['place-visit'],
         ownerScope,
-      );
+      ));
       let snapshot: IOSIntelligenceSnapshot | null = null;
       let snapshotError = '';
       if (loadSnapshot) {
         try {
-          snapshot = await loadSnapshot();
+          snapshot = await runCurrent(loadSnapshot);
         } catch (error) {
           snapshotError = error instanceof Error ? error.message : String(error);
         }
@@ -771,29 +826,33 @@ async function executeDeviceCommand(
       return { sent };
     }
     case 'ios-notification:send': {
-      const authorization = await HermesIOSContext.getNotificationAuthorization();
+      const authorization = await runCurrent(
+        () => HermesIOSContext.getNotificationAuthorization(),
+      );
       if (authorization !== 'authorized' && authorization !== 'limited') {
         throw new Error('notification permission is required');
       }
-      const id = await HermesIOSContext.scheduleLocalNotification(
+      const id = await runCurrent(() => HermesIOSContext.scheduleLocalNotification(
         typeof payload.title === 'string' ? payload.title : 'Hermes Agent',
         requiredString(payload.body, 'body'),
         payload.fireAt === undefined ? null : requiredTimestamp(payload.fireAt),
         typeof payload.data === 'object' && payload.data ? payload.data as Record<string, unknown> : {},
-      );
+      ));
       return { id };
     }
     case 'ios-notification:schedule': {
-      const authorization = await HermesIOSContext.getNotificationAuthorization();
+      const authorization = await runCurrent(
+        () => HermesIOSContext.getNotificationAuthorization(),
+      );
       if (authorization !== 'authorized' && authorization !== 'limited') {
         throw new Error('notification permission is required');
       }
-      const id = await HermesIOSContext.scheduleLocalNotification(
+      const id = await runCurrent(() => HermesIOSContext.scheduleLocalNotification(
         requiredString(payload.title, 'title'),
         requiredString(payload.body, 'body'),
         requiredTimestamp(payload.fireAt),
         typeof payload.data === 'object' && payload.data ? payload.data as Record<string, unknown> : {},
-      );
+      ));
       return { id };
     }
     case 'ios-notification:cancel': {
@@ -816,7 +875,9 @@ async function executeDeviceCommand(
       return { opened: await HermesIOSContext.openDeviceSettings() };
     }
     case 'ios-device:delete-account-data': {
-      return { deletedEvents: await HermesIOSContext.deleteOwnerScope(ownerScope) };
+      return {
+        deletion: await HermesIOSContext.deleteOwnerScope(ownerScope, accountGeneration),
+      };
     }
     default:
       throw new Error(`Unsupported native command: ${command.capability}:${command.action}`);

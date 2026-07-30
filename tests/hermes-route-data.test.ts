@@ -194,6 +194,7 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   });
   const custom = {
     apiKey: 'secret',
+    apiKeyAction: 'replace',
     apiMode: 'chat_completions',
     baseUrl: 'https://model.example/v1',
     contextLength: 131072,
@@ -297,6 +298,19 @@ test('all native management routes render the current cloud workspace response',
           targets: [{ node_id: 'wsl', state: 'completed', error: '' }],
         }],
       },
+      resourceCatalog: {
+        resources: [{
+          install_operation_id: 'mi-mcp',
+          operation_id: 'mi-mcp',
+          aggregate_state: 'verified',
+          health: 'healthy',
+          resolved_commit_or_version: '2.0.0',
+          tools: ['issues.list'],
+          permissions: ['network', 'credentials'],
+          last_verified_at: '2026-07-30T08:00:00Z',
+          rollback_available: true,
+        }],
+      },
     },
     channels: { platforms: [{ id: 'telegram', name: 'Telegram', description: 'Telegram messaging', enabled: true, env_vars: [{ key: 'TELEGRAM_BOT_TOKEN', is_set: true, redacted_value: '123•••456' }] }] },
     webhooks: { enabled: true, subscriptions: [{ name: 'deploy', description: '部署回调', enabled: true }] },
@@ -351,7 +365,11 @@ test('all native management routes render the current cloud workspace response',
   assert.equal(plugins.integrations?.[0].detail, '多 Agent 协作');
   assert.equal(mcp.integrations?.[0].name, '文件系统');
   assert.equal(mcp.integrations?.[0].detail, 'npx server-filesystem');
-  assert.equal(mcp.installations?.[0].state, 'completed');
+  assert.equal(mcp.installations?.[0].state, 'verified');
+  assert.equal(mcp.installations?.[0].version, '2.0.0');
+  assert.deepEqual(mcp.installations?.[0].tools, ['issues.list']);
+  assert.deepEqual(mcp.installations?.[0].permissions, ['network', 'credentials']);
+  assert.equal(mcp.installations?.[0].rollbackAvailable, true);
   assert.equal(channels.integrations?.[0].name, 'Telegram 消息渠道');
   assert.equal(channels.integrations?.[0].detail, '通过 Telegram 消息渠道收发 Hermes 消息。');
   assert.deepEqual(JSON.parse(channels.integrations?.[0].configuration ?? ''), {
@@ -751,4 +769,26 @@ test('snapshot labels and action messages follow the caller locale', async () =>
 
   assert.deepEqual(saved, { message: 'Model configuration saved', reload: true });
   assert.deepEqual(tested, { message: 'Connection succeeded (HTTP 200, 84 ms)' });
+});
+
+test('native managed-resource rollback submits one idempotent server intent', async () => {
+  const calls: unknown[] = [];
+  const api = {
+    async rollbackManagedInstallation(operationId: string, requestId: string) {
+      calls.push([operationId, requestId]);
+      return { accepted: true };
+    },
+  } as unknown as HermesCloudApi;
+
+  const result = await performHermesSwiftUIRouteAction(api, {
+    action: 'installation.rollback',
+    payload: {
+      route: 'skills',
+      id: 'mi-install-1',
+      requestId: 'ios-rollback-1',
+    },
+  }, 'default');
+
+  assert.equal(result, 'reload');
+  assert.deepEqual(calls, [['mi-install-1', 'ios-rollback-1']]);
 });

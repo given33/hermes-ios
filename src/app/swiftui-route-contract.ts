@@ -327,6 +327,12 @@ export interface HermesSwiftUIManagedInstallationSnapshot {
   kind: 'mcp' | 'project' | 'skill';
   state: string;
   error: string;
+  health: string;
+  version: string;
+  tools: readonly string[];
+  permissions: readonly string[];
+  lastVerifiedAt: string;
+  rollbackAvailable: boolean;
   targets: readonly HermesSwiftUIManagedInstallationTargetSnapshot[];
 }
 

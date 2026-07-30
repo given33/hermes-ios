@@ -141,6 +141,8 @@ private let hermesDrawerAnimation = Animation.interactiveSpring(
   blendDuration: 0.08
 )
 
+private let hermesReducedMotionFade = Animation.easeOut(duration: 0.12)
+
 func dismissHermesKeyboard() {
   UIApplication.shared.sendAction(
     #selector(UIResponder.resignFirstResponder),
@@ -236,6 +238,7 @@ final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps, HermesThemeProvidi
 }
 
 struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
+  @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
   @ObservedObject var props: HermesSwiftUISidebarProps
   @StateObject private var appearance = HermesAppearanceModel()
   @State private var presented = false
@@ -247,7 +250,7 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
 
   var body: some View {
     GeometryReader { proxy in
-      let drawerWidth = fillsAvailableWidth ? proxy.size.width : min(360, proxy.size.width)
+      let drawerWidth = proxy.size.width
       ZStack(alignment: .leading) {
         appearance.palette.background
           .ignoresSafeArea()
@@ -261,11 +264,13 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
           showsCloseButton: props.presentation != "split"
         )
         .environmentObject(appearance)
+        .padding(.top, proxy.safeAreaInsets.top)
+        .padding(.bottom, proxy.safeAreaInsets.bottom)
       }
       .frame(width: drawerWidth)
       .frame(maxHeight: .infinity, alignment: .leading)
-      .background(appearance.palette.background.ignoresSafeArea())
-      .offset(x: isDrawer ? drawerOffset(width: drawerWidth) : 0)
+      .offset(x: isDrawer && !accessibilityReduceMotion ? drawerOffset(width: drawerWidth) : 0)
+      .opacity(isDrawer && accessibilityReduceMotion ? (presented ? 1 : 0) : 1)
       .shadow(
         color: .black.opacity(isDrawer && presented ? 0.22 : 0),
         radius: 18,
@@ -273,18 +278,17 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
       )
       .contentShape(Rectangle())
     }
-    .background(appearance.palette.background.ignoresSafeArea())
     .onAppear {
       presented = isDrawer ? false : true
       if isDrawer && props.open {
         DispatchQueue.main.async {
-          withAnimation(hermesDrawerAnimation) { presented = true }
+          withAnimation(drawerAnimation) { presented = true }
         }
       }
     }
     .onChange(of: props.open) { next in
       guard isDrawer else { return }
-      withAnimation(hermesDrawerAnimation) { presented = next }
+      withAnimation(drawerAnimation) { presented = next }
     }
     .onAppear { props.applyTheme(to: appearance) }
     .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
@@ -294,6 +298,10 @@ struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
 
   private func drawerOffset(width: CGFloat) -> CGFloat {
     presented ? 0 : -width
+  }
+
+  private var drawerAnimation: Animation {
+    accessibilityReduceMotion ? hermesReducedMotionFade : hermesDrawerAnimation
   }
 
   private func select(_ route: HermesRoute) {
@@ -735,6 +743,7 @@ final class HermesSwiftUIModelToolsProps: ExpoSwiftUI.ViewProps, HermesThemeProv
 }
 
 struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
+  @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
   @ObservedObject var props: HermesSwiftUIModelToolsProps
   @StateObject private var appearance = HermesAppearanceModel()
   @State private var presented = false
@@ -802,7 +811,8 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
         }
         .frame(width: panelWidth)
         .background(appearance.palette.background)
-        .offset(x: presented ? 0 : panelWidth)
+        .offset(x: accessibilityReduceMotion ? 0 : (presented ? 0 : panelWidth))
+        .opacity(accessibilityReduceMotion ? (presented ? 1 : 0) : 1)
         .shadow(color: .black.opacity(presented ? 0.32 : 0), radius: 22, x: -8)
         .gesture(
           DragGesture(minimumDistance: 8)
@@ -819,12 +829,12 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
       presented = false
       if props.open {
         DispatchQueue.main.async {
-          withAnimation(hermesDrawerAnimation) { presented = true }
+          withAnimation(drawerAnimation) { presented = true }
         }
       }
     }
     .onChange(of: props.open) { next in
-      withAnimation(hermesDrawerAnimation) { presented = next }
+      withAnimation(drawerAnimation) { presented = next }
     }
     .onChange(of: props.model) { selectedModel = $0 }
     .onChange(of: props.reasoning) { selectedReasoning = $0 }
@@ -866,10 +876,15 @@ struct HermesSwiftUIModelToolsView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingVie
   }
 
   private func close() {
-    withAnimation(hermesDrawerAnimation) { presented = false }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.27) {
+    withAnimation(drawerAnimation) { presented = false }
+    let closeDelay = accessibilityReduceMotion ? 0.12 : 0.27
+    DispatchQueue.main.asyncAfter(deadline: .now() + closeDelay) {
       props.onRequestClose([:])
     }
+  }
+
+  private var drawerAnimation: Animation {
+    accessibilityReduceMotion ? hermesReducedMotionFade : hermesDrawerAnimation
   }
 }
 

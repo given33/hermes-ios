@@ -1,5 +1,8 @@
 export interface HermesNotificationTarget {
+  accountGeneration: string;
+  eventKey: string;
   notificationId: string;
+  ownerId: string;
   conversationId: string;
   routePath?: string;
   turnId?: string;
@@ -9,11 +12,15 @@ export interface HermesNotificationTarget {
 }
 
 export interface HermesSmartWeatherFeedbackEvent {
+  account_generation: string;
   id: string;
   kind: 'notification-feedback';
   payload: {
     action: 'opened';
     notification_id: string;
+    account_generation: string;
+    event_key: string;
+    owner_id: string;
     useful: true;
   };
   source_device_id: string;
@@ -23,21 +30,49 @@ export interface HermesSmartWeatherFeedbackEvent {
 export function buildSmartWeatherFeedbackEvent(
   notificationId: string,
   deviceId: string,
+  account: Pick<HermesNotificationTarget, 'accountGeneration' | 'eventKey' | 'ownerId'>,
   timestamp = Date.now(),
 ): HermesSmartWeatherFeedbackEvent | null {
   const sourceID = boundedId(notificationId);
-  if (!sourceID || !Number.isFinite(timestamp) || timestamp < 0) return null;
+  const accountGeneration = boundedId(account.accountGeneration);
+  const eventKey = boundedId(account.eventKey);
+  const ownerId = boundedId(account.ownerId);
+  if (
+    !sourceID
+    || !accountGeneration
+    || !eventKey
+    || !ownerId
+    || !Number.isFinite(timestamp)
+    || timestamp < 0
+  ) return null;
   return {
-    id: `notification-feedback:${sourceID}`.slice(0, 256),
+    id: `notification-feedback:${eventKey}`.slice(0, 256),
     kind: 'notification-feedback',
     payload: {
       action: 'opened',
       notification_id: sourceID,
+      account_generation: accountGeneration,
+      event_key: eventKey,
+      owner_id: ownerId,
       useful: true,
     },
     source_device_id: boundedId(deviceId),
     timestamp,
+    account_generation: accountGeneration,
   };
+}
+
+export function notificationMatchesAccount(
+  target: HermesNotificationTarget,
+  ownerId: string,
+  accountGeneration: string,
+): boolean {
+  return target.ownerId.toLowerCase() === ownerId.trim().toLowerCase()
+    && target.accountGeneration === accountGeneration.trim();
+}
+
+export function notificationDedupeKey(target: HermesNotificationTarget): string {
+  return `${target.ownerId.toLowerCase()}\u0000${target.accountGeneration}\u0000${target.eventKey}`;
 }
 
 export function parseHermesNotificationResponse(
@@ -66,6 +101,10 @@ export function parseHermesNotificationPayload(
 ): HermesNotificationTarget | null {
   if (!isRecord(payload)) return null;
   const hermes = isRecord(payload.hermes) ? payload.hermes : payload;
+  const ownerId = boundedId(hermes.owner_id);
+  const accountGeneration = boundedId(hermes.account_generation);
+  const eventKey = boundedId(hermes.event_key);
+  if (!ownerId || !accountGeneration || !eventKey) return null;
   const deepLink = clean(hermes.deep_link);
   const deepLinkTarget = parseHermesDeepLink(deepLink);
   if (deepLink && !deepLinkTarget) return null;
@@ -87,8 +126,11 @@ export function parseHermesNotificationPayload(
   const validUntil = normalizedTimestamp(hermesData?.valid_until);
   if (validUntil !== null && validUntil <= now) return null;
   return {
+    accountGeneration,
+    eventKey,
     notificationId: clean(notificationId).slice(0, 256)
       || `${conversationId}:${turnId || 'conversation'}`,
+    ownerId,
     conversationId,
     ...(routePath ? { routePath } : {}),
     ...(turnId ? { turnId } : {}),

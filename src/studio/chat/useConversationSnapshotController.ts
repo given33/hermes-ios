@@ -10,11 +10,17 @@ import type {
   HermesCloudApi,
   SingleConversation,
 } from '../../api/HermesCloudApi';
+import { accountGenerationFromOwnerScope } from '../../auth/account-identity';
 import type {
   ConversationLocalStore,
   OptimisticPendingTurn,
 } from '../../api/conversation-local-store';
 import { upsertCachedConversation } from '../../api/conversation-local-store';
+import { reconcileConversationSessionEntries } from '../../api/conversation-session-entries';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import type { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
 import {
   conversationCollaborationState,
@@ -112,35 +118,57 @@ export function useConversationSnapshotController({
   updatePendingPhase,
 }: ConversationSnapshotControllerOptions) {
   const cacheWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const sessionEntryStateRef = useRef(new Map<string, { cursor: number; generation: string }>());
 
   const persistConversationCache = useCallback((
     conversations: readonly SingleConversation[],
     activeId: string,
-  ) => {
-    if (!localStore || !cacheOwner) return;
+    expectedEpoch = captureConversationStorageEpoch(cacheOwner),
+  ): Promise<void> => {
+    if (
+      !localStore
+      || !cacheOwner
+      || !isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)
+    ) return Promise.resolve();
     cacheWriteRef.current = cacheWriteRef.current
       .catch(() => undefined)
-      .then(() => localStore.write(cacheOwner, conversations, activeId));
+      .then(() => {
+        if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
+        return localStore.write(cacheOwner, conversations, activeId, expectedEpoch);
+      });
+    return cacheWriteRef.current;
   }, [cacheOwner, localStore]);
 
-  const commitConversationIndex = useCallback((
+  const commitConversationIndex = useCallback(async (
     conversations: readonly SingleConversation[],
     activeId = activeConversationIdRef.current,
+    expectedEpoch = captureConversationStorageEpoch(cacheOwner),
   ) => {
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
     const next = [...conversations];
     conversationIndexRef.current = next;
     setConversations(next);
-    persistConversationCache(next, activeId);
-  }, [activeConversationIdRef, conversationIndexRef, persistConversationCache, setConversations]);
+    await persistConversationCache(next, activeId, expectedEpoch);
+  }, [activeConversationIdRef, cacheOwner, conversationIndexRef, persistConversationCache, setConversations]);
 
-  const applyConversation = useCallback((incomingConversation: SingleConversation) => {
-    const incomingCursor = Math.max(0, Number(incomingConversation.event_cursor) || 0);
-    const currentCursor = hostedEventCursorRef.current.get(incomingConversation.id) || 0;
-    if (incomingCursor < currentCursor) return;
-    hostedEventCursorRef.current.set(
-      incomingConversation.id,
-      Math.max(currentCursor, incomingCursor),
+  const applyConversation = useCallback(async (
+    incomingConversation: SingleConversation,
+    expectedEpoch = captureConversationStorageEpoch(cacheOwner),
+    resetCursor = false,
+  ) => {
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
+    if (
+      String(incomingConversation.account_generation || '').trim()
+      !== accountGenerationFromOwnerScope(cacheOwner)
+    ) return;
+    const incomingCursor = Math.max(
+      0,
+      Number(incomingConversation.hosted_event_cursor)
+        || Number(incomingConversation.event_cursor)
+        || 0,
     );
+    const currentCursor = hostedEventCursorRef.current.get(incomingConversation.id) || 0;
+    if (!resetCursor && incomingCursor < currentCursor) return;
     const conversation = upsertCachedConversation(
       conversationIndexRef.current,
       incomingConversation,
@@ -249,7 +277,10 @@ export function useConversationSnapshotController({
             };
           });
         }
-      } else if (pendingPhaseRef.current !== 'executing') {
+      } else if (
+        pendingPhaseRef.current !== 'executing'
+        && pendingPhaseRef.current !== 'cancel_requested'
+      ) {
         const latestRuntimeStatus = trackedMessages
           .flatMap((message) => message.activities || [])
           .filter((activity) => {
@@ -309,13 +340,20 @@ export function useConversationSnapshotController({
     setActiveHostedTurnId(runningHostedTurnId);
     setHostedRunning(running);
     setSending(running || pendingTurnActiveRef.current);
-    commitConversationIndex(
+    await commitConversationIndex(
       upsertCachedConversation(conversationIndexRef.current, conversation),
       conversation.id,
+      expectedEpoch,
+    );
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
+    hostedEventCursorRef.current.set(
+      incomingConversation.id,
+      resetCursor ? incomingCursor : Math.max(currentCursor, incomingCursor),
     );
   }, [
     activeConversationIdRef,
     activeHostedTurnIdRef,
+    cacheOwner,
     clearOptimisticHostedTurn,
     clearOptimisticPendingTurn,
     commitConversationIndex,
@@ -351,19 +389,77 @@ export function useConversationSnapshotController({
     signal?: AbortSignal,
   ) => {
     if (!cloudApi || !conversationId) return null;
-    const result = await cloudApi.getConversation(conversationId, signal);
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return null;
+    const previousEntryState = sessionEntryStateRef.current.get(conversationId) || {
+      cursor: 0,
+      generation: '',
+    };
+    const [result, initialEntries] = await Promise.all([
+      cloudApi.getConversation(conversationId, signal),
+      cloudApi.getConversationSessionEntries(
+        conversationId,
+        previousEntryState.cursor,
+        2_000,
+        signal,
+      ).catch(() => null),
+    ]);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+      return result.conversation;
+    }
+    let conversation = result.conversation;
+    if (
+      String(conversation.account_generation || '').trim()
+      !== accountGenerationFromOwnerScope(cacheOwner)
+    ) {
+      throw new Error('Hermes conversation account generation changed');
+    }
+    let entries = initialEntries;
+    if (
+      entries
+      && previousEntryState.cursor > 0
+      && (
+        entries.reset_cursor === true
+        || (
+          previousEntryState.generation
+          && entries.account_generation
+          && entries.account_generation !== previousEntryState.generation
+        )
+      )
+    ) {
+      entries = await cloudApi.getConversationSessionEntries(
+        conversationId,
+        0,
+        2_000,
+        signal,
+      );
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return conversation;
+    }
+    if (entries) {
+      conversation = reconcileConversationSessionEntries(conversation, entries);
+      sessionEntryStateRef.current.set(conversationId, {
+        cursor: Math.max(0, entries.cursor || 0),
+        generation: entries.account_generation || previousEntryState.generation,
+      });
+    }
     if (
       expectedGeneration
       && !conversationSyncGenerationRef.current.isActiveCurrent(expectedGeneration)
     ) {
-      return result.conversation;
+      return conversation;
     }
     if (activeConversationIdRef.current && activeConversationIdRef.current !== conversationId) {
-      return result.conversation;
+      return conversation;
     }
-    applyConversation(result.conversation);
-    return result.conversation;
-  }, [activeConversationIdRef, applyConversation, cloudApi, conversationSyncGenerationRef]);
+    await applyConversation(conversation, ownerEpoch);
+    return conversation;
+  }, [
+    activeConversationIdRef,
+    applyConversation,
+    cacheOwner,
+    cloudApi,
+    conversationSyncGenerationRef,
+  ]);
 
   return { applyConversation, commitConversationIndex, loadConversation };
 }

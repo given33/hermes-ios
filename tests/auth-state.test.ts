@@ -13,6 +13,7 @@ import {
   MAX_FACE_ID_ATTEMPTS,
 } from '../src/auth/auth-state';
 import {
+  ACCOUNT_GENERATION_STORAGE_KEY,
   ACCESS_EXPIRES_AT_STORAGE_KEY,
   ACCESS_TOKEN_STORAGE_KEY,
   BASE_URL_STORAGE_KEY,
@@ -46,6 +47,7 @@ import {
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const session: SavedConnection = {
+  accountGeneration: 'acctgen_generation_a',
   baseUrl: 'https://hermes.test',
   username: 'owner',
   accessToken: 'access-token',
@@ -101,6 +103,7 @@ test('auth reducer covers owner registration, login selection, success, and expi
   assert.deepEqual(
     authReducer(authenticated, {
       type: 'SESSION_REFRESHED',
+      accountGeneration: session.accountGeneration,
       accessToken: 'access-token-2',
       refreshToken: 'refresh-token-2',
       expiresAt: 2_100_000_000,
@@ -225,6 +228,10 @@ test('cold start reads base URL, protected refresh token, then session metadata'
       calls.push('expiresAt');
       return session.expiresAt;
     },
+    async readAccountGeneration() {
+      calls.push('accountGeneration');
+      return session.accountGeneration;
+    },
   });
 
   assert.deepEqual(calls, [
@@ -233,6 +240,7 @@ test('cold start reads base URL, protected refresh token, then session metadata'
     'username',
     'accessToken',
     'expiresAt',
+    'accountGeneration',
   ]);
   assert.deepEqual(result, { status: 'authenticated', connection: session });
 });
@@ -396,6 +404,7 @@ test('SecureStore biometric-protects the refresh token and remembered password, 
     'hermes.native.v2.refreshTokenKey',
     'hermes.native.v2.credentialProtection',
     'hermes.native.v2.accessExpiresAt',
+    'hermes.native.v2.accountGeneration',
     'hermes.native.deviceId',
     'hermes.native.v2.sessionVersion',
     'hermes.native.v2.rememberLogin',
@@ -438,6 +447,7 @@ test('SecureStore biometric-protects the refresh token and remembered password, 
     'rotated-access',
     'rotated-refresh',
     session.expiresAt + 100,
+    session.accountGeneration,
   );
   await store.clear();
 
@@ -678,17 +688,48 @@ test('credential save rolls back every session key when protected storage fails'
   };
 
   await assert.rejects(new CredentialStore(secureStore).save(session), /credential/i);
-  assert.deepEqual(written.slice(0, 4), [
+  assert.deepEqual(written.slice(0, 5), [
     BASE_URL_STORAGE_KEY,
     USERNAME_STORAGE_KEY,
+    ACCOUNT_GENERATION_STORAGE_KEY,
     ACCESS_TOKEN_STORAGE_KEY,
     ACCESS_EXPIRES_AT_STORAGE_KEY,
   ]);
-  assert.ok(written[4].startsWith(REFRESH_TOKEN_KEY_PREFIX));
+  assert.ok(written[5].startsWith(REFRESH_TOKEN_KEY_PREFIX));
   assert.deepEqual(
     new Set(deleted),
-    new Set([...CREDENTIAL_STORAGE_KEYS, written[4]]),
+    new Set([...CREDENTIAL_STORAGE_KEYS, written[5]]),
   );
+});
+
+test('token rotation clears a partially written generation-bound session on storage failure', async () => {
+  const deleted: string[] = [];
+  const currentRefreshKey = `${REFRESH_TOKEN_KEY_PREFIX}current`;
+  const secureStore: SecureStoreAdapter = {
+    async getItemAsync(key) {
+      return key === REFRESH_TOKEN_POINTER_STORAGE_KEY ? currentRefreshKey : null;
+    },
+    async setItemAsync(key) {
+      if (key === ACCESS_EXPIRES_AT_STORAGE_KEY) throw new Error('storage full');
+    },
+    async deleteItemAsync(key) {
+      deleted.push(key);
+    },
+  };
+
+  await assert.rejects(
+    new CredentialStore(secureStore).saveSessionTokens(
+      'next-access',
+      'next-refresh',
+      session.expiresAt + 1,
+      session.accountGeneration,
+    ),
+    /update Hermes token session/i,
+  );
+  for (const key of CREDENTIAL_STORAGE_KEYS) assert.ok(deleted.includes(key));
+  assert.ok(deleted.some(
+    (key) => key.startsWith(REFRESH_TOKEN_KEY_PREFIX) && key !== currentRefreshKey,
+  ));
 });
 
 test('session clearing preserves remembered login only when the user opted in', async () => {
@@ -828,7 +869,7 @@ test('native auth gates the saved session behind the Face ID lock and keeps the 
   assert.match(mobileAuthSource, /\/auth\/mobile\/refresh/);
   assert.match(appSource, /<AuthProvider>/);
   assert.match(providerSource, /new IOSIntelligenceApi\(client\)\.deleteAccount\(ownerScope\)/);
-  assert.match(providerSource, /HermesIOSContext\.deleteOwnerScope\(ownerScope\)/);
+  assert.match(providerSource, /HermesIOSContext\.deleteOwnerScope\([\s\S]*ownerScope,[\s\S]*accountGenerationFromOwnerScope/);
   assert.match(providerSource, /credentialStore\.clear\(\)/);
   assert.match(appSource, /<LoginScreen/);
   assert.match(appSource, /<NotificationProvider>/);

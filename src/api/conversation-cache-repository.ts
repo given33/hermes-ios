@@ -14,8 +14,11 @@ import {
 } from './conversation-storage-primitives';
 import {
   advanceConversationSynchronization,
+  captureConversationStorageEpoch,
+  enqueueConversationStorageMaintenance,
   enqueueConversationStorageWrite,
   hasPendingConversationStorageWrite,
+  isConversationStorageEpochCurrent,
   isConversationSynchronizationCurrent,
 } from './conversation-storage-coordinator';
 
@@ -115,16 +118,19 @@ export class ConversationCacheRepository {
     owner: string,
     conversations: readonly SingleConversation[],
     activeConversationId: string,
+    expectedEpoch?: number,
   ): Promise<void> {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return;
+    const epoch = expectedEpoch ?? captureConversationStorageEpoch(normalizedOwner);
+    if (!isConversationStorageEpochCurrent(normalizedOwner, epoch)) return;
     advanceConversationSynchronization(normalizedOwner);
     const cloned = conversations.map(cloneCachedConversation);
     await enqueueConversationStorageWrite(normalizedOwner, () => this.persistSnapshot(
       normalizedOwner,
       cloned,
       activeConversationId,
-    ));
+    ), epoch);
   }
 
   beginSynchronization(owner: string): number {
@@ -161,7 +167,7 @@ export class ConversationCacheRepository {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return;
     advanceConversationSynchronization(normalizedOwner);
-    await enqueueConversationStorageWrite(normalizedOwner, async () => {
+    await enqueueConversationStorageMaintenance(normalizedOwner, async () => {
       await beforeRemove?.();
       const index = parseCacheIndex(
         await this.storage.getItem(cacheKey(normalizedOwner)),
@@ -216,6 +222,7 @@ export class ConversationCacheRepository {
     const stamps = this.sharedRowStamps(owner);
     const observed = this.ownerObservedRowStamps(owner);
     const currentIds = new Set<string>();
+    let rowsChanged = false;
     for (const requestedConversation of conversations) {
       currentIds.add(requestedConversation.id);
       const sharedStamp = stamps.get(requestedConversation.id);
@@ -241,16 +248,28 @@ export class ConversationCacheRepository {
         owner,
         conversation,
       }));
+      rowsChanged = true;
       stamps.set(conversation.id, stamp);
       observed.set(conversation.id, stamp);
     }
-    await this.storage.setItem(cacheKey(owner), JSON.stringify({
-      version: CONVERSATION_CACHE_VERSION,
+    const requestedIds = conversations.map(({ id }) => id);
+    const currentIndex = parseCacheIndex(
+      await this.storage.getItem(cacheKey(owner)),
       owner,
-      activeConversationId,
-      conversationIds: conversations.map(({ id }) => id),
-      syncedAt: Date.now(),
-    }));
+    );
+    const indexChanged = !currentIndex
+      || currentIndex.activeConversationId !== activeConversationId
+      || currentIndex.conversationIds.length !== requestedIds.length
+      || currentIndex.conversationIds.some((id, index) => id !== requestedIds[index]);
+    if (rowsChanged || indexChanged) {
+      await this.storage.setItem(cacheKey(owner), JSON.stringify({
+        version: CONVERSATION_CACHE_VERSION,
+        owner,
+        activeConversationId,
+        conversationIds: requestedIds,
+        syncedAt: Date.now(),
+      }));
+    }
     for (const id of [...stamps.keys()]) {
       if (currentIds.has(id)) continue;
       stamps.delete(id);

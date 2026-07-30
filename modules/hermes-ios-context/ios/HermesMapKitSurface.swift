@@ -35,7 +35,7 @@ final class HermesMapKitSurface: UIView, HermesMapRendering, MKMapViewDelegate {
     mapView.isZoomEnabled = true
     mapView.isRotateEnabled = true
     mapView.isPitchEnabled = false
-    mapView.pointOfInterestFilter = .includingAll
+    mapView.pointOfInterestFilter = .excludingAll
     mapView.translatesAutoresizingMaskIntoConstraints = false
     addSubview(mapView)
 

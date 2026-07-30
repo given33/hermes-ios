@@ -38,6 +38,7 @@ export class OptimisticConversationLedgerRepository {
     messages: readonly CollaborationMessage[],
     pendingTurn?: OptimisticPendingTurn | null,
     expectedMessageIds?: readonly string[],
+    expectedOwnerEpoch?: number,
   ): Promise<boolean> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedConversationId = stringValue(conversationId);
@@ -79,7 +80,7 @@ export class OptimisticConversationLedgerRepository {
       }
       await this.writeInTransaction(normalizedOwner, next);
       committed = true;
-    });
+    }, expectedOwnerEpoch);
     return committed;
   }
 
@@ -87,6 +88,7 @@ export class OptimisticConversationLedgerRepository {
     owner: string,
     conversationId: string,
     pendingTurn: OptimisticPendingTurn,
+    expectedOwnerEpoch?: number,
   ): Promise<void> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedConversationId = stringValue(conversationId);
@@ -96,13 +98,14 @@ export class OptimisticConversationLedgerRepository {
       normalizedOwner,
       normalizedConversationId,
       normalizedPendingTurn,
-    ));
+    ), expectedOwnerEpoch);
   }
 
   async finalizeTurn(
     owner: string,
     conversationId: string,
     terminalMessages: readonly CollaborationMessage[],
+    expectedOwnerEpoch?: number,
   ): Promise<OptimisticConversationLedgerItem | null> {
     const normalizedOwner = normalizeOwner(owner);
     const normalizedConversationId = stringValue(conversationId);
@@ -115,7 +118,7 @@ export class OptimisticConversationLedgerRepository {
         normalizedConversationId,
         normalizedTerminal,
       );
-    });
+    }, expectedOwnerEpoch);
     return finalized;
   }
 
@@ -372,7 +375,12 @@ export function normalizeOptimisticPendingTurn(
   const phase = stringValue(value.phase);
   if (
     !userMessageId
-    || (phase !== 'thinking' && phase !== 'reconnecting' && phase !== 'executing')
+    || (
+      phase !== 'thinking'
+      && phase !== 'reconnecting'
+      && phase !== 'executing'
+      && phase !== 'cancel_requested'
+    )
   ) return undefined;
   return {
     attempt: Math.max(0, Math.min(5, Math.floor(numberValue(value.attempt)))),

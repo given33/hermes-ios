@@ -34,6 +34,7 @@ public final class HermesIOSContextModule: Module {
   private let liveActivity = HermesLiveActivityService.shared
   private let attachmentVault = HermesAttachmentVault.shared
   private let voice = HermesVoiceService.shared
+  private let protectedExport = HermesProtectedExportFile.shared
   private var relayWakeObserver: NSObjectProtocol?
 
   public func definition() -> ModuleDefinition {
@@ -82,6 +83,15 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("deleteAttachmentEncryptionKey") { (owner: String) throws -> Bool in
       try self.attachmentVault.deleteKey(owner: owner)
+    }
+
+    AsyncFunction("writeProtectedAccountExport") {
+      (contents: String, filename: String) throws -> String in
+      try self.protectedExport.write(contents: contents, filename: filename)
+    }
+
+    AsyncFunction("deleteProtectedAccountExport") { (uri: String) throws -> Bool in
+      try self.protectedExport.delete(uri: uri)
     }
 
     // The vault owns the outbox location (Application Support, outside the
@@ -298,16 +308,30 @@ public final class HermesIOSContextModule: Module {
       self.eventQueue.read(limit: limit, scope: scope)
     }
 
+    AsyncFunction("claimPendingEvents") { (limit: Int, scope: String) throws -> [String: Any] in
+      try self.eventQueue.claim(limit: limit, scope: scope)
+    }
+
     AsyncFunction("enqueueContextEvents") { (events: [[String: Any]]) throws -> Int in
       try self.eventQueue.enqueueBatch(events)
     }
 
-    AsyncFunction("acknowledgeEvents") { (ids: [String], cursor: Int?, scope: String) -> Int in
-      self.eventQueue.acknowledge(ids: Set(ids), cursor: cursor, scope: scope)
+    AsyncFunction("acknowledgeEvents") { (ids: [String], cursor: Int?, scope: String) throws -> Int in
+      try self.eventQueue.acknowledge(ids: Set(ids), cursor: cursor, scope: scope)
     }
 
-    AsyncFunction("setOwnerScope") { (scope: String) in
-      self.eventQueue.setOwnerScope(scope)
+    AsyncFunction("acknowledgeEventClaim") {
+      (token: String, ids: [String], cursor: Int?, scope: String) throws -> Int in
+      try self.eventQueue.acknowledgeClaim(
+        token: token,
+        ids: Set(ids),
+        cursor: cursor,
+        scope: scope
+      )
+    }
+
+    AsyncFunction("setOwnerScope") { (scope: String, accountGeneration: String) in
+      self.eventQueue.setOwnerScope(scope, accountGeneration: accountGeneration)
       HermesPermissionCollectionGate.shared.prepare(ownerScope: scope)
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
     }.runOnQueue(.main)
@@ -316,17 +340,28 @@ public final class HermesIOSContextModule: Module {
       HermesPermissionCollectionGate.shared.setReady(ready, ownerScope: scope)
     }
 
-    AsyncFunction("activateOwnerScope") { (scope: String) throws -> Int in
+    AsyncFunction("activateOwnerScope") { (scope: String, accountGeneration: String) throws -> Int in
+      let generation = HermesAccountLifecycle.activateOwnerScope(
+        scope,
+        accountGeneration: accountGeneration
+      )
       if !scope.isEmpty { try self.attachmentVault.activate(owner: scope) }
-      let generation = HermesAccountLifecycle.activateOwnerScope(scope)
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
       return generation
     }.runOnQueue(.main)
 
-    AsyncFunction("deleteOwnerScope") { (scope: String) throws -> Int in
-      let deleted = HermesAccountLifecycle.deleteOwnerScope(scope)
+    AsyncFunction("deleteOwnerScope") { (scope: String, accountGeneration: String) throws -> [String: Any] in
+      let deletion = HermesAccountLifecycle.deleteOwnerScope(
+        scope,
+        accountGeneration: accountGeneration
+      )
       if !scope.isEmpty { _ = try self.attachmentVault.deleteKey(owner: scope) }
-      return deleted
+      return [
+        "accountGeneration": deletion.accountGeneration,
+        "deletedCount": deletion.deletedCount,
+        "deletedWasCurrent": deletion.deletedWasCurrent,
+        "lifecycleEpoch": deletion.lifecycleEpoch,
+      ]
     }.runOnQueue(.main)
 
     AsyncFunction("readPendingEventsByKind") { (limit: Int, kinds: [String], scope: String) -> [[String: Any]] in
@@ -378,7 +413,6 @@ public final class HermesIOSContextModule: Module {
           start: Date(timeIntervalSince1970: start / 1000),
           end: Date(timeIntervalSince1970: end / 1000)
         )
-        self.eventQueue.enqueue(type: "health", payload: payload)
         return payload
       }
     }
@@ -496,10 +530,16 @@ public final class HermesIOSContextModule: Module {
       content.title = title
       content.body = body
       content.sound = .default
-      content.userInfo = data?.reduce(into: [AnyHashable: Any]()) { result, entry in
-        result[entry.key] = entry.value
-      } ?? [:]
       let identifier = "hermes-\(UUID().uuidString.lowercased())"
+      if let token = self.eventQueue.currentCollectorGenerationToken() {
+        var hermes = data?["hermes"] as? [String: Any] ?? data ?? [:]
+        hermes["owner_id"] = token.ownerID
+        hermes["account_generation"] = token.serverAccountGeneration
+        hermes["event_key"] = (hermes["event_key"] as? String) ?? "local:\(identifier)"
+        content.userInfo = ["hermes": hermes]
+      } else {
+        content.userInfo = [:]
+      }
       let trigger: UNNotificationTrigger?
       if let fireAt {
         trigger = UNTimeIntervalNotificationTrigger(
@@ -578,6 +618,15 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("scheduleBackgroundTasks") {
       HermesBackgroundService.shared.schedule()
+    }
+
+    AsyncFunction("setBackgroundRelayReady") {
+      (scope: String, accountGeneration: String, ready: Bool) -> Bool in
+      HermesBackgroundService.shared.setRelayReady(
+        ownerScope: scope,
+        accountGeneration: accountGeneration,
+        ready: ready
+      )
     }
 
     AsyncFunction("listPendingRelayWakes") { () -> [[String: String]] in

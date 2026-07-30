@@ -17,11 +17,18 @@ import { Platform } from 'react-native';
 import { HermesApiClient, HermesApiError } from '../api/HermesApiClient';
 import { withDeadline } from '../api/async-deadline';
 import { assertMobileHandshake } from '../api/hermes-types';
+import { sharedConversationLocalStore } from '../api/hermes-api-registry';
 import { purgeLocalAccountData } from '../api/local-account-purge';
 import { HERMES_ORIGIN } from '../config';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
 import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
 import { AccessTokenController } from './access-token-controller';
+import {
+  accountOwnerScope,
+  accountGenerationFromOwnerScope,
+  LEGACY_ACCOUNT_GENERATION,
+  legacyAccountOwnerScope,
+} from './account-identity';
 import {
   AuthLifecycleCoordinator,
   CredentialMutationQueue,
@@ -178,7 +185,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         if (!current()) return;
         if (result.status === 'authenticated') {
           refreshingSavedSession = true;
-          savedOwnerScope = `${result.connection.baseUrl}|${result.connection.username}`;
+          savedOwnerScope = savedConnectionOwnerScope(result.connection);
           const adoption = await adoptSavedSession(result.connection, current);
           if (adoption.outcome === 'deleted') {
             if (current()) {
@@ -192,6 +199,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
             return;
           }
           if (adoption.outcome === 'authenticated' && current()) {
+            await activateLocalAccountData(adoption.connection);
             dispatch({ type: 'AUTHENTICATED', connection: adoption.connection });
           }
           return;
@@ -283,6 +291,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       {
         baseUrl: mobileAuth.baseUrl,
         username: session.account.username,
+        accountGeneration: session.account.accountGeneration,
         accessToken: session.accessToken,
         refreshToken: session.refreshToken,
         expiresAt: session.expiresAt,
@@ -318,7 +327,8 @@ export function AuthProvider({ children }: PropsWithChildren) {
     }
     if (hasNativeIOSContext) {
       await HermesIOSContext.activateOwnerScope(
-        `${connection.baseUrl}|${connection.username}`,
+        accountOwnerScope(connection),
+        connection.accountGeneration,
       );
     }
     if (!authLifecycle.current.isCurrent(operationGeneration)) {
@@ -367,6 +377,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           password: remembered ? password : '',
           username: username.trim(),
         });
+        await activateLocalAccountData(connection);
         dispatch({ type: 'AUTHENTICATED', connection });
       } catch (error) {
         if (authLifecycle.current.isCurrent(operationGeneration)) {
@@ -435,7 +446,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         return;
       }
       refreshingSavedSession = true;
-      savedOwnerScope = `${result.connection.baseUrl}|${result.connection.username}`;
+      savedOwnerScope = savedConnectionOwnerScope(result.connection);
       const adoption = await adoptSavedSession(result.connection, currentOperation);
       if (adoption.outcome === 'deleted') {
         if (currentOperation()) {
@@ -449,6 +460,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         return;
       }
       if (adoption.outcome === 'authenticated' && currentOperation()) {
+        await activateLocalAccountData(adoption.connection);
         dispatch({ type: 'AUTHENTICATED', connection: adoption.connection });
       }
     } catch (error) {
@@ -552,6 +564,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         operationGeneration,
       );
       if (authLifecycle.current.isCurrent(operationGeneration)) {
+        await activateLocalAccountData(connection);
         dispatch({ type: 'AUTHENTICATED', connection });
       }
     } catch (error) {
@@ -576,7 +589,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     ? authLifecycle.current.currentGeneration()
     : 0;
   const clientSessionKey = sessionConnection
-    ? `${sessionGeneration}\u0000${sessionConnection.baseUrl}\u0000${sessionConnection.username}`
+    ? `${sessionGeneration}\u0000${accountOwnerScope(sessionConnection)}`
     : '';
   const clientSession = useMemo(() => {
     if (!sessionConnection) return null;
@@ -594,10 +607,15 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const mobileAuth = new MobileAuthApiClient(connection.baseUrl);
     const accessTokens = new AccessTokenController(connection, {
       store: {
-        saveSessionTokens(accessToken, refreshToken, expiresAt) {
+        saveSessionTokens(accessToken, refreshToken, expiresAt, accountGeneration) {
           return credentialMutations.run(async () => {
             if (!isCurrentConnection()) return;
-            await credentialStore.saveSessionTokens(accessToken, refreshToken, expiresAt);
+            await credentialStore.saveSessionTokens(
+              accessToken,
+              refreshToken,
+              expiresAt,
+              accountGeneration,
+            );
           });
         },
       },
@@ -636,6 +654,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
           accessToken: session.accessToken,
           refreshToken: session.refreshToken,
           expiresAt: session.expiresAt,
+          accountGeneration: session.account.accountGeneration,
           deviceId: session.deviceId,
         });
       },
@@ -744,7 +763,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (operationGeneration === null) return;
     let serverDeleted = false;
     try {
-      const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
+      const ownerScope = accountOwnerScope(state.connection);
       // Persist the user's deletion intent before the remote request. If the
       // server commits and the app exits before the next line, cold-start
       // recovery uses the revoked refresh token as the terminal phase signal.
@@ -760,7 +779,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       }
     } catch {
       if (serverDeleted && authLifecycle.current.isCurrent(operationGeneration)) {
-        const ownerScope = `${state.connection.baseUrl}|${state.connection.username}`;
+        const ownerScope = accountOwnerScope(state.connection);
         await localAccountCleanupSaga.begin(ownerScope).catch(() => undefined);
         await localAccountCleanupSaga.markRemoteDone(ownerScope).catch(() => undefined);
         await localAccountCleanupSaga
@@ -825,12 +844,23 @@ export function useAuth(): AuthContextValue {
 function localAccountCleanupTasks() {
   return {
     async deleteNativeOwner(ownerScope: string) {
-      if (hasNativeIOSContext) await HermesIOSContext.deleteOwnerScope(ownerScope);
+      if (hasNativeIOSContext) {
+        await HermesIOSContext.deleteOwnerScope(
+          ownerScope,
+          accountGenerationFromOwnerScope(ownerScope),
+        );
+      }
     },
     async purgeAccountData(ownerScope: string) {
       await purgeLocalAccountData(ownerScope);
     },
   };
+}
+
+async function activateLocalAccountData(connection: SavedConnection): Promise<void> {
+  await sharedConversationLocalStore().activate(
+    accountOwnerScope(connection),
+  );
 }
 
 async function hasPendingRemoteAccountDeletion(ownerScope: string): Promise<boolean> {
@@ -857,11 +887,17 @@ async function adoptSavedSession(
   saved: SavedConnection,
   isCurrent: () => boolean,
 ): Promise<SavedSessionAdoption> {
-  const savedOwnerScope = `${saved.baseUrl}|${saved.username}`;
+  const savedOwnerScope = savedConnectionOwnerScope(saved);
   const mobileAuth = new MobileAuthApiClient(saved.baseUrl);
   const refreshed = await mobileAuth.refresh(saved.refreshToken);
   if (refreshed.account.username !== saved.username) {
     throw new Error('Hermes refreshed a different account');
+  }
+  if (
+    saved.accountGeneration !== LEGACY_ACCOUNT_GENERATION
+    && refreshed.account.accountGeneration !== saved.accountGeneration
+  ) {
+    throw new Error('Hermes refreshed a different account generation');
   }
   // Refresh tokens rotate on every successful exchange. Persist the
   // successor before the handshake so a transient handshake failure
@@ -870,6 +906,7 @@ async function adoptSavedSession(
     refreshed.accessToken,
     refreshed.refreshToken,
     refreshed.expiresAt,
+    refreshed.account.accountGeneration,
   ));
   if (await hasPendingRemoteAccountDeletion(savedOwnerScope)) {
     const deletionClient = new HermesApiClient(
@@ -886,6 +923,7 @@ async function adoptSavedSession(
     {
       baseUrl: mobileAuth.baseUrl,
       username: refreshed.account.username,
+      accountGeneration: refreshed.account.accountGeneration,
       accessToken: refreshed.accessToken,
       refreshToken: refreshed.refreshToken,
       expiresAt: refreshed.expiresAt,
@@ -908,10 +946,17 @@ async function adoptSavedSession(
   if (!isCurrent()) return { outcome: 'stale' };
   if (hasNativeIOSContext) {
     await HermesIOSContext.activateOwnerScope(
-      `${verifiedConnection.baseUrl}|${verifiedConnection.username}`,
+      accountOwnerScope(verifiedConnection),
+      verifiedConnection.accountGeneration,
     );
   }
   return { outcome: 'authenticated', connection: verifiedConnection };
+}
+
+function savedConnectionOwnerScope(connection: SavedConnection): string {
+  return connection.accountGeneration === LEGACY_ACCOUNT_GENERATION
+    ? legacyAccountOwnerScope(connection)
+    : accountOwnerScope(connection);
 }
 
 async function unregisterApnsBeforeLogout(

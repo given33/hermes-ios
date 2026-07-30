@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Security
 
@@ -10,7 +11,6 @@ final class HermesContextEventQueue {
   private let eventsURL: URL
   private let relayStateURL: URL
   private let legacyURL: URL
-  private var deferredEvents: [[String: Any]] = []
 
   private init() {
     let applicationSupport = FileManager.default.urls(
@@ -41,10 +41,49 @@ final class HermesContextEventQueue {
     ioQueue.sync { accountGenerationUnlocked() }
   }
 
+  var serverAccountGeneration: String {
+    ioQueue.sync {
+      loadRelayStateUnlocked()["serverAccountGeneration"] as? String ?? ""
+    }
+  }
+
   var hasCurrentOwner: Bool {
     ioQueue.sync {
       let scope = loadRelayStateUnlocked()["ownerScope"] as? String ?? ""
       return !scope.isEmpty
+    }
+  }
+
+  func currentCollectorGenerationToken() -> HermesCollectorGenerationToken? {
+    ioQueue.sync {
+      let state = loadRelayStateUnlocked()
+      let ownerScope = state["ownerScope"] as? String ?? ""
+      let serverGeneration = state["serverAccountGeneration"] as? String ?? ""
+      let lifecycleEpoch = state["accountGeneration"] as? Int ?? 0
+      let startedAt = state["accountGenerationStartedAt"] as? Double ?? 0
+      guard !(state["collectionSuspended"] as? Bool ?? false),
+            !ownerScope.isEmpty,
+            !serverGeneration.isEmpty,
+            lifecycleEpoch > 0,
+            startedAt.isFinite,
+            startedAt > 0 else { return nil }
+      return HermesCollectorGenerationToken(
+        ownerScope: ownerScope,
+        serverAccountGeneration: serverGeneration,
+        lifecycleEpoch: lifecycleEpoch,
+        startedAtMilliseconds: startedAt
+      )
+    }
+  }
+
+  func isCurrentCollectorGenerationToken(_ token: HermesCollectorGenerationToken) -> Bool {
+    ioQueue.sync {
+      let state = loadRelayStateUnlocked()
+      return !(state["collectionSuspended"] as? Bool ?? false)
+        && (state["ownerScope"] as? String) == token.ownerScope
+        && (state["serverAccountGeneration"] as? String) == token.serverAccountGeneration
+        && (state["accountGeneration"] as? Int) == token.lifecycleEpoch
+        && (state["accountGenerationStartedAt"] as? Double) == token.startedAtMilliseconds
     }
   }
 
@@ -56,15 +95,17 @@ final class HermesContextEventQueue {
     !scope.isEmpty && (loadRelayStateUnlocked()["ownerScope"] as? String) == scope
   }
 
+  @discardableResult
   func enqueue(
     type: String,
     payload: [String: Any],
     occurredAt: Date = Date(),
     sourceDeviceID: String? = nil,
     accountGeneration: Int? = nil,
-    completion: (() -> Void)? = nil
-  ) {
-    ioQueue.async { [self] in
+    eventID: String? = nil,
+    onPersisted: (() -> Void)? = nil
+  ) -> Bool {
+    let persisted = ioQueue.sync { [self] in
       let relayState = loadRelayStateUnlocked()
       let ownerScope = relayState["ownerScope"] as? String ?? ""
       let currentGeneration = relayState["accountGeneration"] as? Int ?? 0
@@ -73,22 +114,23 @@ final class HermesContextEventQueue {
             !ownerScope.isEmpty,
             accountGeneration == nil || accountGeneration == currentGeneration,
             occurredAt.timeIntervalSince1970 * 1000 >= generationStartedAt else {
-        DispatchQueue.main.async { completion?() }
-        return
+        return false
+      }
+      if let eventID, !eventID.isEmpty,
+         loadUnlocked().contains(where: { ($0["id"] as? String) == String(eventID.prefix(256)) }) {
+        return true
       }
       let scopedEvent = self.makeEventUnlocked(
         type: type,
         payload: payload,
         occurredAt: occurredAt,
         sourceDeviceID: sourceDeviceID,
-        eventID: nil
+        eventID: eventID
       )
-      flushDeferredUnlocked()
-      if !appendUnlocked(scopedEvent) {
-        deferredEvents.append(scopedEvent)
-      }
-      DispatchQueue.main.async { completion?() }
+      return appendUnlocked(scopedEvent)
     }
+    if persisted { onPersisted?() }
+    return persisted
   }
 
   func enqueueBatch(_ rawEvents: [[String: Any]]) throws -> Int {
@@ -97,11 +139,15 @@ final class HermesContextEventQueue {
       let ownerScope = relayState["ownerScope"] as? String ?? ""
       guard !(relayState["collectionSuspended"] as? Bool ?? false),
             !ownerScope.isEmpty else { return 0 }
-      flushDeferredUnlocked()
-      let persistedIDs = Set(loadUnlocked().compactMap { $0["id"] as? String })
+      let persistedEvents = loadUnlocked()
+      let persistedIDs = Set(persistedEvents.compactMap { $0["id"] as? String })
       var seenIDs = persistedIDs
       var accepted = 0
-      var failed = false
+      var pending: [[String: Any]] = []
+      var nextSequence = max(
+        UserDefaults.standard.integer(forKey: sequenceKey),
+        persistedEvents.compactMap { $0["sequence"] as? Int }.max() ?? 0
+      )
 
       for raw in rawEvents {
         guard let type = raw["kind"] as? String, !type.isEmpty,
@@ -116,10 +162,14 @@ final class HermesContextEventQueue {
         let timestamp = (raw["timestamp"] as? NSNumber)?.doubleValue
           ?? (raw["observed_at"] as? NSNumber)?.doubleValue
           ?? Date().timeIntervalSince1970 * 1000
-        let expectedGeneration = (raw["account_generation"] as? NSNumber)?.intValue
-          ?? raw["account_generation"] as? Int
+        let expectedGeneration = (raw["lifecycle_epoch"] as? NSNumber)?.intValue
+          ?? raw["lifecycle_epoch"] as? Int
         if let expectedGeneration,
            expectedGeneration != (relayState["accountGeneration"] as? Int ?? 0) {
+          continue
+        }
+        if let expectedAccountGeneration = raw["account_generation"] as? String,
+           expectedAccountGeneration != (relayState["serverAccountGeneration"] as? String ?? "") {
           continue
         }
         let generationStartedAt = relayState["accountGenerationStartedAt"] as? Double ?? 0
@@ -127,23 +177,24 @@ final class HermesContextEventQueue {
         let occurredAt = Date(
           timeIntervalSince1970: timestamp > 10_000_000_000 ? timestamp / 1000 : timestamp
         )
+        nextSequence += 1
         let event = makeEventUnlocked(
           type: type,
           payload: payload,
           occurredAt: occurredAt,
           sourceDeviceID: raw["source_device_id"] as? String,
-          eventID: eventID
+          eventID: eventID,
+          sequenceOverride: nextSequence,
+          relayStateOverride: relayState
         )
         let storedID = event["id"] as? String ?? ""
-        if appendUnlocked(event) {
-          seenIDs.insert(storedID)
-          accepted += 1
-        } else {
-          deferredEvents.append(event)
-          failed = true
-        }
+        pending.append(event)
+        seenIDs.insert(storedID)
+        accepted += 1
       }
-      if failed { throw HermesSecureStoreError.persistenceFailed }
+      guard appendBatchUnlocked(pending) else { throw HermesSecureStoreError.persistenceFailed }
+      UserDefaults.standard.set(nextSequence, forKey: sequenceKey)
+      UserDefaults.standard.synchronize()
       return accepted
     }
   }
@@ -154,7 +205,6 @@ final class HermesContextEventQueue {
   // deleteOwnerScope lifecycle path.
   func read(limit: Int, kinds: Set<String>? = nil, scope: String) -> [[String: Any]] {
     ioQueue.sync {
-      flushDeferredUnlocked()
       guard limit > 0, isCurrentOwnerScopeUnlocked(scope) else { return [] }
       let events = loadUnlocked().filter { event in
         guard (event["owner_scope"] as? String) == scope else { return false }
@@ -165,9 +215,63 @@ final class HermesContextEventQueue {
     }
   }
 
-  func acknowledge(ids: Set<String>, cursor: Int?, scope: String) -> Int {
-    ioQueue.sync {
-      flushDeferredUnlocked()
+  func claim(limit: Int, kinds: Set<String>? = nil, scope: String) throws -> [String: Any] {
+    try ioQueue.sync {
+      guard limit > 0, isCurrentOwnerScopeUnlocked(scope) else {
+        return ["token": "", "events": []]
+      }
+      var events = loadUnlocked()
+      let now = Date().timeIntervalSince1970 * 1000
+      let token = UUID().uuidString.lowercased()
+      var claimed: [[String: Any]] = []
+      for index in events.indices where claimed.count < min(limit, 1_000) {
+        guard (events[index]["owner_scope"] as? String) == scope else { continue }
+        if let kinds, !kinds.contains(events[index]["kind"] as? String ?? "") { continue }
+        let status = events[index]["outbox_state"] as? String ?? "pending"
+        let leaseExpiresAt = (events[index]["lease_expires_at"] as? NSNumber)?.doubleValue
+          ?? events[index]["lease_expires_at"] as? Double
+          ?? 0
+        guard status == "pending" || (status == "inflight" && leaseExpiresAt <= now) else {
+          continue
+        }
+        events[index]["outbox_state"] = "inflight"
+        events[index]["batch_token"] = token
+        events[index]["lease_expires_at"] = now + 120_000
+        claimed.append(events[index])
+      }
+      guard !claimed.isEmpty else { return ["token": "", "events": []] }
+      try persistUnlocked(events)
+      return ["token": token, "events": claimed]
+    }
+  }
+
+  func acknowledgeClaim(
+    token: String,
+    ids: Set<String>,
+    cursor: Int?,
+    scope: String
+  ) throws -> Int {
+    try ioQueue.sync {
+      guard !token.isEmpty, isCurrentOwnerScopeUnlocked(scope) else { return 0 }
+      let events = loadUnlocked()
+      let remaining = events.filter { event in
+        guard (event["owner_scope"] as? String) == scope,
+              (event["outbox_state"] as? String) == "inflight",
+              (event["batch_token"] as? String) == token else { return true }
+        if let id = event["id"] as? String, ids.contains(id) { return false }
+        if let cursor, let sequence = event["sequence"] as? Int, sequence <= cursor {
+          return false
+        }
+        return true
+      }
+      guard remaining.count != events.count else { return 0 }
+      try persistUnlocked(remaining)
+      return events.count - remaining.count
+    }
+  }
+
+  func acknowledge(ids: Set<String>, cursor: Int?, scope: String) throws -> Int {
+    try ioQueue.sync {
       guard isCurrentOwnerScopeUnlocked(scope) else { return 0 }
       let events = loadUnlocked()
       let remaining = events.filter { event in
@@ -177,7 +281,7 @@ final class HermesContextEventQueue {
         return true
       }
       guard remaining.count != events.count else { return 0 }
-      persistUnlocked(remaining)
+      try persistUnlocked(remaining)
       return events.count - remaining.count
     }
   }
@@ -238,63 +342,59 @@ final class HermesContextEventQueue {
     }
   }
 
-  func setOwnerScope(_ scope: String) {
+  func setOwnerScope(_ scope: String, accountGeneration: String) {
     ioQueue.sync {
+      let normalized = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+      let normalizedGeneration = accountGeneration.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !normalized.isEmpty, !normalizedGeneration.isEmpty else { return }
       var state = loadRelayStateUnlocked()
-      let previousScope = state["ownerScope"] as? String ?? ""
+      let currentScope = state["ownerScope"] as? String ?? ""
+      let currentAccountGeneration = state["serverAccountGeneration"] as? String ?? ""
       let wasSuspended = state["collectionSuspended"] as? Bool ?? false
       let deletedScopes = Set(state["deletedOwnerScopes"] as? [String] ?? [])
-      guard !wasSuspended, !deletedScopes.contains(scope) else { return }
-      if previousScope.isEmpty && !scope.isEmpty && !wasSuspended {
-        var events = loadUnlocked()
-        var migrated = false
-        for index in events.indices {
-          let eventScope = events[index]["owner_scope"] as? String ?? ""
-          if eventScope.isEmpty {
-            events[index]["owner_scope"] = scope
-            migrated = true
-          }
-        }
-        if migrated { persistUnlocked(events) }
-      }
-      if !scope.isEmpty {
-        var cursors = state["commandCursorsByScope"] as? [String: String] ?? [:]
-        if cursors[scope] == nil, let legacyCursor = state["commandCursor"] as? String {
-          cursors[scope] = legacyCursor
-        }
+      guard !wasSuspended,
+            currentScope == normalized,
+            currentAccountGeneration == normalizedGeneration,
+            !deletedScopes.contains(normalized) else { return }
+      if !normalized.isEmpty {
+        let cursors = state["commandCursorsByScope"] as? [String: String] ?? [:]
+        // Legacy cursors are fenced in their original unscoped namespace.
         state["commandCursorsByScope"] = cursors
-        var completedByScope = state["completedCommandIDsByScope"] as? [String: [String]] ?? [:]
-        if completedByScope[scope] == nil,
-           let legacyCompleted = state["completedCommandIDs"] as? [String] {
-          completedByScope[scope] = legacyCompleted
-        }
+        let completedByScope = state["completedCommandIDsByScope"] as? [String: [String]] ?? [:]
         state["completedCommandIDsByScope"] = completedByScope
       }
       state.removeValue(forKey: "commandCursor")
       state.removeValue(forKey: "completedCommandIDs")
-      state["ownerScope"] = scope
+      state["ownerScope"] = normalized
+      state["serverAccountGeneration"] = normalizedGeneration
       state["updatedAt"] = Date().timeIntervalSince1970 * 1000
       persistRelayStateUnlocked(state)
     }
   }
 
   @discardableResult
-  func activateOwnerScope(_ scope: String) -> Int {
+  func activateOwnerScope(_ scope: String, accountGeneration: String) -> Int {
     ioQueue.sync {
       let normalized = scope.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !normalized.isEmpty else { return accountGenerationUnlocked() }
+      let normalizedGeneration = accountGeneration.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !normalized.isEmpty, !normalizedGeneration.isEmpty else {
+        return accountGenerationUnlocked()
+      }
       var state = loadRelayStateUnlocked()
       let previousScope = state["ownerScope"] as? String ?? ""
+      let previousAccountGeneration = state["serverAccountGeneration"] as? String ?? ""
       let wasSuspended = state["collectionSuspended"] as? Bool ?? false
-      var deletedScopes = Set(state["deletedOwnerScopes"] as? [String] ?? [])
-      deletedScopes.remove(normalized)
-      state["deletedOwnerScopes"] = Array(deletedScopes).sorted()
-      if wasSuspended || previousScope != normalized {
+      let deletedScopes = Set(state["deletedOwnerScopes"] as? [String] ?? [])
+      guard !deletedScopes.contains(normalized) else { return accountGenerationUnlocked() }
+      if wasSuspended
+          || previousScope != normalized
+          || previousAccountGeneration != normalizedGeneration {
         state["accountGeneration"] = (state["accountGeneration"] as? Int ?? 0) + 1
         state["accountGenerationStartedAt"] = Date().timeIntervalSince1970 * 1000
       }
       state["collectionSuspended"] = false
       state["ownerScope"] = normalized
+      state["serverAccountGeneration"] = normalizedGeneration
       state["updatedAt"] = Date().timeIntervalSince1970 * 1000
       persistRelayStateUnlocked(state)
       return state["accountGeneration"] as? Int ?? 0
@@ -303,10 +403,15 @@ final class HermesContextEventQueue {
 
   func deleteOwnerScope(
     _ scope: String,
+    accountGeneration: String,
     requestedAt: Double? = nil
   ) -> HermesOwnerScopeDeletionResult {
     ioQueue.sync {
-      deleteOwnerScopeUnlocked(scope, requestedAt: requestedAt)
+      deleteOwnerScopeUnlocked(
+        scope,
+        accountGeneration: accountGeneration,
+        requestedAt: requestedAt
+      )
     }
   }
 
@@ -314,43 +419,59 @@ final class HermesContextEventQueue {
     ioQueue.sync {
       let scope = loadRelayStateUnlocked()["ownerScope"] as? String ?? ""
       guard !scope.isEmpty else { return 0 }
-      return deleteOwnerScopeUnlocked(scope, requestedAt: nil).deletedCount
+      let generation = loadRelayStateUnlocked()["serverAccountGeneration"] as? String ?? ""
+      return deleteOwnerScopeUnlocked(
+        scope,
+        accountGeneration: generation,
+        requestedAt: nil
+      ).deletedCount
     }
   }
 
   private func deleteOwnerScopeUnlocked(
     _ scope: String,
+    accountGeneration: String,
     requestedAt: Double?
   ) -> HermesOwnerScopeDeletionResult {
     guard !scope.isEmpty else {
       return HermesOwnerScopeDeletionResult(
         deletedCount: 0,
         deletedWasCurrent: false,
-        accountGeneration: accountGenerationUnlocked()
+        accountGeneration: accountGeneration,
+        lifecycleEpoch: accountGenerationUnlocked()
       )
     }
     var state = loadRelayStateUnlocked()
     let currentGeneration = state["accountGeneration"] as? Int ?? 0
+    let currentAccountGeneration = state["serverAccountGeneration"] as? String ?? ""
     let generationStartedAt = state["accountGenerationStartedAt"] as? Double ?? 0
     if let requestedAt, requestedAt < generationStartedAt {
       return HermesOwnerScopeDeletionResult(
         deletedCount: 0,
         deletedWasCurrent: false,
-        accountGeneration: currentGeneration
+        accountGeneration: accountGeneration,
+        lifecycleEpoch: currentGeneration
       )
     }
     let deletingCurrentScope = (state["ownerScope"] as? String) == scope
+      && currentAccountGeneration == accountGeneration
     let events = loadUnlocked()
     let remaining = events.filter { event in
       let eventScope = event["owner_scope"] as? String ?? ""
       return eventScope != scope && !(deletingCurrentScope && eventScope.isEmpty)
     }
-    let deferredBefore = deferredEvents.count
-    deferredEvents.removeAll { event in
-      let eventScope = event["owner_scope"] as? String ?? ""
-      return eventScope == scope || (deletingCurrentScope && eventScope.isEmpty)
+    if remaining.count != events.count {
+      do {
+        try persistUnlocked(remaining)
+      } catch {
+        return HermesOwnerScopeDeletionResult(
+          deletedCount: 0,
+          deletedWasCurrent: false,
+          accountGeneration: accountGeneration,
+          lifecycleEpoch: currentGeneration
+        )
+      }
     }
-    if remaining.count != events.count { persistUnlocked(remaining) }
     let commands = state["pendingCommands"] as? [[String: Any]] ?? []
     state["pendingCommands"] = commands.filter { ($0["_relay_owner_scope"] as? String) != scope }
     var cursors = state["commandCursorsByScope"] as? [String: String] ?? [:]
@@ -368,6 +489,7 @@ final class HermesContextEventQueue {
       state["accountGeneration"] = generation
       state["accountGenerationStartedAt"] = Date().timeIntervalSince1970 * 1000
       state["ownerScope"] = ""
+      state["serverAccountGeneration"] = ""
       state["pendingRelayWakes"] = []
       state["collectionSuspended"] = true
       try? FileManager.default.removeItem(at: legacyURL)
@@ -378,9 +500,10 @@ final class HermesContextEventQueue {
     state["updatedAt"] = Date().timeIntervalSince1970 * 1000
     persistRelayStateUnlocked(state)
     return HermesOwnerScopeDeletionResult(
-      deletedCount: events.count - remaining.count + deferredBefore - deferredEvents.count,
+      deletedCount: events.count - remaining.count,
       deletedWasCurrent: deletingCurrentScope,
-      accountGeneration: state["accountGeneration"] as? Int ?? 0
+      accountGeneration: accountGeneration,
+      lifecycleEpoch: state["accountGeneration"] as? Int ?? 0
     )
   }
 
@@ -497,7 +620,14 @@ final class HermesContextEventQueue {
       }
       events.append(event)
     }
-    if !corruptLines.isEmpty { quarantineCorruptLinesUnlocked(corruptLines) }
+    if !corruptLines.isEmpty {
+      do {
+        try quarantineCorruptLinesUnlocked(corruptLines)
+        try persistUnlocked(events)
+      } catch {
+        // Keep the original queue intact. A later read retries quarantine and rewrite.
+      }
+    }
     return events.sorted {
       ($0["sequence"] as? Int ?? 0) < ($1["sequence"] as? Int ?? 0)
     }
@@ -508,18 +638,34 @@ final class HermesContextEventQueue {
     payload: [String: Any],
     occurredAt: Date,
     sourceDeviceID: String?,
-    eventID: String?
+    eventID: String?,
+    sequenceOverride: Int? = nil,
+    relayStateOverride: [String: Any]? = nil
   ) -> [String: Any] {
-    let sequence = UserDefaults.standard.integer(forKey: sequenceKey) + 1
-    UserDefaults.standard.set(sequence, forKey: sequenceKey)
+    let sequence: Int
+    if let sequenceOverride {
+      sequence = sequenceOverride
+    } else {
+      let persistedSequence = loadUnlocked().compactMap { $0["sequence"] as? Int }.max() ?? 0
+      sequence = max(
+        UserDefaults.standard.integer(forKey: sequenceKey),
+        persistedSequence
+      ) + 1
+      UserDefaults.standard.set(sequence, forKey: sequenceKey)
+      UserDefaults.standard.synchronize()
+    }
+    let relayState = relayStateOverride ?? loadRelayStateUnlocked()
     let identifier = (eventID?.isEmpty == false ? eventID : nil)
       ?? UUID().uuidString.lowercased()
     return [
       "id": String(identifier.prefix(256)),
       "kind": String(type.prefix(128)),
-      "owner_scope": loadRelayStateUnlocked()["ownerScope"] as? String ?? "",
+      "owner_scope": relayState["ownerScope"] as? String ?? "",
+      "account_generation": relayState["serverAccountGeneration"] as? String ?? "",
+      "lifecycle_epoch": relayState["accountGeneration"] as? Int ?? 0,
       "payload": payload,
       "sequence": sequence,
+      "outbox_state": "pending",
       "source_device_id": sourceDeviceID ?? installationIdentifier,
       "timestamp": occurredAt.timeIntervalSince1970 * 1000,
     ]
@@ -527,58 +673,53 @@ final class HermesContextEventQueue {
 
   @discardableResult
   private func appendUnlocked(_ event: [String: Any]) -> Bool {
-    guard JSONSerialization.isValidJSONObject(event),
-          let clear = try? JSONSerialization.data(withJSONObject: event),
-          let sealed = try? HermesSecureKeychain.seal(clear) else {
-      return false
-    }
-    var line = sealed.base64EncodedData()
-    line.append(0x0a)
-    do {
-      if !FileManager.default.fileExists(atPath: eventsURL.path) {
-        try line.write(
-          to: eventsURL,
-          options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
-        )
-      } else {
-        let handle = try FileHandle(forWritingTo: eventsURL)
-        try handle.seekToEnd()
-        try handle.write(contentsOf: line)
-        try handle.synchronize()
-        try handle.close()
+    appendBatchUnlocked([event])
+  }
+
+  @discardableResult
+  private func appendBatchUnlocked(_ events: [[String: Any]]) -> Bool {
+    guard !events.isEmpty else { return true }
+    var data = Data()
+    for event in events {
+      guard JSONSerialization.isValidJSONObject(event),
+            let clear = try? JSONSerialization.data(withJSONObject: event),
+            let sealed = try? HermesSecureKeychain.seal(clear) else {
+        return false
       }
+      data.append(sealed.base64EncodedData())
+      data.append(0x0a)
+    }
+    do {
+      let created = !FileManager.default.fileExists(atPath: eventsURL.path)
+      if created && !FileManager.default.createFile(atPath: eventsURL.path, contents: nil) {
+        throw HermesSecureStoreError.persistenceFailed
+      }
+      if created { try applyFileProtection(to: eventsURL) }
+      let handle = try FileHandle(forWritingTo: eventsURL)
+      defer { try? handle.close() }
+      try handle.seekToEnd()
+      try handle.write(contentsOf: data)
+      try handle.synchronize()
       try applyFileProtection(to: eventsURL)
+      if created { try synchronizeDirectoryUnlocked(eventsURL.deletingLastPathComponent()) }
       return true
     } catch {
       return false
     }
   }
 
-  private func persistUnlocked(_ events: [[String: Any]]) {
+  private func persistUnlocked(_ events: [[String: Any]]) throws {
     var data = Data()
     for event in events {
       guard JSONSerialization.isValidJSONObject(event),
             let clear = try? JSONSerialization.data(withJSONObject: event),
-            let sealed = try? HermesSecureKeychain.seal(clear) else { continue }
+            let sealed = try? HermesSecureKeychain.seal(clear) else {
+        throw HermesSecureStoreError.invalidEvent
+      }
       data.append(sealed.base64EncodedData())
       data.append(0x0a)
     }
-    do {
-      try data.write(
-        to: eventsURL,
-        options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
-      )
-      try applyFileProtection(to: eventsURL)
-    } catch {
-      // The in-memory batch remains intact and is retried by the next collector callback.
-    }
-  }
-
-  private func flushDeferredUnlocked() {
-    guard !deferredEvents.isEmpty else { return }
-    var remaining: [[String: Any]] = []
-    for event in deferredEvents where !appendUnlocked(event) { remaining.append(event) }
-    deferredEvents = remaining
+    try durableReplaceUnlocked(data, at: eventsURL)
   }
 
   private func loadRelayStateUnlocked() -> [String: Any] {
@@ -623,11 +764,58 @@ final class HermesContextEventQueue {
     try? FileManager.default.removeItem(at: legacyURL)
   }
 
-  private func quarantineCorruptLinesUnlocked(_ data: Data) {
+  private func quarantineCorruptLinesUnlocked(_ data: Data) throws {
+    let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     let url = eventsURL.deletingLastPathComponent().appendingPathComponent(
-      "pending-events-corrupt-\(Int(Date().timeIntervalSince1970)).encjsonl"
+      "pending-events-corrupt-\(digest.prefix(20)).encjsonl"
     )
-    try? data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    if !FileManager.default.fileExists(atPath: url.path) {
+      try durableReplaceUnlocked(data, at: url)
+    }
+  }
+
+  private func durableReplaceUnlocked(_ data: Data, at target: URL) throws {
+    let directory = target.deletingLastPathComponent()
+    let temporary = directory.appendingPathComponent(".\(target.lastPathComponent).\(UUID().uuidString).tmp")
+    guard FileManager.default.createFile(atPath: temporary.path, contents: nil) else {
+      throw HermesSecureStoreError.persistenceFailed
+    }
+    do {
+      try applyFileProtection(to: temporary)
+      let handle = try FileHandle(forWritingTo: temporary)
+      do {
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try handle.close()
+      } catch {
+        try? handle.close()
+        throw error
+      }
+      if FileManager.default.fileExists(atPath: target.path) {
+        _ = try FileManager.default.replaceItemAt(
+          target,
+          withItemAt: temporary,
+          backupItemName: nil,
+          options: []
+        )
+      } else {
+        try FileManager.default.moveItem(at: temporary, to: target)
+      }
+      try applyFileProtection(to: target)
+      try synchronizeDirectoryUnlocked(directory)
+    } catch {
+      try? FileManager.default.removeItem(at: temporary)
+      throw error
+    }
+  }
+
+  private func synchronizeDirectoryUnlocked(_ directory: URL) throws {
+    let descriptor = Darwin.open(directory.path, O_RDONLY)
+    guard descriptor >= 0 else { throw HermesSecureStoreError.persistenceFailed }
+    defer { Darwin.close(descriptor) }
+    guard Darwin.fsync(descriptor) == 0 else {
+      throw HermesSecureStoreError.persistenceFailed
+    }
   }
 
   private func applyFileProtection(to url: URL) throws {
@@ -641,7 +829,57 @@ final class HermesContextEventQueue {
 struct HermesOwnerScopeDeletionResult {
   let deletedCount: Int
   let deletedWasCurrent: Bool
-  let accountGeneration: Int
+  let accountGeneration: String
+  let lifecycleEpoch: Int
+}
+
+struct HermesCollectorGenerationToken: Equatable, Sendable {
+  let ownerScope: String
+  let serverAccountGeneration: String
+  let lifecycleEpoch: Int
+  let startedAtMilliseconds: Double
+
+  var accountUUID: String {
+    Self.accountUUID(for: ownerScope)
+  }
+
+  var ownerID: String {
+    let components = ownerScope.split(separator: "|", omittingEmptySubsequences: false)
+    guard components.count >= 3 else { return "" }
+    return String(components[components.count - 2])
+  }
+
+  func accepts(ownerID candidate: String, accountGeneration: String) -> Bool {
+    !ownerID.isEmpty
+      && ownerID.caseInsensitiveCompare(candidate.trimmingCharacters(in: .whitespacesAndNewlines))
+        == .orderedSame
+      && serverAccountGeneration == accountGeneration.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  var regionNamespace: String {
+    "app.hermes.\(Self.digest(ownerScope)).\(Self.digest(serverAccountGeneration)).\(lifecycleEpoch)"
+  }
+
+  func accepts(_ date: Date, futureSkew: TimeInterval = 60) -> Bool {
+    let milliseconds = date.timeIntervalSince1970 * 1000
+    return milliseconds.isFinite
+      && milliseconds >= startedAtMilliseconds
+      && date.timeIntervalSinceNow <= futureSkew
+  }
+
+  static func accountUUID(for ownerScope: String) -> String {
+    let hex = SHA256.hash(data: Data(ownerScope.utf8))
+      .map { String(format: "%02x", $0) }
+      .joined()
+    return "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20).prefix(12))"
+  }
+
+  private static func digest(_ value: String) -> String {
+    SHA256.hash(data: Data(value.utf8))
+      .prefix(8)
+      .map { String(format: "%02x", $0) }
+      .joined()
+  }
 }
 
 private enum HermesSecureKeychain {

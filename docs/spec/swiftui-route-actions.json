@@ -68,6 +68,7 @@
     "skillSelect": "skill.select",
     "skillView": "skill.view",
     "skillUpdate": "skill.update",
+    "installationRollback": "installation.rollback",
     "integrationCreate": "integration.create",
     "integrationUpdate": "integration.update",
     "integrationToggle": "integration.toggle",

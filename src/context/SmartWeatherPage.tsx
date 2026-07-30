@@ -19,6 +19,7 @@ import {
   getNativeMapProviderStatus,
   hasNativeStandardMapView,
   setNativeMapPrivacyConsent,
+  type HermesNativeMapProviderStatus,
   type IOSCoordinate,
   type IOSTodayPlace,
 } from '../../modules/hermes-ios-context';
@@ -30,7 +31,6 @@ import { multiplyAlpha } from '../design/control-contracts';
 import { useTheme } from '../design/ThemeProvider';
 import {
   IOSIntelligenceApi,
-  type IOSActiveForecast,
   type IOSIntelligenceSnapshot,
 } from './IOSIntelligenceApi';
 import {
@@ -42,6 +42,11 @@ import {
   smartWeatherLoadErrorMessage,
   smartWeatherRetryDelayMs,
 } from './smart-weather-load';
+import {
+  isForecastActive,
+  normalizeForecast,
+  normalizeSnapshot,
+} from './smart-weather-snapshot';
 import { useIOSPermissionCoordinator } from './IOSContextProvider';
 import { ExpoStandardMap } from './ExpoStandardMap';
 import { useNotificationHealth } from '../notifications/NotificationProvider';
@@ -157,7 +162,7 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
       return;
     }
     try {
-      const next = await api.snapshot();
+      const next = normalizeSnapshot(await api.snapshot());
       if (
         generation !== reloadGenerationRef.current
         || requestedDay !== dayKey(new Date())
@@ -232,14 +237,7 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
   const now = Date.now();
   const visibleForecasts = (snapshot.active_forecasts || snapshot.active_forecast || [])
     .map(normalizeForecast)
-    .filter((forecast) => {
-      const expires = forecast.expires_at ? normalizeTimestamp(forecast.expires_at) : null;
-      const starts = forecast.starts_at ? normalizeTimestamp(forecast.starts_at) : null;
-      // Incomplete validity windows are not treated as live travel weather.
-      if (expires === null && starts === null) return false;
-      if (expires !== null && expires <= now) return false;
-      return true;
-    });
+    .filter((forecast) => isForecastActive(forecast, now));
 
   const track: IOSCoordinate[] = todayTrajectory.map((point) => ({
     latitude: point.latitude,
@@ -284,6 +282,7 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
     notificationHealth,
     locale,
   );
+  const providerMessage = nativeMapProviderMessage(nativeMapProvider, locale);
   const retry = useCallback(() => {
     setMapError('');
     setPreviewLocationError('');
@@ -335,7 +334,9 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
                     && (locationState === 'notDetermined' || locationState === 'limited')
                   ) permissions.retry();
                 }}
+                onProviderStatus={(event) => setNativeMapProvider(event.nativeEvent)}
                 places={places}
+                providerResetRequest={mapAttempt}
                 showsUserLocation={locationState === 'authorized' || locationState === 'limited'}
                 style={StyleSheet.absoluteFill}
                 track={track}
@@ -389,8 +390,19 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
             ) : null}
           </View>
         ) : null}
-        {!mapUnavailableMessage && (locationMessage || notificationMessage || loadError) ? (
+        {!mapUnavailableMessage && (providerMessage || locationMessage || notificationMessage || loadError) ? (
           <View style={[styles.warningRail, { top: insets.top + 118 }]}>
+            {providerMessage ? (
+              <IOSPressable
+                accessibilityLabel={providerMessage}
+                haptic="selection"
+                onPress={retry}
+                style={[styles.warningButton, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border }]}
+                testID="smart-weather-provider-warning"
+              >
+                <AlertTriangle color={tokens.colors.warning} size={18} />
+              </IOSPressable>
+            ) : null}
             {locationMessage ? (
               <IOSPressable
                 accessibilityLabel={locationMessage}
@@ -512,6 +524,21 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
       </View>
     </View>
   );
+}
+
+function nativeMapProviderMessage(
+  status: HermesNativeMapProviderStatus,
+  locale: 'en' | 'zh',
+): string {
+  if (status.phase !== 'degraded' && status.phase !== 'failed') return '';
+  if (status.phase === 'degraded') {
+    return locale === 'zh'
+      ? '高德地图加载失败，已切换到 Apple 地图。点按重试'
+      : 'AMap failed to load. Apple Maps is active; tap to retry.';
+  }
+  return locale === 'zh'
+    ? '地图服务加载失败。点按重试'
+    : 'The map provider failed to load; tap to retry.';
 }
 
 function DailyRouteCurve({
@@ -651,78 +678,6 @@ function notificationPermissionMessage(
       : 'Weather notification registration failed and will retry automatically.';
   }
   return '';
-}
-
-function normalizeForecast(forecast: IOSActiveForecast): IOSActiveForecast {
-  const nested = forecast.data || {};
-  return {
-    ...forecast,
-    ...nested,
-    summary: nested.summary ?? nested.body ?? forecast.summary,
-    starts_at: forecast.starts_at ?? forecast.valid_from ?? nested.starts_at,
-    expires_at: forecast.expires_at ?? forecast.valid_until ?? nested.expires_at,
-  };
-}
-
-function normalizeSnapshot(value: unknown): IOSIntelligenceSnapshot {
-  if (!isRecord(value)) return EMPTY;
-  const trajectory = Array.isArray(value.trajectory)
-    ? value.trajectory.flatMap((entry) => {
-        if (!isRecord(entry)) return [];
-        const latitude = Number(entry.latitude);
-        const longitude = Number(entry.longitude);
-        const observedAt = Number(entry.observed_at);
-        if (
-          !Number.isFinite(latitude)
-          || !Number.isFinite(longitude)
-          || !Number.isFinite(observedAt)
-          || Math.abs(latitude) > 90
-          || Math.abs(longitude) > 180
-        ) return [];
-        return [{ ...entry, latitude, longitude, observed_at: observedAt }];
-      })
-    : [];
-  const places = Array.isArray(value.places)
-    ? value.places.flatMap((entry) => {
-        if (!isRecord(entry)) return [];
-        const placeId = typeof entry.place_id === 'string' ? entry.place_id.trim() : '';
-        const arrivedAt = Number(entry.arrived_at);
-        if (!placeId || !Number.isFinite(arrivedAt)) return [];
-        const latitude = entry.latitude == null ? null : Number(entry.latitude);
-        const longitude = entry.longitude == null ? null : Number(entry.longitude);
-        return [{
-          ...entry,
-          arrived_at: arrivedAt,
-          latitude: latitude !== null
-            && Number.isFinite(latitude)
-            && Math.abs(latitude) <= 90
-            ? latitude
-            : null,
-          longitude: longitude !== null
-            && Number.isFinite(longitude)
-            && Math.abs(longitude) <= 180
-            ? longitude
-            : null,
-          name: typeof entry.name === 'string' ? entry.name : '',
-          place_id: placeId,
-        }];
-      })
-    : [];
-  const forecasts = Array.isArray(value.active_forecasts)
-    ? value.active_forecasts.filter(isRecord)
-    : Array.isArray(value.active_forecast)
-      ? value.active_forecast.filter(isRecord)
-      : [];
-  return {
-    ...value,
-    active_forecasts: forecasts,
-    date: typeof value.date === 'string' ? value.date : '',
-    places,
-    timezone: typeof value.timezone === 'string' && value.timezone
-      ? value.timezone
-      : 'Asia/Shanghai',
-    trajectory,
-  } as IOSIntelligenceSnapshot;
 }
 
 function smartWeatherErrorMessage(error: unknown, locale: 'en' | 'zh'): string {

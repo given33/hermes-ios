@@ -41,6 +41,7 @@ function verifySource(projectRoot) {
 
   const nativeModule = read(join(moduleRoot, 'ios', 'HermesIOSContextModule.swift'));
   const attachmentVault = read(join(moduleRoot, 'ios', 'HermesAttachmentVault.swift'));
+  const screenTimeSpool = read(join(moduleRoot, 'ios', 'HermesScreenTimeSpool.swift'));
   const mapModule = read(join(moduleRoot, 'ios', 'HermesStandardMapModule.swift'));
   requireMatch(nativeModule, /Function\("getNativeViewContract"\)/, 'native view build contract');
   requireMatch(mapModule, /Name\("HermesStandardMap"\)/, 'standard map module name');
@@ -51,7 +52,12 @@ function verifySource(projectRoot) {
   requireMatch(nativeModule, /AsyncFunction\("encryptAttachment"\)/, 'attachment encryption bridge');
   requireMatch(nativeModule, /AsyncFunction\("decryptAttachmentForUpload"\)/, 'attachment decryption bridge');
   requireMatch(attachmentVault, /AES\.GCM\.seal/, 'AES-GCM attachment encryption');
+  requireMatch(attachmentVault, /chunkedEnvelopeMagic/, 'chunked attachment envelope');
+  requireMatch(attachmentVault, /maximumPlaintextBytes/, 'bounded attachment plaintext');
+  requireMatch(attachmentVault, /isCurrentCollectorGenerationToken\(ownerToken\)/, 'generation-fenced attachment vault');
   requireMatch(attachmentVault, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/, 'device-only attachment key');
+  requireMatch(screenTimeSpool, /checksum == digest\(combined\)/, 'Screen Time spool checksum');
+  requireMatch(screenTimeSpool, /static func acknowledge/, 'Screen Time spool ACK');
   const mapView = read(join(moduleRoot, 'ios', 'HermesStandardMapView.swift'));
   const mapKitSurface = read(join(moduleRoot, 'ios', 'HermesMapKitSurface.swift'));
   const amapSurface = read(join(moduleRoot, 'ios', 'HermesAMapSurface.swift'));
@@ -64,10 +70,15 @@ function verifySource(projectRoot) {
   );
   requireMatch(mapView, /amapPrivacyConsentGranted/, 'AMap privacy consent gate');
   requireMatch(mapView, /amapFailedForSession = true/, 'AMap runtime failure fallback');
+  requireMatch(mapView, /var providerResetRequest = 0/, 'map provider retry reset');
+  requireMatch(mapView, /HermesNativeMapRuntimeState/, 'map provider runtime state');
+  requireMatch(mapModule, /Events\("onLocationPress", "onProviderStatus"\)/, 'map provider status event');
   requireMatch(mapKitSurface, /MKStandardMapConfiguration/, 'MapKit fallback');
+  requireMatch(mapKitSurface, /pointOfInterestFilter = \.excludingAll/, 'MapKit POI selection disabled');
   requireMatch(amapSurface, /MAMapView\.updatePrivacyAgree\(\.didAgree\)/, 'AMap privacy API');
   requireMatch(amapSurface, /mapViewDidFailLoadingMap/, 'AMap load failure callback');
   requireMatch(amapSurface, /AMapCoordinateConvert\(coordinate, \.GPS\)/, 'WGS-84 to GCJ-02 conversion');
+  requireMatch(amapSurface, /touchPOIEnabled = false/, 'AMap POI selection disabled');
   read(join(moduleRoot, 'ios', 'HermesScreenTimeReportView.swift'));
   read(join(moduleRoot, 'ios', 'HermesPermissionCollectionGate.swift'));
 
@@ -83,15 +94,15 @@ function verifySource(projectRoot) {
   requireMatch(bridge, /getNativeViewContract/, 'old-build native view guard');
 
   const provider = read(join(projectRoot, 'src', 'context', 'IOSContextProvider.tsx'));
-  requireMatch(provider, /await ensureIOSPermissions\(/, 'OS permission coordination');
+  requireMatch(provider, /ensureIOSPermissions\(/, 'OS permission coordination');
   requireMatch(
     provider,
-    /if \(canCollectIOSPermission\(authorization, 'location'\)\) \{\s*await HermesIOSContext\.startAdaptiveLocation\(\)/,
+    /if \(canCollectIOSPermission\(authorization, 'location'\)\) \{\s*await runCurrent\(\(\) => HermesIOSContext\.startAdaptiveLocation\(\)\)/,
     'authorized location collector startup',
   );
   requireMatch(
     provider,
-    /if \(canCollectIOSPermission\(authorization, 'motion'\)\) \{\s*await HermesIOSContext\.startMotionUpdates\(\)/,
+    /if \(canCollectIOSPermission\(authorization, 'motion'\)\) \{\s*await runCurrent\(\(\) => HermesIOSContext\.startMotionUpdates\(\)\)/,
     'authorized motion collector startup',
   );
   const locationService = read(join(moduleRoot, 'ios', 'HermesLocationService.swift'));
@@ -130,6 +141,7 @@ function verifyPods(iosDirectory) {
   requireMatch(podsProject, /HermesMapKitSurface\.swift/, 'Pods project MapKit fallback source');
   requireMatch(podsProject, /HermesAMapSurface\.swift/, 'Pods project AMap source');
   requireMatch(podsProject, /HermesScreenTimeReportView\.swift/, 'Pods project Screen Time view source');
+  requireMatch(podsProject, /HermesScreenTimeSpool\.swift/, 'Pods project Screen Time spool source');
   requireMatch(podsProject, /HermesAttachmentVault\.swift/, 'Pods project attachment vault source');
   requireMatch(
     podsProject,
@@ -161,8 +173,9 @@ function verifyCompiledObjects(derivedRoot) {
   const mapKitEvidence = sourceCompileEvidence(buildFiles, 'HermesMapKitSurface.swift');
   const amapEvidence = sourceCompileEvidence(buildFiles, 'HermesAMapSurface.swift');
   const attachmentVaultEvidence = sourceCompileEvidence(buildFiles, 'HermesAttachmentVault.swift');
-  if (!mapViewEvidence || !mapModuleEvidence || !mapKitEvidence || !amapEvidence || !attachmentVaultEvidence) {
-    fail('Xcode did not emit compile evidence for every Hermes native map and attachment source.');
+  const screenTimeSpoolEvidence = sourceCompileEvidence(buildFiles, 'HermesScreenTimeSpool.swift');
+  if (!mapViewEvidence || !mapModuleEvidence || !mapKitEvidence || !amapEvidence || !attachmentVaultEvidence || !screenTimeSpoolEvidence) {
+    fail('Xcode did not emit compile evidence for every Hermes native map, attachment, and Screen Time source.');
   }
 }
 

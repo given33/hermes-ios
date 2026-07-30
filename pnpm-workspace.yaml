@@ -1,2 +1,4 @@
 allowBuilds:
   esbuild: true
+patchedDependencies:
+  react-native-drawer-layout@4.2.7: patches/react-native-drawer-layout@4.2.7.patch

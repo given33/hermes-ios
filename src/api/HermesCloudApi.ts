@@ -4,6 +4,8 @@ import {
   HermesConsoleCloudApi,
   type MobileConsoleCatalog,
   type MobileConsoleCommand,
+  type MobileConsoleCompletions,
+  type MobileConsoleCompletionSuggestion,
   type MobileConsoleResult,
   type MobileConsoleStatus,
 } from './cloud/console';
@@ -23,6 +25,7 @@ import {
   type StudioMemoryContent,
 } from './cloud/memory';
 import {
+  customModelApiKeyAction,
   HermesModelsCloudApi,
   type CustomModelConfiguration,
   type CustomModelConnectionResult,
@@ -49,6 +52,9 @@ import type {
   ConversationCompressionResponse,
   ConversationForkResponse,
   ConversationSessionContext,
+  ConversationSessionEntriesResponse,
+  ConversationSessionEntry,
+  ConversationSessionEntryType,
   ConversationSessionLineageEntry,
   ConversationSessionState,
   HostedTurnEnqueueInput,
@@ -60,6 +66,8 @@ import type {
   RouteDecision,
   SessionSummary,
   SingleConversation,
+  ToolOutputArtifactEntry,
+  ToolOutputArtifactsResponse,
   WorkflowWorkspaceAuditSummary,
   WorkflowWorkspaceChangeFile,
   WorkflowWorkspaceChangeSetDetail,
@@ -77,6 +85,9 @@ export type {
   ConversationCompressionResponse,
   ConversationForkResponse,
   ConversationSessionContext,
+  ConversationSessionEntriesResponse,
+  ConversationSessionEntry,
+  ConversationSessionEntryType,
   ConversationSessionLineageEntry,
   ConversationSessionState,
   HostedTurnEnqueueInput,
@@ -88,6 +99,8 @@ export type {
   RouteDecision,
   SessionSummary,
   SingleConversation,
+  ToolOutputArtifactEntry,
+  ToolOutputArtifactsResponse,
   WorkflowWorkspaceAuditSummary,
   WorkflowWorkspaceChangeFile,
   WorkflowWorkspaceChangeSetDetail,
@@ -99,11 +112,14 @@ export type { StudioMemoryContent } from './cloud/memory';
 export type {
   MobileConsoleCatalog,
   MobileConsoleCommand,
+  MobileConsoleCompletions,
+  MobileConsoleCompletionSuggestion,
   MobileConsoleResult,
   MobileConsoleStatus,
 } from './cloud/console';
 export {
   customApiMode,
+  customModelApiKeyAction,
   customReasoningEffort,
   type CustomModelConfiguration,
   type CustomModelConnectionResult,
@@ -154,6 +170,11 @@ export class HermesCloudApi {
 
   constructor(private readonly client: HermesApiClient) {
     const transport: HermesCloudTransport = {
+      consumeDownload: <T>(
+        path: string,
+        consume: (response: Response, signal: AbortSignal) => Promise<T>,
+        options?: HermesRequestOptions,
+      ) => this.client.consumeDownload(path, consume, options),
       download: (path: string, options?: HermesRequestOptions) =>
         this.client.download(path, options),
       json: <T>(
@@ -215,8 +236,16 @@ export class HermesCloudApi {
     return this.sessions.getStatus();
   }
 
-  getMobileConsoleCommands(profile = 'default'): Promise<MobileConsoleCatalog> {
-    return this.console.getCommands(profile);
+  getMobileConsoleCommands(profile = 'default', signal?: AbortSignal): Promise<MobileConsoleCatalog> {
+    return this.console.getCommands(profile, signal);
+  }
+
+  getMobileConsoleCompletions(
+    line: string,
+    profile = 'default',
+    signal?: AbortSignal,
+  ): Promise<MobileConsoleCompletions> {
+    return this.console.complete(line, profile, signal);
   }
 
   executeMobileConsoleCommand(
@@ -361,6 +390,10 @@ export class HermesCloudApi {
   // cloud/extensions.ts (H8 domain split).
   getSkills(profile = 'default') {
     return this.extensions.getSkills(profile);
+  }
+
+  bindManagedResourceOwner(owner: string) {
+    this.extensions.bindManagedResourceOwner(owner);
   }
 
   getManagedInstallations(kind = '', profile = 'default', limit = 50) {
@@ -525,6 +558,18 @@ export class HermesCloudApi {
 
   getWorkflows(profile = 'default') {
     return this.workflows.getWorkflows(profile);
+  }
+
+  rollbackManagedInstallation(operationId: string, requestId: string) {
+    return this.extensions.rollbackManagedInstallation(operationId, requestId);
+  }
+
+  openManagedResourceEvents(cursor = 0, signal?: AbortSignal) {
+    return this.extensions.openManagedResourceEvents(cursor, signal);
+  }
+
+  getManagedResources(cursor = 0, limit = 500, signal?: AbortSignal) {
+    return this.extensions.getManagedResources(cursor, limit, signal);
   }
 
   getWorkflow(id: string, profile = 'default') {
@@ -745,12 +790,32 @@ export class HermesCloudApi {
     return this.conversations.getConversation(id, signal);
   }
 
+  getConversationSessionEntries(
+    conversationId: string,
+    cursor = 0,
+    limit = 500,
+    signal?: AbortSignal,
+  ) {
+    return this.conversations.getConversationSessionEntries(
+      conversationId,
+      cursor,
+      limit,
+      signal,
+    );
+  }
+
   openHostedConversationEvents(
     conversationId: string,
     cursor: number,
     signal: AbortSignal,
+    expectedAccountGeneration: string,
   ) {
-    return this.conversations.openHostedConversationEvents(conversationId, cursor, signal);
+    return this.conversations.openHostedConversationEvents(
+      conversationId,
+      cursor,
+      signal,
+      expectedAccountGeneration,
+    );
   }
 
   getConversationSessionState(conversationId: string, profile = '') {
@@ -843,9 +908,16 @@ export class HermesCloudApi {
     conversationId: string,
     turnId: string,
     reason: string,
+    requestId = `cancel-${turnId}`,
     signal?: AbortSignal,
   ) {
-    return this.conversations.cancelHostedTurn(conversationId, turnId, reason, signal);
+    return this.conversations.cancelHostedTurn(
+      conversationId,
+      turnId,
+      reason,
+      requestId,
+      signal,
+    );
   }
 
   interveneHostedTurn(
@@ -878,8 +950,12 @@ export class HermesCloudApi {
     );
   }
 
-  downloadConversationAttachment(downloadUrl: string) {
-    return this.conversations.downloadConversationAttachment(downloadUrl);
+  consumeConversationAttachment<T>(
+    downloadUrl: string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ) {
+    return this.conversations.consumeConversationAttachment(downloadUrl, consume, signal);
   }
 
   async loadRoute(

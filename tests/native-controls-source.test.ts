@@ -20,24 +20,28 @@ test('native controls render through React Native without a browser surface', ()
   assert.match(sources, /from 'react-native'/);
 });
 
-test('arc border stays native, exact, and continuously animated', () => {
+test('arc border stays native and respects reduced motion', () => {
   const button = read('src/components/ui/NativeButton.tsx');
   const contract = read('src/design/control-contracts.ts');
 
   assert.match(button, /from 'react-native-svg'/);
   assert.match(button, /withRepeat\(/);
   assert.match(button, /withTiming\(1/);
-  assert.match(button, /cancelAnimation\(progress\);[\s\S]*if \(visible\)/);
-  assert.match(button, /\[progress, visible\]/);
+  assert.match(
+    button,
+    /cancelAnimation\(progress\);[\s\S]*if \(visible && !motion\.reduceMotion\)/,
+  );
+  assert.match(button, /\[motion\.reduceMotion, progress, visible\]/);
   assert.match(button, /Easing\.linear/);
-  assert.match(button, /if \(visible\)/);
+  assert.match(button, /if \(visible && !motion\.reduceMotion\)/);
   assert.match(button, /resolveCssGradientGeometry/);
   assert.match(contract, /arcBorderDurationMs: 2230/);
   assert.match(contract, /arcBorderBackgroundSizePercent: 300/);
   assert.match(contract, /brightness: 100 - 99 \* foregroundAlpha/);
+  assert.match(button, /const motion = useMotion\(\)/);
   assert.doesNotMatch(
     button,
-    /ReduceMotion|useReducedMotion|reduceMotion|AccessibilityInfo|isReduceMotionEnabled/,
+    /AccessibilityInfo|isReduceMotionEnabled|useReducedMotion/,
   );
   assert.doesNotMatch(button, /filter:\s*\[/);
   assert.match(button, /textTransform: 'uppercase'/);

@@ -84,6 +84,7 @@ export interface HermesChatAttachment {
   id: string;
   mimeType?: string;
   name: string;
+  sha256?: string;
   size?: number;
 }
 

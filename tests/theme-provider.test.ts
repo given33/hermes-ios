@@ -23,7 +23,7 @@ test('authenticated native content is reachable through the native ThemeProvider
   assert.match(appSource, /Hermes authenticated content/);
   assert.match(
     appSource,
-    /<FrontendPreviewApp[\s\S]{0,180}cacheOwner=\{`\$\{state\.connection\.baseUrl\}\|\$\{state\.connection\.username\}`\}[\s\S]{0,80}client=\{client\}[\s\S]{0,80}notificationTarget=\{notificationTarget\}/,
+    /<FrontendPreviewApp[\s\S]{0,180}cacheOwner=\{ownerScope\}[\s\S]{0,80}client=\{client\}[\s\S]{0,80}notificationTarget=\{notificationTarget\}/,
   );
   assert.doesNotMatch(appSource, /<NativeShell \/>/);
   assert.match(appSource, /EXPO_PUBLIC_FRONTEND_PREVIEW/);

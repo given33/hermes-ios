@@ -286,8 +286,10 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(bridge, /startNativeFrameRateController/);
   assert.match(bridge, /getNativeFrameRateDiagnostics/);
   assert.match(app, /startNativeFrameRateController\(\)/);
-  assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = true \}/);
-  assert.match(native, /withAnimation\(hermesDrawerAnimation\) \{ presented = next \}/);
+  assert.match(native, /withAnimation\(drawerAnimation\) \{ presented = true \}/);
+  assert.match(native, /withAnimation\(drawerAnimation\) \{ presented = next \}/);
+  assert.match(native, /@Environment\(\\\.accessibilityReduceMotion\)/);
+  assert.match(native, /hermesReducedMotionFade = Animation\.easeOut\(duration: 0\.12\)/);
   assert.match(native, /NavigationStack \{/);
   assert.doesNotMatch(native, /navigationTitle\("Hermes Agent"\)/);
   assert.match(native, /HermesSidebarAvatar\(uri: avatarUri\)/);
@@ -298,6 +300,12 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(shell, /avatarUri=\{HERMES_SIDEBAR_AVATAR_URI\}/);
   assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
   assert.match(nativeSidebar, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
+  assert.equal(
+    nativeSidebar.match(/appearance\.palette\.background\s*\.ignoresSafeArea\(\)/g)?.length,
+    1,
+  );
+  assert.match(nativeSidebar, /padding\(\.top, proxy\.safeAreaInsets\.top\)/);
+  assert.match(nativeSidebar, /padding\(\.bottom, proxy\.safeAreaInsets\.bottom\)/);
   assert.doesNotMatch(nativeSidebar, /\.background\(Color\.clear\.ignoresSafeArea\(\)\)/);
   assert.doesNotMatch(nativeSidebar, /\.clipped\(\)/);
   assert.match(native, /\.frame\(maxWidth: \.infinity, minHeight: 52, alignment: \.leading\)/);

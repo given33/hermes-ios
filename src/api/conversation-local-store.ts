@@ -13,6 +13,7 @@ import type {
   HostedTurnPendingAttachment,
   OptimisticConversationLedgerItem,
   OptimisticPendingTurn,
+  PendingEnqueueInitializationResult,
   PendingEnqueueMutationResult,
   PendingInterventionMutationResult,
 } from './conversation-store-types';
@@ -40,7 +41,20 @@ import {
 import {
   ConversationCacheRepository,
 } from './conversation-cache-repository';
-import { enqueueConversationStorageWrite } from './conversation-storage-coordinator';
+import {
+  beginConversationStorageOwnerActivation,
+  beginConversationStorageOwnerPurge,
+  completeConversationStorageOwnerActivation,
+  enqueueConversationStorageMaintenance,
+  enqueueConversationStorageWrite,
+} from './conversation-storage-coordinator';
+import {
+  ConversationDraftRepository,
+  conversationDraftsKey,
+  conversationOwnerDeletionKey,
+  type ConversationDraft,
+  type ConversationDraftAttachment,
+} from './conversation-draft-repository';
 
 export type {
   CollaborationRoomOutboxItem,
@@ -52,6 +66,7 @@ export type {
   HostedTurnPendingAttachment,
   OptimisticConversationLedgerItem,
   OptimisticPendingTurn,
+  PendingEnqueueInitializationResult,
   PendingEnqueueMutationResult,
   PendingInterventionMutationResult,
 } from './conversation-store-types';
@@ -70,6 +85,7 @@ export class ConversationLocalStore {
   private readonly optimisticLedger: OptimisticConversationLedgerRepository;
   private readonly interventionOutbox: HostedInterventionOutboxRepository;
   private readonly hostedTurnOutbox: HostedTurnOutboxRepository;
+  private readonly drafts: ConversationDraftRepository;
 
   constructor(private readonly storage: ConversationStorageAdapter = AsyncStorage) {
     this.cache = new ConversationCacheRepository(storage);
@@ -86,10 +102,12 @@ export class ConversationLocalStore {
       enqueueConversationStorageWrite,
       this.optimisticLedger,
     );
+    this.drafts = new ConversationDraftRepository(storage);
     this.hostedTurnOutbox = new HostedTurnOutboxRepository(
       storage,
       enqueueConversationStorageWrite,
       this.optimisticLedger,
+      this.drafts,
     );
   }
 
@@ -101,8 +119,9 @@ export class ConversationLocalStore {
     owner: string,
     conversations: readonly SingleConversation[],
     activeConversationId: string,
+    expectedEpoch?: number,
   ): Promise<void> {
-    return this.cache.write(owner, conversations, activeConversationId);
+    return this.cache.write(owner, conversations, activeConversationId, expectedEpoch);
   }
 
   beginSynchronization(owner: string): number {
@@ -127,8 +146,82 @@ export class ConversationLocalStore {
     return this.hostedTurnOutbox.read(owner);
   }
 
-  async upsertPendingEnqueue(owner: string, item: HostedTurnOutboxItem): Promise<void> {
-    return this.hostedTurnOutbox.upsert(owner, item);
+  async claimReadyPendingEnqueues(
+    owner: string,
+    workerId: string,
+    now = Date.now(),
+    leaseMs = 5 * 60_000,
+    limit = 4,
+    expectedOwnerEpoch?: number,
+  ): Promise<HostedTurnOutboxItem[]> {
+    return this.hostedTurnOutbox.claimReady(
+      owner,
+      workerId,
+      now,
+      leaseMs,
+      limit,
+      expectedOwnerEpoch,
+    );
+  }
+
+  async claimPendingEnqueueByRequest(
+    owner: string,
+    requestId: string,
+    workerId: string,
+    now = Date.now(),
+    leaseMs = 5 * 60_000,
+    expectedOwnerEpoch?: number,
+  ): Promise<HostedTurnOutboxItem | null> {
+    return this.hostedTurnOutbox.claimByRequest(
+      owner,
+      requestId,
+      workerId,
+      now,
+      leaseMs,
+      expectedOwnerEpoch,
+    );
+  }
+
+  async releasePendingEnqueueLease(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    expectedOwnerEpoch?: number,
+  ): Promise<boolean> {
+    return this.hostedTurnOutbox.releaseLease(owner, item, expectedOwnerEpoch);
+  }
+
+  readDraft(
+    owner: string,
+    conversationId: string,
+    expectedOwnerEpoch?: number,
+  ): Promise<ConversationDraft | null> {
+    return this.hostedTurnOutbox.readDraft(owner, conversationId, expectedOwnerEpoch);
+  }
+
+  writeDraft(
+    owner: string,
+    conversationId: string,
+    content: string,
+    attachments: readonly ConversationDraftAttachment[] = [],
+    expectedEpoch?: number,
+  ): Promise<void> {
+    return this.drafts.write(owner, conversationId, content, attachments, expectedEpoch);
+  }
+
+  clearDraftClaim(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    expectedOwnerEpoch?: number,
+  ): Promise<void> {
+    return this.hostedTurnOutbox.clearDraftClaim(owner, item, expectedOwnerEpoch);
+  }
+
+  async upsertPendingEnqueue(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    expectedOwnerEpoch?: number,
+  ): Promise<void> {
+    return this.hostedTurnOutbox.upsert(owner, item, expectedOwnerEpoch);
   }
 
   async readPendingInterventions(owner: string): Promise<HostedInterventionOutboxItem[]> {
@@ -138,27 +231,34 @@ export class ConversationLocalStore {
   async initializePendingIntervention(
     owner: string,
     item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch?: number,
   ): Promise<PendingInterventionMutationResult> {
-    return this.interventionOutbox.initialize(owner, item);
+    return this.interventionOutbox.initialize(owner, item, expectedOwnerEpoch);
   }
 
   async upsertPendingIntervention(
     owner: string,
     item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch?: number,
   ): Promise<void> {
-    return this.interventionOutbox.upsert(owner, item);
+    return this.interventionOutbox.upsert(owner, item, expectedOwnerEpoch);
   }
 
-  async removePendingIntervention(owner: string, messageId: string): Promise<void> {
-    return this.interventionOutbox.remove(owner, messageId);
+  async removePendingIntervention(
+    owner: string,
+    messageId: string,
+    expectedOwnerEpoch?: number,
+  ): Promise<void> {
+    return this.interventionOutbox.remove(owner, messageId, expectedOwnerEpoch);
   }
 
   async failPendingIntervention(
     owner: string,
     item: HostedInterventionOutboxItem,
     error: string,
+    expectedOwnerEpoch?: number,
   ): Promise<void> {
-    return this.interventionOutbox.fail(owner, item, error);
+    return this.interventionOutbox.fail(owner, item, error, expectedOwnerEpoch);
   }
 
   async initializePendingEnqueue(
@@ -166,47 +266,69 @@ export class ConversationLocalStore {
     item: HostedTurnOutboxItem,
     messages: readonly CollaborationMessage[],
     pendingTurn: OptimisticPendingTurn,
-  ): Promise<PendingEnqueueMutationResult> {
-    return this.hostedTurnOutbox.initialize(owner, item, messages, pendingTurn);
+    expectedOwnerEpoch?: number,
+  ): Promise<PendingEnqueueInitializationResult> {
+    return this.hostedTurnOutbox.initialize(
+      owner,
+      item,
+      messages,
+      pendingTurn,
+      expectedOwnerEpoch,
+    );
   }
 
   async upsertPendingEnqueueIfActive(
     owner: string,
     item: HostedTurnOutboxItem,
+    expectedOwnerEpoch?: number,
   ): Promise<PendingEnqueueMutationResult> {
-    return this.hostedTurnOutbox.upsertIfActive(owner, item);
+    return this.hostedTurnOutbox.upsertIfActive(owner, item, expectedOwnerEpoch);
   }
 
   async transitionPendingEnqueueRetry(
     owner: string,
     item: HostedTurnOutboxItem,
     pendingTurn: OptimisticPendingTurn,
+    expectedOwnerEpoch?: number,
   ): Promise<PendingEnqueueMutationResult> {
-    return this.hostedTurnOutbox.transitionRetry(owner, item, pendingTurn);
+    return this.hostedTurnOutbox.transitionRetry(owner, item, pendingTurn, expectedOwnerEpoch);
   }
 
   async transitionPendingEnqueueTerminal(
     owner: string,
     item: HostedTurnOutboxItem,
     terminalMessages: readonly CollaborationMessage[],
+    expectedOwnerEpoch?: number,
   ): Promise<PendingEnqueueMutationResult> {
-    return this.hostedTurnOutbox.transitionTerminal(owner, item, terminalMessages);
+    return this.hostedTurnOutbox.transitionTerminal(
+      owner,
+      item,
+      terminalMessages,
+      expectedOwnerEpoch,
+    );
   }
 
   async transitionPendingEnqueueForegroundFailure(
     owner: string,
     item: HostedTurnOutboxItem,
     terminalMessages: readonly CollaborationMessage[],
+    expectedOwnerEpoch?: number,
   ): Promise<PendingEnqueueMutationResult> {
-    return this.hostedTurnOutbox.transitionForegroundFailure(owner, item, terminalMessages);
+    return this.hostedTurnOutbox.transitionForegroundFailure(
+      owner,
+      item,
+      terminalMessages,
+      expectedOwnerEpoch,
+    );
   }
 
   async acceptPendingEnqueueIfActive(
     owner: string,
     item: HostedTurnOutboxItem,
     pendingTurn: OptimisticPendingTurn,
+    expectedOwnerEpoch?: number,
   ): Promise<PendingEnqueueMutationResult> {
-    return this.hostedTurnOutbox.acceptIfActive(owner, item, pendingTurn);
+    return this.hostedTurnOutbox.acceptIfActive(owner, item, pendingTurn, expectedOwnerEpoch);
   }
 
   async cancelPendingEnqueue(
@@ -214,8 +336,9 @@ export class ConversationLocalStore {
     requestId: string,
     fallback?: HostedTurnOutboxItem,
     now = Date.now(),
+    expectedOwnerEpoch?: number,
   ): Promise<HostedTurnOutboxItem | null> {
-    return this.hostedTurnOutbox.cancel(owner, requestId, fallback, now);
+    return this.hostedTurnOutbox.cancel(owner, requestId, fallback, now, expectedOwnerEpoch);
   }
 
   async cancelPendingEnqueueAndFinalize(
@@ -224,6 +347,7 @@ export class ConversationLocalStore {
     fallback: HostedTurnOutboxItem | undefined,
     terminalMessages: readonly CollaborationMessage[],
     now = Date.now(),
+    expectedOwnerEpoch?: number,
   ): Promise<HostedTurnOutboxItem | null> {
     return this.hostedTurnOutbox.cancelAndFinalize(
       owner,
@@ -231,15 +355,32 @@ export class ConversationLocalStore {
       fallback,
       terminalMessages,
       now,
+      expectedOwnerEpoch,
     );
   }
 
-  async removePendingEnqueueIfActive(owner: string, requestId: string): Promise<boolean> {
-    return this.hostedTurnOutbox.removeIfActive(owner, requestId);
+  async removePendingEnqueueIfActive(
+    owner: string,
+    requestId: string,
+    expectedOwnerEpoch?: number,
+  ): Promise<boolean> {
+    return this.hostedTurnOutbox.removeIfActive(owner, requestId, expectedOwnerEpoch);
   }
 
-  async removePendingEnqueue(owner: string, requestId: string): Promise<void> {
-    return this.hostedTurnOutbox.remove(owner, requestId);
+  async removePendingEnqueueIfLeaseOwned(
+    owner: string,
+    item: HostedTurnOutboxItem,
+    expectedOwnerEpoch?: number,
+  ): Promise<boolean> {
+    return this.hostedTurnOutbox.removeIfLeaseOwned(owner, item, expectedOwnerEpoch);
+  }
+
+  async removePendingEnqueue(
+    owner: string,
+    requestId: string,
+    expectedOwnerEpoch?: number,
+  ): Promise<void> {
+    return this.hostedTurnOutbox.remove(owner, requestId, expectedOwnerEpoch);
   }
 
   async readPendingRoomMessages(owner: string): Promise<CollaborationRoomOutboxItem[]> {
@@ -249,12 +390,17 @@ export class ConversationLocalStore {
   async upsertPendingRoomMessage(
     owner: string,
     item: CollaborationRoomOutboxItem,
+    expectedOwnerEpoch?: number,
   ): Promise<void> {
-    return this.roomOutbox.upsert(owner, item);
+    return this.roomOutbox.upsert(owner, item, expectedOwnerEpoch);
   }
 
-  async removePendingRoomMessage(owner: string, requestId: string): Promise<void> {
-    return this.roomOutbox.remove(owner, requestId);
+  async removePendingRoomMessage(
+    owner: string,
+    requestId: string,
+    expectedOwnerEpoch?: number,
+  ): Promise<void> {
+    return this.roomOutbox.remove(owner, requestId, expectedOwnerEpoch);
   }
 
   async readOptimisticConversations(
@@ -269,6 +415,7 @@ export class ConversationLocalStore {
     messages: readonly CollaborationMessage[],
     pendingTurn?: OptimisticPendingTurn | null,
     expectedMessageIds?: readonly string[],
+    expectedOwnerEpoch?: number,
   ): Promise<boolean> {
     return this.optimisticLedger.replaceMessages(
       owner,
@@ -276,6 +423,7 @@ export class ConversationLocalStore {
       messages,
       pendingTurn,
       expectedMessageIds,
+      expectedOwnerEpoch,
     );
   }
 
@@ -283,16 +431,28 @@ export class ConversationLocalStore {
     owner: string,
     conversationId: string,
     pendingTurn: OptimisticPendingTurn,
+    expectedOwnerEpoch?: number,
   ): Promise<void> {
-    return this.optimisticLedger.updatePendingTurn(owner, conversationId, pendingTurn);
+    return this.optimisticLedger.updatePendingTurn(
+      owner,
+      conversationId,
+      pendingTurn,
+      expectedOwnerEpoch,
+    );
   }
 
   async finalizeOptimisticTurn(
     owner: string,
     conversationId: string,
     terminalMessages: readonly CollaborationMessage[],
+    expectedOwnerEpoch?: number,
   ): Promise<OptimisticConversationLedgerItem | null> {
-    return this.optimisticLedger.finalizeTurn(owner, conversationId, terminalMessages);
+    return this.optimisticLedger.finalizeTurn(
+      owner,
+      conversationId,
+      terminalMessages,
+      expectedOwnerEpoch,
+    );
   }
 
   async purge(
@@ -301,6 +461,7 @@ export class ConversationLocalStore {
   ): Promise<HostedTurnOutboxItem[]> {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return [];
+    beginConversationStorageOwnerPurge(normalizedOwner);
     let pendingAttachments: HostedTurnOutboxItem[] = [];
     await this.cache.purge(normalizedOwner, [
       hostedTurnOutboxKey(normalizedOwner),
@@ -309,10 +470,27 @@ export class ConversationLocalStore {
       legacyRoomOutboxKey(normalizedOwner),
       interventionOutboxKey(normalizedOwner),
       optimisticLedgerKey(normalizedOwner),
+      conversationDraftsKey(normalizedOwner),
+      conversationOwnerDeletionKey(normalizedOwner),
     ], async () => {
+      await this.storage.setItem(
+        conversationOwnerDeletionKey(normalizedOwner),
+        JSON.stringify({ deletedAt: Date.now(), version: 1 }),
+      );
       pendingAttachments = await this.hostedTurnOutbox.read(normalizedOwner);
       await beforeRemove?.(pendingAttachments);
     });
     return pendingAttachments;
+  }
+
+  /** Open a fresh authenticated lifecycle after any prior account deletion. */
+  async activate(owner: string): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    if (!normalizedOwner) return;
+    const epoch = beginConversationStorageOwnerActivation(normalizedOwner);
+    await enqueueConversationStorageMaintenance(normalizedOwner, async () => {
+      await this.storage.removeItem(conversationOwnerDeletionKey(normalizedOwner));
+      completeConversationStorageOwnerActivation(normalizedOwner, epoch);
+    });
   }
 }

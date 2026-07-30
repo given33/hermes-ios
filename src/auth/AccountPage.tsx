@@ -16,6 +16,7 @@ import {
 } from '../legal/third-party-notices';
 import type { NativeRouteLocale } from '../app/route-composition';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
+import { HermesIOSContext } from '../../modules/hermes-ios-context';
 import {
   PreviewBadge,
   PreviewDataRow,
@@ -234,23 +235,21 @@ export async function shareAccountExport(
   if (payload.encrypted !== true || !payload.blob_base64) {
     throw new Error('The server did not return an encrypted export');
   }
-  const [{ File, Paths }, Sharing] = await Promise.all([
-    import('expo-file-system'),
-    import('expo-sharing'),
-  ]);
+  const Sharing = await import('expo-sharing');
   if (!await Sharing.isAvailableAsync()) throw new Error('System sharing is unavailable');
   const date = new Date().toISOString().slice(0, 10);
-  const target = new File(Paths.cache, `Hermes-account-${date}.hermes-export`);
-  target.create({ intermediates: true, overwrite: true });
-  target.write(JSON.stringify(payload));
+  const target = await HermesIOSContext.writeProtectedAccountExport(
+    JSON.stringify(payload),
+    `Hermes-account-${date}.hermes-export`,
+  );
   try {
-    await Sharing.shareAsync(target.uri, {
+    await Sharing.shareAsync(target, {
       dialogTitle: 'Hermes account export',
       mimeType: 'application/octet-stream',
       UTI: 'public.data',
     });
   } finally {
-    target.delete();
+    await HermesIOSContext.deleteProtectedAccountExport(target);
   }
 }
 

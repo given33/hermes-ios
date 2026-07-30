@@ -1,10 +1,20 @@
 import Foundation
 import HealthKit
+import OSLog
 
 final class HermesHealthService {
   static let shared = HermesHealthService()
+  private static let logger = Logger(subsystem: "app.hermes", category: "health-collector")
+  private static let anchoredBatchLimit = 500
+  private static let initialBackfillLimit = 5_000
+  private static let initialBackfillDays: TimeInterval = 7
 
   private let store = HKHealthStore()
+  private let stateLock = NSLock()
+  private var activeCollectorToken: HermesCollectorGenerationToken?
+  private var inFlightTypes = Set<String>()
+  private var observerCompletions: [String: [() -> Void]] = [:]
+  private var observerQueries: [String: HKObserverQuery] = [:]
 
   private var readTypes: Set<HKObjectType> {
     var types = Set<HKObjectType>()
@@ -20,6 +30,290 @@ final class HermesHealthService {
       HKObjectType.workoutType(),
     ].compactMap { $0 }.forEach { types.insert($0) }
     return types
+  }
+
+  private var sampleTypes: [HKSampleType] {
+    readTypes.compactMap { $0 as? HKSampleType }
+  }
+
+  func activateAccountGeneration(_ token: HermesCollectorGenerationToken) {
+    stateLock.lock()
+    let changed = activeCollectorToken != token
+    stateLock.unlock()
+    if changed { stopObservers(deleteAnchors: false) }
+    stateLock.lock()
+    activeCollectorToken = token
+    stateLock.unlock()
+    DispatchQueue.main.async { [weak self] in
+      _ = self?.resumeBackgroundCollection()
+    }
+  }
+
+  func resetAccountState() {
+    stopObservers(deleteAnchors: true)
+    stateLock.lock()
+    activeCollectorToken = nil
+    stateLock.unlock()
+  }
+
+  @discardableResult
+  func resumeBackgroundCollection() -> Bool {
+    guard HKHealthStore.isHealthDataAvailable(),
+          let token = HermesAccountLifecycle.captureCollectorGeneration() else { return false }
+    var started = false
+    let current = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      stateLock.lock()
+      let changed = activeCollectorToken != token
+      stateLock.unlock()
+      if changed { activateAccountGeneration(token) }
+      else { startBackgroundCollection(token: token) }
+      started = true
+    }
+    return current && started
+  }
+
+  private func startBackgroundCollection(token: HermesCollectorGenerationToken) {
+    stateLock.lock()
+    let current = activeCollectorToken == token
+    let alreadyStarted = !observerQueries.isEmpty
+    stateLock.unlock()
+    guard current, !alreadyStarted else { return }
+
+    for sampleType in sampleTypes {
+      store.enableBackgroundDelivery(for: sampleType, frequency: .immediate) { success, error in
+        if !success {
+          Self.logger.error(
+            "Health background delivery failed for \(sampleType.identifier, privacy: .public): \(error?.localizedDescription ?? "unknown", privacy: .public)"
+          )
+        }
+      }
+      let query = HKObserverQuery(sampleType: sampleType, predicate: nil) {
+        [weak self] _, completion, error in
+        guard let self else {
+          completion()
+          return
+        }
+        if let error {
+          Self.logger.error(
+            "Health observer failed for \(sampleType.identifier, privacy: .public): \(error.localizedDescription, privacy: .public)"
+          )
+          completion()
+          return
+        }
+        self.scheduleDrain(sampleType, token: token, completion: completion)
+      }
+      stateLock.lock()
+      guard activeCollectorToken == token else {
+        stateLock.unlock()
+        return
+      }
+      observerQueries[sampleType.identifier] = query
+      stateLock.unlock()
+      store.execute(query)
+      scheduleDrain(sampleType, token: token, completion: {})
+    }
+  }
+
+  private func stopObservers(deleteAnchors: Bool) {
+    stateLock.lock()
+    let token = activeCollectorToken
+    let queries = Array(observerQueries.values)
+    let completions = observerCompletions.values.flatMap { $0 }
+    observerQueries.removeAll()
+    observerCompletions.removeAll()
+    inFlightTypes.removeAll()
+    stateLock.unlock()
+    queries.forEach(store.stop)
+    completions.forEach { $0() }
+    if deleteAnchors, let token { deleteAnchorState(token: token) }
+  }
+
+  private func scheduleDrain(
+    _ sampleType: HKSampleType,
+    token: HermesCollectorGenerationToken,
+    completion: @escaping () -> Void
+  ) {
+    let identifier = sampleType.identifier
+    stateLock.lock()
+    guard activeCollectorToken == token else {
+      stateLock.unlock()
+      completion()
+      return
+    }
+    observerCompletions[identifier, default: []].append(completion)
+    let shouldStart = !inFlightTypes.contains(identifier)
+    if shouldStart { inFlightTypes.insert(identifier) }
+    stateLock.unlock()
+    guard shouldStart else { return }
+    executeAnchoredDrain(sampleType, token: token, processed: 0)
+  }
+
+  private func executeAnchoredDrain(
+    _ sampleType: HKSampleType,
+    token: HermesCollectorGenerationToken,
+    processed: Int
+  ) {
+    guard HermesContextEventQueue.shared.isCurrentCollectorGenerationToken(token) else {
+      finishDrain(identifier: sampleType.identifier, token: token)
+      return
+    }
+    let anchor = loadAnchor(token: token, typeIdentifier: sampleType.identifier)
+    let predicate = anchor == nil
+      ? HKQuery.predicateForSamples(
+          withStart: Date().addingTimeInterval(-Self.initialBackfillDays * 24 * 60 * 60),
+          end: nil,
+          options: .strictStartDate
+        )
+      : nil
+    let query = HKAnchoredObjectQuery(
+      type: sampleType,
+      predicate: predicate,
+      anchor: anchor,
+      limit: Self.anchoredBatchLimit
+    ) { [weak self] _, samples, deleted, newAnchor, error in
+      guard let self else { return }
+      guard error == nil, let newAnchor else {
+        Self.logger.error(
+          "Health anchored query failed for \(sampleType.identifier, privacy: .public): \(error?.localizedDescription ?? "missing anchor", privacy: .public)"
+        )
+        self.finishDrain(identifier: sampleType.identifier, token: token)
+        return
+      }
+      let samples = samples ?? []
+      let deleted = deleted ?? []
+      self.persistAnchoredBatch(
+        samples: samples,
+        deleted: deleted,
+        sampleType: sampleType,
+        anchor: newAnchor,
+        token: token
+      ) { persisted in
+        guard persisted else {
+          self.finishDrain(identifier: sampleType.identifier, token: token)
+          return
+        }
+        let batchCount = samples.count + deleted.count
+        let total = processed + batchCount
+        if batchCount >= Self.anchoredBatchLimit && total < Self.initialBackfillLimit {
+          self.executeAnchoredDrain(sampleType, token: token, processed: total)
+          return
+        }
+        self.finishDrain(identifier: sampleType.identifier, token: token)
+        if batchCount >= Self.anchoredBatchLimit {
+          DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1) {
+            self.scheduleDrain(sampleType, token: token, completion: {})
+          }
+        }
+      }
+    }
+    store.execute(query)
+  }
+
+  private func persistAnchoredBatch(
+    samples: [HKSample],
+    deleted: [HKDeletedObject],
+    sampleType: HKSampleType,
+    anchor: HKQueryAnchor,
+    token: HermesCollectorGenerationToken,
+    completion: @escaping (Bool) -> Void
+  ) {
+    var rawPersisted = true
+    let current = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      stateLock.lock()
+      let isActive = activeCollectorToken == token
+      stateLock.unlock()
+      guard isActive else {
+        rawPersisted = false
+        return
+      }
+      let capturedAt = Date().timeIntervalSince1970 * 1000
+      let rawEvents = samples.map { sample in
+        [
+          "account_generation": token.serverAccountGeneration,
+          "id": "health-sample:\(sample.uuid.uuidString.lowercased())",
+          "kind": "health-sample",
+          "lifecycle_epoch": token.lifecycleEpoch,
+          "payload": healthSamplePayload(sample, typeIdentifier: sampleType.identifier),
+          "timestamp": capturedAt,
+        ] as [String: Any]
+      } + deleted.map { deletedObject in
+        [
+          "account_generation": token.serverAccountGeneration,
+          "id": "health-sample-delete:\(deletedObject.uuid.uuidString.lowercased())",
+          "kind": "health-sample",
+          "lifecycle_epoch": token.lifecycleEpoch,
+          "payload": [
+            "action": "deleted",
+            "sample_id": deletedObject.uuid.uuidString.lowercased(),
+            "type_identifier": sampleType.identifier,
+          ],
+          "timestamp": capturedAt,
+        ] as [String: Any]
+      }
+      do {
+        rawPersisted = try HermesContextEventQueue.shared.enqueueBatch(rawEvents)
+          == rawEvents.count
+      } catch {
+        rawPersisted = false
+      }
+    }
+    guard current, rawPersisted else {
+      completion(false)
+      return
+    }
+
+    let intervals = sampleType.identifier == HKQuantityTypeIdentifier.stepCount.rawValue
+      ? closedDayIntervals(for: samples)
+      : []
+    Task { [weak self] in
+      guard let self else {
+        completion(false)
+        return
+      }
+      var aggregatesPersisted = true
+      for interval in intervals {
+        do {
+          let aggregate = try await self.summary(start: interval.start, end: interval.end)
+          aggregatesPersisted = self.persistAggregate(
+            aggregate,
+            interval: interval,
+            token: token
+          ) && aggregatesPersisted
+        } catch {
+          aggregatesPersisted = false
+        }
+      }
+      guard aggregatesPersisted else {
+        completion(false)
+        return
+      }
+      var saved = false
+      let anchorPersisted = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+        saved = self.saveAnchor(
+          anchor,
+          token: token,
+          typeIdentifier: sampleType.identifier,
+          processedDelta: samples.count + deleted.count,
+          backfillComplete: samples.count + deleted.count < Self.anchoredBatchLimit
+        )
+      }
+      completion(anchorPersisted && saved)
+    }
+  }
+
+  private func finishDrain(
+    identifier: String,
+    token: HermesCollectorGenerationToken
+  ) {
+    stateLock.lock()
+    guard activeCollectorToken == token else {
+      stateLock.unlock()
+      return
+    }
+    let completions = observerCompletions.removeValue(forKey: identifier) ?? []
+    inFlightTypes.remove(identifier)
+    stateLock.unlock()
+    completions.forEach { $0() }
   }
 
   func authorizationStatus() async -> String {
@@ -50,6 +344,7 @@ final class HermesHealthService {
     guard HKHealthStore.isHealthDataAvailable() else { return "unavailable" }
     do {
       try await store.requestAuthorization(toShare: [], read: readTypes)
+      _ = resumeBackgroundCollection()
       return "limited"
     } catch {
       return "unavailable"
@@ -108,18 +403,219 @@ final class HermesHealthService {
     async let sleep = optionalSleepMinutes(start: rangeStart, end: rangeEnd)
     async let workouts = optionalWorkoutSummary(start: rangeStart, end: rangeEnd)
 
+    let heartRateValue = await heartRate
+    let restingHeartRateValue = await restingHeartRate
+    let oxygenValue = await oxygen
+    let stepsValue = await steps
+    let activeEnergyValue = await activeEnergy
+    let exerciseMinutesValue = await exerciseMinutes
+    let distanceValue = await distance
+    let sleepValue = await sleep
+    let workoutValues = await workouts
     return [
       "authorization": authorization,
-      "activeEnergyKcal": hermesNullable(await activeEnergy),
-      "distanceWalkingRunningMeters": hermesNullable(await distance),
-      "exerciseMinutes": hermesNullable(await exerciseMinutes),
-      "heartRateBpm": hermesNullable(await heartRate),
-      "oxygenSaturation": hermesNullable(await oxygen),
-      "restingHeartRateBpm": hermesNullable(await restingHeartRate),
-      "sleepMinutes": hermesNullable(await sleep),
-      "steps": hermesNullable(await steps),
-      "workouts": await workouts,
+      "activeEnergyKcal": hermesNullable(activeEnergyValue),
+      "distanceWalkingRunningMeters": hermesNullable(distanceValue),
+      "domainAuthorization": [
+        "activity": domainStatus(
+          authorization: authorization,
+          hasData: stepsValue != nil || activeEnergyValue != nil
+            || exerciseMinutesValue != nil || distanceValue != nil || !workoutValues.isEmpty
+        ),
+        "heart": domainStatus(
+          authorization: authorization,
+          hasData: heartRateValue != nil || restingHeartRateValue != nil
+        ),
+        "oxygen": domainStatus(authorization: authorization, hasData: oxygenValue != nil),
+        "sleep": domainStatus(authorization: authorization, hasData: sleepValue != nil),
+      ],
+      "exerciseMinutes": hermesNullable(exerciseMinutesValue),
+      "heartRateBpm": hermesNullable(heartRateValue),
+      "oxygenSaturation": hermesNullable(oxygenValue),
+      "restingHeartRateBpm": hermesNullable(restingHeartRateValue),
+      "sleepMinutes": hermesNullable(sleepValue),
+      "steps": hermesNullable(stepsValue),
+      "workouts": workoutValues,
     ]
+  }
+
+  private func domainStatus(authorization: String, hasData: Bool) -> String {
+    if authorization == "unavailable" { return "unavailable" }
+    return hasData ? "available" : "limited"
+  }
+
+  private func healthSamplePayload(
+    _ sample: HKSample,
+    typeIdentifier: String
+  ) -> [String: Any] {
+    var payload: [String: Any] = [
+      "end": sample.endDate.timeIntervalSince1970 * 1000,
+      "sample_id": sample.uuid.uuidString.lowercased(),
+      "source_bundle": sample.sourceRevision.source.bundleIdentifier,
+      "start": sample.startDate.timeIntervalSince1970 * 1000,
+      "type_identifier": typeIdentifier,
+    ]
+    if let quantity = sample as? HKQuantitySample {
+      let value: Double
+      switch typeIdentifier {
+      case HKQuantityTypeIdentifier.heartRate.rawValue:
+        value = quantity.quantity.doubleValue(
+          for: HKUnit.count().unitDivided(by: .minute())
+        )
+        payload["heartRateBpm"] = value
+        payload["unit"] = "count/min"
+      case HKQuantityTypeIdentifier.restingHeartRate.rawValue:
+        value = quantity.quantity.doubleValue(
+          for: HKUnit.count().unitDivided(by: .minute())
+        )
+        payload["restingHeartRateBpm"] = value
+        payload["unit"] = "count/min"
+      case HKQuantityTypeIdentifier.oxygenSaturation.rawValue:
+        value = quantity.quantity.doubleValue(for: .percent())
+        payload["oxygenSaturation"] = value
+        payload["unit"] = "%"
+      case HKQuantityTypeIdentifier.stepCount.rawValue:
+        value = quantity.quantity.doubleValue(for: .count())
+        payload["steps"] = value
+        payload["unit"] = "count"
+      case HKQuantityTypeIdentifier.activeEnergyBurned.rawValue:
+        value = quantity.quantity.doubleValue(for: .kilocalorie())
+        payload["activeEnergyKcal"] = value
+        payload["unit"] = "kcal"
+      case HKQuantityTypeIdentifier.appleExerciseTime.rawValue:
+        value = quantity.quantity.doubleValue(for: .minute())
+        payload["exerciseMinutes"] = value
+        payload["unit"] = "min"
+      case HKQuantityTypeIdentifier.distanceWalkingRunning.rawValue:
+        value = quantity.quantity.doubleValue(for: .meter())
+        payload["distanceWalkingRunningMeters"] = value
+        payload["unit"] = "m"
+      default:
+        value = 0
+      }
+      payload["value"] = value
+    } else if let category = sample as? HKCategorySample {
+      payload["category_value"] = category.value
+      payload["sleepMinutes"] = max(0, category.endDate.timeIntervalSince(category.startDate) / 60)
+    } else if let workout = sample as? HKWorkout {
+      payload.merge(workoutPayload(workout)) { _, workoutValue in workoutValue }
+    }
+    return payload
+  }
+
+  private func closedDayIntervals(for samples: [HKSample]) -> [(start: Date, end: Date)] {
+    let secondsPerDay: TimeInterval = 24 * 60 * 60
+    let currentDay = floor(Date().timeIntervalSince1970 / secondsPerDay) * secondsPerDay
+    var starts = Set(samples.map {
+      floor($0.endDate.timeIntervalSince1970 / secondsPerDay) * secondsPerDay
+    }.filter { $0 < currentDay })
+    starts.insert(currentDay - secondsPerDay)
+    return starts.sorted().suffix(Int(Self.initialBackfillDays) + 1).map {
+      let start = Date(timeIntervalSince1970: $0)
+      return (start: start, end: start.addingTimeInterval(secondsPerDay))
+    }
+  }
+
+  private func persistAggregate(
+    _ aggregate: [String: Any],
+    interval: (start: Date, end: Date),
+    token: HermesCollectorGenerationToken
+  ) -> Bool {
+    let bucket = Int(interval.start.timeIntervalSince1970 * 1000)
+    let common: [String: Any] = [
+      "authorization": aggregate["authorization"] ?? "limited",
+      "bucket_end": interval.end.timeIntervalSince1970 * 1000,
+      "bucket_start": Double(bucket),
+    ]
+    let values: [(String, [String: Any])] = [
+      ("health-sleep", common.merging([
+        "sleepMinutes": aggregate["sleepMinutes"] ?? NSNull(),
+      ]) { _, value in value }),
+      ("health-heart", common.merging([
+        "heartRateBpm": aggregate["heartRateBpm"] ?? NSNull(),
+        "restingHeartRateBpm": aggregate["restingHeartRateBpm"] ?? NSNull(),
+      ]) { _, value in value }),
+      ("health-oxygen", common.merging([
+        "oxygenSaturation": aggregate["oxygenSaturation"] ?? NSNull(),
+      ]) { _, value in value }),
+      ("health-activity", common.merging([
+        "activeEnergyKcal": aggregate["activeEnergyKcal"] ?? NSNull(),
+        "distanceWalkingRunningMeters": aggregate["distanceWalkingRunningMeters"] ?? NSNull(),
+        "exerciseMinutes": aggregate["exerciseMinutes"] ?? NSNull(),
+        "steps": aggregate["steps"] ?? NSNull(),
+        "workouts": aggregate["workouts"] ?? [],
+      ]) { _, value in value }),
+    ]
+    var persisted = true
+    let current = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      for (kind, payload) in values {
+        persisted = HermesContextEventQueue.shared.enqueue(
+          type: kind,
+          payload: payload,
+          occurredAt: Date(),
+          accountGeneration: token.lifecycleEpoch,
+          eventID: "health-aggregate:\(kind):\(bucket)"
+        ) && persisted
+      }
+    }
+    return current && persisted
+  }
+
+  private func anchorKey(
+    token: HermesCollectorGenerationToken,
+    typeIdentifier: String
+  ) -> String {
+    "app.hermes.health.anchor.\(token.regionNamespace).\(typeIdentifier)"
+  }
+
+  private func anchorIndexKey(token: HermesCollectorGenerationToken) -> String {
+    "app.hermes.health.anchor-index.\(token.regionNamespace)"
+  }
+
+  private func loadAnchor(
+    token: HermesCollectorGenerationToken,
+    typeIdentifier: String
+  ) -> HKQueryAnchor? {
+    let key = anchorKey(token: token, typeIdentifier: typeIdentifier)
+    guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+    return (try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(data)) as? HKQueryAnchor
+  }
+
+  private func saveAnchor(
+    _ anchor: HKQueryAnchor,
+    token: HermesCollectorGenerationToken,
+    typeIdentifier: String,
+    processedDelta: Int = 0,
+    backfillComplete: Bool = false
+  ) -> Bool {
+    let data = try? NSKeyedArchiver.archivedData(
+      withRootObject: anchor,
+      requiringSecureCoding: false
+    )
+    guard let data else { return false }
+    let defaults = UserDefaults.standard
+    let key = anchorKey(token: token, typeIdentifier: typeIdentifier)
+    let progressKey = "\(key).backfill-progress"
+    let completeKey = "\(key).backfill-complete"
+    defaults.set(data, forKey: key)
+    defaults.set(defaults.integer(forKey: progressKey) + processedDelta, forKey: progressKey)
+    if backfillComplete { defaults.set(true, forKey: completeKey) }
+    let indexKey = anchorIndexKey(token: token)
+    var keys = Set(defaults.stringArray(forKey: indexKey) ?? [])
+    keys.formUnion([key, progressKey, completeKey])
+    defaults.set(Array(keys).sorted(), forKey: indexKey)
+    defaults.synchronize()
+    return true
+  }
+
+  private func deleteAnchorState(token: HermesCollectorGenerationToken) {
+    let defaults = UserDefaults.standard
+    let indexKey = anchorIndexKey(token: token)
+    (defaults.stringArray(forKey: indexKey) ?? []).forEach {
+      defaults.removeObject(forKey: $0)
+    }
+    defaults.removeObject(forKey: indexKey)
+    defaults.synchronize()
   }
 
   private func emptySummary(authorization: String) -> [String: Any] {
@@ -127,6 +623,12 @@ final class HermesHealthService {
       "authorization": authorization,
       "activeEnergyKcal": NSNull(),
       "distanceWalkingRunningMeters": NSNull(),
+      "domainAuthorization": [
+        "activity": "unavailable",
+        "heart": "unavailable",
+        "oxygen": "unavailable",
+        "sleep": "unavailable",
+      ],
       "exerciseMinutes": NSNull(),
       "heartRateBpm": NSNull(),
       "oxygenSaturation": NSNull(),

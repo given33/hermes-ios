@@ -5,6 +5,7 @@ import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApi
 import {
   conversationSessionSummary,
   customApiMode,
+  customModelApiKeyAction,
   customReasoningEffort,
   HermesCloudApi,
   mergeUnifiedConversationIndex,
@@ -86,6 +87,16 @@ function createApi() {
           status: 200,
         } as T);
       }
+      if (path === '/api/plugins/collaboration/managed-resources') {
+        return Promise.resolve({
+          account_generation: 'generation-contract',
+          cursor: 0,
+          diagnostics: [],
+          events: [],
+          has_more: false,
+          resources: [],
+        } as T);
+      }
       return Promise.resolve({} as T);
     },
   } as HermesApiClient;
@@ -138,18 +149,20 @@ test('account files and contextual routing use the collaboration cloud contract'
     status: undefined,
     type: undefined,
   });
-  assert.equal(calls[1].path, '/api/plugins/collaboration/route');
-  assert.deepEqual(JSON.parse(String(calls[1].options.body)), {
+  assert.equal(calls[1].path, '/api/plugins/collaboration/tool-output-artifacts');
+  assert.deepEqual(calls[1].options.query, { limit: 200, offset: 0 });
+  assert.equal(calls[2].path, '/api/plugins/collaboration/route');
+  assert.deepEqual(JSON.parse(String(calls[2].options.body)), {
     attachments: [{ name: 'input.csv', mime_type: 'text/csv', source: 'user_upload' }],
     content: '继续完成并发送文件',
     mode: 'auto',
     recent_messages: [{ role: 'assistant', content: '报告已经生成。' }],
   });
   assert.equal(
-    calls[2].path,
+    calls[3].path,
     '/api/plugins/collaboration/files/file%20%2F%20%E4%B8%AD%E6%96%87',
   );
-  assert.equal(calls[2].options.method, 'DELETE');
+  assert.equal(calls[3].options.method, 'DELETE');
 });
 
 test('account file route drains every server page before SwiftUI search and date filtering', async () => {
@@ -157,6 +170,9 @@ test('account file route drains every server page before SwiftUI search and date
   const client = {
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
       calls.push({ path, options });
+      if (path.endsWith('/tool-output-artifacts')) {
+        return Promise.resolve({ artifacts: [], limit: 200, offset: 0, total: 0 } as T);
+      }
       const offset = Number(options.query?.offset || 0);
       const limit = Number(options.query?.limit || 200);
       const remaining = Math.max(0, 450 - offset);
@@ -176,8 +192,89 @@ test('account file route drains every server page before SwiftUI search and date
   const result = await new HermesCloudApi(client).loadRoute('files') as { files: unknown[] };
 
   assert.equal(result.files.length, 450);
-  assert.deepEqual(calls.map(({ options }) => options.query?.offset), [0, 125, 250, 375]);
-  assert.ok(calls.every(({ path }) => path === '/api/plugins/collaboration/files'));
+  assert.deepEqual(
+    calls.filter(({ path }) => path.endsWith('/files')).map(({ options }) => options.query?.offset),
+    [0, 125, 250, 375],
+  );
+  assert.equal(
+    calls.filter(({ path }) => path.endsWith('/tool-output-artifacts')).length,
+    1,
+  );
+});
+
+test('custom model API keys require an explicit preserve, replace, or delete action', () => {
+  assert.equal(customModelApiKeyAction(''), 'preserve');
+  assert.equal(customModelApiKeyAction('********', { preview: '********' }), 'preserve');
+  assert.equal(customModelApiKeyAction('sk-new'), 'replace');
+  assert.equal(customModelApiKeyAction('', { deleteRequested: true }), 'delete');
+});
+
+test('encrypted tool outputs are real account files with working download and delete routes', async () => {
+  const calls: Call[] = [];
+  const downloads: string[] = [];
+  const client = {
+    download(path: string): Promise<Blob> {
+      downloads.push(path);
+      return Promise.resolve(new Blob(['full tool output'], { type: 'text/plain' }));
+    },
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ path, options });
+      if (path.endsWith('/files')) {
+        return Promise.resolve({ files: [], limit: 200, offset: 0, total: 0 } as T);
+      }
+      if (path.endsWith('/tool-output-artifacts')) {
+        return Promise.resolve({
+          artifacts: [{
+            account_generation: 'generation-2',
+            conversation_id: 'conversation-1',
+            created_at: 1_800_000_000,
+            id: 'toolout_1234',
+            retained_until: 1_900_000_000,
+            sha256: 'abc',
+            size_bytes: 16,
+            state: 'available',
+            tool_call_id: 'call-1',
+            tool_name: 'terminal',
+            turn_id: 'turn-1',
+          }],
+          limit: 200,
+          offset: 0,
+          total: 1,
+        } as T);
+      }
+      return Promise.resolve({ id: 'toolout_1234', ok: true } as T);
+    },
+  } as HermesApiClient;
+  const api = new HermesCloudApi(client);
+
+  const listing = await api.getAllAccountFiles();
+  const downloaded = await api.downloadAccountFile('toolout_1234');
+  await api.deleteAccountFile('toolout_1234');
+
+  assert.equal(listing.files.length, 1);
+  assert.deepEqual(listing.files[0], {
+    available_at: 1_800_000_000_000,
+    conversation_id: 'conversation-1',
+    created_at: 1_800_000_000_000,
+    download_url: '/api/plugins/collaboration/tool-output-artifacts/toolout_1234/download',
+    extension: 'txt',
+    file_type: 'tool_output',
+    id: 'toolout_1234',
+    mime_type: 'text/plain',
+    name: 'terminal-call-1.txt',
+    sha256: 'abc',
+    size: 16,
+    source: 'model_output',
+    status: 'available',
+    turn_id: 'turn-1',
+    updated_at: 1_800_000_000_000,
+  });
+  assert.equal(await downloaded.text(), 'full tool output');
+  assert.deepEqual(downloads, [
+    '/api/plugins/collaboration/tool-output-artifacts/toolout_1234/download',
+  ]);
+  assert.equal(calls.at(-1)?.path, '/api/plugins/collaboration/tool-output-artifacts/toolout_1234');
+  assert.equal(calls.at(-1)?.options.method, 'DELETE');
 });
 
 test('management mutations preserve the official method and body contracts', async () => {
@@ -217,11 +314,15 @@ test('profile-scoped management routes keep the active Profile on every request'
     '/api/cron/jobs',
     '/api/mcp/servers',
     '/api/mcp/catalog',
-    '/api/managed-installations',
+    '/api/plugins/collaboration/managed-installations',
+    '/api/plugins/collaboration/managed-resources',
     '/api/messaging/platforms',
     '/api/model/credentials',
   ]);
-  assert.ok(calls.every(({ options }) => options.query?.profile === 'reviewer'));
+  assert.ok(calls
+    .filter(({ path }) => path !== '/api/plugins/collaboration/managed-resources')
+    .every(({ options }) => options.query?.profile === 'reviewer'));
+  assert.deepEqual(calls[4].options.query, { cursor: '0', limit: '500' });
 });
 
 test('managed installations are submitted once to the authoritative server', async () => {
@@ -233,7 +334,7 @@ test('managed installations are submitted once to the authoritative server', asy
     request_id: 'mobile-install-1',
   });
 
-  assert.equal(calls[0].path, '/api/managed-installations');
+  assert.equal(calls[0].path, '/api/plugins/collaboration/managed-installations');
   assert.equal(calls[0].options.method, 'POST');
   assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
     identifier: 'official/security-review',
@@ -328,7 +429,10 @@ test('atomic hosted-turn enqueue carries one stable idempotency request and supp
     calls[1].path,
     '/api/plugins/collaboration/single/conversations/conversation%20%2F%201/hosted-turns/turn%20%2F%201/cancel',
   );
-  assert.deepEqual(JSON.parse(String(calls[1].options.body)), { reason: '用户取消' });
+  assert.deepEqual(JSON.parse(String(calls[1].options.body)), {
+    reason: '用户取消',
+    request_id: 'cancel-turn / 1',
+  });
 });
 
 test('collaboration room retries reuse the caller supplied request and turn identity', async () => {
@@ -361,6 +465,7 @@ test('conversation attachment retries carry one stable server idempotency identi
     {
       mimeType: 'text/plain',
       name: 'input.txt',
+      sha256: 'a'.repeat(64),
       uri: 'data:text/plain,hello',
     },
     {
@@ -378,6 +483,7 @@ test('conversation attachment retries carry one stable server idempotency identi
   assert.deepEqual(calls[0].options.headers, {
     'Content-Type': 'text/plain',
     'X-Filename': 'input.txt',
+    'X-Content-SHA256': 'a'.repeat(64),
     'X-Message-ID': 'message-1',
     'X-Profile': 'reviewer',
     'X-Turn-ID': 'turn-1',
@@ -616,6 +722,7 @@ test('custom model configuration carries the full runtime contract', async () =>
   ]);
   assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
     api_key: 'secret',
+    api_key_action: 'replace',
     api_mode: 'codex_responses',
     base_url: 'https://model.example/v1',
     context_length: 200000,

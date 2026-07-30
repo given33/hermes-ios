@@ -25,6 +25,16 @@ function recordingApi() {
   const client = {
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
       calls.push({ options, path });
+      if (path === '/api/plugins/collaboration/managed-resources') {
+        return Promise.resolve({
+          account_generation: 'generation-contract',
+          cursor: 0,
+          diagnostics: [],
+          events: [],
+          has_more: false,
+          resources: [],
+        } as T);
+      }
       return Promise.resolve({} as T);
     },
   } as HermesApiClient;
@@ -39,6 +49,7 @@ test('mobile console commands stay profile-scoped and confirmation-aware', async
   const { api, calls } = recordingApi();
 
   await api.getMobileConsoleCommands('ios-native');
+  await api.getMobileConsoleCompletions('/config set model.', 'ios-native');
   await api.executeMobileConsoleCommand('/status', 'ios-native');
   await api.executeMobileConsoleCommand('/config set theme dark', 'ios-native', true);
 
@@ -49,16 +60,22 @@ test('mobile console commands stay profile-scoped and confirmation-aware', async
         '/api/plugins/collaboration/mobile/console/commands?profile=ios-native',
         'GET',
       ],
+      ['/api/plugins/collaboration/mobile/console/completions', 'POST'],
       ['/api/plugins/collaboration/mobile/console/execute', 'POST'],
       ['/api/plugins/collaboration/mobile/console/execute', 'POST'],
     ],
   );
   assert.deepEqual(parsedBody(calls[1]), {
+    line: '/config set model.',
+    limit: 30,
+    profile: 'ios-native',
+  });
+  assert.deepEqual(parsedBody(calls[2]), {
     confirmed: false,
     line: '/status',
     profile: 'ios-native',
   });
-  assert.deepEqual(parsedBody(calls[2]), {
+  assert.deepEqual(parsedBody(calls[3]), {
     confirmed: true,
     line: '/config set theme dark',
     profile: 'ios-native',
@@ -195,6 +212,7 @@ test('model methods keep their exact wire contract through cloud/models', async 
   );
   assert.deepEqual(parsedBody(calls[0]), {
     api_key: 'secret',
+    api_key_action: 'replace',
     api_mode: 'chat_completions',
     base_url: 'https://models.example/v1',
     context_length: 131072,
@@ -232,7 +250,8 @@ test('skills and managed installation methods keep their wire contract through c
     [
       ['/api/skills', 'ops'],
       ['/api/tools/toolsets', 'ops'],
-      ['/api/managed-installations', 'ops'],
+      ['/api/plugins/collaboration/managed-installations', 'ops'],
+      ['/api/plugins/collaboration/managed-resources', undefined],
     ],
   );
   assert.deepEqual(calls[2].options.query, { kind: 'skill', profile: 'ops', limit: '50' });
@@ -247,7 +266,7 @@ test('skills and managed installation methods keep their wire contract through c
     kind: 'skill',
     request_id: 'req-1',
   });
-  assert.equal(calls[0].path, '/api/managed-installations');
+  assert.equal(calls[0].path, '/api/plugins/collaboration/managed-installations');
   assert.equal(calls[0].options.method, 'POST');
   assert.deepEqual(parsedBody(calls[0]), {
     identifier: 'weather-skill',
@@ -292,9 +311,15 @@ test('plugin and MCP methods keep their wire contract through cloud/extensions',
   await api.getMcp('ops');
   assert.deepEqual(
     calls.map(({ path }) => path),
-    ['/api/mcp/servers', '/api/mcp/catalog', '/api/managed-installations'],
+    [
+      '/api/mcp/servers',
+      '/api/mcp/catalog',
+      '/api/plugins/collaboration/managed-installations',
+      '/api/plugins/collaboration/managed-resources',
+    ],
   );
   assert.deepEqual(calls[2].options.query, { kind: 'mcp', profile: 'ops', limit: '50' });
+  assert.deepEqual(calls[3].options.query, { cursor: '0', limit: '500' });
 
   calls.length = 0;
   await api.addMcpServer({ name: 'files' }, 'ops');
@@ -317,6 +342,7 @@ test('conversation and hosted-turn methods keep their wire contract through clou
   await api.getConversations();
   await api.createConversation('ops', 'Deploy audit', 'device-conversation-1');
   await api.getConversation('conversation one');
+  await api.getConversationSessionEntries('conversation one', 7, 250);
   await api.forkConversationFromMessage('conversation one', 'message one', {
     idempotencyKey: 'fork-1',
     profile: 'reviewer',
@@ -346,6 +372,10 @@ test('conversation and hosted-turn methods keep their wire contract through clou
       ['/api/plugins/collaboration/single/conversations', 'POST'],
       ['/api/plugins/collaboration/single/conversations/conversation%20one', 'GET'],
       [
+        '/api/plugins/collaboration/single/conversations/conversation%20one/session-entries',
+        'GET',
+      ],
+      [
         '/api/plugins/collaboration/mobile/conversations/conversation%20one/messages/message%20one/fork',
         'POST',
       ],
@@ -368,17 +398,18 @@ test('conversation and hosted-turn methods keep their wire contract through clou
     profile: 'ops',
     title: 'Deploy audit',
   });
-  assert.deepEqual(parsedBody(calls[3]), {
+  assert.deepEqual(calls[3].options.query, { cursor: '7', limit: '250' });
+  assert.deepEqual(parsedBody(calls[4]), {
     idempotency_key: 'fork-1',
     profile: 'reviewer',
     title: 'Forked audit',
   });
-  assert.deepEqual(parsedBody(calls[4]), {
+  assert.deepEqual(parsedBody(calls[5]), {
     focus_topic: 'release evidence',
     idempotency_key: 'compress-1',
     profile: 'reviewer',
   });
-  assert.deepEqual(parsedBody(calls[5]), {
+  assert.deepEqual(parsedBody(calls[6]), {
     attachment_context: '',
     attachment_ids: [],
     delivery_context: '',
@@ -388,11 +419,14 @@ test('conversation and hosted-turn methods keep their wire contract through clou
     request_id: 'request-1',
     turn_id: 'turn-1',
   });
-  assert.deepEqual(parsedBody(calls[6]), {
+  assert.deepEqual(parsedBody(calls[7]), {
     content: '@reviewer recheck',
     message_id: 'message-2',
   });
-  assert.deepEqual(parsedBody(calls[7]), { reason: 'user_cancelled' });
+  assert.deepEqual(parsedBody(calls[8]), {
+    reason: 'user_cancelled',
+    request_id: 'cancel-turn-1',
+  });
 });
 
 test('managed and account files keep their wire contract through cloud/files', async () => {
@@ -656,7 +690,7 @@ test('the facade keeps no drifting second copy of migrated endpoint bodies', () 
   for (const [path, home] of [
     ['/api/cron/jobs', cron],
     ['/api/skills', extensions],
-    ['/api/managed-installations', extensions],
+    ['/api/plugins/collaboration/managed-installations', extensions],
     ['/api/dashboard/plugins', extensions],
     ['/api/mcp/servers', extensions],
     ['/api/hermes/memory', memory],

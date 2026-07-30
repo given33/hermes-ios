@@ -578,6 +578,7 @@ private struct HermesRemoteRoutePage: View {
   @State private var editorDetail = ""
   @State private var importingConfiguration = false
   @State private var requestedSkillID = ""
+  @State private var rollbackInstallationID = ""
 
   var body: some View {
     routeBody
@@ -616,6 +617,26 @@ private struct HermesRemoteRoutePage: View {
         editorDetail = content
         requestedSkillID = ""
         editor = .skill
+      }
+      .confirmationDialog(
+        chinese ? "确认回滚此资源？" : "Roll back this resource?",
+        isPresented: Binding(
+          get: { !rollbackInstallationID.isEmpty },
+          set: { if !$0 { rollbackInstallationID = "" } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button(chinese ? "回滚" : "Roll Back", role: .destructive) {
+          let operationID = rollbackInstallationID
+          rollbackInstallationID = ""
+          onAction(
+            .installationRollback,
+            HermesRouteActionPayload(route: route.rawValue, id: operationID)
+          )
+        }
+        Button(chinese ? "取消" : "Cancel", role: .cancel) {
+          rollbackInstallationID = ""
+        }
       }
   }
 
@@ -1085,10 +1106,37 @@ private struct HermesRemoteRoutePage: View {
             }.joined(separator: "  ·  "))
               .font(HermesFonts.body(12))
               .foregroundStyle(appearance.palette.secondary)
+            if !operation.version.isEmpty {
+              LabeledContent(chinese ? "版本" : "Version", value: operation.version)
+                .font(HermesFonts.mono(11))
+            }
+            if !operation.tools.isEmpty {
+              Text((chinese ? "工具：" : "Tools: ") + operation.tools.joined(separator: ", "))
+                .font(HermesFonts.body(11))
+                .foregroundStyle(appearance.palette.secondary)
+            }
+            if !operation.permissions.isEmpty {
+              Text((chinese ? "权限：" : "Permissions: ") + operation.permissions.joined(separator: ", "))
+                .font(HermesFonts.body(11))
+                .foregroundStyle(appearance.palette.secondary)
+            }
+            if !operation.lastVerifiedAt.isEmpty {
+              Text((chinese ? "最后验证：" : "Verified: ") + operation.lastVerifiedAt)
+                .font(HermesFonts.mono(10))
+                .foregroundStyle(appearance.palette.tertiary)
+            }
             if !operation.error.isEmpty {
               Text(operation.error)
                 .font(HermesFonts.body(12))
                 .foregroundStyle(appearance.palette.destructive)
+            }
+            if operation.rollbackAvailable {
+              Button(role: .destructive) {
+                rollbackInstallationID = operation.id
+              } label: {
+                Label(chinese ? "回滚" : "Roll Back", systemImage: "arrow.uturn.backward")
+              }
+              .buttonStyle(.bordered)
             }
           }
           .padding(.vertical, 3)
@@ -1109,6 +1157,9 @@ private struct HermesRemoteRoutePage: View {
   private func localizedInstallationState(_ value: String) -> String {
     guard chinese else { return value.capitalized }
     switch value {
+    case "verified": return "已验证"
+    case "partial": return "部分完成"
+    case "rolled_back": return "已回滚"
     case "accepted": return "已受理"
     case "dispatching": return "正在分发"
     case "pending": return "等待中"
@@ -1988,6 +2039,7 @@ private struct HermesModelsPage: View {
   let operation: HermesRouteOperationSnapshot?
   let onAction: HermesRouteActionSink
   @State private var apiKey = ""
+  @State private var apiKeyAction = "preserve"
   @State private var apiMode = "chat_completions"
   @State private var baseUrl = ""
   @State private var contextLength = "131072"
@@ -2003,6 +2055,7 @@ private struct HermesModelsPage: View {
   private var fields: [String: String] {
     [
       "apiKey": apiKey,
+      "apiKeyAction": apiKeyAction,
       "apiMode": apiMode,
       "baseUrl": baseUrl,
       "contextLength": contextLength,
@@ -2038,7 +2091,12 @@ private struct HermesModelsPage: View {
       if next != (configuration?.baseUrl ?? "") { invalidateDetectedModels() }
     }
     .onChange(of: apiKey) { _, next in
-      if !next.isEmpty { invalidateDetectedModels() }
+      if !next.isEmpty {
+        apiKeyAction = "replace"
+        invalidateDetectedModels()
+      } else if apiKeyAction == "replace" {
+        apiKeyAction = "preserve"
+      }
     }
     .onChange(of: operation) { _, next in
       guard next?.action == "model.discover", next?.state == "success" else { return }
@@ -2180,6 +2238,23 @@ private struct HermesModelsPage: View {
             : "Saved key \(configuration.apiKeyPreview). Leave blank to keep it.")
             .font(HermesFonts.body(11))
             .foregroundStyle(appearance.palette.secondary)
+          Button(role: apiKeyAction == "delete" ? nil : .destructive) {
+            apiKey = ""
+            apiKeyAction = apiKeyAction == "delete" ? "preserve" : "delete"
+          } label: {
+            Label(
+              apiKeyAction == "delete"
+                ? (chinese ? "保存时删除密钥，点此撤销" : "Delete on save; tap to undo")
+                : (chinese ? "删除已保存密钥" : "Delete saved API key"),
+              systemImage: "trash"
+            )
+          }
+          .buttonStyle(.borderless)
+          .foregroundStyle(
+            apiKeyAction == "delete"
+              ? appearance.palette.destructive
+              : appearance.palette.secondary
+          )
         }
         detectModelsControl
         modelNameField
@@ -2447,6 +2522,7 @@ private struct HermesModelsPage: View {
   private func apply(_ value: HermesModelSnapshot?) {
     guard let value else { return }
     apiKey = ""
+    apiKeyAction = "preserve"
     apiMode = value.apiMode
     baseUrl = value.baseUrl
     contextLength = String(value.contextLength > 0 ? value.contextLength : 131072)

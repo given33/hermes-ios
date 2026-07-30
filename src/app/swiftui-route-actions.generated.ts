@@ -110,6 +110,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   skillSelect: 'skill.select',
   skillView: 'skill.view',
   skillUpdate: 'skill.update',
+  installationRollback: 'installation.rollback',
   integrationCreate: 'integration.create',
   integrationUpdate: 'integration.update',
   integrationToggle: 'integration.toggle',

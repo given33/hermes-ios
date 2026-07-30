@@ -1,4 +1,5 @@
 import type { SavedConnection } from './credential-contract';
+import { LEGACY_ACCOUNT_GENERATION } from './account-identity';
 
 export type AuthMode = 'register' | 'login';
 export const MAX_FACE_ID_ATTEMPTS = 5;
@@ -52,6 +53,7 @@ export type AuthAction =
       accessToken: string;
       refreshToken: string;
       expiresAt: number;
+      accountGeneration: string;
       deviceId?: string;
     }
   | { type: 'DEVICE_IDENTIFIED'; deviceId: string }
@@ -93,6 +95,7 @@ export function authReducer(state: AuthState, action: AuthAction): AuthState {
               accessToken: action.accessToken,
               refreshToken: action.refreshToken,
               expiresAt: action.expiresAt,
+              accountGeneration: action.accountGeneration,
               ...(action.deviceId ? { deviceId: action.deviceId } : {}),
             },
           }
@@ -192,6 +195,7 @@ export interface CredentialReader {
   readAccessToken(): Promise<string | null>;
   readAccessExpiresAt(): Promise<number | null>;
   readDeviceId?(): Promise<string | null>;
+  readAccountGeneration?(): Promise<string | null>;
 }
 
 export type BootstrapResult =
@@ -228,11 +232,12 @@ export async function bootstrapSavedConnection(
       return { status: 'locked', baseUrl, failure: 'unavailable' };
     }
 
-    const [username, accessToken, expiresAt, deviceId] = await Promise.all([
+    const [username, accessToken, expiresAt, deviceId, accountGeneration] = await Promise.all([
       store.readUsername(),
       store.readAccessToken(),
       store.readAccessExpiresAt(),
       store.readDeviceId?.() ?? Promise.resolve(null),
+      store.readAccountGeneration?.() ?? Promise.resolve(null),
     ]);
     if (!username || !accessToken || expiresAt === null) {
       return { status: 'locked', baseUrl, failure: 'unavailable' };
@@ -242,6 +247,7 @@ export async function bootstrapSavedConnection(
       connection: {
         baseUrl,
         username,
+        accountGeneration: accountGeneration?.trim() || LEGACY_ACCOUNT_GENERATION,
         accessToken,
         refreshToken,
         expiresAt,

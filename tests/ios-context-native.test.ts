@@ -24,6 +24,7 @@ test('signed iOS builds declare native context privacy and background capabiliti
   const { entitlements, infoPlist } = config.expo.ios;
 
   assert.equal(entitlements['com.apple.developer.healthkit'], true);
+  assert.equal(entitlements['com.apple.developer.healthkit.background-delivery'], true);
   assert.deepEqual(infoPlist.UIBackgroundModes, [
     'fetch',
     'location',
@@ -46,6 +47,9 @@ test('signed iOS builds declare native context privacy and background capabiliti
   assert.equal(entitlements['com.apple.developer.family-controls'], true);
   assert.deepEqual(entitlements['com.apple.security.application-groups'], [
     'group.app.sunstone1029.fig1171.hermes',
+  ]);
+  assert.deepEqual(entitlements['keychain-access-groups'], [
+    '$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared',
   ]);
 });
 
@@ -112,7 +116,9 @@ test('native context exposes independently callable collectors and event streams
     'createReminder',
     'shareTextToNotes',
     'enqueueContextEvents',
+    'claimPendingEvents',
     'readPendingEvents',
+    'acknowledgeEventClaim',
     'acknowledgeEvents',
   ]) {
     assert.match(bridge, new RegExp(operation));
@@ -157,7 +163,7 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   assert.match(queue, /handle\.seekToEnd\(\)/);
   // Reads and acknowledgements demand the active owner scope; a missing or
   // stale scope must never drain another account's events.
-  assert.match(queue, /func acknowledge\(ids: Set<String>, cursor: Int\?, scope: String\)/);
+  assert.match(queue, /func acknowledge\(ids: Set<String>, cursor: Int\?, scope: String\) throws/);
   assert.match(queue, /guard limit > 0, isCurrentOwnerScopeUnlocked\(scope\) else \{ return \[\] \}/);
   assert.match(queue, /guard isCurrentOwnerScopeUnlocked\(scope\) else \{ return 0 \}/);
   assert.match(
@@ -165,9 +171,8 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
     /readPendingEventsByKind"\) \{ \(limit: Int, kinds: \[String\], scope: String\)/,
   );
   assert.match(module, /read\(limit: limit, kinds: Set\(kinds\), scope: scope\)/);
-  assert.match(queue, /previousScope\.isEmpty && !scope\.isEmpty/);
-  assert.match(queue, /previousScope\.isEmpty && !scope\.isEmpty && !wasSuspended/);
-  assert.match(queue, /events\[index\]\["owner_scope"\] = scope/);
+  assert.doesNotMatch(queue, /events\[index\]\["owner_scope"\] = scope/);
+  assert.match(queue, /"account_generation": relayState\["serverAccountGeneration"\]/);
   assert.match(queue, /func deleteCurrentOwnerScope\(\)/);
   assert.match(queue, /state\["pendingRelayWakes"\] = \[\]/);
   assert.ok(
@@ -184,21 +189,23 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   assert.match(subscriber, /HermesLocationService\.shared\.start\(\)/);
   assert.match(subscriber, /account-deletion/);
   assert.match(subscriber, /data\["owner_scope"\]/);
+  assert.match(subscriber, /data\["account_generation"\]/);
   assert.match(
     subscriber,
-    /HermesAccountLifecycle\.deleteOwnerScope\([\s\S]*tombstone\.ownerScope,[\s\S]*requestedAt: tombstone\.requestedAt/,
+    /HermesAccountLifecycle\.deleteOwnerScope\([\s\S]*tombstone\.ownerScope,[\s\S]*accountGeneration: tombstone\.accountGeneration,[\s\S]*requestedAt: tombstone\.requestedAt/,
   );
   assert.doesNotMatch(subscriber, /deleteCurrentOwnerScope\(\)/);
   assert.match(queue, /state\["collectionSuspended"\] = true/);
   assert.match(queue, /guard !isCollectionSuspendedUnlocked\(\)/);
   assert.match(lifecycle, /HermesLocationService\.shared\.resetAccountState\(\)/);
   assert.match(lifecycle, /HermesMotionService\.shared\.resetAccountState\(\)/);
+  assert.match(lifecycle, /HermesHealthService\.shared\.resetAccountState\(\)/);
   assert.match(lifecycle, /HermesScreenTimeService\.shared\.stopAllMonitoring\(/);
   assert.match(lifecycle, /HermesBackgroundService\.shared\.cancelScheduledTasks\(\)/);
   assert.match(lifecycle, /HermesWatchService\.shared\.resetAccountState\(/);
-  assert.match(lifecycle, /queue\.deleteOwnerScope\(ownerScope, requestedAt: requestedAt\)/);
+  assert.match(lifecycle, /queue\.deleteOwnerScope\([\s\S]*ownerScope,[\s\S]*accountGeneration: accountGeneration,[\s\S]*requestedAt: requestedAt/);
   assert.doesNotMatch(lifecycle, /isCurrentOwnerScope/);
-  assert.match(queue, /func activateOwnerScope\(_ scope: String\)/);
+  assert.match(queue, /func activateOwnerScope\(_ scope: String, accountGeneration: String\)/);
   assert.match(queue, /state\["accountGeneration"\]/);
   assert.match(queue, /deletedOwnerScopes/);
   assert.match(lifecycle, /HermesLiveActivityService\.shared\.endAll\(\)/);
@@ -207,6 +214,71 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   assert.deepEqual(expoConfig.apple.appDelegateSubscribers, [
     'HermesIOSContextAppDelegateSubscriber',
   ]);
+});
+
+test('account exports use a protected native ciphertext file and delete it after sharing', () => {
+  const bridge = read('index.ts');
+  const module = read('ios/HermesIOSContextModule.swift');
+  const protectedFile = read('ios/HermesProtectedExportFile.swift');
+  const accountPage = readFileSync(resolve(root, 'src/auth/AccountPage.tsx'), 'utf8');
+
+  for (const operation of [
+    'writeProtectedAccountExport',
+    'deleteProtectedAccountExport',
+  ]) {
+    assert.match(bridge, new RegExp(operation));
+    assert.match(module, new RegExp(`AsyncFunction\\("${operation}"\\)`));
+  }
+  assert.match(protectedFile, /FileProtectionType\.complete/);
+  assert.match(protectedFile, /InputStream\(data:/);
+  assert.match(protectedFile, /64 \* 1024/);
+  assert.match(protectedFile, /candidate\.deletingLastPathComponent\(\) == directory/);
+  assert.match(accountPage, /payload\.encrypted !== true/);
+  assert.match(accountPage, /writeProtectedAccountExport/);
+  assert.match(accountPage, /deleteProtectedAccountExport/);
+  assert.doesNotMatch(accountPage, /new File\(Paths\.cache/);
+});
+
+test('remote APNs wakes are fenced and persisted before relay execution', () => {
+  const subscriber = read('ios/HermesIOSContextAppDelegateSubscriber.swift');
+  const queue = read('ios/HermesContextEventQueue.swift');
+  const module = read('ios/HermesIOSContextModule.swift');
+  assert.match(subscriber, /notificationFence\(userInfo\)/);
+  assert.match(subscriber, /owner_id/);
+  assert.match(subscriber, /account_generation/);
+  assert.match(subscriber, /event_key/);
+  assert.match(subscriber, /token\.accepts\(ownerID: fence\.ownerID/);
+  const persist = subscriber.indexOf('let persisted = HermesContextEventQueue.shared.enqueue');
+  const relay = subscriber.indexOf('notifyRelayWake(reason: "remote-notification")');
+  assert.ok(persist >= 0 && persist < relay);
+  assert.match(subscriber, /eventID: Self\.apnsEventID\(fence\)/);
+  assert.match(queue, /func accepts\(ownerID candidate: String, accountGeneration: String\)/);
+  assert.match(module, /hermes\["event_key"\].*local:/s);
+});
+
+test('native event outbox claims and ACKs only after durable atomic replacement', () => {
+  const queue = read('ios/HermesContextEventQueue.swift');
+  const provider = readFileSync(resolve(root, 'src/context/IOSContextProvider.tsx'), 'utf8');
+
+  assert.match(queue, /func enqueue\([\s\S]*\) -> Bool \{/);
+  assert.doesNotMatch(queue, /deferredEvents/);
+  assert.match(queue, /"outbox_state": "pending"/);
+  assert.match(queue, /func claim\(limit: Int, kinds: Set<String>\? = nil, scope: String\) throws/);
+  assert.match(queue, /events\[index\]\["outbox_state"\] = "inflight"/);
+  assert.match(queue, /events\[index\]\["batch_token"\] = token/);
+  assert.match(queue, /func acknowledgeClaim\([\s\S]*token: String[\s\S]*\) throws -> Int/);
+  assert.match(queue, /try persistUnlocked\(remaining\)[\s\S]*return events\.count - remaining\.count/);
+  assert.match(queue, /try handle\.synchronize\(\)/);
+  assert.match(queue, /FileManager\.default\.replaceItemAt/);
+  assert.match(queue, /Darwin\.fsync\(descriptor\)/);
+  assert.match(queue, /pending-events-corrupt-\\\(digest\.prefix\(20\)\)/);
+  assert.match(queue, /try quarantineCorruptLinesUnlocked\(corruptLines\)[\s\S]*try persistUnlocked\(events\)/);
+  assert.doesNotMatch(queue, /catch \{[\s\S]{0,120}in-memory batch remains intact/);
+
+  const claim = provider.indexOf('HermesIOSContext.claimPendingEvents');
+  const upload = provider.indexOf('api.uploadEvents');
+  const acknowledge = provider.indexOf('HermesIOSContext.acknowledgeEventClaim');
+  assert.ok(claim >= 0 && claim < upload && upload < acknowledge);
 });
 
 test('attachment vault keeps a non-shared outbox root and symlink-safe containment', () => {
@@ -236,6 +308,28 @@ test('attachment vault keeps a non-shared outbox root and symlink-safe containme
   assert.match(vault, /candidateComponents\.prefix\(rootComponents\.count\)\) == rootComponents/);
   assert.match(vault, /try requireAllowedSource\(source\)/);
   assert.doesNotMatch(vault, /\.path\.hasPrefix\(rootPath\)/);
+  // New envelopes are chunked and bounded; SHA-256 and the account token are
+  // rechecked before the temporary file is atomically published. Legacy v1
+  // remains read-only compatibility for already queued uploads.
+  const encrypt = vault.slice(vault.indexOf('func encrypt('), vault.indexOf('func decryptForUpload('));
+  assert.match(encrypt, /HATTV002|chunkedEnvelopeMagic/);
+  assert.match(encrypt, /read\(upToCount: Self\.chunkBytes\)/);
+  assert.match(encrypt, /maximumPlaintextBytes/);
+  assert.match(encrypt, /SHA256\(\)/);
+  assert.match(encrypt, /isCurrentCollectorGenerationToken\(ownerToken\)/);
+  assert.match(encrypt, /installAtomically\(temporary, at: target\)/);
+  assert.doesNotMatch(encrypt, /Data\(contentsOf: source/);
+  assert.match(vault, /legacyEnvelopeMagic/);
+  const deletion = vault.slice(vault.indexOf('func deleteKey('), vault.indexOf('func activate('));
+  assert.ok(deletion.indexOf('markRevoked') < deletion.indexOf('removeItem'));
+
+  const attachmentController = readFileSync(
+    resolve(root, 'src/studio/chat/useChatAttachmentController.ts'),
+    'utf8',
+  );
+  assert.match(attachmentController, /writeBoundedDownload/);
+  assert.match(attachmentController, /AbortController/);
+  assert.doesNotMatch(attachmentController, /blob\.arrayBuffer\(\)/);
 });
 
 test('native power changes are durably collected across the account lifecycle', () => {
@@ -268,7 +362,7 @@ test('context startup upgrades an existing When-In-Use grant to Always', () => {
   assert.match(coordinator, /getLocationAuthorizationDetails\(\)/);
   assert.match(coordinator, /!alwaysBefore/);
   assert.match(coordinator, /requestLocationAuthorization\(\)/);
-  assert.match(provider, /setOwnerScope\(ownerScope\)/);
+  assert.match(provider, /setOwnerScope\(ownerScope, accountGeneration\)/);
   assert.doesNotMatch(provider, /activateOwnerScope\(ownerScope\)/);
   assert.match(
     provider,
@@ -313,7 +407,7 @@ test('location collector is adaptive, resumable, and eligible for background del
   assert.match(source, /HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner/);
   assert.match(source, /date\.timeIntervalSinceNow - 30 \* 60/);
   assert.match(source, /deadline: \.now\(\) \+ 15/);
-  assert.match(source, /didFailWithError[\s\S]*resolveLocationRequest\(with: bestPayload, matching: token\)/);
+  assert.match(source, /didFailWithError[\s\S]*resolveLocationRequest\(with: bestPayload, matching: requestToken\)/);
   assert.match(
     read('ios/HermesIOSContextAppDelegateSubscriber.swift'),
     /guard HermesPermissionCollectionGate\.shared\.isReadyForCurrentOwner else \{ return \}/,
@@ -321,6 +415,40 @@ test('location collector is adaptive, resumable, and eligible for background del
   const gate = read('ios/HermesPermissionCollectionGate.swift');
   assert.match(gate, /accountGeneration/);
   assert.match(gate, /isCurrentOwnerScope/);
+});
+
+test('location, geofence, and motion callbacks are fenced by account generation', () => {
+  const queue = read('ios/HermesContextEventQueue.swift');
+  const lifecycle = read('ios/HermesAccountLifecycle.swift');
+  const location = read('ios/HermesLocationService.swift');
+  const motion = read('ios/HermesMotionService.swift');
+
+  assert.match(queue, /struct HermesCollectorGenerationToken: Equatable, Sendable/);
+  assert.match(queue, /func currentCollectorGenerationToken\(\)/);
+  assert.match(queue, /func isCurrentCollectorGenerationToken/);
+  assert.match(queue, /startedAtMilliseconds/);
+  assert.match(queue, /func accepts\(_ date: Date, futureSkew: TimeInterval = 60\)/);
+  assert.match(queue, /"app\.hermes\.\\\(Self\.digest\(ownerScope\)\)\.\\\(Self\.digest\(serverAccountGeneration\)\)\.\\\(lifecycleEpoch\)"/);
+  assert.match(lifecycle, /performIfCurrentCollectorGeneration/);
+  assert.match(lifecycle, /HermesLocationService\.shared\.activateAccountGeneration\(token\)/);
+  assert.match(lifecycle, /HermesMotionService\.shared\.activateAccountGeneration\(token\)/);
+
+  assert.match(location, /private var manager: CLLocationManager/);
+  assert.match(location, /previous\.delegate = nil[\s\S]*manager = CLLocationManager\(\)/);
+  assert.match(location, /for region in previous\.monitoredRegions where isHermesRegion\(region\)/);
+  assert.match(location, /for region in manager\.monitoredRegions where isHermesRegion\(region\)/);
+  assert.match(location, /identifier: "\\\(token\.regionNamespace\)\.stable-place"/);
+  assert.match(location, /withCurrentCollector\(manager, source: "location"\)[\s\S]*lastLocation = location/);
+  assert.match(location, /withCurrentRegion\(manager, region: region, source: "region-entry"\)/);
+  assert.match(location, /token\.accepts\(\$0\.timestamp\)/);
+  assert.match(location, /accountGeneration: token\.lifecycleEpoch/);
+  assert.match(location, /Logger\(subsystem: "app\.hermes", category: "location-collector"\)/);
+
+  assert.match(motion, /manager\.startActivityUpdates[\s\S]*self\.handle\(activity, token: token\)/);
+  assert.match(motion, /performIfCurrentCollectorGeneration\(token\)[\s\S]*storedSnapshot = payload/);
+  assert.match(motion, /token\.accepts\(activity\.startDate\)/);
+  assert.match(motion, /accountGeneration: token\.lifecycleEpoch/);
+  assert.match(motion, /Logger\(subsystem: "app\.hermes", category: "motion-collector"\)/);
 });
 
 test('weather map stays a flat standard vector map with native gestures and user location', () => {
@@ -337,6 +465,7 @@ test('weather map stays a flat standard vector map with native gestures and user
   assert.match(source, /centerOnNextUserLocation = true/);
   assert.match(source, /didUpdate userLocation[\s\S]*!hasCenteredOnUser \|\| centerOnNextUserLocation/);
   assert.match(source, /isPitchEnabled = false/);
+  assert.match(source, /pointOfInterestFilter = \.excludingAll/);
   assert.match(source, /func setShowsUserLocation\(_ shows: Bool\)/);
   assert.match(source, /mapView\.showsUserLocation = shows/);
   assert.match(source, /MKPolyline/);
@@ -349,6 +478,7 @@ test('weather map stays a flat standard vector map with native gestures and user
   assert.match(amap, /mapView\.isScrollEnabled = true/);
   assert.match(amap, /mapView\.isRotateEnabled = true/);
   assert.match(amap, /mapView\.isRotateCameraEnabled = false/);
+  assert.match(amap, /mapView\.touchPOIEnabled = false/);
 });
 
 test('native relay covers durable cursors, background services, health, watch, notifications, and optional capabilities', () => {
@@ -357,7 +487,11 @@ test('native relay covers durable cursors, background services, health, watch, n
   const background = read('ios/HermesBackgroundService.swift');
   const watch = read('ios/HermesWatchService.swift');
   const liveActivity = read('ios/HermesLiveActivityService.swift');
-  assert.match(watch, /guard let generation,[\s\S]*generation == defaults\.integer/);
+  assert.match(watch, /currentCollectorGenerationToken\(\)/);
+  assert.match(watch, /matches\(message, token: token\)/);
+  assert.match(watch, /enqueueBatch\(events\)/);
+  assert.match(watch, /accountResetAt/);
+  assert.match(watch, /accountUUID/);
   for (const operation of [
     'getInstallationIdentifier',
     'getCommandCursor',
@@ -389,6 +523,7 @@ test('native relay covers durable cursors, background services, health, watch, n
     'getScreenTimeSnapshot',
     'updateLiveActivity',
     'scheduleBackgroundTasks',
+    'setBackgroundRelayReady',
     'listPendingRelayWakes',
     'completeBackgroundRelay',
   ]) {
@@ -406,9 +541,9 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /hasCompletedCommand/);
   assert.match(provider, /recordCommandCompletion/);
   assert.match(provider, /HermesIOSContext\.getDeviceSnapshot\(\)\.catch/);
-  assert.match(provider, /HermesIOSContext\.getScreenTimeSnapshot\(\)\.catch/);
+  assert.match(provider, /return \{ screenTime: await HermesIOSContext\.getScreenTimeSnapshot\(\) \};/);
   assert.match(provider, /HermesIOSContext\.getWatchSnapshot\(\)\.catch/);
-  assert.match(provider, /snapshotEvent\('screen-time'/);
+  assert.doesNotMatch(provider, /snapshotEvent\('screen-time'/);
   assert.match(provider, /snapshotEvent\('watch'/);
   assert.doesNotMatch(provider, /payload\.place_id = payload\.place_id \?\? event\.id/);
   assert.match(provider, /_relay_execution_status: 'executing'/);
@@ -422,7 +557,9 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /createReminderForCommand\(command\.id/);
   assert.match(provider, /_relay_device_id: deviceId/);
   assert.match(provider, /_relay_owner_scope: ownerScope/);
-  assert.match(provider, /setOwnerScope\(ownerScope\)/);
+  assert.match(provider, /setOwnerScope\(ownerScope, accountGeneration\)/);
+  assert.match(provider, /setBackgroundRelayReady\([\s\S]*ownerScope,[\s\S]*accountGeneration,[\s\S]*true/);
+  assert.match(provider, /setBackgroundRelayReady\([\s\S]*ownerScope,[\s\S]*accountGeneration,[\s\S]*false/);
   assert.match(provider, /setPermissionCollectionReady\(ownerScope, false\)/);
   assert.match(provider, /canStartIOSCollection\(authorization\)/);
   assert.match(provider, /!canStartIOSCollection\(permissionSnapshotRef\.current\)/);
@@ -431,17 +568,18 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /clearIOSPermissionRun\(ownerScope\)/);
   assert.match(readFileSync(resolve(root, 'src/context/ios-permission-coordinator.ts'), 'utf8'), /requestScreenTimeAuthorization/);
   assert.match(provider, /startScreenTimeMonitoring\('hermes-daily-context', 0, 24\)/);
-  assert.match(provider, /readPendingEvents\(EVENT_BATCH_SIZE, ownerScope\)/);
-  assert.match(provider, /enqueueContextEvents\(events/);
+  assert.match(provider, /claimPendingEvents\(EVENT_BATCH_SIZE, ownerScope\)/);
+  assert.match(provider, /enqueueContextEvents\([\s\S]*events as unknown/);
   assert.ok(
-    provider.indexOf('enqueueContextEvents(events') < provider.indexOf('await flushPendingEvents();'),
+    provider.indexOf('HermesIOSContext.enqueueContextEvents(')
+      < provider.indexOf('await flushPendingEvents(capture);'),
     'snapshots are encrypted locally before upload',
   );
   assert.doesNotMatch(provider, /apiRef\.current\.uploadEvents\(\{\s*cursor: `snapshot:/);
   // Trajectory/places device commands flush pending then load the durable server snapshot.
   assert.match(
     provider,
-    /executeDeviceCommand\(\s*command,\s*flushPendingEvents,\s*ownerScope,\s*permissionSnapshotRef\.current,\s*\(\)\s*=>\s*apiRef\.current\.snapshot\(\),\s*\)/,
+    /executeDeviceCommand\([\s\S]*command,[\s\S]*flushPendingEvents\(capture\),[\s\S]*ownerScope,[\s\S]*accountGeneration,[\s\S]*permissionSnapshotRef\.current/,
   );
   assert.match(provider, /source: snapshot \? 'server_snapshot' : 'local_pending_after_flush'/);
   assert.match(provider, /trajectory: snapshot\?\.trajectory \|\| \[\]/);
@@ -466,6 +604,22 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /\['place-visit'\],\s+ownerScope,/);
   assert.match(background, /BGAppRefreshTaskRequest/);
   assert.match(background, /BGProcessingTaskRequest/);
+  assert.match(background, /performNativeWork\(operationID:/);
+  assert.match(background, /HermesScreenTimeService\.shared\.consumeExtensionEvents\(\)/);
+  assert.match(background, /HermesHealthService\.shared\.resumeBackgroundCollection\(\)/);
+  assert.match(background, /MainActor\.run \{ HermesDeviceService\.shared\.recordSnapshot\(\) \}/);
+  assert.match(background, /waitForRelayReady\(token, timeout: 5\)/);
+  assert.match(background, /Task\.isCancelled/);
+  assert.match(background, /operation\.cancel\(reason: "expired"\)/);
+  assert.match(background, /persistRetryState/);
+  assert.match(background, /defaults\.synchronize\(\)/);
+  assert.match(background, /private var finished = false/);
+  assert.match(background, /task\.setTaskCompleted\(success: success\)/);
+  assert.ok(
+    background.indexOf('nativeMaintenanceCompleted')
+      < background.indexOf('notifyRelayWake(reason: "background-task")'),
+    'BGTask executes native maintenance before handing an upload wake to JavaScript',
+  );
   assert.match(watch, /WCSessionDelegate/);
   assert.match(liveActivity, /ActivityAttributes/);
 });
@@ -483,13 +637,50 @@ test('HealthKit sleep totals retain generic asleep samples', () => {
   assert.match(health, /current\.end = max\(current\.end, interval\.end\)/);
 });
 
+test('HealthKit background delivery advances generation-scoped anchors after durable writes', () => {
+  const health = read('ios/HermesHealthService.swift');
+  const queue = read('ios/HermesContextEventQueue.swift');
+  const lifecycle = read('ios/HermesAccountLifecycle.swift');
+  const subscriber = read('ios/HermesIOSContextAppDelegateSubscriber.swift');
+  const module = read('ios/HermesIOSContextModule.swift');
+  const provider = readFileSync(resolve(root, 'src/context/IOSContextProvider.tsx'), 'utf8');
+
+  assert.match(health, /HKObserverQuery\(sampleType: sampleType/);
+  assert.match(health, /enableBackgroundDelivery\(for: sampleType, frequency: \.immediate/);
+  assert.match(health, /HKAnchoredObjectQuery\(/);
+  assert.match(health, /private static let anchoredBatchLimit = 500/);
+  assert.match(health, /private static let initialBackfillLimit = 5_000/);
+  assert.match(health, /initialBackfillDays: TimeInterval = 7/);
+  assert.match(health, /token\.regionNamespace[\s\S]*typeIdentifier/);
+  assert.match(health, /NSKeyedArchiver\.archivedData/);
+  assert.match(health, /NSKeyedUnarchiver\.unarchiveTopLevelObjectWithData/);
+  assert.match(health, /backfill-progress/);
+  assert.match(health, /backfill-complete/);
+  assert.match(health, /"id": "health-sample:\\\(sample\.uuid\.uuidString\.lowercased\(\)\)"/);
+  assert.match(health, /eventID: "health-aggregate:\\\(kind\):\\\(bucket\)"/);
+  assert.match(health, /domainAuthorization/);
+  assert.match(health, /performIfCurrentCollectorGeneration\(token\)/);
+  assert.ok(
+    health.indexOf('type: "health-sample"') < health.indexOf('self.saveAnchor('),
+    'HealthKit anchor advances only after raw samples reach the durable queue',
+  );
+  assert.match(queue, /eventID: String\? = nil/);
+  assert.match(queue, /loadUnlocked\(\)\.contains\(where:/);
+  assert.match(lifecycle, /HermesHealthService\.shared\.activateAccountGeneration\(token\)/);
+  assert.match(subscriber, /HermesHealthService\.shared\.resumeBackgroundCollection\(\)/);
+  assert.doesNotMatch(module, /eventQueue\.enqueue\(type: "health"/);
+  assert.doesNotMatch(provider, /function healthEvents/);
+  assert.doesNotMatch(provider, /snapshotEvent\('health-(?:sleep|heart|oxygen|activity)'/);
+});
+
 test('smart weather view only renders local today data and valid alerts', () => {
   const source = readFileSync(resolve(root, 'src', 'context', 'SmartWeatherPage.tsx'), 'utf8');
   assert.match(source, /dayKey\(new Date\(\)\)/);
   assert.match(source, /todayTrajectory = snapshot\.trajectory\.filter/);
   assert.match(source, /todayPlaces = snapshot\.places\.filter/);
   // Incomplete validity windows are rejected; stale reloads are labeled, not hidden as live.
-  assert.match(source, /expires === null && starts === null/);
+  assert.match(source, /isForecastActive\(forecast, now\)/);
+  assert.match(source, /normalizeSnapshot\(await api\.snapshot\(\)\)/);
   assert.match(source, /smart-weather-stale-warning/);
   assert.match(source, /setSnapshot\(EMPTY\)/);
   // Route readiness is one-shot and must not be a reload dependency: the
@@ -525,7 +716,7 @@ test('logout keeps Always location collection; delete stops owner scope', () => 
   // Product boundary: logout / session expiry clear credentials only.
   assert.match(auth, /Product boundary: logout \/ session expiry clear credentials only/);
   assert.doesNotMatch(auth, /logout[\s\S]{0,400}stopAdaptiveLocation/);
-  assert.match(auth, /deleteOwnerScope\(ownerScope\)/);
+  assert.match(auth, /deleteOwnerScope\([\s\S]*ownerScope,[\s\S]*accountGenerationFromOwnerScope/);
   // Provider unmount stops motion but deliberately leaves adaptive location running.
   assert.match(provider, /stopMotionUpdates\(\)\.catch/);
   assert.match(provider, /Do not stopAdaptiveLocation here/);
@@ -595,9 +786,28 @@ test('distributable builds keep MapKit available when the optional AMap key is a
   );
   assert.match(mapView, /static var amapConfigured:[\s\S]*!amapAPIKey\.isEmpty/);
   assert.match(mapView, /amapBundleIdentifier == Bundle\.main\.bundleIdentifier/);
-  assert.match(mapView, /amapFailedForSession = true[\s\S]*installRendererIfNeeded\(\)/);
+  assert.match(mapView, /amapFailedForSession = true[\s\S]*installRendererIfNeeded\(force: true\)/);
   assert.match(amap, /mapViewDidFailLoadingMap[\s\S]*onProviderFailure\?\(error\)/);
   assert.match(mapView, /let mapKit = HermesMapKitSurface/);
+  assert.match(mapView, /final class HermesNativeMapRuntimeState/);
+  assert.match(mapView, /"bundleIdentifierMatches"/);
+  assert.match(mapView, /HermesLocationService\.shared\.mapLocationStatus\(\)/);
+  assert.match(mapView, /phase: "degraded"/);
+  assert.match(mapView, /var providerResetRequest = 0/);
+  assert.match(mapView, /onProviderStatus\(HermesNativeMapRuntimeState\.shared\.snapshot\(\)\)/);
+
+  const module = read('ios/HermesStandardMapModule.swift');
+  const location = read('ios/HermesLocationService.swift');
+  const bridge = read('index.ts');
+  const page = readFileSync(resolve(root, 'src/context/SmartWeatherPage.tsx'), 'utf8');
+  assert.match(module, /Events\("onLocationPress", "onProviderStatus"\)/);
+  assert.match(module, /Prop\("providerResetRequest"\)/);
+  assert.match(location, /func mapLocationStatus\(\)/);
+  assert.match(location, /"lastLocationStatus"/);
+  assert.match(bridge, /phase: 'unconfigured' \| 'requestingPermission' \| 'initializing' \| 'ready' \| 'degraded' \| 'failed'/);
+  assert.match(page, /providerResetRequest=\{mapAttempt\}/);
+  assert.match(page, /onProviderStatus=\{\(event\) => setNativeMapProvider\(event\.nativeEvent\)\}/);
+  assert.match(page, /smart-weather-provider-warning/);
 });
 
 test('native map discovery requires the default Expo view manager and runtime config', () => {

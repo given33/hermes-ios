@@ -4,6 +4,7 @@ import { AppState } from 'react-native';
 import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
 import { withAbortableDeadline } from '../api/async-deadline';
 import { expireSystemRouteData } from '../api/managed-node-status';
+import { consumeManagedResourceEvents } from '../api/managed-resource-events';
 import {
   conversationSessionSummary,
   createCollaborationRoomRequestId,
@@ -84,7 +85,10 @@ export function useHermesSwiftUIRouteData({
   profile,
   routeId,
 }: UseHermesSwiftUIRouteDataOptions): HermesSwiftUIRouteDataController {
-  const api = useMemo(() => client ? hermesCloudApiFor(client) : null, [client]);
+  const api = useMemo(
+    () => client ? hermesCloudApiFor(client, cacheOwner) : null,
+    [cacheOwner, client],
+  );
   const localStore = useMemo(
     () => cacheOwner ? sharedConversationLocalStore() : null,
     [cacheOwner],
@@ -228,6 +232,53 @@ export function useHermesSwiftUIRouteData({
     replayPendingCollaborationMessages,
     routeId,
   ]);
+
+  useEffect(() => {
+    if (!api || (routeId !== 'skills' && routeId !== 'mcp')) return undefined;
+    let disposed = false;
+    let cursor = 0;
+    let controller: AbortController | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const connect = () => {
+      if (disposed || controller || AppState.currentState !== 'active') return;
+      controller = new AbortController();
+      const activeController = controller;
+      void consumeManagedResourceEvents(
+        api,
+        cursor,
+        activeController.signal,
+        async (frame) => {
+          cursor = Math.max(cursor, frame.cursor);
+          if (!disposed && AppState.currentState === 'active') await reload();
+        },
+      ).then((nextCursor) => {
+        cursor = Math.max(cursor, nextCursor);
+      }).catch(() => undefined).finally(() => {
+        if (controller === activeController) controller = null;
+        if (!disposed && AppState.currentState === 'active') {
+          reconnectTimer = setTimeout(connect, INSTALLATION_REFRESH_MS);
+        }
+      });
+    };
+
+    connect();
+    const appState = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        connect();
+      } else {
+        controller?.abort();
+        controller = null;
+        if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+      }
+    });
+    return () => {
+      disposed = true;
+      controller?.abort();
+      if (reconnectTimer !== undefined) clearTimeout(reconnectTimer);
+      appState.remove();
+    };
+  }, [api, reload, routeId]);
 
   useEffect(() => {
     const lifecycleVersion = ++requestVersion.current;

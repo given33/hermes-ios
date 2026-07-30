@@ -1,4 +1,11 @@
-export const ATTACHMENT_ENCRYPTION_FORMAT = 'aes-gcm-v1' as const;
+export const ATTACHMENT_ENCRYPTION_FORMAT = 'aes-gcm-chunked-v2' as const;
+export type AttachmentEncryptionFormat = 'aes-gcm-chunked-v2' | 'aes-gcm-v1';
+
+export function isAttachmentEncryptionFormat(
+  value: unknown,
+): value is AttachmentEncryptionFormat {
+  return value === ATTACHMENT_ENCRYPTION_FORMAT || value === 'aes-gcm-v1';
+}
 
 export interface AttachmentVault {
   encryptAttachment(

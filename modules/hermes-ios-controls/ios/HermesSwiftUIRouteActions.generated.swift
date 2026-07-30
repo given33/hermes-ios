@@ -98,6 +98,7 @@ enum HermesRouteAction: String, CaseIterable {
   case skillSelect = "skill.select"
   case skillView = "skill.view"
   case skillUpdate = "skill.update"
+  case installationRollback = "installation.rollback"
   case integrationCreate = "integration.create"
   case integrationUpdate = "integration.update"
   case integrationToggle = "integration.toggle"

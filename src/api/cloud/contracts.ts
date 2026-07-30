@@ -81,6 +81,27 @@ export interface AccountFilesQuery {
   status?: string;
 }
 
+export interface ToolOutputArtifactEntry {
+  id: string;
+  account_generation: string;
+  conversation_id: string;
+  turn_id: string;
+  tool_call_id: string;
+  tool_name: string;
+  sha256: string;
+  size_bytes: number;
+  state: 'available';
+  created_at: number;
+  retained_until: number;
+}
+
+export interface ToolOutputArtifactsResponse {
+  artifacts: ToolOutputArtifactEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 export interface CollaborationProfile {
   name: string;
   description: string;
@@ -122,6 +143,7 @@ export interface CollaborationMessage {
 }
 
 export interface SingleConversation {
+  account_generation?: string;
   id: string;
   profile: string;
   title: string;
@@ -132,12 +154,49 @@ export interface SingleConversation {
   hosted_turns?: Record<string, JsonRecord>;
   participants?: JsonRecord[];
   event_cursor?: number;
+  hosted_event_cursor?: number;
+  hosted_event_min_cursor?: number;
+  session_entry_cursor?: number;
+  session_entry_leaf_id?: string;
   created_at?: number;
   updated_at?: number;
   official_session_id?: string;
   official_profile?: string;
   official_model?: string;
   preview?: string;
+}
+
+export type ConversationSessionEntryType =
+  | 'message'
+  | 'model_change'
+  | 'tool_visibility_change'
+  | 'collaboration_lift'
+  | 'role_handoff'
+  | 'intervention'
+  | 'compaction'
+  | 'label'
+  | 'attachment'
+  | 'terminal_state';
+
+export interface ConversationSessionEntry {
+  entry_id: string;
+  cursor: number;
+  parent_entry_id: string | null;
+  entry_type: ConversationSessionEntryType;
+  occurred_at: number;
+  idempotency_key: string;
+  payload: JsonRecord;
+  schema_version: 'hermes.session-entry.v1';
+}
+
+export interface ConversationSessionEntriesResponse {
+  schema_version: 'hermes.session-entry.v1';
+  account_generation: string;
+  cursor: number;
+  reset_cursor?: boolean;
+  reset_reason?: string;
+  leaf_entry_id: string;
+  entries: ConversationSessionEntry[];
 }
 
 export interface ConversationSessionContext extends JsonRecord {
@@ -300,6 +359,8 @@ export interface HostedTurnEnqueueResponse {
 export interface NativeUpload {
   name: string;
   mimeType?: string | null;
+  sha256?: string;
+  size?: number | null;
   uri: string;
 }
 

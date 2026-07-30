@@ -32,10 +32,12 @@ test('motion tokens sit inside the Studio parity bands', () => {
   );
 });
 
-test('useMotion honors the OS Reduce Motion switch for both timing and mount animations', () => {
+test('useMotion replaces spatial motion with short fades under Reduce Motion', () => {
   assert.match(motionSource, /useReducedMotion/);
-  // Timing durations collapse to 0 (snap, still interruptible)…
-  assert.match(motionSource, /reduceMotion \? 0 : baseMs/);
-  // …and entering/exiting props are dropped entirely.
+  assert.match(motionSource, /reduced: 120/);
+  assert.match(motionSource, /spatialDuration: 0/);
+  assert.match(motionSource, /allowLoop: false/);
   assert.match(motionSource, /reduceMotion \? undefined : animation/);
+  assert.match(motionSource, /reduceMotion \? reducedFade : animation/);
+  assert.match(motionSource, /reduceMotion \? MOTION\.fade\.reduced : baseMs/);
 });

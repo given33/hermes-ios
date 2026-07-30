@@ -4,6 +4,7 @@ import {
   ChevronDown,
   RefreshCw,
   Search,
+  Trash2,
 } from 'lucide-react-native';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import {
@@ -24,6 +25,7 @@ import type {
   CustomModelConfiguration,
   CustomModelConnectionResult,
 } from '../api/HermesCloudApi';
+import { customModelApiKeyAction } from '../api/cloud/models';
 import { hermesCloudApiFor } from '../api/hermes-api-registry';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { NativeButton } from '../components/ui/NativeButton';
@@ -63,6 +65,8 @@ export function ModelsManagementPage({
   const api = useMemo(() => hermesCloudApiFor(client), [client]);
   const chinese = locale === 'zh';
   const [apiKey, setApiKey] = useState('');
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
+  const [apiKeyDeleteRequested, setApiKeyDeleteRequested] = useState(false);
   const [apiKeyPreview, setApiKeyPreview] = useState('');
   const [apiMode, setApiMode] = useState<CustomModelConfiguration['apiMode']>('chat_completions');
   const [baseUrl, setBaseUrl] = useState('');
@@ -92,6 +96,8 @@ export function ModelsManagementPage({
     try {
       const current = await api.getCustomModel(profile);
       setApiKey('');
+      setApiKeyConfigured(current.apiKeyConfigured === true);
+      setApiKeyDeleteRequested(false);
       setApiKeyPreview(current.apiKeyConfigured ? current.apiKeyPreview || '********' : '');
       setApiMode(current.apiMode);
       setBaseUrl(current.baseUrl);
@@ -109,12 +115,25 @@ export function ModelsManagementPage({
 
   const configuration = useCallback((): CustomModelConfiguration => ({
     apiKey,
+    apiKeyAction: customModelApiKeyAction(apiKey, {
+      deleteRequested: apiKeyDeleteRequested,
+      preview: apiKeyPreview,
+    }),
     apiMode,
     baseUrl,
     contextLength: Number.parseInt(contextLength, 10) || 0,
     model,
     reasoningEffort,
-  }), [apiKey, apiMode, baseUrl, contextLength, model, reasoningEffort]);
+  }), [
+    apiKey,
+    apiKeyDeleteRequested,
+    apiKeyPreview,
+    apiMode,
+    baseUrl,
+    contextLength,
+    model,
+    reasoningEffort,
+  ]);
 
   const invalidateDetection = () => {
     setDetectedExpanded(false);
@@ -184,7 +203,10 @@ export function ModelsManagementPage({
     try {
       const saved = await api.saveCustomModel(configuration(), profile);
       const preview = typeof saved.api_key_preview === 'string' ? saved.api_key_preview : '';
-      if (preview) setApiKeyPreview(preview);
+      const configured = saved.api_key_configured === true;
+      setApiKeyConfigured(configured);
+      setApiKeyPreview(configured ? preview || '********' : '');
+      setApiKeyDeleteRequested(false);
       setApiKey('');
       const message = chinese ? '模型配置已保存' : 'Model configuration saved';
       setOperation({ kind: 'save', message, state: 'success' });
@@ -230,6 +252,7 @@ export function ModelsManagementPage({
             autoCapitalize="none"
             onChangeText={(value) => {
               setApiKey(value);
+              if (value.trim()) setApiKeyDeleteRequested(false);
               invalidateDetection();
             }}
             placeholder={apiKeyPreview
@@ -238,6 +261,31 @@ export function ModelsManagementPage({
             secureTextEntry
             value={apiKey}
           />
+          {apiKeyConfigured ? (
+            <IOSPressable
+              accessibilityLabel={apiKeyDeleteRequested
+                ? (chinese ? '取消删除已保存密钥' : 'Keep saved API key')
+                : (chinese ? '删除已保存密钥' : 'Delete saved API key')}
+              disabled={busy}
+              onPress={() => {
+                setApiKey('');
+                setApiKeyDeleteRequested((current) => !current);
+              }}
+              style={styles.keyAction}
+            >
+              <Trash2
+                color={apiKeyDeleteRequested
+                  ? tokens.colors.destructive
+                  : tokens.colors.textSecondary}
+                size={16}
+              />
+              <PreviewText variant="label">
+                {apiKeyDeleteRequested
+                  ? (chinese ? '保存时删除密钥，点此撤销' : 'Delete on save; tap to undo')
+                  : (chinese ? '删除已保存密钥' : 'Delete saved API key')}
+              </PreviewText>
+            </IOSPressable>
+          ) : null}
 
           <View style={[styles.detectionBox, { borderColor: tokens.colors.border }]}>
             <View style={styles.detectionHeader}>
@@ -460,6 +508,14 @@ const styles = StyleSheet.create({
   },
   fields: {
     gap: 10,
+  },
+  keyAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 36,
+    paddingHorizontal: 2,
   },
   operation: {
     alignItems: 'flex-start',

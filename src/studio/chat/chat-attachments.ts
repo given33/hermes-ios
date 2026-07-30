@@ -29,43 +29,6 @@ export function formatAttachmentSize(size?: number | null): string {
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function cleanupUnreferencedPickerCacheFiles(
-  protectedSources: readonly { ownedTemporary?: boolean; uri: string }[],
-): void {
-  if (Platform.OS === 'web') return;
-  const protectedUris = new Set(protectedSources.flatMap((source) => {
-    if (!source.ownedTemporary || !isUriInsideDirectory(source.uri, Paths.cache.uri)) return [];
-    try {
-      return [new URL(source.uri).href];
-    } catch {
-      return [];
-    }
-  }));
-  const sweep = (directory: ExpoDirectory) => {
-    if (!directory.exists) return;
-    for (const entry of directory.list()) {
-      try {
-        if (entry instanceof ExpoDirectory) {
-          sweep(entry);
-          if (entry.exists && entry.list().length === 0) entry.delete();
-          continue;
-        }
-        const normalized = new URL(entry.uri).href;
-        if (!protectedUris.has(normalized) && entry.exists) entry.delete();
-      } catch {
-        // A later replay or account cleanup retries inaccessible entries.
-      }
-    }
-  };
-  for (const name of ['DocumentPicker', 'ImagePicker']) {
-    try {
-      sweep(new ExpoDirectory(Paths.cache, name));
-    } catch {
-      // Picker caches are ephemeral; cleanup remains best-effort.
-    }
-  }
-}
-
 export function resolveComposerFontSize(value: string): number {
   const glyphCount = Array.from(value).length;
   if (glyphCount <= 28 || /\s/u.test(value)) return 16;
@@ -129,14 +92,17 @@ export async function persistPendingAttachments(
             .map((uri) => new ExpoFile(uri))
             .find((file) => file.exists) ?? null;
       const sourceUri = legacyPlaintext ? legacyPlaintext.uri : attachment.sourceUri?.trim();
+      let sha256 = attachment.sha256;
       if (!target.exists) {
         if (!sourceUri) throw new Error(`Attachment source is unavailable: ${attachment.name}`);
-        await HermesIOSContext.encryptAttachment(owner, sourceUri, targetUri);
+        const encrypted = await HermesIOSContext.encryptAttachment(owner, sourceUri, targetUri);
+        sha256 = encrypted.sha256;
         installedTargets.add(targetUri);
       }
       persisted.push({
         ...attachment,
         encryption: ATTACHMENT_ENCRYPTION_FORMAT,
+        sha256,
         sourceUri: sourceUri || '',
         uri: targetUri,
       });

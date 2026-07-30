@@ -51,6 +51,7 @@ import {
 import { resolveNativeFontStack } from '../../design/native-font-faces';
 import { useTheme } from '../../design/ThemeProvider';
 import { IOS_MOTION } from '../../design/ios-motion';
+import { useMotion } from '../../design/motion';
 import { useNativeLocalization } from '../../i18n/NativeLocalization';
 import { playHaptic, type IOSHaptic } from '../ios/IOSPressable';
 
@@ -310,6 +311,7 @@ function ArcBorder({
   visible: boolean;
   width: number;
 }) {
+  const motion = useMotion();
   const opacity = useSharedValue(0);
   const progress = useSharedValue(0);
   const nativeId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
@@ -336,14 +338,14 @@ function ArcBorder({
 
   useEffect(() => {
     opacity.value = withTiming(visible ? 1 : 0, {
-      duration: IOS_MOTION.duration.control,
+      duration: motion.fadeDuration(IOS_MOTION.duration.control),
       easing: Easing.bezier(...IOS_MOTION.curve.standard),
     });
-  }, [opacity, visible]);
+  }, [motion, opacity, visible]);
 
   useEffect(() => {
     cancelAnimation(progress);
-    if (visible) {
+    if (visible && !motion.reduceMotion) {
       progress.value = 0;
       progress.value = withRepeat(
         withTiming(1, {
@@ -355,7 +357,7 @@ function ArcBorder({
       );
     }
     return () => cancelAnimation(progress);
-  }, [progress, visible]);
+  }, [motion.reduceMotion, progress, visible]);
 
   const opacityStyle = useAnimatedStyle(() => ({ opacity: opacity.value }));
   const movingRectProps = useAnimatedProps(() => ({

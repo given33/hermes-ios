@@ -14,12 +14,15 @@ import type {
   OptimisticPendingTurn,
 } from '../../api/conversation-store-types';
 import { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
 import {
   HOSTED_TURN_RETRY_DELAY_MS,
   HostedTurnDeliveryClaimRegistry,
   hostedTurnDeliveryClaimKey,
-  hostedTurnOutboxReady,
   hostedTurnResponseFailure,
   hostedTurnTransportFailure,
   type HostedTurnDeliveryFailure,
@@ -32,7 +35,6 @@ import {
 } from '../../api/chat-view-model';
 import {
   cleanupPendingAttachments,
-  cleanupUnreferencedPickerCacheFiles,
   pendingChatSendFromOutbox,
 } from './chat-attachments';
 import { serverFailure } from './chat-domain';
@@ -40,6 +42,7 @@ import {
   HostedTurnCancelledDuringDelivery,
   type ChatAttachment,
   type HostedTurnDelivery,
+  type PendingPhase,
 } from './chat-types';
 import type { HostedTurnDeliveryService } from './hosted-turn-delivery-service';
 import {
@@ -56,10 +59,14 @@ interface HostedOutboxReplayControllerOptions {
   cacheOwner: string;
   cloudApi: HermesCloudApi | null;
   conversationSyncGenerationRef: MutableRefObject<ConversationSyncGeneration>;
-  deliverAndReconcilePendingCancellation(item: HostedTurnOutboxItem): Promise<unknown>;
+  deliverAndReconcilePendingCancellation(
+    item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<unknown>;
   handleOutboxFailure(
     source: HostedTurnOutboxItem,
     failure: HostedTurnDeliveryFailure,
+    expectedOwnerEpoch: number,
   ): Promise<'retry' | 'retry-background' | 'terminal'>;
   hostedTurnDeliveryClaimsRef: MutableRefObject<HostedTurnDeliveryClaimRegistry>;
   hostedTurnDeliveryService: HostedTurnDeliveryService | null;
@@ -87,22 +94,29 @@ interface HostedOutboxReplayControllerOptions {
     conversationId: string,
     state: ConversationCollaborationState,
   ): void;
-  updatePendingPhase(phase: 'thinking' | 'reconnecting' | 'executing', startedAt?: number): void;
+  updatePendingPhase(phase: PendingPhase, startedAt?: number): void;
   finalizePendingSend: import('./useHostedCancellationController').HostedCancellationController['finalizePendingSend'];
 }
 
 export interface HostedOutboxReplayController {
-  acceptPendingOutboxItem(item: HostedTurnOutboxItem): Promise<{
+  acceptPendingOutboxItem(item: HostedTurnOutboxItem, expectedOwnerEpoch: number): Promise<{
     item: HostedTurnOutboxItem | null;
     updated: boolean;
   }>;
-  deliverPendingEnqueue(source: HostedTurnOutboxItem): Promise<HostedTurnDelivery>;
-  deliverPendingIntervention(item: HostedInterventionOutboxItem): Promise<void>;
+  deliverPendingEnqueue(
+    source: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<HostedTurnDelivery>;
+  deliverPendingIntervention(
+    item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<void>;
   interventionReplayService: HostedInterventionReplayService | null;
   replayDurableOutboxes(): Promise<void>;
-  replayPendingEnqueues(): Promise<void>;
+  replayPendingEnqueues(expectedOwnerEpoch?: number): Promise<void>;
   settleAcceptedOutboxItem(
     item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<'cancelled' | 'cleanup-pending' | 'settled'>;
 }
 
@@ -139,17 +153,27 @@ export function useHostedOutboxReplayController({
   updateConversationCollaborationState,
   updatePendingPhase,
 }: HostedOutboxReplayControllerOptions): HostedOutboxReplayController {
-  const outboxReplayRef = useRef<Promise<void> | null>(null);
+  const outboxReplayRef = useRef<{ epoch: number; promise: Promise<void> } | null>(null);
+  const replayWorkerIdRef = useRef(
+    `ios-hosted-outbox:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+  );
 
   const deliverPendingEnqueue = useCallback(async (
     source: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<HostedTurnDelivery> => {
     if (!hostedTurnDeliveryService) throw new Error('Durable outbox is unavailable');
-    return hostedTurnDeliveryService.deliverPendingEnqueue(source);
+    return hostedTurnDeliveryService.deliverPendingEnqueue(source, expectedOwnerEpoch);
   }, [hostedTurnDeliveryService]);
 
-  const acceptPendingOutboxItem = useCallback(async (item: HostedTurnOutboxItem) => {
+  const acceptPendingOutboxItem = useCallback(async (
+    item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
+  ) => {
     if (!localStore || !cacheOwner) return { item: null, updated: false };
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) {
+      return { item: null, updated: false };
+    }
     const acceptedAt = item.deliveryAcceptedAt || Date.now();
     const pendingTurn: OptimisticPendingTurn = {
       attempt: 0,
@@ -163,7 +187,11 @@ export function useHostedOutboxReplayController({
       cacheOwner,
       { ...item, deliveryAcceptedAt: acceptedAt },
       pendingTurn,
+      expectedOwnerEpoch,
     );
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) {
+      return { item: null, updated: false };
+    }
     if (!transition.updated || !transition.item) return transition;
     const failureIds = new Set([
       `send-failed-${item.input.message.id}`,
@@ -197,26 +225,43 @@ export function useHostedOutboxReplayController({
 
   const settleAcceptedOutboxItem = useCallback(async (
     item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<'cancelled' | 'cleanup-pending' | 'settled'> => {
     if (!localStore || !cacheOwner) return 'cleanup-pending';
+    const lifecycleCurrent = () => isConversationStorageEpochCurrent(
+      cacheOwner,
+      expectedOwnerEpoch,
+    );
+    if (!lifecycleCurrent()) return 'cleanup-pending';
     try {
       cleanupPendingAttachments(item);
     } catch (error) {
-      await localStore.upsertPendingEnqueueIfActive(cacheOwner, {
-        ...item,
-        lastError: serverFailure(error, isChinese),
-        nextAttemptAt: Date.now() + acceptFailureCleanupDelayMs,
-      });
+      await localStore.upsertPendingEnqueueIfActive(
+        cacheOwner,
+        {
+          ...item,
+          lastError: serverFailure(error, isChinese),
+          nextAttemptAt: Date.now() + acceptFailureCleanupDelayMs,
+        },
+        expectedOwnerEpoch,
+      );
       return 'cleanup-pending';
     }
-    if (await localStore.removePendingEnqueueIfActive(cacheOwner, item.input.requestId)) {
+    if (await localStore.removePendingEnqueueIfLeaseOwned(
+      cacheOwner,
+      item,
+      expectedOwnerEpoch,
+    )) {
+      if (!lifecycleCurrent()) return 'cleanup-pending';
       return 'settled';
     }
+    if (!lifecycleCurrent()) return 'cleanup-pending';
     const cancelled = (await localStore.readPendingEnqueues(cacheOwner)).find(
       ({ input }) => input.requestId === item.input.requestId,
     );
+    if (!lifecycleCurrent()) return 'cleanup-pending';
     if (cancelled?.cancelledAt) {
-      void deliverAndReconcilePendingCancellation(cancelled);
+      void deliverAndReconcilePendingCancellation(cancelled, expectedOwnerEpoch);
       return 'cancelled';
     }
     return 'settled';
@@ -228,31 +273,53 @@ export function useHostedOutboxReplayController({
     localStore,
   ]);
 
-  const replayPendingEnqueues = useCallback(async () => {
+  const replayPendingEnqueues = useCallback(async (
+    expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner),
+  ) => {
     if (!cloudApi || !localStore || !cacheOwner) return;
-    if (outboxReplayRef.current) return outboxReplayRef.current;
+    if (outboxReplayRef.current?.epoch === expectedOwnerEpoch) {
+      return outboxReplayRef.current.promise;
+    }
+    const lifecycleCurrent = () => isConversationStorageEpochCurrent(
+      cacheOwner,
+      expectedOwnerEpoch,
+    );
+    if (!lifecycleCurrent()) return;
     const replay = (async () => {
-      const pending = await localStore.readPendingEnqueues(cacheOwner);
+      const pending = await localStore.claimReadyPendingEnqueues(
+        cacheOwner,
+        replayWorkerIdRef.current,
+        Date.now(),
+        5 * 60_000,
+        4,
+        expectedOwnerEpoch,
+      );
+      if (!lifecycleCurrent()) return;
       try {
-        for (const pendingItem of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
+        for (const pendingItem of pending) {
+          if (!lifecycleCurrent()) return;
           if (pendingItem.cancelledAt) {
-            if (!hostedTurnOutboxReady(pendingItem)) break;
-            if (pendingItem.purpose === 'hosted-turn-cancel') {
-              await deliverAndReconcilePendingCancellation(pendingItem);
-              continue;
-            }
-            const repaired = await finalizePendingSend(
-              pendingChatSendFromOutbox(pendingItem, cacheOwner),
-              isChinese ? '任务已取消。' : 'Task cancelled.',
-              'cancelled',
-              'cancelled',
-              isChinese ? '已取消' : 'Cancelled',
+            const cancelRequested: OptimisticPendingTurn = {
+              attempt: pendingItem.attempts || 0,
+              phase: 'cancel_requested',
+              phaseStartedAt: pendingItem.cancelledAt,
+              turnId: pendingItem.input.turnId,
+              updatedAt: Date.now(),
+              userMessageId: pendingItem.input.message.id,
+            };
+            optimisticPendingByConversationRef.current.set(
+              pendingItem.conversationId,
+              cancelRequested,
             );
-            if (!repaired) continue;
-            await deliverAndReconcilePendingCancellation(pendingItem);
+            if (activeConversationIdRef.current === pendingItem.conversationId) {
+              updatePendingPhase('cancel_requested', pendingItem.cancelledAt);
+              setHostedRunning(true);
+              setSending(true);
+            }
+            await deliverAndReconcilePendingCancellation(pendingItem, expectedOwnerEpoch);
+            if (!lifecycleCurrent()) return;
             continue;
           }
-          if (!hostedTurnOutboxReady(pendingItem)) break;
           if (pendingItem.deliveryTerminalAt) {
             await finalizePendingSend(
               pendingChatSendFromOutbox(pendingItem, cacheOwner),
@@ -262,15 +329,24 @@ export function useHostedOutboxReplayController({
               isChinese ? '连接错误' : 'Connection error',
               pendingItem,
             );
-            const settled = await settleAcceptedOutboxItem(pendingItem);
-            if (settled === 'cleanup-pending') break;
+            if (!lifecycleCurrent()) return;
+            const settled = await settleAcceptedOutboxItem(pendingItem, expectedOwnerEpoch);
+            if (!lifecycleCurrent()) return;
+            if (settled === 'cleanup-pending') continue;
             continue;
           }
           if (pendingItem.deliveryAcceptedAt) {
-            const acceptedMutation = await acceptPendingOutboxItem(pendingItem);
+            const acceptedMutation = await acceptPendingOutboxItem(
+              pendingItem,
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return;
             if (!acceptedMutation.updated || !acceptedMutation.item) {
               if (acceptedMutation.item?.cancelledAt) {
-                await deliverAndReconcilePendingCancellation(acceptedMutation.item);
+                await deliverAndReconcilePendingCancellation(
+                  acceptedMutation.item,
+                  expectedOwnerEpoch,
+                );
               }
               continue;
             }
@@ -282,19 +358,32 @@ export function useHostedOutboxReplayController({
             setActiveHostedTurnId(acceptedMutation.item.input.turnId);
             setHostedRunning(true);
             setSending(true);
-            const settled = await settleAcceptedOutboxItem(acceptedMutation.item);
-            if (settled === 'cleanup-pending') break;
+            const settled = await settleAcceptedOutboxItem(
+              acceptedMutation.item,
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return;
+            if (settled === 'cleanup-pending') continue;
             continue;
           }
           const claimKey = hostedTurnDeliveryClaimKey(cacheOwner, pendingItem.input.requestId);
           const claim = hostedTurnDeliveryClaimsRef.current.tryAcquire(claimKey);
-          if (!claim) break;
+          if (!claim) continue;
           try {
-            const { item, response } = await deliverPendingEnqueue(pendingItem);
+            const { item, response } = await deliverPendingEnqueue(
+              pendingItem,
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return;
             const responseFailure = hostedTurnResponseFailure(response);
             if (responseFailure) {
-              const outcome = await handleOutboxFailure(item, responseFailure);
-              if (outcome === 'retry' || outcome === 'retry-background') break;
+              const outcome = await handleOutboxFailure(
+                item,
+                responseFailure,
+                expectedOwnerEpoch,
+              );
+              if (!lifecycleCurrent()) return;
+              if (outcome === 'retry' || outcome === 'retry-background') continue;
               continue;
             }
             if (response.route.mode === 'work') {
@@ -306,10 +395,17 @@ export function useHostedOutboxReplayController({
               lastError: '',
               nextAttemptAt: 0,
             };
-            const acceptedMutation = await acceptPendingOutboxItem(acceptedItem);
+            const acceptedMutation = await acceptPendingOutboxItem(
+              acceptedItem,
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return;
             if (!acceptedMutation.updated || !acceptedMutation.item) {
               if (acceptedMutation.item?.cancelledAt) {
-                await deliverAndReconcilePendingCancellation(acceptedMutation.item);
+                await deliverAndReconcilePendingCancellation(
+                  acceptedMutation.item,
+                  expectedOwnerEpoch,
+                );
               }
               continue;
             }
@@ -325,45 +421,52 @@ export function useHostedOutboxReplayController({
               setSending(true);
               const generation = conversationSyncGenerationRef.current.advanceActive();
               await loadConversation(item.conversationId, generation);
+              if (!lifecycleCurrent()) return;
             }
-            const settled = await settleAcceptedOutboxItem(acceptedMutation.item);
-            if (settled === 'cleanup-pending') break;
+            const settled = await settleAcceptedOutboxItem(
+              acceptedMutation.item,
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return;
+            if (settled === 'cleanup-pending') continue;
           } catch (error) {
+            if (!lifecycleCurrent()) return;
             if (error instanceof HostedTurnCancelledDuringDelivery) {
               const cancelled = (await localStore.readPendingEnqueues(cacheOwner)).find(
                 ({ input }) => input.requestId === pendingItem.input.requestId,
               );
+              if (!lifecycleCurrent()) return;
               if (cancelled?.cancelledAt) {
-                await deliverAndReconcilePendingCancellation(cancelled);
+                await deliverAndReconcilePendingCancellation(cancelled, expectedOwnerEpoch);
               }
               continue;
             }
             const failure = hostedTurnTransportFailure(error);
-            const outcome = await handleOutboxFailure(pendingItem, {
-              ...failure,
-              message: serverFailure(error, isChinese),
-            });
-            if (outcome === 'retry' || outcome === 'retry-background') break;
+            const outcome = await handleOutboxFailure(
+              pendingItem,
+              {
+                ...failure,
+                message: serverFailure(error, isChinese),
+              },
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return;
+            if (outcome === 'retry' || outcome === 'retry-background') continue;
           } finally {
             hostedTurnDeliveryClaimsRef.current.release(claimKey, claim);
           }
         }
       } finally {
-        cleanupUnreferencedPickerCacheFiles([
-          ...attachmentsRef.current,
-          ...pending.flatMap((item) => (item.pendingAttachments || []).flatMap((attachment) => (
-            attachment.sourceUri
-              ? [{ ownedTemporary: attachment.ownedTemporary, uri: attachment.sourceUri }]
-              : []
-          ))),
-        ]);
+        await Promise.allSettled(pending.map((item) => (
+          localStore.releasePendingEnqueueLease(cacheOwner, item, expectedOwnerEpoch)
+        )));
       }
     })();
-    outboxReplayRef.current = replay;
+    outboxReplayRef.current = { epoch: expectedOwnerEpoch, promise: replay };
     try {
       await replay;
     } finally {
-      if (outboxReplayRef.current === replay) outboxReplayRef.current = null;
+      if (outboxReplayRef.current?.promise === replay) outboxReplayRef.current = null;
     }
   }, [
     acceptPendingOutboxItem,
@@ -392,11 +495,12 @@ export function useHostedOutboxReplayController({
 
   const deliverPendingIntervention = useCallback(async (
     item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch: number,
   ) => {
     if (!hostedTurnDeliveryService) {
       throw new Error('Durable hosted intervention outbox is unavailable');
     }
-    await hostedTurnDeliveryService.deliverPendingIntervention(item);
+    await hostedTurnDeliveryService.deliverPendingIntervention(item, expectedOwnerEpoch);
   }, [hostedTurnDeliveryService]);
 
   const interventionReplayService = useMemo(() => (
@@ -407,14 +511,17 @@ export function useHostedOutboxReplayController({
           describeError: (error) => serverFailure(error, isChinese),
           isRetryable: (error) => hostedTurnTransportFailure(error).retryable,
           maxAttempts: maxReconnectAttempts,
-          onDelivered: async (item) => {
+          onDelivered: async (item, expectedOwnerEpoch) => {
+            if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return;
             if (activeConversationIdRef.current !== item.conversationId) return;
             await loadConversation(
               item.conversationId,
               conversationSyncGenerationRef.current.active(),
             ).catch(() => undefined);
+            if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return;
           },
-          onPermanentFailure: (item) => {
+          onPermanentFailure: (item, _message, expectedOwnerEpoch) => {
+            if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return;
             if (activeConversationIdRef.current !== item.conversationId) return;
             const failedMessage = conversationMessagesToView({
               id: item.conversationId,
@@ -448,11 +555,13 @@ export function useHostedOutboxReplayController({
   ]);
 
   const replayDurableOutboxes = useCallback(async () => {
+    const expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return;
     await Promise.all([
-      replayPendingEnqueues(),
-      interventionReplayService?.replay(),
+      replayPendingEnqueues(expectedOwnerEpoch),
+      interventionReplayService?.replay(expectedOwnerEpoch),
     ]);
-  }, [interventionReplayService, replayPendingEnqueues]);
+  }, [cacheOwner, interventionReplayService, replayPendingEnqueues]);
 
   return {
     acceptPendingOutboxItem,

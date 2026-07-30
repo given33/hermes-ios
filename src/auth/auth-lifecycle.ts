@@ -86,11 +86,12 @@ export function isCurrentAuthLifecycle(
 
 export function isCurrentAuthSession(
   currentConnection: SavedConnection | null,
-  expectedConnection: Pick<SavedConnection, 'baseUrl' | 'username'>,
+  expectedConnection: Pick<SavedConnection, 'baseUrl' | 'username' | 'accountGeneration'>,
   currentGeneration: number,
   expectedGeneration: number,
 ): boolean {
   return currentConnection?.baseUrl === expectedConnection.baseUrl
     && currentConnection.username === expectedConnection.username
+    && currentConnection.accountGeneration === expectedConnection.accountGeneration
     && currentGeneration === expectedGeneration;
 }

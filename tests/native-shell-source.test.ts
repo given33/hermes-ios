@@ -26,11 +26,21 @@ test('phone drawer uses the UI-thread native gesture while the iPad rail keeps n
   assert.match(source, /swipeMinDistance=\{48\}/);
   assert.match(source, /direction="ltr"[\s\S]*drawerPosition="left"/);
   assert.match(source, /resolveVisibleSidebarWidth/);
-  assert.match(source, /const compactSidebarWidth = Math\.min\(270, Math\.max\(220, layout\.width - 96\)\)/);
+  assert.match(source, /const compactSidebarWidth = Math\.min\(\s*SHELL_METRICS\.sidebarWidth,\s*Math\.max\(220, layout\.width - 96\),\s*\)/);
   assert.doesNotMatch(source, /PanResponder|CompactSidebarReturnSurface|styles\.openEdge/);
   assert.match(source, /onPress=\{openMobile\}/);
   assert.match(source, /onPress=\{closeMobile\}/);
-  assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
+  assert.match(source, /const motion = useMotion\(\)/);
+  assert.match(source, /duration: motion\.duration\(IOS_MOTION\.duration\.rail\)/);
+});
+
+test('drawer dependency delegates Reduce Motion to the system', () => {
+  const patch = read('patches/react-native-drawer-layout@4.2.7.patch');
+  const lock = read('pnpm-lock.yaml');
+
+  assert.match(patch, /reduceMotion: ReduceMotion\.System/);
+  assert.doesNotMatch(patch, /^\+.*ReduceMotion\.Never/m);
+  assert.match(lock, /patchedDependencies:\s+react-native-drawer-layout@4\.2\.7:/);
 });
 
 test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () => {
@@ -54,8 +64,8 @@ test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () =>
   assert.match(source, /FadeInRight[\s\S]*duration\(IOS_MOTION\.duration\.navigationEnter\)/);
   assert.match(source, /FadeOutLeft[\s\S]*duration\(IOS_MOTION\.duration\.navigationExit\)/);
   assert.match(source, /IOS_NAVIGATION_EASING = Easing\.bezier\(\.\.\.IOS_MOTION\.curve\.navigation\)/);
-  assert.match(source, /entering=\{PAGE_ENTERING\}/);
-  assert.match(source, /exiting=\{PAGE_EXITING\}/);
+  assert.match(source, /entering=\{motion\.fade\([\s\S]*PAGE_ENTERING,[\s\S]*FadeIn\.duration\(MOTION\.fade\.reduced\)/);
+  assert.match(source, /exiting=\{motion\.fade\([\s\S]*PAGE_EXITING,[\s\S]*FadeOut\.duration\(MOTION\.fade\.reduced\)/);
   assert.match(source, /Platform\.OS === 'web' \? \([\s\S]*<View key=\{activeRoute\.path\} style=\{styles\.routeStage\}>/);
   assert.match(source, /animation: 'slide_from_right'/);
   for (const scrollSource of scrollSources) {
@@ -71,7 +81,7 @@ test('navigation keeps icon and text on one exact shared color animation', () =>
   assert.match(source, /color\.value = withTiming\(targetColor/);
   assert.match(source, /<AnimatedTintedIcon[\s\S]*color=\{color\}/);
   assert.match(source, /color: color\.value/);
-  assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
+  assert.match(source, /color\.value = withTiming\(targetColor/);
 });
 
 test('sidebar preserves the customized WebUI ownership order', () => {

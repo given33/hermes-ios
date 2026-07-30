@@ -18,6 +18,7 @@ export class AccessTokenController implements HermesAccessTokenProvider {
   private accessToken: string;
   private refreshToken: string;
   private expiresAt: number;
+  private readonly accountGeneration: string;
   private refreshInFlight: Promise<string> | null = null;
   private refreshBlockedUntil = 0;
   private refreshFailure: unknown = null;
@@ -33,6 +34,7 @@ export class AccessTokenController implements HermesAccessTokenProvider {
     this.accessToken = connection.accessToken;
     this.refreshToken = connection.refreshToken;
     this.expiresAt = connection.expiresAt;
+    this.accountGeneration = connection.accountGeneration;
     this.now = dependencies.now ?? (() => Date.now() / 1000);
     this.refreshLeewaySeconds = dependencies.refreshLeewaySeconds ?? 60;
   }
@@ -80,10 +82,14 @@ export class AccessTokenController implements HermesAccessTokenProvider {
       if (session.expiresAt <= this.now()) {
         throw new Error('Hermes returned an expired access token');
       }
+      if (session.account.accountGeneration !== this.accountGeneration) {
+        throw new Error('Hermes refreshed a different account generation');
+      }
       await this.dependencies.store.saveSessionTokens(
         session.accessToken,
         session.refreshToken,
         session.expiresAt,
+        session.account.accountGeneration,
       );
       if (this.disposed) throw new Error('Hermes session is no longer active');
       this.accessToken = session.accessToken;

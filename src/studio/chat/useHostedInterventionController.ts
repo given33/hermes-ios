@@ -7,6 +7,10 @@ import {
 
 import type { ConversationLocalStore } from '../../api/conversation-local-store';
 import type { HostedInterventionOutboxItem } from '../../api/conversation-store-types';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
 import {
   conversationRunningHostedTurnId,
@@ -23,12 +27,15 @@ import type { HostedInterventionReplayService } from './hosted-intervention-repl
 interface HostedInterventionControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
   activeHostedTurnIdRef: MutableRefObject<string>;
-  applyConversation(conversation: SingleConversation): void;
+  applyConversation(conversation: SingleConversation, expectedOwnerEpoch?: number): void;
   cacheOwner: string;
   cloudApi: HermesCloudApi | null;
   contentRef: MutableRefObject<string>;
   conversationIndexRef: MutableRefObject<SingleConversation[]>;
-  deliverPendingIntervention(item: HostedInterventionOutboxItem): Promise<void>;
+  deliverPendingIntervention(
+    item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<void>;
   interventionReplayService: HostedInterventionReplayService | null;
   isChinese: boolean;
   localStore: ConversationLocalStore | null;
@@ -68,6 +75,8 @@ export function useHostedInterventionController({
   setSlashMenuOpen,
 }: HostedInterventionControllerOptions): HostedInterventionController {
   const sendIntervention = useCallback(async (trimmed: string) => {
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     const conversationId = activeConversationIdRef.current;
     const activeConversation = conversationIndexRef.current.find(
       ({ id }) => id === conversationId,
@@ -115,10 +124,12 @@ export function useHostedInterventionController({
     const initialization = await localStore.initializePendingIntervention(
       cacheOwner,
       queuedIntervention,
+      ownerEpoch,
     ).catch((error) => {
       notify(serverFailure(error, isChinese));
       return null;
     });
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     if (!initialization) return;
     if (!initialization.item) {
       notify(isChinese
@@ -132,13 +143,17 @@ export function useHostedInterventionController({
     setSlashMenuOpen(false);
     setMessages((current) => upsertChatMessage(current, interventionMessage));
     try {
-      await deliverPendingIntervention(initialization.item);
+      await deliverPendingIntervention(initialization.item, ownerEpoch);
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     } catch (error) {
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       const failure = serverFailure(error, isChinese);
       const outcome = await interventionReplayService?.handleFailure(
         initialization.item,
         error,
+        ownerEpoch,
       ) ?? 'failed';
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       notify(outcome === 'retry'
         ? isChinese
           ? `干预消息已保存，将自动重试：${failure}`
@@ -147,7 +162,11 @@ export function useHostedInterventionController({
       return;
     }
     await cloudApi.getConversation(conversationId)
-      .then(({ conversation }) => applyConversation(conversation))
+      .then(({ conversation }) => {
+        if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          applyConversation(conversation, ownerEpoch);
+        }
+      })
       .catch(() => undefined);
   }, [
     activeConversationIdRef,

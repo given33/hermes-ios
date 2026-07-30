@@ -552,11 +552,13 @@ function mapMessageAttachments(value: unknown): HermesChatAttachment[] {
     const name = stringValue(entry.name);
     if (!downloadUrl || !name) return [];
     const size = numberValue(entry.size);
+    const sha256 = stringValue(entry.sha256);
     return [{
       downloadUrl,
       id: stringValue(entry.id) || downloadUrl,
       mimeType: stringValue(entry.mime_type) || undefined,
       name,
+      ...(/^[a-f0-9]{64}$/i.test(sha256) ? { sha256: sha256.toLowerCase() } : {}),
       size: size > 0 ? size : undefined,
     }];
   });
@@ -670,6 +672,34 @@ export function conversationHostedTurnState(
       HOSTED_TURN_FRESHNESS_MS,
       now,
     ) ? 'running' : 'terminal';
+  }
+  return 'missing';
+}
+
+export type HostedTurnCancellationAuthority =
+  | 'cancel_requested'
+  | 'cancelled'
+  | 'completed'
+  | 'failed'
+  | 'missing'
+  | 'running';
+
+export function conversationHostedTurnCancellationAuthority(
+  conversation: SingleConversation,
+  turnId: string,
+): HostedTurnCancellationAuthority {
+  const normalizedTurnId = turnId.trim();
+  if (!normalizedTurnId) return 'missing';
+  const terminal = hostedTurnTerminalAuthority(conversation, normalizedTurnId);
+  if (terminal) return terminal.status;
+  for (const [key, record] of Object.entries(conversation.hosted_turns || {})) {
+    if (!isRecord(record)) continue;
+    const id = stringValue(record.turn_id) || stringValue(record.id) || key;
+    if (id !== normalizedTurnId) continue;
+    const stage = stringValue(record.stage).toLowerCase();
+    return record.cancel_requested === true || stage === 'cancel_requested'
+      ? 'cancel_requested'
+      : 'running';
   }
   return 'missing';
 }

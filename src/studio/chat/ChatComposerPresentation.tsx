@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import Reanimated, {
   Easing,
+  FadeIn,
   FadeInUp,
   FadeOut,
   LinearTransition,
@@ -27,6 +28,7 @@ import { IOSContextMenu } from '../../components/ios/IOSContextMenu';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
 import { IOS_MOTION } from '../../design/ios-motion';
+import { MOTION, useMotion } from '../../design/motion';
 import { useTheme } from '../../design/ThemeProvider';
 import { formatAttachmentSize } from './chat-attachments';
 import { styles } from './chat-presentation-styles';
@@ -58,8 +60,14 @@ function OpenMinisVoiceWaveBar({
   height: number;
   index: number;
 }) {
+  const motion = useMotion();
   const scale = useSharedValue(0.35 + (index % 3) * 0.1);
   useEffect(() => {
+    cancelAnimation(scale);
+    if (motion.reduceMotion) {
+      scale.value = 0.65;
+      return undefined;
+    }
     scale.value = withRepeat(
       withSequence(
         withTiming(1, { duration: 360 + index * 29, easing: IOS_STANDARD_EASING }),
@@ -69,7 +77,7 @@ function OpenMinisVoiceWaveBar({
       true,
     );
     return () => cancelAnimation(scale);
-  }, [index, scale]);
+  }, [index, motion.reduceMotion, scale]);
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scaleY: scale.value }],
   }));
@@ -118,6 +126,7 @@ export function AttachmentItem({
   onShare(): void;
 }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const isImage = attachment.kind === 'image';
   const backgroundColor = Platform.OS === 'ios'
     ? PlatformColor('secondarySystemBackground')
@@ -136,15 +145,20 @@ export function AttachmentItem({
     : tokens.colors.primary;
   return (
     <Reanimated.View
-      entering={FadeInUp
-        .duration(IOS_MOTION.duration.content)
-        .easing(IOS_DECELERATE_EASING)}
+      entering={motion.fade(
+        FadeInUp
+          .duration(IOS_MOTION.duration.content)
+          .easing(IOS_DECELERATE_EASING),
+        FadeIn.duration(MOTION.fade.reduced),
+      )}
       exiting={FadeOut
-        .duration(IOS_MOTION.duration.control)
+        .duration(motion.fadeDuration(IOS_MOTION.duration.control))
         .easing(IOS_STANDARD_EASING)}
-      layout={LinearTransition
-        .duration(IOS_MOTION.duration.control)
-        .easing(IOS_STANDARD_EASING)}
+      layout={motion.animate(
+        LinearTransition
+          .duration(IOS_MOTION.duration.control)
+          .easing(IOS_STANDARD_EASING),
+      )}
       style={[
         styles.attachmentItem,
         isImage ? styles.attachmentImageItem : styles.attachmentFileItem,

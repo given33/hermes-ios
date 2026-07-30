@@ -1,5 +1,6 @@
 import { HermesApiError } from '../../api/HermesApiClient';
 import { withAbortableDeadline } from '../../api/async-deadline';
+import { assertConversationStorageEpochCurrent } from '../../api/conversation-storage-coordinator';
 import type {
   HostedInterventionOutboxItem,
   HostedTurnOutboxItem,
@@ -65,14 +66,20 @@ export interface HostedTurnCloudPort {
 }
 
 export interface HostedTurnOutboxPort {
-  removePendingIntervention(owner: string, messageId: string): Promise<void>;
+  removePendingIntervention(
+    owner: string,
+    messageId: string,
+    expectedOwnerEpoch: number,
+  ): Promise<void>;
   upsertPendingEnqueueIfActive(
     owner: string,
     item: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<PendingEnqueueMutationResult>;
   upsertPendingIntervention(
     owner: string,
     item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<void>;
 }
 
@@ -82,17 +89,25 @@ export interface HostedTurnAttachmentPort {
     owner: string,
     requestId: string,
     attachments: readonly HostedTurnPendingAttachment[],
+    expectedOwnerEpoch: number,
   ): Promise<HostedTurnPendingAttachment[]>;
   upload(
     item: HostedTurnOutboxItem,
     attachment: HostedTurnPendingAttachment,
     signal: AbortSignal,
+    expectedOwnerEpoch: number,
   ): Promise<JsonRecord>;
 }
 
 export interface HostedTurnDeliveryService {
-  deliverPendingEnqueue(source: HostedTurnOutboxItem): Promise<HostedTurnDelivery>;
-  deliverPendingIntervention(item: HostedInterventionOutboxItem): Promise<void>;
+  deliverPendingEnqueue(
+    source: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<HostedTurnDelivery>;
+  deliverPendingIntervention(
+    item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<void>;
 }
 
 interface HostedTurnDeliveryOptions {
@@ -114,15 +129,32 @@ export function createHostedTurnDeliveryService({
   profile,
   requestTimeoutMs,
 }: HostedTurnDeliveryOptions): HostedTurnDeliveryService {
-  const persistIfActive = async (next: HostedTurnOutboxItem) => {
-    const mutation = await outbox.upsertPendingEnqueueIfActive(cacheOwner, next);
+  const assertCurrent = (expectedOwnerEpoch: number) => {
+    assertConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch);
+  };
+
+  const persistIfActive = async (
+    next: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
+  ) => {
+    assertCurrent(expectedOwnerEpoch);
+    const mutation = await outbox.upsertPendingEnqueueIfActive(
+      cacheOwner,
+      next,
+      expectedOwnerEpoch,
+    );
+    assertCurrent(expectedOwnerEpoch);
     if (!mutation.updated || !mutation.item) {
       throw new HostedTurnCancelledDuringDelivery();
     }
     return mutation.item;
   };
 
-  const deliverOnce = async (source: HostedTurnOutboxItem): Promise<HostedTurnDelivery> => {
+  const deliverOnce = async (
+    source: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
+  ): Promise<HostedTurnDelivery> => {
+    assertCurrent(expectedOwnerEpoch);
     let item = attachments.hydrate(source);
     if (item.cancelledAt) throw new HostedTurnCancelledDuringDelivery();
     if (item.deliveryAcceptedAt) throw new Error('Hosted turn was already accepted');
@@ -132,8 +164,13 @@ export function createHostedTurnDeliveryService({
         cacheOwner,
         item.input.requestId,
         item.pendingAttachments,
+        expectedOwnerEpoch,
       );
-      item = await persistIfActive({ ...item, pendingAttachments: materialized });
+      assertCurrent(expectedOwnerEpoch);
+      item = await persistIfActive(
+        { ...item, pendingAttachments: materialized },
+        expectedOwnerEpoch,
+      );
     }
 
     if (!item.conversationId) {
@@ -141,7 +178,7 @@ export function createHostedTurnDeliveryService({
         ...item,
         conversationId: `chat_${safeRequestComponent(item.input.requestId).slice(0, 251)}`,
         conversationPending: true,
-      });
+      }, expectedOwnerEpoch);
     }
 
     if (item.conversationPending) {
@@ -155,7 +192,11 @@ export function createHostedTurnDeliveryService({
         requestTimeoutMs,
         'Hermes conversation creation timed out',
       );
-      item = await persistIfActive({ ...item, conversationPending: false });
+      assertCurrent(expectedOwnerEpoch);
+      item = await persistIfActive(
+        { ...item, conversationPending: false },
+        expectedOwnerEpoch,
+      );
     }
 
     const pendingAttachments = [...(item.pendingAttachments || [])];
@@ -163,32 +204,45 @@ export function createHostedTurnDeliveryService({
       const attachment = pendingAttachments[index];
       if (attachment.uploaded) continue;
       const uploaded = await withAbortableDeadline(
-        (signal) => attachments.upload(item, attachment, signal),
+        (signal) => attachments.upload(item, attachment, signal, expectedOwnerEpoch),
         requestTimeoutMs,
         'Hermes attachment upload timed out',
       );
+      assertCurrent(expectedOwnerEpoch);
       if (!isRecord(uploaded)) {
         throw new Error('Attachment upload was not persisted');
       }
       pendingAttachments[index] = { ...attachment, uploaded };
-      item = await persistIfActive(attachments.hydrate({ ...item, pendingAttachments }));
+      item = await persistIfActive(
+        attachments.hydrate({ ...item, pendingAttachments }),
+        expectedOwnerEpoch,
+      );
     }
 
-    item = await persistIfActive(attachments.hydrate({ ...item, pendingAttachments }));
+    item = await persistIfActive(
+      attachments.hydrate({ ...item, pendingAttachments }),
+      expectedOwnerEpoch,
+    );
     const response = await withAbortableDeadline(
       (signal) => cloud.enqueueHostedTurn(item.conversationId, item.input, signal),
       requestTimeoutMs,
       'Hermes hosted-turn enqueue timed out',
     );
+    assertCurrent(expectedOwnerEpoch);
     return { item, response };
   };
 
   const deliverPendingEnqueue = async (
     source: HostedTurnOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<HostedTurnDelivery> => {
+    assertCurrent(expectedOwnerEpoch);
     try {
-      return await deliverOnce(source);
+      const delivered = await deliverOnce(source, expectedOwnerEpoch);
+      assertCurrent(expectedOwnerEpoch);
+      return delivered;
     } catch (error) {
+      assertCurrent(expectedOwnerEpoch);
       if (
         !isConversationNotFoundError(error)
         || source.conversationPending
@@ -205,14 +259,17 @@ export function createHostedTurnDeliveryService({
           ({ uploaded: _uploaded, ...attachment }) => attachment,
         ),
       };
-      await persistIfActive(replacement);
-      return deliverOnce(replacement);
+      await persistIfActive(replacement, expectedOwnerEpoch);
+      assertCurrent(expectedOwnerEpoch);
+      return deliverOnce(replacement, expectedOwnerEpoch);
     }
   };
 
   const deliverPendingIntervention = async (
     item: HostedInterventionOutboxItem,
+    expectedOwnerEpoch: number,
   ): Promise<void> => {
+    assertCurrent(expectedOwnerEpoch);
     if (!item.deliveryAcceptedAt) {
       const response = await cloud.interveneHostedTurn(
         item.conversationId,
@@ -220,23 +277,39 @@ export function createHostedTurnDeliveryService({
         item.content,
         item.messageId,
       );
+      assertCurrent(expectedOwnerEpoch);
       if (response.accepted !== true) {
         throw new HermesApiError(409, 'Hermes rejected the hosted intervention');
       }
       try {
-        await outbox.upsertPendingIntervention(cacheOwner, {
-          ...item,
-          deliveryAcceptedAt: Date.now(),
-          lastError: '',
-          nextAttemptAt: 0,
-        });
-      } catch {
+        await outbox.upsertPendingIntervention(
+          cacheOwner,
+          {
+            ...item,
+            deliveryAcceptedAt: Date.now(),
+            lastError: '',
+            nextAttemptAt: 0,
+          },
+          expectedOwnerEpoch,
+        );
+        assertCurrent(expectedOwnerEpoch);
+      } catch (error) {
+        assertCurrent(expectedOwnerEpoch);
         // The stable message id makes replay server-idempotent when the local
         // acknowledgement marker cannot be persisted.
         return;
       }
     }
-    await outbox.removePendingIntervention(cacheOwner, item.messageId).catch(() => undefined);
+    try {
+      await outbox.removePendingIntervention(
+        cacheOwner,
+        item.messageId,
+        expectedOwnerEpoch,
+      );
+      assertCurrent(expectedOwnerEpoch);
+    } catch (error) {
+      assertCurrent(expectedOwnerEpoch);
+    }
   };
 
   return { deliverPendingEnqueue, deliverPendingIntervention };

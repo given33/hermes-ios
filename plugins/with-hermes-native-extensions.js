@@ -15,6 +15,7 @@ const TARGETS = [
     type: 'app_extension',
     bundleIdentifier: 'app.sunstone1029.fig1171.device-activity-monitor',
     source: 'HermesDeviceActivityMonitor.swift',
+    sharedSources: ['HermesScreenTimeSpool.swift'],
     platform: 'ios',
   },
   {
@@ -22,6 +23,7 @@ const TARGETS = [
     type: 'app_extension',
     bundleIdentifier: 'app.sunstone1029.fig1171.device-activity-report',
     source: 'HermesDeviceActivityReport.swift',
+    sharedSources: ['HermesScreenTimeSpool.swift'],
     platform: 'ios',
   },
   {
@@ -103,9 +105,10 @@ function configureTarget(project, definition, buildNumber, version) {
       definition.name,
       definition.bundleIdentifier,
     );
-    const sourcePaths = definition.source
-      ? [`native-extensions/${directory}/${definition.source}`]
-      : [];
+    const sourcePaths = [
+      ...(definition.source ? [`native-extensions/${directory}/${definition.source}`] : []),
+      ...(definition.sharedSources ?? []).map((source) => `native-extensions/${source}`),
+    ];
     project.addBuildPhase(sourcePaths, 'PBXSourcesBuildPhase', 'Sources', target.uuid);
     project.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', target.uuid);
     project.addBuildPhase([], 'PBXResourcesBuildPhase', 'Resources', target.uuid);

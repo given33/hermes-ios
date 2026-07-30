@@ -54,8 +54,53 @@ enum HermesNativeMapConfiguration {
   }
 }
 
+final class HermesNativeMapRuntimeState: @unchecked Sendable {
+  static let shared = HermesNativeMapRuntimeState()
+
+  private let lock = NSLock()
+  private var activeProvider = "mapkit"
+  private var error = ""
+  private var phase = "unconfigured"
+
+  func update(phase: String, activeProvider: String, error: String = "") {
+    lock.lock()
+    self.phase = phase
+    self.activeProvider = activeProvider
+    self.error = error
+    lock.unlock()
+  }
+
+  func snapshot() -> [String: Any] {
+    lock.lock()
+    let currentPhase = phase
+    let currentProvider = activeProvider
+    let currentError = error
+    lock.unlock()
+    let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
+    let configuredBundleIdentifier = HermesNativeMapConfiguration.amapBundleIdentifier
+    var result: [String: Any] = [
+      "activeProvider": currentProvider,
+      "amapConfigured": HermesNativeMapConfiguration.amapConfigured,
+      "apiKeyConfigured": !HermesNativeMapConfiguration.amapAPIKey.isEmpty,
+      "bundleIdentifier": bundleIdentifier,
+      "bundleIdentifierMatches": !configuredBundleIdentifier.isEmpty
+        && configuredBundleIdentifier == bundleIdentifier,
+      "configuredBundleIdentifier": configuredBundleIdentifier,
+      "phase": currentPhase,
+      "privacyConsent": HermesNativeMapConfiguration.persistedPrivacyConsent,
+    ]
+    if !currentError.isEmpty { result["error"] = currentError }
+    result.merge(
+      HermesLocationService.shared.mapLocationStatus(),
+      uniquingKeysWith: { _, locationValue in locationValue }
+    )
+    return result
+  }
+}
+
 final class HermesStandardMapView: ExpoView {
   let onLocationPress = EventDispatcher()
+  let onProviderStatus = EventDispatcher()
 
   private var renderer: HermesMapRendering?
   private var rendererView: UIView?
@@ -65,7 +110,20 @@ final class HermesStandardMapView: ExpoView {
   var amapPrivacyConsentGranted = false {
     didSet {
       guard oldValue != amapPrivacyConsentGranted else { return }
-      installRendererIfNeeded()
+      amapFailedForSession = false
+      installRendererIfNeeded(force: true)
+    }
+  }
+
+  var providerResetRequest = 0 {
+    didSet {
+      guard oldValue != providerResetRequest else { return }
+      amapFailedForSession = false
+      HermesNativeMapRuntimeState.shared.update(
+        phase: "initializing",
+        activeProvider: shouldUseAMap ? "amap" : "mapkit"
+      )
+      installRendererIfNeeded(force: true)
     }
   }
 
@@ -100,9 +158,9 @@ final class HermesStandardMapView: ExpoView {
       && !amapFailedForSession
   }
 
-  private func installRendererIfNeeded() {
+  private func installRendererIfNeeded(force: Bool = false) {
     let nextUsesAMap = shouldUseAMap
-    guard renderer == nil || usingAMap != nextUsesAMap else { return }
+    guard force || renderer == nil || usingAMap != nextUsesAMap else { return }
 
     rendererView?.removeFromSuperview()
     renderer = nil
@@ -134,7 +192,12 @@ final class HermesStandardMapView: ExpoView {
       DispatchQueue.main.async { [weak self] in
         guard let self, self.usingAMap else { return }
         self.amapFailedForSession = true
-        self.installRendererIfNeeded()
+        HermesNativeMapRuntimeState.shared.update(
+          phase: "degraded",
+          activeProvider: "mapkit",
+          error: "AMap failed to load; MapKit fallback is active"
+        )
+        self.installRendererIfNeeded(force: true)
       }
     }
     nextRenderer.setShowsUserLocation(showsUserLocation)
@@ -148,6 +211,24 @@ final class HermesStandardMapView: ExpoView {
       nextView.topAnchor.constraint(equalTo: topAnchor),
       nextView.bottomAnchor.constraint(equalTo: bottomAnchor),
     ])
+    let phase: String
+    if nextUsesAMap {
+      phase = "ready"
+    } else if amapFailedForSession {
+      phase = "degraded"
+    } else if HermesNativeMapConfiguration.amapConfigured && !amapPrivacyConsentGranted {
+      phase = "requestingPermission"
+    } else if !HermesNativeMapConfiguration.amapConfigured {
+      phase = "unconfigured"
+    } else {
+      phase = "ready"
+    }
+    HermesNativeMapRuntimeState.shared.update(
+      phase: phase,
+      activeProvider: nextUsesAMap ? "amap" : "mapkit",
+      error: amapFailedForSession ? "AMap failed to load; MapKit fallback is active" : ""
+    )
+    onProviderStatus(HermesNativeMapRuntimeState.shared.snapshot())
   }
 }
 

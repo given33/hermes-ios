@@ -253,19 +253,39 @@ test('sending is one durable idempotent enqueue with foreground outbox compensat
   assert.doesNotMatch(source, /new HermesChatStream|createNativeHermesChatStreamRuntime/);
 });
 
-test('the user message is rendered before any model or network request', () => {
+test('the user message is rendered after durable intent but before any network request', () => {
   const sendStart = source.indexOf('const send = async () =>');
   const sendEnd = source.indexOf('const requestSend = () =>', sendStart);
   const send = source.slice(sendStart, sendEnd);
-  const optimisticInsert = send.indexOf('setMessages((current) => [...current, userMessage])');
+  const optimisticInsert = send.indexOf('setMessages((current) => upsertChatMessage(current, userMessage))');
   const composerClear = send.indexOf('clearQueuedComposer()');
   const durableIntent = send.indexOf('await localStore.initializePendingEnqueue(');
-  const enqueueRequest = send.indexOf('await outbox.deliverPendingEnqueue(queuedItem)');
+  const enqueueRequest = send.indexOf('await outbox.deliverPendingEnqueue(queuedItem, ownerEpoch)');
 
   assert.ok(optimisticInsert >= 0, 'the local user message is inserted');
-  assert.ok(composerClear > optimisticInsert, 'the composer clears after the local insert');
-  assert.ok(durableIntent > composerClear, 'the durable intent starts after the local UI update');
-  assert.ok(enqueueRequest > durableIntent, 'hosted delivery starts after the durable intent');
+  assert.ok(optimisticInsert > durableIntent, 'the local insert follows the durable intent');
+  assert.ok(composerClear > optimisticInsert, 'the composer clears only after the visible commit');
+  assert.ok(enqueueRequest > composerClear, 'hosted delivery starts after the composer handoff');
+});
+
+test('new conversation creation persists its staged snapshot before switching UI state', () => {
+  const createStart = conversationActionsSource.indexOf('const createConversation = async () =>');
+  const createEnd = conversationActionsSource.indexOf(
+    'const cancelActiveHostedTurn = async () =>',
+    createStart,
+  );
+  const create = conversationActionsSource.slice(createStart, createEnd);
+  const serverCreate = create.indexOf('await cloudApi.createConversation(');
+  const generationCheck = create.indexOf('accountGenerationFromOwnerScope(cacheOwner)');
+  const durableIndex = create.indexOf('await commitConversationIndex(');
+  const clearOldState = create.indexOf('clearOptimisticHostedTurn()');
+  const switchConversation = create.indexOf('await applyConversation(result.conversation, ownerEpoch)');
+
+  assert.ok(serverCreate >= 0);
+  assert.ok(generationCheck > serverCreate);
+  assert.ok(durableIndex > generationCheck);
+  assert.ok(clearOldState > durableIndex);
+  assert.ok(switchConversation > clearOldState);
 });
 
 test('chat maps gateway failures to bounded native copy instead of proxy documents', () => {

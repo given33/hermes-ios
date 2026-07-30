@@ -4,6 +4,42 @@ import HealthKit
 import SwiftUI
 import WatchConnectivity
 
+private struct HermesWatchAccountFence: Equatable {
+  let accountUUID: String
+  let serverGeneration: String
+  let lifecycleEpoch: Int
+  let resetAt: Double
+
+  func envelope(_ payload: [String: Any]) -> [String: Any] {
+    var result = payload
+    result["accountUUID"] = accountUUID
+    result["accountEpoch"] = lifecycleEpoch
+    result["accountGeneration"] = lifecycleEpoch
+    result["account_generation"] = serverGeneration
+    result["accountResetAt"] = resetAt
+    return result
+  }
+
+  func matches(_ payload: [String: Any]) -> Bool {
+    let epoch = (payload["accountEpoch"] as? NSNumber)?.intValue
+      ?? payload["accountEpoch"] as? Int
+    let legacyEpoch = (payload["accountGeneration"] as? NSNumber)?.intValue
+      ?? payload["accountGeneration"] as? Int
+    let payloadResetAt = (payload["accountResetAt"] as? NSNumber)?.doubleValue
+      ?? payload["accountResetAt"] as? Double
+    return payload["accountUUID"] as? String == accountUUID
+      && payload["account_generation"] as? String == serverGeneration
+      && epoch == lifecycleEpoch
+      && legacyEpoch == lifecycleEpoch
+      && payloadResetAt == resetAt
+  }
+}
+
+private enum HermesWatchRelayMode: Equatable {
+  case navigation
+  case workout
+}
+
 @main
 struct HermesWatchApp: App {
   @StateObject private var relay = HermesWatchRelay()
@@ -62,9 +98,16 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   private let accountCollectionEnabledKey = "app.hermes.watch.accountCollectionEnabled"
   private let accountControlIssuedAtKey = "app.hermes.watch.accountControlIssuedAt"
   private let accountGenerationKey = "app.hermes.watch.accountGeneration"
+  private let serverAccountGenerationKey = "app.hermes.watch.serverAccountGeneration"
+  private let accountUUIDKey = "app.hermes.watch.accountUUID"
+  private let accountResetAtKey = "app.hermes.watch.accountResetAt"
+  private let lastAcknowledgedEventAtKey = "app.hermes.watch.lastAcknowledgedEventAt"
   private var healthReady = false
   private var latestMotion = "unknown"
   private var permissionSequenceGeneration: Int?
+  private var activeOperationFence: HermesWatchAccountFence?
+  private var activeRelayMode: HermesWatchRelayMode?
+  private var pendingLocationFence: HermesWatchAccountFence?
   private var workoutBuilder: HKLiveWorkoutBuilder?
   private var workoutSession: HKWorkoutSession?
   private lazy var sourceDeviceID: String = {
@@ -96,17 +139,17 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
 
   func toggleActiveRelay() {
     if activeRelay {
-      stopActiveRelay(reason: "watch-control")
+      stopContinuousRelay(reason: "watch-control")
     } else {
       Task { await startActiveRelay(activity: "walking", reason: "watch-control") }
     }
   }
 
   func captureContext() {
-    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
-          UserDefaults.standard.integer(forKey: accountGenerationKey) > 0 else { return }
+    guard let fence = captureAccountFence() else { return }
     let locationStatus = locationManager.authorizationStatus
     if locationStatus == .authorizedWhenInUse || locationStatus == .authorizedAlways {
+      pendingLocationFence = fence
       locationManager.requestLocation()
     }
     var payload: [String: Any] = [
@@ -115,12 +158,13 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       "motion": latestMotion,
       "observedAt": Date().timeIntervalSince1970 * 1000,
     ]
-    if let location = locationManager.location {
+    if let location = locationManager.location,
+       accepts(location.timestamp, for: fence) {
       payload["location"] = locationPayload(location)
     }
     guard healthReady,
           let steps = HKObjectType.quantityType(forIdentifier: .stepCount) else {
-      send(payload)
+      send(payload, fence: fence)
       return
     }
     let start = Calendar.current.startOfDay(for: Date())
@@ -132,7 +176,7 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     ) { [weak self] _, result, _ in
       var next = payload
       next["steps"] = result?.sumQuantity()?.doubleValue(for: .count()) ?? 0
-      Task { @MainActor in self?.send(next) }
+      Task { @MainActor in self?.send(next, fence: fence) }
     }
     healthStore.execute(query)
   }
@@ -157,24 +201,21 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   }
 
   private func beginAccountPermissionSequence() {
-    let generation = UserDefaults.standard.integer(forKey: accountGenerationKey)
-    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
-          generation > 0,
-          permissionSequenceGeneration != generation else { return }
-    permissionSequenceGeneration = generation
+    guard let fence = captureAccountFence(),
+          permissionSequenceGeneration != fence.lifecycleEpoch else { return }
+    permissionSequenceGeneration = fence.lifecycleEpoch
     let status = locationManager.authorizationStatus
     if status == .notDetermined {
       locationManager.requestWhenInUseAuthorization()
       return
     }
-    requestMotionAuthorization(for: generation)
+    requestMotionAuthorization(for: fence)
   }
 
-  private func requestMotionAuthorization(for generation: Int) {
-    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
-          generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
+  private func requestMotionAuthorization(for fence: HermesWatchAccountFence) {
+    guard isCurrent(fence) else { return }
     guard CMMotionActivityManager.isActivityAvailable() else {
-      finishAccountPermissionSequence(generation: generation)
+      finishAccountPermissionSequence(fence: fence)
       return
     }
     if CMMotionActivityManager.authorizationStatus() == .notDetermined {
@@ -183,52 +224,51 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
         to: Date(),
         to: motionQueue
       ) { [weak self] _, _ in
-        Task { @MainActor in self?.finishAccountPermissionSequence(generation: generation) }
+        Task { @MainActor in self?.finishAccountPermissionSequence(fence: fence) }
       }
       return
     }
-    finishAccountPermissionSequence(generation: generation)
+    finishAccountPermissionSequence(fence: fence)
   }
 
-  private func finishAccountPermissionSequence(generation: Int) {
-    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
-          generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
+  private func finishAccountPermissionSequence(fence: HermesWatchAccountFence) {
+    guard isCurrent(fence) else { return }
     if CMMotionActivityManager.authorizationStatus() == .authorized {
-      startMotionUpdates()
+      startMotionUpdates(fence: fence)
     }
     Task {
       await requestHealthAuthorization()
-      guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
-            generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
+      guard isCurrent(fence) else { return }
       if session.activationState == .activated { captureContext() }
     }
   }
 
-  private func startMotionUpdates() {
+  private func startMotionUpdates(fence: HermesWatchAccountFence) {
     guard CMMotionActivityManager.authorizationStatus() == .authorized else { return }
+    activityManager.stopActivityUpdates()
     activityManager.startActivityUpdates(to: motionQueue) { [weak self] activity in
       guard let activity else { return }
-      let motion = Self.motionName(activity)
       Task { @MainActor in
-        guard let self else { return }
+        guard let self, self.isCurrent(fence) else { return }
+        let motion = Self.motionName(activity)
         self.latestMotion = motion
         self.send([
           "confidence": Self.confidenceName(activity.confidence),
           "kind": "watch-motion",
           "motion": motion,
           "observedAt": activity.startDate.timeIntervalSince1970 * 1000,
-        ])
+        ], fence: fence)
       }
     }
   }
 
   private func startActiveRelay(activity: String, reason: String) async {
     let status = locationManager.authorizationStatus
-    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
-          UserDefaults.standard.integer(forKey: accountGenerationKey) > 0,
+    guard let fence = captureAccountFence(),
           healthReady,
           status == .authorizedWhenInUse || status == .authorizedAlways,
-          workoutSession == nil else { return }
+          workoutSession == nil,
+          activeRelayMode == nil else { return }
     let configuration = HKWorkoutConfiguration()
     configuration.activityType = Self.workoutType(activity)
     configuration.locationType = .outdoor
@@ -246,6 +286,8 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       nextSession.delegate = self
       workoutSession = nextSession
       workoutBuilder = builder
+      activeOperationFence = fence
+      activeRelayMode = .workout
       activeRelay = true
       locationManager.desiredAccuracy = kCLLocationAccuracyBest
       locationManager.distanceFilter = 5
@@ -254,17 +296,29 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       nextSession.startActivity(with: startedAt)
       builder.beginCollection(withStart: startedAt) { [weak self] succeeded, error in
         Task { @MainActor in
-          self?.send([
+          guard let self, self.workoutBuilder === builder, self.isCurrent(fence) else { return }
+          self.send([
             "activity": activity,
             "error": error?.localizedDescription ?? "",
             "kind": "watch-workout",
             "observedAt": startedAt.timeIntervalSince1970 * 1000,
             "reason": reason,
             "state": succeeded ? "started" : "failed",
-          ])
+          ], fence: fence)
+          guard !succeeded else { return }
+          self.workoutSession?.end()
+          self.workoutBuilder?.discardWorkout()
+          self.workoutBuilder = nil
+          self.workoutSession = nil
+          self.activeOperationFence = nil
+          self.activeRelayMode = nil
+          self.activeRelay = false
+          self.locationManager.stopUpdatingLocation()
         }
       }
     } catch {
+      activeOperationFence = nil
+      activeRelayMode = nil
       activeRelay = false
       send([
         "error": error.localizedDescription,
@@ -272,54 +326,106 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
         "observedAt": Date().timeIntervalSince1970 * 1000,
         "reason": reason,
         "state": "failed",
-      ])
+      ], fence: fence)
     }
   }
 
-  private func stopActiveRelay(reason: String) {
-    guard let workoutSession else { return }
-    workoutSession.end()
-    activeRelay = false
+  private func startNavigationRelay(reason: String) {
+    let status = locationManager.authorizationStatus
+    guard let fence = captureAccountFence(),
+          status == .authorizedWhenInUse || status == .authorizedAlways,
+          activeRelayMode == nil,
+          workoutSession == nil else { return }
+    activeOperationFence = fence
+    activeRelayMode = .navigation
+    activeRelay = true
+    locationManager.desiredAccuracy = kCLLocationAccuracyBest
+    locationManager.distanceFilter = 5
+    locationManager.startUpdatingLocation()
+    send([
+      "kind": "watch-navigation",
+      "observedAt": Date().timeIntervalSince1970 * 1000,
+      "reason": reason,
+      "state": "started",
+    ], fence: fence)
+  }
+
+  private func stopContinuousRelay(reason: String) {
+    guard let mode = activeRelayMode, let fence = activeOperationFence else { return }
+    if mode == .workout {
+      workoutSession?.end()
+    }
     locationManager.stopUpdatingLocation()
     locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
     locationManager.distanceFilter = 50
+    activeRelay = false
     send([
-      "kind": "watch-workout",
+      "kind": mode == .workout ? "watch-workout" : "watch-navigation",
       "observedAt": Date().timeIntervalSince1970 * 1000,
       "reason": reason,
       "state": "stopping",
-    ])
+    ], fence: fence)
+    if mode == .navigation {
+      activeOperationFence = nil
+      activeRelayMode = nil
+    }
   }
 
-  private func handle(_ message: [String: Any]) {
+  @discardableResult
+  private func handle(_ message: [String: Any]) -> Bool {
     switch message["action"] as? String {
     case "set-account-generation":
-      guard let generation = (message["accountGeneration"] as? NSNumber)?.intValue,
-            generation > 0,
-            acceptAccountControl(message) else { return }
-      UserDefaults.standard.set(generation, forKey: accountGenerationKey)
+      guard let fence = accountFence(from: message), acceptAccountControl(message) else {
+        return false
+      }
+      let collectionWasEnabled = UserDefaults.standard.bool(forKey: accountCollectionEnabledKey)
+      let generationChanged = storedAccountFence() != fence || !collectionWasEnabled
+      if generationChanged, storedAccountFence() != nil {
+        stopAccountCollection(reason: "account-switch")
+      }
+      persist(fence)
       UserDefaults.standard.set(true, forKey: accountCollectionEnabledKey)
-      beginAccountPermissionSequence()
+      if generationChanged {
+        permissionSequenceGeneration = nil
+        beginAccountPermissionSequence()
+      }
+      return true
     case "reset-account-generation":
-      guard let generation = (message["accountGeneration"] as? NSNumber)?.intValue,
-            generation > 0,
-            acceptAccountControl(message) else { return }
+      guard let fence = accountFence(from: message), acceptAccountControl(message) else {
+        return false
+      }
       UserDefaults.standard.set(false, forKey: accountCollectionEnabledKey)
       stopAccountCollection(reason: "account-reset")
-      UserDefaults.standard.set(generation, forKey: accountGenerationKey)
+      persist(fence)
       permissionSequenceGeneration = nil
+      return true
+    case "watch-event-ack":
+      guard message["accepted"] as? Bool == true,
+            let fence = captureAccountFence(),
+            fence.matches(message),
+            message["eventID"] is String,
+            let observedAt = observedDate(message["observedAt"]),
+            accepts(observedAt, for: fence) else { return false }
+      UserDefaults.standard.set(
+        observedAt.timeIntervalSince1970 * 1000,
+        forKey: lastAcknowledgedEventAtKey
+      )
+      return true
     case "refresh-context", "start-active-relay", "start-navigation", "stop-active-relay", "stop-navigation":
-      let generation = (message["accountGeneration"] as? NSNumber)?.intValue
-      guard generation == UserDefaults.standard.integer(forKey: accountGenerationKey) else { return }
+      guard let fence = captureAccountFence(),
+            fence.matches(message),
+            acceptAccountControl(message) else { return false }
       handleAccountCommand(message)
+      return true
     default:
-      break
+      return false
     }
   }
 
   private func acceptAccountControl(_ message: [String: Any]) -> Bool {
     guard let issuedAt = message["controlIssuedAt"] as? NSNumber,
           issuedAt.doubleValue.isFinite,
+          issuedAt.doubleValue <= Date().timeIntervalSince1970 * 1000 + 60_000,
           issuedAt.doubleValue > UserDefaults.standard.double(forKey: accountControlIssuedAtKey) else {
       return false
     }
@@ -329,8 +435,12 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
 
   private func stopAccountCollection(reason: String) {
     activityManager.stopActivityUpdates()
-    locationManager.stopUpdatingLocation()
-    if workoutSession != nil { stopActiveRelay(reason: reason) }
+    if activeRelayMode != nil {
+      stopContinuousRelay(reason: reason)
+    } else {
+      locationManager.stopUpdatingLocation()
+    }
+    pendingLocationFence = nil
     latestMotion = "unknown"
     healthReady = false
   }
@@ -339,30 +449,134 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     switch message["action"] as? String {
     case "refresh-context":
       captureContext()
-    case "start-active-relay", "start-navigation":
+    case "start-active-relay":
       let activity = message["activity"] as? String ?? "walking"
       let reason = message["action"] as? String ?? "iphone-command"
       Task { await startActiveRelay(activity: activity, reason: reason) }
-    case "stop-active-relay", "stop-navigation":
-      stopActiveRelay(reason: message["action"] as? String ?? "iphone-command")
+    case "start-navigation":
+      startNavigationRelay(reason: "start-navigation")
+    case "stop-active-relay":
+      guard activeRelayMode == .workout else { return }
+      stopContinuousRelay(reason: message["action"] as? String ?? "iphone-command")
+    case "stop-navigation":
+      guard activeRelayMode == .navigation else { return }
+      stopContinuousRelay(reason: message["action"] as? String ?? "iphone-command")
     default:
       break
     }
   }
 
-  private func send(_ payload: [String: Any]) {
-    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey),
-          UserDefaults.standard.integer(forKey: accountGenerationKey) > 0 else { return }
-    var envelope = payload
-    envelope["accountGeneration"] = UserDefaults.standard.integer(forKey: accountGenerationKey)
+  private func send(_ payload: [String: Any], fence: HermesWatchAccountFence) {
+    guard isCurrent(fence),
+          let observedAt = observedDate(payload["observedAt"]),
+          accepts(observedAt, for: fence) else { return }
+    var event = payload
+    event["eventID"] = event["eventID"] ?? UUID().uuidString.lowercased()
+    var envelope = fence.envelope(event)
     envelope["sourceDeviceId"] = sourceDeviceID
+    if payload["kind"] as? String == "watch-context" {
+      try? session.updateApplicationContext(envelope)
+    }
     if session.isReachable {
-      session.sendMessage(envelope, replyHandler: nil) { [weak self] _ in
-        self?.session.transferUserInfo(envelope)
+      session.sendMessage(envelope, replyHandler: { [weak self] reply in
+        guard reply["accepted"] as? Bool != true else { return }
+        Task { @MainActor in
+          guard let self, self.isCurrent(fence) else { return }
+          self.session.transferUserInfo(envelope)
+        }
+      }) { [weak self] _ in
+        Task { @MainActor in
+          guard let self, self.isCurrent(fence) else { return }
+          self.session.transferUserInfo(envelope)
+        }
       }
     } else {
       session.transferUserInfo(envelope)
     }
+  }
+
+  private func requestAccountHandshake() {
+    let request: [String: Any] = [
+      "action": "request-account-handshake",
+      "controlIssuedAt": Date().timeIntervalSince1970 * 1000,
+    ]
+    if session.isReachable {
+      session.sendMessage(request, replyHandler: { [weak self] reply in
+        Task { @MainActor in _ = self?.handle(reply) }
+      }, errorHandler: { [weak self] _ in
+        Task { @MainActor in self?.session.transferUserInfo(request) }
+      })
+    } else {
+      session.transferUserInfo(request)
+    }
+  }
+
+  private func captureAccountFence() -> HermesWatchAccountFence? {
+    guard UserDefaults.standard.bool(forKey: accountCollectionEnabledKey) else { return nil }
+    return storedAccountFence()
+  }
+
+  private func storedAccountFence() -> HermesWatchAccountFence? {
+    let defaults = UserDefaults.standard
+    let accountUUID = defaults.string(forKey: accountUUIDKey) ?? ""
+    let serverGeneration = defaults.string(forKey: serverAccountGenerationKey) ?? ""
+    let lifecycleEpoch = defaults.integer(forKey: accountGenerationKey)
+    let resetAt = defaults.double(forKey: accountResetAtKey)
+    guard !accountUUID.isEmpty, !serverGeneration.isEmpty, lifecycleEpoch > 0,
+          resetAt.isFinite, resetAt > 0 else { return nil }
+    return HermesWatchAccountFence(
+      accountUUID: accountUUID,
+      serverGeneration: serverGeneration,
+      lifecycleEpoch: lifecycleEpoch,
+      resetAt: resetAt
+    )
+  }
+
+  private func accountFence(from payload: [String: Any]) -> HermesWatchAccountFence? {
+    guard let accountUUID = payload["accountUUID"] as? String, !accountUUID.isEmpty,
+          let serverGeneration = payload["account_generation"] as? String,
+          !serverGeneration.isEmpty,
+          let lifecycleEpoch = (payload["accountEpoch"] as? NSNumber)?.intValue,
+          lifecycleEpoch > 0,
+          (payload["accountGeneration"] as? NSNumber)?.intValue == lifecycleEpoch,
+          let resetAt = (payload["accountResetAt"] as? NSNumber)?.doubleValue,
+          resetAt.isFinite, resetAt > 0,
+          resetAt <= Date().timeIntervalSince1970 * 1000 + 60_000 else { return nil }
+    return HermesWatchAccountFence(
+      accountUUID: accountUUID,
+      serverGeneration: serverGeneration,
+      lifecycleEpoch: lifecycleEpoch,
+      resetAt: resetAt
+    )
+  }
+
+  private func persist(_ fence: HermesWatchAccountFence) {
+    let defaults = UserDefaults.standard
+    defaults.set(fence.accountUUID, forKey: accountUUIDKey)
+    defaults.set(fence.serverGeneration, forKey: serverAccountGenerationKey)
+    defaults.set(fence.lifecycleEpoch, forKey: accountGenerationKey)
+    defaults.set(fence.resetAt, forKey: accountResetAtKey)
+  }
+
+  private func isCurrent(_ fence: HermesWatchAccountFence) -> Bool {
+    captureAccountFence() == fence
+  }
+
+  private func accepts(_ date: Date, for fence: HermesWatchAccountFence) -> Bool {
+    let timestamp = date.timeIntervalSince1970 * 1000
+    return timestamp.isFinite
+      && timestamp > fence.resetAt
+      && date.timeIntervalSinceNow <= 60
+  }
+
+  private func observedDate(_ value: Any?) -> Date? {
+    guard let number = value as? NSNumber, number.doubleValue.isFinite,
+          number.doubleValue > 0 else { return nil }
+    return Date(
+      timeIntervalSince1970: number.doubleValue > 10_000_000_000
+        ? number.doubleValue / 1000
+        : number.doubleValue
+    )
   }
 
   private func locationPayload(_ location: CLLocation) -> [String: Any] {
@@ -385,12 +599,18 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   ) {
     Task { @MainActor in
       self.reachable = error == nil && session.isReachable
-      if error == nil && self.healthReady { self.captureContext() }
+      if error == nil {
+        self.requestAccountHandshake()
+        if self.healthReady { self.captureContext() }
+      }
     }
   }
 
   nonisolated func sessionReachabilityDidChange(_ session: WCSession) {
-    Task { @MainActor in self.reachable = session.isReachable }
+    Task { @MainActor in
+      self.reachable = session.isReachable
+      if session.isReachable { self.requestAccountHandshake() }
+    }
   }
 
   nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
@@ -402,15 +622,20 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     didReceiveMessage message: [String: Any],
     replyHandler: @escaping ([String: Any]) -> Void
   ) {
-    // The iPhone relay awaits this ACK before completing its durable command.
-    // Acknowledge receipt immediately; native command execution stays on the
-    // main actor and emits its own context events.
-    replyHandler(["accepted": true])
-    Task { @MainActor in self.handle(message) }
+    Task { @MainActor in
+      replyHandler(["accepted": self.handle(message)])
+    }
   }
 
   nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
     Task { @MainActor in self.handle(userInfo) }
+  }
+
+  nonisolated func session(
+    _ session: WCSession,
+    didReceiveApplicationContext applicationContext: [String: Any]
+  ) {
+    Task { @MainActor in self.handle(applicationContext) }
   }
 
   nonisolated func locationManager(
@@ -421,10 +646,14 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
           location.horizontalAccuracy >= 0,
           CLLocationCoordinate2DIsValid(location.coordinate) else { return }
     Task { @MainActor in
+      guard let fence = self.activeOperationFence ?? self.pendingLocationFence,
+            self.accepts(location.timestamp, for: fence),
+            self.isCurrent(fence) else { return }
+      if self.activeOperationFence == nil { self.pendingLocationFence = nil }
       var payload = self.locationPayload(location)
       payload["kind"] = "watch-location"
       payload["observedAt"] = location.timestamp.timeIntervalSince1970 * 1000
-      self.send(payload)
+      self.send(payload, fence: fence)
     }
   }
 
@@ -432,8 +661,8 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     let status = manager.authorizationStatus
     guard status != .notDetermined else { return }
     Task { @MainActor in
-      let generation = UserDefaults.standard.integer(forKey: self.accountGenerationKey)
-      self.requestMotionAuthorization(for: generation)
+      guard let fence = self.captureAccountFence() else { return }
+      self.requestMotionAuthorization(for: fence)
     }
   }
 
@@ -445,10 +674,15 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
   ) {
     guard toState == .ended else { return }
     Task { @MainActor in
+      guard self.workoutSession === workoutSession,
+            let fence = self.activeOperationFence,
+            self.activeRelayMode == .workout else { return }
       let builder = self.workoutBuilder
       builder?.endCollection(withEnd: date) { _, _ in builder?.discardWorkout() }
       self.workoutBuilder = nil
       self.workoutSession = nil
+      self.activeOperationFence = nil
+      self.activeRelayMode = nil
       self.activeRelay = false
       self.locationManager.stopUpdatingLocation()
       self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
@@ -457,15 +691,20 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
         "kind": "watch-workout",
         "observedAt": date.timeIntervalSince1970 * 1000,
         "state": "ended",
-      ])
+      ], fence: fence)
     }
   }
 
   nonisolated func workoutSession(_ workoutSession: HKWorkoutSession, didFailWithError error: Error) {
     Task { @MainActor in
+      guard self.workoutSession === workoutSession,
+            let fence = self.activeOperationFence,
+            self.activeRelayMode == .workout else { return }
       self.workoutBuilder?.discardWorkout()
       self.workoutBuilder = nil
       self.workoutSession = nil
+      self.activeOperationFence = nil
+      self.activeRelayMode = nil
       self.activeRelay = false
       self.locationManager.stopUpdatingLocation()
       self.locationManager.desiredAccuracy = kCLLocationAccuracyHundredMeters
@@ -475,7 +714,7 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
         "kind": "watch-workout",
         "observedAt": Date().timeIntervalSince1970 * 1000,
         "state": "failed",
-      ])
+      ], fence: fence)
     }
   }
 
@@ -501,12 +740,15 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     }
     guard !metrics.isEmpty else { return }
     Task { @MainActor in
+      guard self.workoutBuilder === workoutBuilder,
+            let fence = self.activeOperationFence,
+            self.activeRelayMode == .workout else { return }
       self.send([
         "kind": "watch-workout-sample",
         "metrics": metrics,
         "motion": self.latestMotion,
         "observedAt": Date().timeIntervalSince1970 * 1000,
-      ])
+      ], fence: fence)
     }
   }
 

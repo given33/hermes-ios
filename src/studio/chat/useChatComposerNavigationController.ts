@@ -11,16 +11,29 @@ import {
 import { Keyboard, Platform, type TextInput } from 'react-native';
 import type { SharedValue } from 'react-native-reanimated';
 
-import type { HermesCloudApi, MobileConsoleCommand } from '../../api/HermesCloudApi';
-
-export interface SlashCommandDescriptor {
-  command: string;
-  en: string;
-  zh: string;
-}
+import type {
+  HermesCloudApi,
+  MobileConsoleCommand,
+  MobileConsoleCompletionSuggestion,
+} from '../../api/HermesCloudApi';
+import {
+  selectSlashCommandDescriptor,
+  shouldAutoOpenSlashMenu,
+  slashCommandMatchScore,
+  type SlashCommandDescriptor,
+} from './slash-command-model';
+export type { SlashCommandDescriptor } from './slash-command-model';
 
 const LOCAL_SLASH_COMMANDS: readonly SlashCommandDescriptor[] = [
-  { command: '/stop', en: 'Stop the active run', zh: '停止当前运行任务' },
+  {
+    command: '/stop',
+    usage: 'stop',
+    category: 'task',
+    requiresArgument: false,
+    requiresConfirmation: false,
+    en: 'Stop the active run',
+    zh: '停止当前运行任务',
+  },
 ] as const;
 
 const COMMAND_TRANSLATIONS: Readonly<Record<string, string>> = {
@@ -35,8 +48,28 @@ const COMMAND_TRANSLATIONS: Readonly<Record<string, string>> = {
 function commandDescriptor(command: MobileConsoleCommand): SlashCommandDescriptor {
   return {
     command: command.command,
+    usage: command.usage || command.command.slice(1),
+    category: command.category || 'general',
+    requiresArgument: (command.arguments || []).some((argument) => argument.required),
+    requiresConfirmation: command.requires_confirmation || command.mutating,
     en: command.summary,
     zh: COMMAND_TRANSLATIONS[command.command] || command.summary,
+  };
+}
+
+function argumentDescriptor(
+  suggestion: MobileConsoleCompletionSuggestion,
+): SlashCommandDescriptor {
+  return {
+    command: suggestion.display_name || suggestion.value,
+    usage: suggestion.value,
+    category: 'argument',
+    requiresArgument: !suggestion.complete,
+    requiresConfirmation: false,
+    en: suggestion.description,
+    zh: suggestion.description,
+    selectionContent: suggestion.replacement,
+    keepMenuOpen: !suggestion.complete,
   };
 }
 
@@ -63,7 +96,9 @@ export function useChatComposerNavigationController({
 }: ChatComposerNavigationOptions) {
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [remoteSlashCommands, setRemoteSlashCommands] = useState<SlashCommandDescriptor[]>([]);
+  const [remoteArgumentSuggestions, setRemoteArgumentSuggestions] = useState<SlashCommandDescriptor[]>([]);
   const pendingNavigationCleanup = useRef<(() => void) | null>(null);
+  const suppressedAutoOpenContent = useRef('');
   const slashCommands = useMemo(() => {
     const byCommand = new Map<string, SlashCommandDescriptor>();
     for (const item of [...remoteSlashCommands, ...LOCAL_SLASH_COMMANDS]) {
@@ -71,12 +106,25 @@ export function useChatComposerNavigationController({
     }
     return [...byCommand.values()];
   }, [remoteSlashCommands]);
+  const activeArgumentCommand = useMemo(() => remoteSlashCommands
+    .filter((descriptor) => (
+      descriptor.requiresArgument
+      && content.trimStart().startsWith(`${descriptor.command} `)
+    ))
+    .sort((left, right) => right.command.length - left.command.length)[0], [content, remoteSlashCommands]);
   const filteredSlashCommands = useMemo(() => {
-    const query = content.trimStart().replace(/^\//, '').split(/\s/, 1)[0].toLowerCase();
-    return slashCommands.filter(({ command, en, zh }) => (
-      !query || command.slice(1).includes(query) || en.toLowerCase().includes(query) || zh.includes(query)
-    ));
-  }, [content, slashCommands]);
+    if (activeArgumentCommand) return remoteArgumentSuggestions;
+    const query = content.trimStart().replace(/^\//, '').toLowerCase();
+    return slashCommands
+      .map((descriptor, sourceIndex) => ({
+        descriptor,
+        score: slashCommandMatchScore(query, descriptor),
+        sourceIndex,
+      }))
+      .filter(({ score }) => Number.isFinite(score))
+      .sort((left, right) => left.score - right.score || left.sourceIndex - right.sourceIndex)
+      .map(({ descriptor }) => descriptor);
+  }, [activeArgumentCommand, content, remoteArgumentSuggestions, slashCommands]);
 
   useEffect(() => {
     let active = true;
@@ -84,13 +132,51 @@ export function useChatComposerNavigationController({
       setRemoteSlashCommands([]);
       return () => { active = false; };
     }
-    void cloudApi.getMobileConsoleCommands(profile).then(({ commands }) => {
+    const controller = new AbortController();
+    void cloudApi.getMobileConsoleCommands(profile, controller.signal).then(({ commands }) => {
       if (active) setRemoteSlashCommands(commands.map(commandDescriptor));
     }).catch(() => {
       if (active) setRemoteSlashCommands([]);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      controller.abort();
+    };
   }, [cloudApi, profile]);
+
+  useEffect(() => {
+    setRemoteArgumentSuggestions([]);
+    if (!cloudApi || !slashMenuOpen || !activeArgumentCommand) return undefined;
+    const controller = new AbortController();
+    const requestedLine = content;
+    const timer = setTimeout(() => {
+      void cloudApi.getMobileConsoleCompletions(
+        requestedLine,
+        profile,
+        controller.signal,
+      ).then((result) => {
+        if (!controller.signal.aborted && result.line === requestedLine) {
+          setRemoteArgumentSuggestions(result.suggestions.map(argumentDescriptor));
+        }
+      }).catch(() => {
+        if (!controller.signal.aborted) setRemoteArgumentSuggestions([]);
+      });
+    }, 120);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [activeArgumentCommand, cloudApi, content, profile, slashMenuOpen]);
+
+  useEffect(() => {
+    if (!content.trimStart().startsWith('/')) {
+      suppressedAutoOpenContent.current = '';
+      return;
+    }
+    if (shouldAutoOpenSlashMenu(content, suppressedAutoOpenContent.current)) {
+      setSlashMenuOpen(true);
+    }
+  }, [content]);
 
   const openSlashCommand = () => {
     if (slashMenuOpen) {
@@ -107,11 +193,13 @@ export function useChatComposerNavigationController({
     requestAnimationFrame(() => composerInputRef.current?.focus());
   };
 
-  const selectSlashCommand = (command: string) => {
-    const next = `${command} `;
+  const selectSlashCommand = (descriptor: SlashCommandDescriptor) => {
+    const selection = selectSlashCommandDescriptor(descriptor);
+    const next = selection.content;
     contentRef.current = next;
     setContent(next);
-    setSlashMenuOpen(false);
+    suppressedAutoOpenContent.current = selection.keepMenuOpen ? '' : next;
+    setSlashMenuOpen(selection.keepMenuOpen);
     requestAnimationFrame(() => composerInputRef.current?.focus());
   };
 

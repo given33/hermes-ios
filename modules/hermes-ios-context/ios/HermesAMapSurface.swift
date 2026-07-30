@@ -34,7 +34,7 @@ final class HermesAMapSurface: UIView, HermesMapRendering, MAMapViewDelegate {
     mapView.isShowsBuildings = false
     mapView.isShowsIndoorMap = false
     mapView.isShowsIndoorMapControl = false
-    mapView.touchPOIEnabled = true
+    mapView.touchPOIEnabled = false
     mapView.isZoomEnabled = true
     mapView.isScrollEnabled = true
     mapView.isRotateEnabled = true

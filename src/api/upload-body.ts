@@ -7,10 +7,24 @@ async function nativeFileBody(uri: string): Promise<Blob> {
   return file;
 }
 
-export async function boundedUploadBody(uri: string, name: string): Promise<Blob> {
+export async function boundedUploadBody(
+  uri: string,
+  name: string,
+  signal?: AbortSignal,
+): Promise<Blob> {
   const body = uri.startsWith('file:')
     ? await nativeFileBody(uri)
-    : await fetch(uri).then((response) => response.blob());
+    : await fetch(uri, { signal }).then(async (response) => {
+      if (!response.ok) throw new Error(`Unable to read attachment (${response.status})`);
+      const declared = response.headers.get('Content-Length');
+      if (declared !== null) {
+        if (!/^\d+$/.test(declared.trim())) throw new Error('Invalid attachment Content-Length');
+        if (Number(declared) > MAX_CONVERSATION_ATTACHMENT_BYTES) {
+          throw new Error(`File must be 64 MB or smaller: ${name}`);
+        }
+      }
+      return response.blob();
+    });
   if (body.size > MAX_CONVERSATION_ATTACHMENT_BYTES) {
     throw new Error(`File must be 64 MB or smaller: ${name}`);
   }

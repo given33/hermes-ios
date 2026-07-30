@@ -16,10 +16,12 @@ export function useChatAttachmentLifecycle({
   mountedRef,
   pendingAttachmentCleanup,
   setAttachments,
+  composerRevisionRef,
 }: {
   attachmentOwnerRef: MutableRefObject<string>;
   attachmentsRef: MutableRefObject<ChatAttachment[]>;
   cacheOwner: string;
+  composerRevisionRef: MutableRefObject<number>;
   clearOptimisticHostedTurn(): void;
   mountedRef: MutableRefObject<boolean>;
   pendingAttachmentCleanup: MutableRefObject<(() => void) | null>;
@@ -28,12 +30,12 @@ export function useChatAttachmentLifecycle({
   const updateAttachments = useCallback((
     update: ChatAttachment[] | ((current: ChatAttachment[]) => ChatAttachment[]),
   ) => {
-    setAttachments((current) => {
-      const next = typeof update === 'function' ? update(current) : update;
-      attachmentsRef.current = next;
-      return next;
-    });
-  }, [attachmentsRef, setAttachments]);
+    const current = attachmentsRef.current;
+    const next = typeof update === 'function' ? update(current) : update;
+    if (next !== current) composerRevisionRef.current += 1;
+    attachmentsRef.current = next;
+    setAttachments(next);
+  }, [attachmentsRef, composerRevisionRef, setAttachments]);
 
   const cleanupAttachmentSources = useCallback((
     items: readonly ChatAttachment[] | readonly HostedTurnPendingAttachment[],
@@ -52,8 +54,12 @@ export function useChatAttachmentLifecycle({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      cleanupAttachmentSources(attachmentsRef.current);
-      attachmentsRef.current = [];
+      cleanupAttachmentSources(
+        attachmentsRef.current.filter((attachment) => !attachment.draftPersistent),
+      );
+      // The draft-persistence effect is registered after this lifecycle effect
+      // and reads this ref during its own cleanup. Keep the final snapshot
+      // available until the component instance is collected.
       clearOptimisticHostedTurn();
       pendingAttachmentCleanup.current?.();
     };
@@ -67,15 +73,10 @@ export function useChatAttachmentLifecycle({
 
   useEffect(() => {
     if (attachmentOwnerRef.current === cacheOwner) return;
-    cleanupAttachmentSources(attachmentsRef.current);
     attachmentOwnerRef.current = cacheOwner;
-    updateAttachments([]);
   }, [
     attachmentOwnerRef,
-    attachmentsRef,
     cacheOwner,
-    cleanupAttachmentSources,
-    updateAttachments,
   ]);
 
   return { cleanupAttachmentSources, updateAttachments };

@@ -30,6 +30,7 @@
   <string>Hermes uses Watch motion state to label walking, running, cycling, and stationary context.</string>
   <key>WKBackgroundModes</key>
   <array>
+    <string>location</string>
     <string>workout-processing</string>
   </array>
   <key>NSExtension</key>

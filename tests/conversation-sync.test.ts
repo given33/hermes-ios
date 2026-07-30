@@ -7,6 +7,8 @@ import {
   type HermesRequestOptions,
 } from '../src/api/HermesApiClient';
 import { ConversationSyncGeneration } from '../src/api/conversation-sync-generation';
+import { conversationOwnerDeletionKey } from '../src/api/conversation-draft-repository';
+import { selectReadyHostedTurnOutboxItems } from '../src/api/conversation-hosted-turn-outbox';
 import {
   HermesCloudApi,
   officialConversationPlaceholderId,
@@ -19,6 +21,10 @@ import {
   synchronizeConversationCache,
 } from '../src/api/conversation-local-store';
 import { decideHostedTurnCancellationFailure } from '../src/api/hosted-turn-delivery-state';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../src/api/conversation-storage-coordinator';
 
 class MemoryStorage {
   readonly values = new Map<string, string>();
@@ -85,6 +91,59 @@ function conversation(
     message_count: messageCount,
     runtime_sessions: {},
     updated_at: updatedAt,
+  };
+}
+
+function hostedTurnFixture(
+  requestId: string,
+  conversationId = 'conversation-1',
+) {
+  const message = {
+    content: 'queued text',
+    created_at: 100,
+    id: requestId,
+    name: 'You',
+    role: 'user' as const,
+    status: 'completed' as const,
+  };
+  return {
+    item: {
+      attempts: 0,
+      conversationId,
+      conversationProfile: 'default',
+      conversationTitle: 'Queued turn',
+      draftClaim: {
+        attachments: [{ id: 'draft-file-1', uri: 'file:///cache/draft-file.txt' }],
+        content: 'queued text',
+        requestId,
+      },
+      input: {
+        attachmentIds: [],
+        message,
+        profiles: ['default'],
+        recentMessages: [{ content: message.content, role: message.role }],
+        requestId,
+        turnId: `turn-${requestId}`,
+      },
+      pendingAttachments: [{
+        id: 'upload-file-1',
+        kind: 'file' as const,
+        name: 'draft-file.txt',
+        ownedTemporary: true,
+        sourceUri: 'file:///cache/draft-file.txt',
+        uri: `file:///outbox/${requestId}/draft-file.txt.hermes-encrypted`,
+      }],
+      queuedAt: 100,
+    },
+    message,
+    pendingTurn: {
+      attempt: 0,
+      phase: 'thinking' as const,
+      phaseStartedAt: 100,
+      turnId: `turn-${requestId}`,
+      updatedAt: 100,
+      userMessageId: requestId,
+    },
   };
 }
 
@@ -311,6 +370,283 @@ test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed a
   assert.equal((await store.readPendingEnqueues(ownerB)).length, 1);
 });
 
+test('hosted-turn replay skips a delayed conversation without reordering that conversation', () => {
+  const delayed = {
+    ...hostedTurnFixture('request-a1', 'conversation-a').item,
+    nextAttemptAt: 10_000,
+    queuedAt: 100,
+  };
+  const sameConversationLater = {
+    ...hostedTurnFixture('request-a2', 'conversation-a').item,
+    queuedAt: 200,
+  };
+  const ready = {
+    ...hostedTurnFixture('request-b1', 'conversation-b').item,
+    queuedAt: 300,
+  };
+  const cancellation = {
+    ...hostedTurnFixture('request-c1', 'conversation-c').item,
+    cancelledAt: 400,
+    queuedAt: 400,
+  };
+
+  const selected = selectReadyHostedTurnOutboxItems(
+    [delayed, sameConversationLater, ready, cancellation],
+    1_000,
+  );
+
+  assert.deepEqual(
+    selected.map((item) => item.input.requestId),
+    ['request-c1', 'request-b1'],
+  );
+});
+
+test('hosted-turn delivery leases fence dual workers and recover after expiry', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|lease@example.test';
+  const firstProcess = new ConversationLocalStore(storage);
+  await firstProcess.upsertPendingEnqueue(
+    owner,
+    hostedTurnFixture('request-leased', 'conversation-leased').item,
+  );
+
+  const firstClaim = await firstProcess.claimReadyPendingEnqueues(
+    owner,
+    'worker-1',
+    1_000,
+    1_000,
+  );
+  const competingClaim = await new ConversationLocalStore(storage)
+    .claimReadyPendingEnqueues(owner, 'worker-2', 1_500, 1_000);
+
+  assert.equal(firstClaim.length, 1);
+  assert.deepEqual(competingClaim, []);
+
+  const recoveredClaim = await new ConversationLocalStore(storage)
+    .claimReadyPendingEnqueues(owner, 'worker-2', 2_001, 1_000);
+  assert.equal(recoveredClaim.length, 1);
+  assert.notEqual(
+    recoveredClaim[0].deliveryLeaseToken,
+    firstClaim[0].deliveryLeaseToken,
+  );
+  assert.equal((await firstProcess.upsertPendingEnqueueIfActive(owner, {
+    ...firstClaim[0],
+    lastError: 'late worker result',
+  })).updated, false);
+  assert.equal(
+    await firstProcess.removePendingEnqueueIfLeaseOwned(owner, firstClaim[0]),
+    false,
+  );
+  assert.equal(
+    await firstProcess.releasePendingEnqueueLease(owner, firstClaim[0]),
+    false,
+  );
+  assert.equal(
+    await firstProcess.releasePendingEnqueueLease(owner, recoveredClaim[0]),
+    true,
+  );
+  assert.equal(
+    (await firstProcess.claimReadyPendingEnqueues(owner, 'worker-3', 2_002)).length,
+    1,
+  );
+});
+
+test('foreground cancellation cannot bypass an active replay lease', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|cancel-lease@example.test';
+  const store = new ConversationLocalStore(storage);
+  const cancellation = {
+    ...hostedTurnFixture('cancel-turn-1', 'conversation-1').item,
+    cancelledAt: 1_000,
+    purpose: 'hosted-turn-cancel' as const,
+  };
+  await store.upsertPendingEnqueue(owner, cancellation);
+
+  const replayClaim = await store.claimPendingEnqueueByRequest(
+    owner,
+    cancellation.input.requestId,
+    'replay-worker',
+    2_000,
+    1_000,
+  );
+  const foregroundClaim = await new ConversationLocalStore(storage)
+    .claimPendingEnqueueByRequest(
+      owner,
+      cancellation.input.requestId,
+      'foreground-worker',
+      2_500,
+      1_000,
+    );
+
+  assert.ok(replayClaim?.deliveryLeaseToken);
+  assert.equal(foregroundClaim, null);
+  await store.releasePendingEnqueueLease(owner, replayClaim!);
+  assert.ok(await store.claimPendingEnqueueByRequest(
+    owner,
+    cancellation.input.requestId,
+    'foreground-worker',
+    2_501,
+    1_000,
+  ));
+});
+
+test('hosted-turn initialization exposes a durable intent when the optimistic ledger write fails', async () => {
+  const storage = new MemoryStorage();
+  storage.setFailureSubstrings.add('optimistic-messages');
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|ledger-failure@example.test';
+  const fixture = hostedTurnFixture('request-ledger-failure');
+
+  const result = await store.initializePendingEnqueue(
+    owner,
+    fixture.item,
+    [fixture.message],
+    fixture.pendingTurn,
+  );
+
+  assert.equal(result.durable, true);
+  assert.equal(result.updated, true);
+  assert.equal(result.recovery, 'optimistic-ledger-replay');
+  assert.equal(result.item?.input.requestId, fixture.item.input.requestId);
+  assert.equal((await store.readPendingEnqueues(owner)).length, 1);
+  assert.deepEqual(await store.readOptimisticConversations(owner), []);
+});
+
+test('a failed first outbox write leaves the original draft and attachment claim intact', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|outbox-failure@example.test';
+  const fixture = hostedTurnFixture('request-outbox-failure');
+  await store.writeDraft(owner, fixture.item.conversationId, 'queued text', [{
+    draftPersistent: true,
+    id: 'draft-file-1',
+    kind: 'file',
+    name: 'draft-file.txt',
+    ownedTemporary: true,
+    uri: 'file:///cache/draft-file.txt',
+  }]);
+  storage.setFailureSubstrings.add('hosted-turn-outbox');
+
+  await assert.rejects(() => store.initializePendingEnqueue(
+    owner,
+    fixture.item,
+    [fixture.message],
+    fixture.pendingTurn,
+  ), /storage write failed/);
+
+  assert.deepEqual(await store.readPendingEnqueues(owner), []);
+  const recovered = await store.readDraft(owner, fixture.item.conversationId);
+  assert.equal(recovered?.content, 'queued text');
+  assert.equal(recovered?.attachments[0]?.uri, 'file:///cache/draft-file.txt');
+});
+
+test('initialization recovers an outbox write committed before its adapter reports failure', async () => {
+  let interruptNextOutboxWrite = true;
+  const storage = new class extends MemoryStorage {
+    override async setItem(key: string, value: string) {
+      if (interruptNextOutboxWrite && key.includes('hosted-turn-outbox')) {
+        interruptNextOutboxWrite = false;
+        this.values.set(key, value);
+        throw new Error('storage acknowledgement interrupted');
+      }
+      return super.setItem(key, value);
+    }
+  }();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|ambiguous-write@example.test';
+  const fixture = hostedTurnFixture('request-ambiguous-write');
+
+  const result = await store.initializePendingEnqueue(
+    owner,
+    fixture.item,
+    [fixture.message],
+    fixture.pendingTurn,
+  );
+
+  assert.equal(result.durable, true);
+  assert.equal(result.updated, true);
+  assert.equal(result.recovery, 'none');
+  assert.equal((await store.readPendingEnqueues(owner)).length, 1);
+});
+
+test('restart consumes only the draft snapshot claimed by a durable hosted turn', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|restart-window@example.test';
+  const fixture = hostedTurnFixture('request-restart-window');
+  const firstProcess = new ConversationLocalStore(storage);
+  await firstProcess.writeDraft(owner, fixture.item.conversationId, 'queued text', [{
+    draftPersistent: true,
+    id: 'draft-file-1',
+    kind: 'file',
+    name: 'draft-file.txt',
+    ownedTemporary: true,
+    uri: 'file:///cache/draft-file.txt',
+  }]);
+  await firstProcess.initializePendingEnqueue(
+    owner,
+    fixture.item,
+    [fixture.message],
+    fixture.pendingTurn,
+  );
+
+  const restartedBeforeDraftClear = new ConversationLocalStore(storage);
+  assert.equal(
+    await restartedBeforeDraftClear.readDraft(owner, fixture.item.conversationId),
+    null,
+  );
+  assert.equal((await restartedBeforeDraftClear.readPendingEnqueues(owner)).length, 1);
+
+  await restartedBeforeDraftClear.writeDraft(
+    owner,
+    fixture.item.conversationId,
+    'new text typed after enqueue',
+  );
+  const restartedWithNewerDraft = new ConversationLocalStore(storage);
+  assert.equal(
+    (await restartedWithNewerDraft.readDraft(owner, fixture.item.conversationId))?.content,
+    'new text typed after enqueue',
+  );
+  await restartedWithNewerDraft.removePendingEnqueue(owner, fixture.item.input.requestId);
+  assert.equal(
+    (await new ConversationLocalStore(storage).readDraft(
+      owner,
+      fixture.item.conversationId,
+    ))?.content,
+    'new text typed after enqueue',
+  );
+});
+
+test('outbox removal clears its claimed draft before an interrupted outbox delete', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|remove-window@example.test';
+  const fixture = hostedTurnFixture('request-remove-window');
+  const store = new ConversationLocalStore(storage);
+  await store.writeDraft(owner, fixture.item.conversationId, 'queued text', [{
+    draftPersistent: true,
+    id: 'draft-file-1',
+    kind: 'file',
+    name: 'draft-file.txt',
+    ownedTemporary: true,
+    uri: 'file:///cache/draft-file.txt',
+  }]);
+  await store.initializePendingEnqueue(
+    owner,
+    fixture.item,
+    [fixture.message],
+    fixture.pendingTurn,
+  );
+  storage.setFailureSubstrings.add('hosted-turn-outbox');
+
+  await assert.rejects(
+    () => store.removePendingEnqueue(owner, fixture.item.input.requestId),
+    /storage write failed/,
+  );
+
+  const restarted = new ConversationLocalStore(storage);
+  assert.equal(await restarted.readDraft(owner, fixture.item.conversationId), null);
+  assert.equal((await restarted.readPendingEnqueues(owner)).length, 1);
+});
+
 test('hosted intervention intent is durable, owner-isolated, and rebuilds the optimistic message', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
@@ -482,6 +818,15 @@ test('account purge removes conversation and outbox keys while preserving attach
   assert.deepEqual(await store.readPendingEnqueues(owner), []);
   assert.deepEqual(await store.readPendingRoomMessages(owner), []);
   assert.equal(storage.values.size, 0);
+
+  // Successful deletion keeps a process-local fence but leaves no persistent
+  // tombstone that could poison the next authenticated lifecycle.
+  await store.writeDraft(owner, 'late-old-generation', 'must stay deleted');
+  assert.equal(await store.readDraft(owner, 'late-old-generation'), null);
+  await store.activate(owner);
+  await store.writeDraft(owner, 'new-generation', 'preserve me');
+  assert.equal((await store.readDraft(owner, 'new-generation'))?.content, 'preserve me');
+  assert.equal(storage.values.has(conversationOwnerDeletionKey(owner)), false);
 });
 
 test('account purge retains retry metadata when attachment cleanup fails', async () => {
@@ -516,6 +861,76 @@ test('account purge retains retry metadata when attachment cleanup fails', async
   assert.equal((await store.readPendingEnqueues(owner)).length, 1);
   await store.purge(owner, async () => undefined);
   assert.deepEqual(await store.readPendingEnqueues(owner), []);
+});
+
+test('a fresh account activation queued during purge preserves only its new writes', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|generation-race@example.test';
+  await store.write(owner, [conversation('old-generation', 1, [])], 'old-generation');
+  let releasePurge: (() => void) | undefined;
+  let markPurgeStarted: (() => void) | undefined;
+  const purgeStarted = new Promise<void>((resolve) => { markPurgeStarted = resolve; });
+  const purgeGate = new Promise<void>((resolve) => { releasePurge = resolve; });
+  const purge = store.purge(owner, async () => {
+    markPurgeStarted?.();
+    await purgeGate;
+  });
+  await purgeStarted;
+
+  const activation = store.activate(owner);
+  const freshWrite = store.writeDraft(owner, 'new-generation', 'new account draft');
+  releasePurge?.();
+  await Promise.all([purge, activation, freshWrite]);
+
+  assert.equal(await store.read(owner), null);
+  assert.equal((await store.readDraft(owner, 'new-generation'))?.content, 'new account draft');
+  assert.equal(storage.values.has(conversationOwnerDeletionKey(owner)), false);
+});
+
+test('same-owner reactivation rejects old index detail create and fork callbacks', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|same-owner-generation@example.test';
+  await store.activate(owner);
+  const oldEpoch = captureConversationStorageEpoch(owner);
+  const oldUiApplies: string[] = [];
+  let releaseOldCallbacks: (() => void) | undefined;
+  const oldCallbackGate = new Promise<void>((resolve) => { releaseOldCallbacks = resolve; });
+  const staleCallbacks = ['index', 'detail', 'create', 'fork'].map(async (kind) => {
+    await oldCallbackGate;
+    if (isConversationStorageEpochCurrent(owner, oldEpoch)) oldUiApplies.push(kind);
+    await store.write(
+      owner,
+      [conversation(`old-${kind}`, 1, [])],
+      `old-${kind}`,
+      oldEpoch,
+    );
+  });
+
+  await store.purge(owner);
+  await store.activate(owner);
+  await store.write(owner, [conversation('new-generation', 2, [])], 'new-generation');
+  releaseOldCallbacks?.();
+  await Promise.all(staleCallbacks);
+
+  assert.deepEqual(oldUiApplies, []);
+  assert.equal(isConversationStorageEpochCurrent(owner, oldEpoch), false);
+  const restored = await store.read(owner);
+  assert.deepEqual(restored?.conversations.map(({ id }) => id), ['new-generation']);
+
+  const newEpoch = captureConversationStorageEpoch(owner);
+  assert.equal(isConversationStorageEpochCurrent(owner, newEpoch), true);
+  await store.write(
+    owner,
+    [conversation('new-generation-callback', 3, [])],
+    'new-generation-callback',
+    newEpoch,
+  );
+  assert.deepEqual(
+    (await store.read(owner))?.conversations.map(({ id }) => id),
+    ['new-generation-callback'],
+  );
 });
 
 test('cloud reconciliation reuses unchanged local transcripts and downloads only changed records', () => {
@@ -561,7 +976,7 @@ test('cloud reconciliation reuses unchanged local transcripts and downloads only
 test('session-page synchronization stores full changed transcripts for later local-first startup', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
-  const owner = 'https://example.test|owner@example.test';
+  const owner = 'https://example.test|sync-owner@example.test';
   const unchanged = conversation('unchanged', 100, [
     { id: 'm-1', role: 'user', name: '你', content: '本地完整正文' },
   ]);
@@ -599,6 +1014,37 @@ test('session-page synchronization stores full changed transcripts for later loc
   assert.equal(synchronized.activeConversationId, 'unchanged');
   assert.equal(restored?.conversations.find(({ id }) => id === 'unchanged')?.messages[0].content, '本地完整正文');
   assert.equal(restored?.conversations.find(({ id }) => id === 'changed')?.messages.length, 2);
+});
+
+test('unchanged authoritative transcripts perform no detail download or local write', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|unchanged-sync@example.test';
+  const complete = conversation('unchanged', 100, [
+    { id: 'm-1', role: 'user', name: 'You', content: 'complete local transcript' },
+  ]);
+  await store.write(owner, [complete], complete.id);
+  storage.setCalls.length = 0;
+  const detailCalls: string[] = [];
+  const api = {
+    async getUnifiedConversations() {
+      return {
+        conversations: [conversation('unchanged', 100, [
+          { id: 'summary', role: 'user', name: 'You', content: 'summary only' },
+        ])],
+      };
+    },
+    async getConversation(id: string) {
+      detailCalls.push(id);
+      return { conversation: complete };
+    },
+  } as unknown as HermesCloudApi;
+
+  const synchronized = await synchronizeConversationCache(api, store, owner);
+
+  assert.deepEqual(detailCalls, []);
+  assert.deepEqual(storage.setCalls, []);
+  assert.equal(synchronized.conversations[0].messages[0].content, 'complete local transcript');
 });
 
 test('a detail 404 removes the stale summary and selects the next live conversation', async () => {
@@ -785,8 +1231,8 @@ test('appending one message rewrites only that conversation row plus the index',
 
   storage.setCalls.length = 0;
   await store.write(owner, appended, 'chat-2');
-  // A write with no conversation changes refreshes only the index (syncedAt).
-  assert.deepEqual(storage.setCalls, [indexKey]);
+  // A write with no conversation changes performs no storage write.
+  assert.deepEqual(storage.setCalls, []);
 
   storage.setCalls.length = 0;
   await store.write(owner, appended.filter(({ id }) => id !== 'chat-4'), 'chat-2');

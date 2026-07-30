@@ -2,10 +2,36 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  consoleInvocationBlocksActiveView,
+  consoleInvocationOwnsActiveView,
   isRemoteConsoleCommand,
   isStopSlashCommand,
   mobileConsoleResultText,
 } from '../src/studio/chat/mobile-console-model';
+
+test('console results only mutate the conversation view that launched them', () => {
+  assert.equal(consoleInvocationOwnsActiveView('a', 'a', 7, 7), true);
+  assert.equal(consoleInvocationOwnsActiveView('b', 'a', 8, 7), false);
+  assert.equal(consoleInvocationOwnsActiveView('a', 'a', 8, 7), false);
+  assert.equal(consoleInvocationOwnsActiveView('', '', 7, 7), false);
+});
+
+test('a running console invocation blocks only its conversation generation', () => {
+  const running = [{ conversationId: 'a', generation: 7 }];
+  assert.equal(consoleInvocationBlocksActiveView(running, 'a', 7), true);
+  assert.equal(consoleInvocationBlocksActiveView(running, 'b', 8), false);
+  assert.equal(consoleInvocationBlocksActiveView(running, 'a', 8), false);
+  assert.equal(consoleInvocationBlocksActiveView(
+    [{ conversationId: '', generation: 9 }],
+    'new-conversation',
+    9,
+  ), false);
+  assert.equal(consoleInvocationBlocksActiveView(
+    [{ conversationId: '', generation: 9 }],
+    '',
+    9,
+  ), true);
+});
 
 test('stop command matching is exact and does not capture unrelated commands', () => {
   assert.equal(isStopSlashCommand('/stop'), true);

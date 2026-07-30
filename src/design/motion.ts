@@ -33,6 +33,16 @@ export const MOTION = {
     skeleton: 1_100,
   },
   easing: IOS_MOTION.curve,
+  fade: {
+    /** Short non-spatial transition retained when Reduce Motion is enabled. */
+    reduced: 120,
+    standard: 180,
+  },
+  reduceMotion: {
+    allowLargeScale: false,
+    allowLoop: false,
+    spatialDuration: 0,
+  },
   spring: IOS_MOTION.spring,
 } as const;
 
@@ -47,18 +57,29 @@ export interface MotionController {
    */
   duration(baseMs: number): number;
   /**
-   * Gate for entering/exiting/layout animation props: returns the animation
-   * normally and undefined under Reduce Motion, so mounts and unmounts render
-   * instantly rather than sliding or fading.
+   * Gate for spatial entering/exiting/layout animation props. Spatial motion
+   * is removed when Reduce Motion is enabled.
    */
   animate<T>(animation: T): T | undefined;
+  /** Select a short fade in place of a spatial transition under Reduce Motion. */
+  fade<T>(animation: T, reducedFade: T): T;
+  /** Duration for opacity-only transitions, retaining a short accessible fade. */
+  fadeDuration(baseMs?: number): number;
 }
 
 export function useMotion(): MotionController {
   const reduceMotion = useReducedMotion();
   return useMemo<MotionController>(() => ({
     reduceMotion,
-    duration: (baseMs: number) => (reduceMotion ? 0 : baseMs),
+    duration: (baseMs: number) => (
+      reduceMotion ? MOTION.reduceMotion.spatialDuration : baseMs
+    ),
     animate: <T,>(animation: T) => (reduceMotion ? undefined : animation),
+    fade: <T,>(animation: T, reducedFade: T) => (
+      reduceMotion ? reducedFade : animation
+    ),
+    fadeDuration: (baseMs = MOTION.fade.standard) => (
+      reduceMotion ? MOTION.fade.reduced : baseMs
+    ),
   }), [reduceMotion]);
 }

@@ -1,7 +1,10 @@
 import type { HermesChatViewMessage as ChatMessage } from '../api/chat-view-model';
 import type { SingleConversation } from '../api/HermesCloudApi';
 
-export function previewConversationHistory(_isChinese: boolean): SingleConversation[] {
+export function previewConversationHistory(
+  _isChinese: boolean,
+  _accountGeneration: string,
+): SingleConversation[] {
   return [];
 }
 

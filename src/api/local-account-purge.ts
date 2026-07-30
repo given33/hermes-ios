@@ -5,8 +5,10 @@ import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-
 import { attachmentOutboxOwnerComponent } from './attachment-outbox-crypto';
 import { attachmentOutboxRoot, remapLegacyOutboxUri } from './attachment-outbox-root';
 import { cleanupOwnedTemporaryAttachments } from './attachment-draft-lifecycle';
+import { purgeAttachmentDraftCache } from './attachment-draft-cache';
 import { sharedConversationLocalStore } from './hermes-api-registry';
 import { runLocalAccountPurgePhases } from './local-account-purge-order';
+import { purgeManagedResourceCatalog } from './managed-resource-catalog';
 
 export async function purgeLocalAccountData(owner: string): Promise<void> {
   const ownerDirectory = attachmentOutboxRoot(attachmentOutboxOwnerComponent(owner));
@@ -65,14 +67,22 @@ export async function purgeLocalAccountData(owner: string): Promise<void> {
           if (ownerDirectory.exists) ownerDirectory.delete();
           if (legacyOwnerDirectory.exists) legacyOwnerDirectory.delete();
         });
+        await purgeManagedResourceCatalog(owner);
       } finally {
-        for (const pickerCacheName of ['DocumentPicker', 'ImagePicker']) {
-          try {
-            const pickerCache = new ExpoDirectory(Paths.cache, pickerCacheName);
-            if (pickerCache.exists) pickerCache.delete();
-          } catch {
-            // Picker caches are ephemeral; key revocation remains authoritative.
+        const draftPastePrefix = `hermes-paste-${attachmentOutboxOwnerComponent(owner)}-`;
+        try {
+          for (const entry of new ExpoDirectory(Paths.cache).list()) {
+            if (entry instanceof ExpoFile && entry.name.startsWith(draftPastePrefix)) {
+              entry.delete();
+            }
           }
+        } catch {
+          // Draft paste files are account-scoped cache data; retry on the next purge.
+        }
+        try {
+          purgeAttachmentDraftCache(owner);
+        } catch {
+          // The owner-scoped cache remains eligible for the next purge retry.
         }
       }
     },

@@ -3,6 +3,12 @@ import test from 'node:test';
 
 import type { HostedInterventionOutboxItem } from '../src/api/conversation-store-types';
 import { createHostedInterventionReplayService } from '../src/studio/chat/hosted-intervention-replay-service';
+import {
+  beginConversationStorageOwnerActivation,
+  beginConversationStorageOwnerPurge,
+  captureConversationStorageEpoch,
+  completeConversationStorageOwnerActivation,
+} from '../src/api/conversation-storage-coordinator';
 
 function intervention(overrides: Partial<HostedInterventionOutboxItem> = {}) {
   return {
@@ -39,7 +45,7 @@ test('retryable intervention failures keep one intent with bounded backoff', asy
     retryDelayMs: 60_000,
   });
 
-  await service.replay();
+  await service.replay(0);
 
   assert.equal(saved[0].attempts, 2);
   assert.equal(saved[0].nextAttemptAt, 61_000);
@@ -64,7 +70,7 @@ test('the final retry records one permanent failure and exposes it to the UI', a
     retryDelayMs: 60_000,
   });
 
-  await service.replay();
+  await service.replay(0);
 
   assert.deepEqual(failed, ['HTTP 409']);
   assert.deepEqual(surfaced, ['HTTP 409']);
@@ -88,10 +94,49 @@ test('concurrent replay requests share one drain operation', async () => {
     retryDelayMs: 60_000,
   });
 
-  const first = service.replay();
-  const second = service.replay();
+  const first = service.replay(0);
+  const second = service.replay(0);
   release();
   await Promise.all([first, second]);
 
   assert.equal(reads, 1);
+});
+
+test('old intervention replay cannot write retry state into a reactivated owner', async () => {
+  const owner = 'intervention-owner-epoch-interleaving';
+  const expectedOwnerEpoch = captureConversationStorageEpoch(owner);
+  const saved: HostedInterventionOutboxItem[] = [];
+  const failed: string[] = [];
+  let releaseDelivery!: () => void;
+  let deliveryStarted!: () => void;
+  const deliveryGate = new Promise<void>((resolve) => { releaseDelivery = resolve; });
+  const started = new Promise<void>((resolve) => { deliveryStarted = resolve; });
+  const service = createHostedInterventionReplayService({
+    cacheOwner: owner,
+    async deliver() {
+      deliveryStarted();
+      await deliveryGate;
+      throw new Error('offline');
+    },
+    describeError: () => 'offline',
+    isRetryable: () => true,
+    maxAttempts: 5,
+    outbox: {
+      async failPendingIntervention(_owner, _item, message) { failed.push(message); },
+      async readPendingInterventions() { return [intervention()]; },
+      async upsertPendingIntervention(_owner, item) { saved.push(item); },
+    },
+    retryDelayMs: 60_000,
+  });
+
+  const replay = service.replay(expectedOwnerEpoch);
+  await started;
+  beginConversationStorageOwnerPurge(owner);
+  const newEpoch = beginConversationStorageOwnerActivation(owner);
+  completeConversationStorageOwnerActivation(owner, newEpoch);
+  releaseDelivery();
+
+  await assert.rejects(replay, /lifecycle changed/i);
+  assert.deepEqual(saved, []);
+  assert.deepEqual(failed, []);
 });

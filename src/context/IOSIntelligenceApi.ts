@@ -3,14 +3,17 @@ import type { HermesApiClient } from '../api/HermesApiClient';
 const IOS_INTELLIGENCE = '/api/plugins/ios-intelligence';
 
 export interface IOSContextEvent {
+  account_generation?: string;
   id: string;
   kind: string;
   source_device_id?: string;
+  lifecycle_epoch?: number;
   timestamp: number;
   payload: Record<string, unknown>;
 }
 
 export interface IOSIntelligenceSnapshot {
+  schema_version?: string;
   date: string;
   timezone: string;
   server_time?: number;
@@ -46,6 +49,8 @@ export interface IOSActiveForecast {
   starts_at?: number;
   valid_from?: number;
   expires_at?: number;
+  is_active?: boolean;
+  schema_version?: string;
   valid_until?: number;
   severity?: string;
   data?: {
@@ -71,9 +76,13 @@ export interface IOSDeviceCommand {
 export class IOSIntelligenceApi {
   constructor(private readonly client: HermesApiClient) {}
 
-  snapshot(timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai') {
+  snapshot(
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
+    signal?: AbortSignal,
+  ) {
     return this.client.request<IOSIntelligenceSnapshot>(
       `${IOS_INTELLIGENCE}/snapshot?timezone=${encodeURIComponent(timezone)}`,
+      { signal },
     );
   }
 
@@ -82,7 +91,7 @@ export class IOSIntelligenceApi {
     deviceId: string;
     events: readonly IOSContextEvent[];
     timezone?: string;
-  }) {
+  }, signal?: AbortSignal) {
     return this.json<{ accepted: number; duplicates: number; next_cursor: string }>(
       `${IOS_INTELLIGENCE}/events/batch`,
       {
@@ -93,6 +102,7 @@ export class IOSIntelligenceApi {
           || Intl.DateTimeFormat().resolvedOptions().timeZone
           || 'Asia/Shanghai',
       },
+      signal,
     );
   }
 
@@ -104,10 +114,11 @@ export class IOSIntelligenceApi {
     });
   }
 
-  pullCommands(deviceId: string, cursor = '') {
+  pullCommands(deviceId: string, cursor = '', signal?: AbortSignal) {
     return this.json<{ commands: IOSDeviceCommand[]; cursor?: string }>(
       `${IOS_INTELLIGENCE}/commands/pull`,
       { device_id: deviceId, cursor, limit: 50 },
+      signal,
     );
   }
 
@@ -115,13 +126,14 @@ export class IOSIntelligenceApi {
     deviceId: string,
     commandId: string,
     input: { error?: string; result?: Record<string, unknown>; status: 'completed' | 'failed' },
+    signal?: AbortSignal,
   ) {
     return this.json(`${IOS_INTELLIGENCE}/commands/${encodeURIComponent(commandId)}/ack`, {
       device_id: deviceId,
       status: input.status,
       result: input.result || {},
       error: input.error || '',
-    });
+    }, signal);
   }
 
   evaluate() {
@@ -169,11 +181,16 @@ export class IOSIntelligenceApi {
     });
   }
 
-  private json<T = Record<string, unknown>>(path: string, body: Record<string, unknown>) {
+  private json<T = Record<string, unknown>>(
+    path: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
     return this.client.request<T>(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     });
   }
 }

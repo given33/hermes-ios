@@ -6,6 +6,38 @@ function read(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
+test('composer attachments and console prompts stay bound to their conversation', () => {
+  const attachments = read('src/studio/chat/useChatAttachmentController.ts');
+  const attachmentLifecycle = read('src/studio/chat/useChatAttachmentLifecycle.ts');
+  const drafts = read('src/studio/chat/useConversationDraftPersistence.ts');
+  const consoleController = read('src/studio/chat/useMobileConsoleController.ts');
+  const hostedSend = read('src/studio/chat/useHostedSendController.ts');
+
+  assert.equal((attachments.match(/draftPersistent: true/g) || []).length >= 3, true);
+  assert.match(attachments, /copyToCacheDirectory: true/);
+  assert.doesNotMatch(
+    attachmentLifecycle,
+    /attachmentsRef\.current\s*=\s*\[\]/,
+  );
+  assert.match(attachments, /uniqueTurnId\('paste'\)/);
+  assert.match(attachments, /粘贴内容不能超过/);
+  assert.doesNotMatch(attachments, /绮樿创鍐呭/);
+  assert.match(drafts, /hydrationRevision/);
+  assert.match(drafts, /composerRevisionRef\.current/);
+  assert.match(consoleController, /confirmationRef\.current = \{[\s\S]*ownsActiveView/);
+  assert.doesNotMatch(consoleController, /Alert\.alert|cancelable: false/);
+  assert.match(consoleController, /if \(ownsActiveView\(\)\) \{[\s\S]*conversation sync failed/);
+  assert.match(consoleController, /consoleInvocationBlocksActiveView/);
+  assert.match(
+    hostedSend,
+    /initializePendingEnqueue[\s\S]*clearDraftClaim[\s\S]*persistPendingAttachments[\s\S]*cleanupAttachmentSources/,
+  );
+  assert.match(
+    hostedSend,
+    /restoreQueuedComposer\(\)[\s\S]*localStore\.writeDraft[\s\S]*attachmentSourcesReleased/,
+  );
+});
+
 test('frontend preview renders every customized route and authenticated builds may attach cloud ownership', () => {
   const app = read('src/studio/FrontendPreviewApp.tsx');
   const previewSources = [
@@ -82,6 +114,7 @@ test('distributable IPA builds always launch the authenticated production fronte
 
   assert.match(workflow, /EXPO_PUBLIC_FRONTEND_PREVIEW: '0'/);
   assert.match(workflow, /HERMES_DISTRIBUTABLE_BUILD: '1'/);
+  assert.match(workflow, /branches:\s*\n\s*- main/);
   assert.doesNotMatch(workflow, /inputs\.frontend_preview/);
   assert.match(app, /process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
   assert.doesNotMatch(app, /__DEV__[\s\S]{0,80}EXPO_PUBLIC_FRONTEND_PREVIEW/);
@@ -128,7 +161,7 @@ test('Expo Go fallback never replaces the exact blur in signed native builds', (
   assert.match(nativeBlur, /backdropLayer\.filters = \[gaussianFilter\]/);
 });
 
-test('native runtime does not adapt Reduce Motion or Reduce Transparency', () => {
+test('native runtime adapts spatial and looping motion to the OS Reduce Motion setting', () => {
   const runtime = [
     read('src/app/NativeShell.tsx'),
     read('src/auth/LoginScreen.tsx'),
@@ -142,10 +175,26 @@ test('native runtime does not adapt Reduce Motion or Reduce Transparency', () =>
     read('modules/hermes-live-blur/ios/HermesLiquidGlassView.swift'),
   ].join('\n');
 
-  assert.doesNotMatch(
-    runtime,
-    /ReduceMotion|useReducedMotion|reduceMotion|reduceTransparency|isReduceTransparency|isReduceMotion/,
+  const motion = read('src/design/motion.ts');
+  const swiftUI = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
+  assert.match(motion, /useReducedMotion/);
+  assert.match(motion, /reduced: 120/);
+  assert.match(runtime, /useMotion|reduceMotion/);
+  assert.match(swiftUI, /@Environment\(\\\.accessibilityReduceMotion\)/);
+  assert.match(swiftUI, /hermesReducedMotionFade/);
+  assert.doesNotMatch(runtime, /reduceTransparency|isReduceTransparency/);
+
+  const loopingSources = [
+    read('src/components/ui/NativeButton.tsx'),
+    read('src/studio/PreviewMemoryPage.tsx'),
+    read('src/studio/chat/ChatComposerPresentation.tsx'),
+    read('src/studio/chat/ChatPresentation.tsx'),
+  ].join('\n');
+  assert.match(loopingSources, /visible && !motion\.reduceMotion/);
+  assert.match(loopingSources, /if \(motion\.reduceMotion\)/);
+  assert.match(loopingSources, /busy && !motion\.reduceMotion/);
 });
 
 test('preview appearance persistence is limited to theme and font', () => {
@@ -238,7 +287,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /paddingBottom: keyboard\.height\.value \* keyboardAvoidanceEnabled\.value/);
   assert.match(chat, /composerInputRef\.current\?\.blur\(\)/);
   assert.match(chat, /keyboardAvoidanceEnabled\.value = 0/);
-  assert.match(chat, /requestAnimationFrame\(showIOSAttachmentPicker\)/);
+  assert.match(chat, /requestAnimationFrame\(\(\) => showIOSAttachmentPicker\(ownerEpoch\)\)/);
   assert.match(
     chat,
     /<Reanimated\.View[\s\S]{0,240}styles\.composer,[\s\S]*composerKeyboardStyle/,
@@ -296,7 +345,8 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /animationType="none"/);
   assert.match(chat, /translateX/);
   assert.match(chat, /withSpring\(0,[\s\S]*IOS_MOTION\.spring\.stiffness/);
-  assert.doesNotMatch(chat, /ReduceMotion|useReducedMotion|reduceMotion/);
+  assert.match(chat, /const motion = useMotion\(\)/);
+  assert.match(chat, /if \(motion\.reduceMotion\)/);
   assert.match(chat, /runOnJS\(setMounted\)\(false\)/);
   assert.match(chat, /styles\.drawerBackdrop, backdropStyle/);
   assert.match(chat, /safeAreaBottom/);
@@ -305,14 +355,18 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /launchImageLibraryAsync/);
   assert.match(chat, /launchCameraAsync/);
   assert.match(chat, /DocumentPicker\.getDocumentAsync/);
-  assert.match(chat, /copyToCacheDirectory: false/);
+  assert.match(chat, /copyToCacheDirectory: true/);
   assert.match(
     chat,
-    /ownedTemporary: Platform\.OS !== 'web'\s*&& isUriInsideDirectory\(asset\.uri, Paths\.cache\.uri\)/,
+    /copyAttachmentIntoDraftCache\(\s*cacheOwner \|\| 'local',\s*asset\.uri/,
   );
+  assert.match(chat, /ownedTemporary: Platform\.OS !== 'web'/);
   assert.match(chat, /if \(Platform\.OS === 'web'\) return;/);
   assert.match(chat, /cleanupAttachmentSources\(pendingAttachments\)/);
-  assert.match(chat, /cleanupAttachmentSources\(attachmentsRef\.current\)/);
+  assert.match(
+    chat,
+    /cleanupAttachmentSources\([\s\S]{0,120}attachmentsRef\.current\.filter\(\(attachment\) => !attachment\.draftPersistent\)/,
+  );
   assert.match(chat, /cleanupAttachmentSources\(\[attachment\]\)/);
   assert.match(chat, /Sharing\.shareAsync/);
   assert.match(chat, /presentQuickLook/);
@@ -355,7 +409,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const delivery = await outbox\.deliverPendingEnqueue\(queuedItem\);\s*queuedItem = delivery\.item;/,
+    /const delivery = await outbox\.deliverPendingEnqueue\(queuedItem, ownerEpoch\);\s*if \(!isCurrentSend\(\)\) return;\s*queuedItem = delivery\.item;/,
   );
   assert.match(
     chat,
@@ -363,7 +417,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const acceptedMutation = await outbox\.acceptPendingOutboxItem\(queuedItem\);[\s\S]{0,700}setHostedRunning\(true\);/,
+    /const acceptedMutation = await outbox\.acceptPendingOutboxItem\(queuedItem, ownerEpoch\);[\s\S]{0,1400}setHostedRunning\(true\);/,
   );
   assert.match(
     chat,
@@ -371,7 +425,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const outcome = await cancellation\.handleOutboxFailure\(queuedItem, responseFailure\);/,
+    /const outcome = await cancellation\.handleOutboxFailure\(\s*queuedItem,\s*responseFailure,\s*ownerEpoch,\s*\);/,
   );
   assert.match(
     chat,
@@ -591,7 +645,11 @@ test('preview share, import, export, and model selection open iOS system surface
   assert.match(chat, /hitSlop=\{8\}[\s\S]*onPress=\{model\.canCancelHostedTurn \?[\s\S]*: actions\.onSend\}/);
   assert.match(chat, /const currentContent = contentRef\.current/);
   assert.match(chat, /sendSubmissionGateRef\.current\.tryAcquire\(\)/);
-  assert.match(chat, /setSending\(true\);\s*void send\(\)\.finally\(\(\) => sendSubmissionGateRef\.current\.release\(\)\);/);
+  assert.match(
+    chat,
+    /initializePendingEnqueue\([\s\S]*enqueuePersisted = true;[\s\S]*setSending\(true\);/,
+  );
+  assert.match(chat, /void send\(\)\.finally\(\(\) => sendSubmissionGateRef\.current\.release\(\)\);/);
   assert.doesNotMatch(chat, /pendingSendFrame/);
   // PreviewCorePages no longer asserts an ActionSheetIOS call: its only
   // occurrence lived in a dead duplicate ChatPreviewPage that was never
@@ -631,8 +689,30 @@ test('stale conversation selection is removed instead of surfacing another 404',
   ].join('\n');
   assert.match(chat, /if \(isConversationNotFoundError\(error\)\) \{/);
   assert.match(chat, /conversationIndexRef\.current\.filter\([\s\S]*id !== conversationId/);
-  assert.match(chat, /commitConversationIndex\(remaining, fallbackId\)/);
+  assert.match(chat, /commitConversationIndex\(remaining, fallbackId, ownerEpoch\)/);
   assert.match(chat, /await openConversation\(fallbackId, generation\)/);
+});
+
+test('same-owner account epochs fence every long-lived chat callback', () => {
+  const snapshot = read('src/studio/chat/useConversationSnapshotController.ts');
+  const index = read('src/studio/chat/useConversationIndexController.ts');
+  const actions = read('src/studio/chat/useConversationActionsController.ts');
+  const stream = read('src/studio/chat/useHostedConversationStream.ts');
+  const outbox = read('src/studio/chat/useHostedOutboxReplayController.ts');
+
+  for (const source of [snapshot, index, actions, stream, outbox]) {
+    assert.match(source, /captureConversationStorageEpoch/);
+    assert.match(source, /isConversationStorageEpochCurrent/);
+  }
+  assert.match(snapshot, /applyConversation\(conversation, ownerEpoch\)/);
+  assert.match(index, /commitConversationIndex\(synchronized, activeId, ownerEpoch\)/);
+  assert.match(actions, /applyConversation\(result\.conversation, ownerEpoch\)/);
+  assert.match(actions, /applyConversation\(response\.conversation, ownerEpoch\)/);
+  assert.match(
+    stream,
+    /applyConversation\([\s\S]*hosted_event_cursor:[\s\S]*ownerEpoch, resetCursor\)/,
+  );
+  assert.match(outbox, /const lifecycleCurrent = \(\) => isConversationStorageEpochCurrent/);
 });
 
 test('Chinese preview mode translates every shared visible control surface', () => {

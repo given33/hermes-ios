@@ -1,8 +1,10 @@
 import CoreMotion
 import Foundation
+import OSLog
 
 final class HermesMotionService {
   static let shared = HermesMotionService()
+  private static let logger = Logger(subsystem: "app.hermes", category: "motion-collector")
 
   private let manager = CMMotionActivityManager()
   private let queue: OperationQueue = {
@@ -12,8 +14,15 @@ final class HermesMotionService {
     queue.maxConcurrentOperationCount = 1
     return queue
   }()
+  private let stateLock = NSLock()
+  private var activeCollectorToken: HermesCollectorGenerationToken?
+  private var storedSnapshot: [String: Any]?
 
-  private(set) var snapshot: [String: Any]?
+  var snapshot: [String: Any]? {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return storedSnapshot
+  }
   var onMotion: (([String: Any]) -> Void)?
 
   func requestAuthorization() async -> String {
@@ -41,26 +50,22 @@ final class HermesMotionService {
     guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return false }
     guard CMMotionActivityManager.isActivityAvailable() else { return false }
     guard CMMotionActivityManager.authorizationStatus() == .authorized else { return false }
-    manager.startActivityUpdates(to: queue) { [weak self] activity in
-      guard let self, let activity else { return }
-      let payload: [String: Any] = [
-        "activity": Self.activityName(activity),
-        "confidence": Self.confidenceName(activity.confidence),
-        "timestamp": activity.startDate.timeIntervalSince1970 * 1000,
-      ]
-      self.snapshot = payload
-      DispatchQueue.main.async {
-        HermesLocationService.shared.applyMotionActivity(Self.activityName(activity))
-      }
-      HermesContextEventQueue.shared.enqueue(
-        type: "motion",
-        payload: payload,
-        occurredAt: activity.startDate
-      ) { [weak self] in
-        self?.onMotion?(payload)
-      }
+    guard let token = HermesAccountLifecycle.captureCollectorGeneration() else {
+      Self.logger.error("Motion collector start rejected: no active generation")
+      return false
     }
-    return true
+    var started = false
+    let current = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      activateAccountGeneration(token)
+      manager.stopActivityUpdates()
+      manager.startActivityUpdates(to: queue) { [weak self] activity in
+        guard let self, let activity else { return }
+        self.handle(activity, token: token)
+      }
+      started = true
+    }
+    if !current { Self.logger.error("Motion collector start rejected: stale generation") }
+    return current && started
   }
 
   func stop() {
@@ -69,7 +74,64 @@ final class HermesMotionService {
 
   func resetAccountState() {
     stop()
-    snapshot = nil
+    stateLock.lock()
+    activeCollectorToken = nil
+    storedSnapshot = nil
+    stateLock.unlock()
+  }
+
+  func activateAccountGeneration(_ token: HermesCollectorGenerationToken) {
+    stateLock.lock()
+    let changed = activeCollectorToken != token
+    if changed {
+      activeCollectorToken = token
+      storedSnapshot = nil
+    }
+    stateLock.unlock()
+    if changed { manager.stopActivityUpdates() }
+  }
+
+  private func handle(
+    _ activity: CMMotionActivity,
+    token: HermesCollectorGenerationToken
+  ) {
+    let accepted = HermesAccountLifecycle.performIfCurrentCollectorGeneration(token) {
+      stateLock.lock()
+      let isActive = activeCollectorToken == token
+      stateLock.unlock()
+      guard isActive else {
+        Self.logger.error("Motion callback rejected: inactive generation")
+        return
+      }
+      guard token.accepts(activity.startDate) else {
+        Self.logger.error("Motion callback rejected: invalid or out-of-generation timestamp")
+        return
+      }
+      let activityName = Self.activityName(activity)
+      let payload: [String: Any] = [
+        "activity": activityName,
+        "confidence": Self.confidenceName(activity.confidence),
+        "timestamp": activity.startDate.timeIntervalSince1970 * 1000,
+      ]
+      stateLock.lock()
+      storedSnapshot = payload
+      stateLock.unlock()
+      HermesContextEventQueue.shared.enqueue(
+        type: "motion",
+        payload: payload,
+        occurredAt: activity.startDate,
+        accountGeneration: token.lifecycleEpoch
+      ) { [weak self] in
+        self?.onMotion?(payload)
+      }
+      DispatchQueue.main.async {
+        HermesLocationService.shared.applyMotionActivity(
+          activityName,
+          collectorToken: token
+        )
+      }
+    }
+    if !accepted { Self.logger.error("Motion callback rejected: stale generation") }
   }
 
   private static func activityName(_ activity: CMMotionActivity) -> String {

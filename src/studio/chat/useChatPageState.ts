@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState, type MutableRefObject } from 'react';
 import type { TextInput } from 'react-native';
 
 import type { SingleConversation } from '../../api/HermesCloudApi';
@@ -34,7 +34,21 @@ export function useChatPageState(cacheOwner: string) {
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
 
   const composerInputRef = useRef<TextInput>(null);
-  const contentRef = useRef('');
+  const composerRevisionRef = useRef(0);
+  const contentValueRef = useRef('');
+  const contentRef = useMemo<MutableRefObject<string>>(() => {
+    const revisioned = {} as MutableRefObject<string>;
+    Object.defineProperty(revisioned, 'current', {
+      configurable: false,
+      enumerable: true,
+      get: () => contentValueRef.current,
+      set: (next: string) => {
+        if (contentValueRef.current !== next) composerRevisionRef.current += 1;
+        contentValueRef.current = next;
+      },
+    });
+    return revisioned;
+  }, []);
   const activeConversationIdRef = useRef('');
   const activeHostedTurnIdRef = useRef('');
   const cancelHostedTurnInFlightRef = useRef(false);
@@ -43,6 +57,7 @@ export function useChatPageState(cacheOwner: string) {
     new Map<string, ConversationCollaborationState>(),
   );
   const hostedEventCursorRef = useRef(new Map<string, number>());
+  const hostedAccountGenerationRef = useRef(new Map<string, string>());
   const conversationSyncGenerationRef = useRef(new ConversationSyncGeneration());
   const pendingAttachmentCleanup = useRef<(() => void) | null>(null);
   const attachmentsRef = useRef<ChatAttachment[]>([]);
@@ -67,6 +82,7 @@ export function useChatPageState(cacheOwner: string) {
     cancellingHostedTurn,
     collaborationState,
     collaborationStateByConversationRef,
+    composerRevisionRef,
     composerInputRef,
     content,
     contentRef,
@@ -76,6 +92,7 @@ export function useChatPageState(cacheOwner: string) {
     historyCollapsed,
     historyModalOpen,
     hostedEventCursorRef,
+    hostedAccountGenerationRef,
     hostedRunning,
     hostedTurnDeliveryClaimsRef,
     messages,

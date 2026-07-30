@@ -5,10 +5,13 @@ import type {
   AccountFilesResponse,
   ManagedFilesResponse,
   NativeUpload,
+  ToolOutputArtifactEntry,
+  ToolOutputArtifactsResponse,
 } from '../HermesCloudApi';
 import type { HermesCloudTransport, JsonRecord } from './transport';
 
 const COLLABORATION = '/api/plugins/collaboration';
+const TOOL_OUTPUT_PREFIX = 'toolout_';
 
 /** Managed workspace files and account-scoped cloud file library. */
 export class HermesFilesCloudApi {
@@ -69,11 +72,10 @@ export class HermesFilesCloudApi {
     });
   }
 
-  async getAllAccountFiles(query: AccountFilesQuery = {}) {
+  private async drainAccountFiles(query: AccountFilesQuery = {}) {
     const pageSize = Math.max(1, Math.min(200, Math.trunc(query.limit || 200)));
-    const startOffset = Math.max(0, Math.trunc(query.offset || 0));
     const files = new Map<string, AccountFileEntry>();
-    let offset = startOffset;
+    let offset = 0;
     let total = Number.POSITIVE_INFINITY;
     while (offset < total) {
       const page = await this.getAccountFiles({ ...query, limit: pageSize, offset });
@@ -87,11 +89,53 @@ export class HermesFilesCloudApi {
       if (!entries.length || offset + entries.length >= total) break;
       offset += entries.length;
     }
-    const allFiles = [...files.values()];
+    return [...files.values()];
+  }
+
+  getToolOutputArtifacts(limit = 200, offset = 0) {
+    return this.transport.request<ToolOutputArtifactsResponse>(
+      `${COLLABORATION}/tool-output-artifacts`,
+      { query: { limit, offset } },
+    );
+  }
+
+  private async drainToolOutputArtifacts() {
+    const artifacts = new Map<string, ToolOutputArtifactEntry>();
+    const pageSize = 200;
+    let offset = 0;
+    let total = Number.POSITIVE_INFINITY;
+    while (offset < total) {
+      const page = await this.getToolOutputArtifacts(pageSize, offset);
+      const entries = Array.isArray(page.artifacts) ? page.artifacts : [];
+      for (const entry of entries) {
+        if (entry?.id) artifacts.set(entry.id, entry);
+      }
+      total = Number.isFinite(page.total)
+        ? Math.max(0, page.total)
+        : offset + entries.length;
+      if (!entries.length || offset + entries.length >= total) break;
+      offset += entries.length;
+    }
+    return [...artifacts.values()];
+  }
+
+  async getAllAccountFiles(query: AccountFilesQuery = {}) {
+    const [storedFiles, artifacts] = await Promise.all([
+      this.drainAccountFiles(query),
+      this.drainToolOutputArtifacts(),
+    ]);
+    const startOffset = Math.max(0, Math.trunc(query.offset || 0));
+    const files = [
+      ...storedFiles,
+      ...artifacts.map(toolOutputArtifactFile),
+    ]
+      .filter((entry) => accountFileMatches(entry, query))
+      .sort((left, right) => right.created_at - left.created_at || left.id.localeCompare(right.id))
+      .slice(startOffset);
     return {
-      files: allFiles,
-      total: allFiles.length,
-      limit: pageSize,
+      files,
+      total: files.length,
+      limit: Math.max(1, Math.min(200, Math.trunc(query.limit || 200))),
       offset: startOffset,
     } satisfies AccountFilesResponse;
   }
@@ -103,6 +147,12 @@ export class HermesFilesCloudApi {
   }
 
   deleteAccountFile(id: string) {
+    if (isToolOutputArtifactId(id)) {
+      return this.transport.request<{ id: string; ok: boolean }>(
+        `${COLLABORATION}/tool-output-artifacts/${encodeURIComponent(id)}`,
+        { method: 'DELETE' },
+      );
+    }
     return this.transport.request<{ id: string; ok: boolean }>(
       `${COLLABORATION}/files/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
@@ -110,6 +160,11 @@ export class HermesFilesCloudApi {
   }
 
   downloadAccountFile(id: string, preview = false) {
+    if (isToolOutputArtifactId(id)) {
+      return this.transport.download(
+        `${COLLABORATION}/tool-output-artifacts/${encodeURIComponent(id)}/download`,
+      );
+    }
     return this.transport.download(
       `${COLLABORATION}/files/${encodeURIComponent(id)}/download`,
       { query: { preview: preview || undefined } },
@@ -128,4 +183,58 @@ export class HermesFilesCloudApi {
       method: 'POST',
     });
   }
+}
+
+function isToolOutputArtifactId(id: string) {
+  return id.startsWith(TOOL_OUTPUT_PREFIX);
+}
+
+function toolOutputArtifactFile(artifact: ToolOutputArtifactEntry): AccountFileEntry {
+  const createdAt = Math.max(0, Number(artifact.created_at) || 0) * 1_000;
+  const toolName = safeArtifactName(artifact.tool_name || 'tool');
+  const callId = safeArtifactName(artifact.tool_call_id || artifact.id).slice(-48);
+  return {
+    id: artifact.id,
+    name: `${toolName}-${callId}.txt`,
+    sha256: artifact.sha256,
+    mime_type: 'text/plain',
+    extension: 'txt',
+    file_type: 'tool_output',
+    size: Math.max(0, Number(artifact.size_bytes) || 0),
+    source: 'model_output',
+    status: 'available',
+    conversation_id: artifact.conversation_id || undefined,
+    turn_id: artifact.turn_id || undefined,
+    created_at: createdAt,
+    updated_at: createdAt,
+    available_at: createdAt,
+    download_url: `${COLLABORATION}/tool-output-artifacts/${encodeURIComponent(artifact.id)}/download`,
+  };
+}
+
+function safeArtifactName(value: string) {
+  return value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'tool';
+}
+
+function accountFileMatches(entry: AccountFileEntry, query: AccountFilesQuery) {
+  if (query.source && entry.source !== query.source) return false;
+  if (query.status && entry.status !== query.status) return false;
+  if (query.fileType && entry.file_type !== query.fileType) return false;
+  const keyword = query.keyword?.trim().toLocaleLowerCase();
+  if (keyword && !`${entry.name} ${entry.file_type}`.toLocaleLowerCase().includes(keyword)) {
+    return false;
+  }
+  const createdAt = Number(entry.created_at) || 0;
+  const dateFrom = query.dateFrom ? Date.parse(query.dateFrom) : Number.NaN;
+  if (Number.isFinite(dateFrom) && createdAt < dateFrom) return false;
+  if (query.dateTo) {
+    const dateTo = Date.parse(query.dateTo);
+    if (Number.isFinite(dateTo)) {
+      const inclusiveEnd = /^\d{4}-\d{2}-\d{2}$/.test(query.dateTo)
+        ? dateTo + 86_400_000 - 1
+        : dateTo;
+      if (createdAt > inclusiveEnd) return false;
+    }
+  }
+  return true;
 }

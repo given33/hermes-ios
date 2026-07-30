@@ -4,6 +4,7 @@ import { Platform, StyleSheet, Text, View } from 'react-native';
 
 import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
+import { accountOwnerScope } from '../auth/account-identity';
 import { LoginScreen } from '../auth/LoginScreen';
 import { HERMES_ORIGIN_TRANSPORT_ERROR } from '../config';
 import {
@@ -41,7 +42,9 @@ export function HermesNativeApp() {
                 accessibilityLabel="Hermes frontend preview"
                 style={styles.nativeContent}
               >
-                <FrontendPreviewApp cacheOwner="expo-studio-preview-v2" />
+                <FrontendPreviewApp
+                  cacheOwner="https://preview.hermes.invalid|preview|acctgen_frontend_preview"
+                />
               </View>
             </ThemedNativeSurface>
           </FrontendPreviewThemeProvider>
@@ -64,6 +67,7 @@ function NativeAuthRoot() {
   const notificationTarget = useTaskNotificationTarget();
   if (state.status !== 'authenticated') return <LoginScreen />;
   if (!client) return null;
+  const ownerScope = accountOwnerScope(state.connection);
   return (
     <ThemeProvider client={client}>
       <ThemedNativeSurface>
@@ -73,9 +77,10 @@ function NativeAuthRoot() {
           style={styles.nativeContent}
         >
           <IOSContextProvider
+            accountGeneration={state.connection.accountGeneration}
             client={client}
             deviceId={state.connection.deviceId || ''}
-            ownerScope={`${state.connection.baseUrl}|${state.connection.username}`}
+            ownerScope={ownerScope}
           >
             <FrontendPreviewApp
               account={{
@@ -83,7 +88,7 @@ function NativeAuthRoot() {
                 logout,
                 username: state.connection.username,
               }}
-              cacheOwner={`${state.connection.baseUrl}|${state.connection.username}`}
+              cacheOwner={ownerScope}
               client={client}
               notificationTarget={notificationTarget}
             />

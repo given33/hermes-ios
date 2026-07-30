@@ -24,6 +24,7 @@ import {
 } from '../api/chat-view-model';
 import { useTheme } from '../design/ThemeProvider';
 import type { HermesNotificationTarget } from '../notifications/notification-target';
+import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import {
   resolveComposerFontSize,
 } from './chat/chat-attachments';
@@ -39,10 +40,12 @@ import { useConversationIndexLifecycle } from './chat/useConversationIndexLifecy
 import { useChatScrollController } from './chat/useChatScrollController';
 import { useOptimisticConversationState } from './chat/useOptimisticConversationState';
 import { useConversationSnapshotController } from './chat/useConversationSnapshotController';
+import { useConversationDraftPersistence } from './chat/useConversationDraftPersistence';
 import { useConversationIndexController } from './chat/useConversationIndexController';
 import { useHostedCancellationController } from './chat/useHostedCancellationController';
 import { useHostedOutboxReplayController } from './chat/useHostedOutboxReplayController';
 import { useChatAttachmentController } from './chat/useChatAttachmentController';
+import { isLargePaste } from './chat/composer-draft-policy';
 import { useHostedInterventionController } from './chat/useHostedInterventionController';
 import { useHostedSendController } from './chat/useHostedSendController';
 import { useConversationActionsController } from './chat/useConversationActionsController';
@@ -109,9 +112,10 @@ export function ChatPreviewPage({
     attachmentOwnerRef, attachments, attachmentsOpen, attachmentsRef,
     cancelHostedTurnInFlightRef, cancelledPendingSendKeysRef, cancellingHostedTurn,
     collaborationState, collaborationStateByConversationRef, composerInputRef,
-    content, contentRef, conversationIndexRef, conversations,
+    composerRevisionRef, content, contentRef, conversationIndexRef, conversations,
     conversationSyncGenerationRef, historyCollapsed, historyModalOpen,
-    hostedEventCursorRef, hostedRunning, hostedTurnDeliveryClaimsRef, messages,
+    hostedAccountGenerationRef, hostedEventCursorRef, hostedRunning,
+    hostedTurnDeliveryClaimsRef, messages,
     mountedRef, pendingAttachmentCleanup, pendingChatSendRef, pendingTurn,
     sendOperationGenerationRef, sendSubmissionGateRef, sending,
     setActiveConversationId, setActiveHostedTurnId, setAttachments,
@@ -211,10 +215,24 @@ export function ChatPreviewPage({
     attachmentOwnerRef,
     attachmentsRef,
     cacheOwner,
+    composerRevisionRef,
     clearOptimisticHostedTurn,
     mountedRef,
     pendingAttachmentCleanup,
     setAttachments,
+  });
+  useConversationDraftPersistence({
+    activeConversationId,
+    attachments,
+    attachmentsRef,
+    cacheOwner,
+    cleanupAttachmentSources,
+    content,
+    contentRef,
+    composerRevisionRef,
+    localStore,
+    setContent,
+    updateAttachments,
   });
 
   const updatePendingPhase = pendingTurn.updatePhase;
@@ -375,9 +393,9 @@ export function ChatPreviewPage({
     },
     cancelledPendingSendKeysRef,
     cancellingHostedTurn,
-    cleanupAttachmentSources,
     client,
     cloudAvailable: Boolean(cloudApi),
+    cleanupAttachmentSources,
     commitConversationIndex,
     contentRef,
     conversationIndexRef,
@@ -421,10 +439,13 @@ export function ChatPreviewPage({
     updatePendingPhase,
   });
 
-  const { consoleRunning, executeConsoleCommand } = useMobileConsoleController({
+  const { consoleConfirmation, consoleRunning, executeConsoleCommand } = useMobileConsoleController({
+    activeConversationId,
     activeConversationIdRef,
     applyConversation,
+    cacheOwner,
     cloudApi,
+    conversationSyncGenerationRef,
     contentRef,
     isChinese,
     notify,
@@ -505,6 +526,7 @@ export function ChatPreviewPage({
     conversationIndexRef.current = [];
     collaborationStateByConversationRef.current = new Map();
     hostedEventCursorRef.current = new Map();
+    hostedAccountGenerationRef.current = new Map();
     optimisticMessagesByConversationRef.current = new Map();
     optimisticPendingByConversationRef.current = new Map();
     optimisticMessagesRef.current = [];
@@ -537,9 +559,11 @@ export function ChatPreviewPage({
   });
 
   useHostedConversationStream({
+    accountGenerationRef: hostedAccountGenerationRef,
     activeConversationId,
     activeConversationIdRef,
     applyConversation,
+    cacheOwner,
     cloudApi,
     cursorRef: hostedEventCursorRef,
     generation: conversationSyncGenerationRef.current,
@@ -557,7 +581,6 @@ export function ChatPreviewPage({
     activeConversationIdRef,
     activeHostedTurnIdRef,
     applyConversation,
-    attachmentsRef,
     autoFollowStreamRef,
     cacheOwner,
     cancelHostedTurnInFlightRef,
@@ -566,13 +589,11 @@ export function ChatPreviewPage({
       cancelPendingSend,
       deliverAndReconcilePendingCancellation,
     },
-    cleanupAttachmentSources,
     clearOptimisticHostedTurn,
     clearOptimisticPendingTurn,
     cloudApi,
     collaborationStateByConversationRef,
     commitConversationIndex,
-    contentRef,
     conversationIndexRef,
     conversationSyncGenerationRef,
     hostedRunning,
@@ -593,12 +614,11 @@ export function ChatPreviewPage({
     setActiveHostedTurnId,
     setCancellingHostedTurn,
     setCollaborationState,
-    setContent,
     setHostedRunning,
     setMessages,
     setSending,
     setSlashMenuOpen,
-    updateAttachments,
+    updatePendingPhase,
   });
 
   const requestSend = useChatSendAction({
@@ -615,6 +635,7 @@ export function ChatPreviewPage({
   });
 
   const {
+    appendLargePastedText,
     openAttachmentPicker,
     openStoredAttachment,
     pickFile,
@@ -623,6 +644,7 @@ export function ChatPreviewPage({
     removeAttachment,
     shareAttachment,
   } = useChatAttachmentController({
+    cacheOwner,
     cleanupAttachmentSources,
     cloudApi,
     composerInputRef,
@@ -636,7 +658,8 @@ export function ChatPreviewPage({
   });
 
   return (
-    <ChatPageShell
+    <>
+      <ChatPageShell
       attachmentsOpen={attachmentsOpen}
       backgroundColor={tokens.colors.background}
       compact={compact}
@@ -645,6 +668,28 @@ export function ChatPreviewPage({
         actions: {
           onCancelHostedTurn: () => { void cancelActiveHostedTurn(); },
           onContentChange: (next) => {
+            const previous = contentRef.current;
+            if (isLargePaste(previous, next)) {
+              const conversationId = activeConversationIdRef.current;
+              try {
+                const prepared = appendLargePastedText(next);
+                if (!prepared) return;
+                if (
+                  contentRef.current !== previous
+                  || activeConversationIdRef.current !== conversationId
+                ) {
+                  cleanupAttachmentSources([prepared.attachment]);
+                  return;
+                }
+                updateAttachments((current) => [...current, prepared.attachment]);
+                contentRef.current = prepared.marker;
+                setContent(prepared.marker);
+                setSlashMenuOpen(false);
+              } catch (error) {
+                notify(serverFailure(error, isChinese));
+              }
+              return;
+            }
             contentRef.current = next;
             setContent(next);
             setSlashMenuOpen(next.trimStart().startsWith('/'));
@@ -770,7 +815,17 @@ export function ChatPreviewPage({
         speakingMessageId,
         streamRef,
       }}
-    />
+      />
+      <ConfirmDialog
+        cancelLabel={isChinese ? '取消' : 'Cancel'}
+        confirmLabel={isChinese ? '执行' : 'Run'}
+        description={consoleConfirmation?.message}
+        onCancel={() => consoleConfirmation?.onCancel()}
+        onConfirm={() => consoleConfirmation?.onConfirm()}
+        open={consoleConfirmation !== null}
+        title={isChinese ? '确认执行命令' : 'Confirm command'}
+      />
+    </>
   );
 }
 

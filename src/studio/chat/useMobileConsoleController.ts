@@ -1,19 +1,31 @@
-import { useCallback, useState, type MutableRefObject } from 'react';
-import { Alert } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
+import type { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import {
   collaborationMessageToView,
   upsertChatMessage,
   type HermesChatViewMessage as ChatMessage,
 } from '../../api/chat-view-model';
 import { serverFailure, uniqueTurnId } from './chat-domain';
-import { isRemoteConsoleCommand, mobileConsoleResultText } from './mobile-console-model';
+import {
+  consoleInvocationBlocksActiveView,
+  consoleInvocationOwnsActiveView,
+  isRemoteConsoleCommand,
+  mobileConsoleResultText,
+} from './mobile-console-model';
 
 interface MobileConsoleControllerOptions {
+  activeConversationId: string;
   activeConversationIdRef: MutableRefObject<string>;
-  applyConversation(conversation: SingleConversation): void;
+  applyConversation(conversation: SingleConversation, expectedOwnerEpoch?: number): void;
+  cacheOwner: string;
   cloudApi: HermesCloudApi | null;
+  conversationSyncGenerationRef: MutableRefObject<ConversationSyncGeneration>;
   contentRef: MutableRefObject<string>;
   isChinese: boolean;
   notify(message: string): void;
@@ -24,25 +36,10 @@ interface MobileConsoleControllerOptions {
   setSlashMenuOpen(value: boolean): void;
 }
 
-function confirmConsoleMutation(message: string, isChinese: boolean): Promise<boolean> {
-  return new Promise((resolve) => {
-    Alert.alert(
-      isChinese ? '确认执行命令' : 'Confirm command',
-      message,
-      [
-        {
-          onPress: () => resolve(false),
-          style: 'cancel',
-          text: isChinese ? '取消' : 'Cancel',
-        },
-        {
-          onPress: () => resolve(true),
-          text: isChinese ? '执行' : 'Run',
-        },
-      ],
-      { cancelable: false },
-    );
-  });
+export interface MobileConsoleConfirmation {
+  message: string;
+  onCancel(): void;
+  onConfirm(): void;
 }
 
 function replaceOptimisticMessage(
@@ -57,9 +54,12 @@ function replaceOptimisticMessage(
 }
 
 export function useMobileConsoleController({
+  activeConversationId,
   activeConversationIdRef,
   applyConversation,
+  cacheOwner,
   cloudApi,
+  conversationSyncGenerationRef,
   contentRef,
   isChinese,
   notify,
@@ -69,20 +69,74 @@ export function useMobileConsoleController({
   setMessages,
   setSlashMenuOpen,
 }: MobileConsoleControllerOptions) {
-  const [consoleRunning, setConsoleRunning] = useState(false);
+  const runningInvocationsRef = useRef(new Map<string, {
+    conversationId: string;
+    generation: number;
+  }>());
+  const [, setConsoleActivityRevision] = useState(0);
+  const [confirmationMessage, setConfirmationMessage] = useState('');
+  const confirmationRef = useRef<{
+    conversationId: string;
+    generation: number;
+    ownsActiveView(): boolean;
+    resolve(value: boolean): void;
+  } | null>(null);
+  const consoleRunning = consoleInvocationBlocksActiveView(
+    runningInvocationsRef.current.values(),
+    activeConversationIdRef.current,
+    conversationSyncGenerationRef.current.active(),
+  );
+
+  const settleConfirmation = useCallback((accepted: boolean) => {
+    const pending = confirmationRef.current;
+    if (!pending) return;
+    confirmationRef.current = null;
+    setConfirmationMessage('');
+    pending.resolve(accepted && pending.ownsActiveView());
+  }, []);
+
+  useEffect(() => {
+    const pending = confirmationRef.current;
+    if (!pending) return;
+    if (
+      pending.conversationId !== activeConversationId
+      || pending.generation !== conversationSyncGenerationRef.current.active()
+    ) settleConfirmation(false);
+  }, [activeConversationId, conversationSyncGenerationRef, settleConfirmation]);
+
+  useEffect(() => () => {
+    const pending = confirmationRef.current;
+    confirmationRef.current = null;
+    pending?.resolve(false);
+  }, []);
 
   const executeConsoleCommand = useCallback(async (draft: string): Promise<boolean> => {
     const line = draft.trim();
     if (!isRemoteConsoleCommand(line)) return false;
-    if (consoleRunning) return true;
     if (!cloudApi) {
       notify(isChinese
         ? 'Hermes 服务器尚未连接，命令没有执行。'
         : 'Hermes is not connected. The command was not executed.');
       return true;
     }
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return true;
+    const lifecycleCurrent = () => isConversationStorageEpochCurrent(cacheOwner, ownerEpoch);
 
-    setConsoleRunning(true);
+    const invocationGeneration = conversationSyncGenerationRef.current.active();
+    const invocationConversationId = activeConversationIdRef.current;
+    if (consoleInvocationBlocksActiveView(
+      runningInvocationsRef.current.values(),
+      invocationConversationId,
+      invocationGeneration,
+    )) return true;
+    const invocationId = uniqueTurnId('console-invocation');
+    const invocationScope = {
+      conversationId: invocationConversationId,
+      generation: invocationGeneration,
+    };
+    runningInvocationsRef.current.set(invocationId, invocationScope);
+    setConsoleActivityRevision((current) => current + 1);
     const createdAt = Date.now();
     const optimisticUserId = uniqueTurnId('console-user');
     const optimisticUser: ChatMessage = {
@@ -101,6 +155,12 @@ export function useMobileConsoleController({
     setSlashMenuOpen(false);
 
     let conversationId = activeConversationIdRef.current;
+    const ownsActiveView = () => consoleInvocationOwnsActiveView(
+      activeConversationIdRef.current,
+      conversationId,
+      conversationSyncGenerationRef.current.active(),
+      invocationGeneration,
+    ) && isConversationStorageEpochCurrent(cacheOwner, ownerEpoch);
     let commandCompleted = false;
     try {
       if (!conversationId) {
@@ -110,9 +170,16 @@ export function useMobileConsoleController({
           isChinese ? 'Hermes 命令行' : 'Hermes Console',
           clientId,
         );
+        if (!lifecycleCurrent()) return true;
         conversationId = created.conversation.id;
-        activeConversationIdRef.current = conversationId;
-        setActiveConversationId(conversationId);
+        invocationScope.conversationId = conversationId;
+        if (
+          conversationSyncGenerationRef.current.isActiveCurrent(invocationGeneration)
+          && activeConversationIdRef.current === invocationConversationId
+        ) {
+          activeConversationIdRef.current = conversationId;
+          setActiveConversationId(conversationId);
+        }
       }
 
       const userRecord = await cloudApi.recordConversationMessage(conversationId, {
@@ -123,8 +190,9 @@ export function useMobileConsoleController({
         role: 'user',
         status: 'completed',
       });
+      if (!lifecycleCurrent()) return true;
       const authoritativeUser = collaborationMessageToView(userRecord.message, isChinese);
-      if (authoritativeUser) {
+      if (authoritativeUser && ownsActiveView()) {
         setMessages((current) => replaceOptimisticMessage(
           current,
           optimisticUserId,
@@ -133,11 +201,21 @@ export function useMobileConsoleController({
       }
 
       let result = await cloudApi.executeMobileConsoleCommand(line, profile, false);
+      if (!lifecycleCurrent()) return true;
       if (result.status === 'confirm_required') {
-        const accepted = await confirmConsoleMutation(
-          result.confirmation_message || line,
-          isChinese,
-        );
+        const accepted = await new Promise<boolean>((resolve) => {
+          if (!ownsActiveView()) {
+            resolve(false);
+            return;
+          }
+          confirmationRef.current = {
+            conversationId,
+            generation: invocationGeneration,
+            ownsActiveView,
+            resolve,
+          };
+          setConfirmationMessage(result.confirmation_message || line);
+        });
         result = accepted
           ? await cloudApi.executeMobileConsoleCommand(line, profile, true)
           : {
@@ -145,6 +223,7 @@ export function useMobileConsoleController({
               output: isChinese ? '命令已取消。' : 'Command cancelled.',
               status: 'ok',
             };
+        if (!lifecycleCurrent()) return true;
       }
       const output = mobileConsoleResultText(result, isChinese);
       const responseId = uniqueTurnId('console-result');
@@ -159,7 +238,9 @@ export function useMobileConsoleController({
         status: result.status === 'error' ? 'failed' : 'completed',
         updatedAt: completedAt,
       };
-      setMessages((current) => upsertChatMessage(current, localResponse));
+      if (ownsActiveView()) {
+        setMessages((current) => upsertChatMessage(current, localResponse));
+      }
       commandCompleted = true;
 
       try {
@@ -172,18 +253,23 @@ export function useMobileConsoleController({
           role: 'assistant',
           status: result.status === 'error' ? 'failed' : 'completed',
         });
+        if (!lifecycleCurrent()) return true;
         const responseView = collaborationMessageToView(response.message, isChinese);
-        if (responseView) {
+        if (responseView && ownsActiveView()) {
           setMessages((current) => replaceOptimisticMessage(current, responseId, responseView));
         }
         const snapshot = await cloudApi.getConversation(conversationId);
-        applyConversation(snapshot.conversation);
+        if (!lifecycleCurrent()) return true;
+        if (ownsActiveView()) applyConversation(snapshot.conversation, ownerEpoch);
       } catch (syncError) {
-        notify(isChinese
-          ? `命令已执行，但会话同步失败：${serverFailure(syncError, true)}`
-          : `The command ran, but conversation sync failed: ${serverFailure(syncError, false)}`);
+        if (ownsActiveView()) {
+          notify(isChinese
+            ? `命令已执行，但会话同步失败：${serverFailure(syncError, true)}`
+            : `The command ran, but conversation sync failed: ${serverFailure(syncError, false)}`);
+        }
       }
     } catch (error) {
+      if (!lifecycleCurrent()) return true;
       if (commandCompleted) return true;
       const detail = serverFailure(error, isChinese);
       const failedAt = Date.now();
@@ -198,7 +284,9 @@ export function useMobileConsoleController({
         status: 'failed',
         updatedAt: failedAt,
       };
-      setMessages((current) => upsertChatMessage(current, failure));
+      if (ownsActiveView()) {
+        setMessages((current) => upsertChatMessage(current, failure));
+      }
       if (conversationId) {
         try {
           await cloudApi.recordConversationMessage(conversationId, {
@@ -210,19 +298,24 @@ export function useMobileConsoleController({
             role: 'assistant',
             status: 'failed',
           });
+          if (!lifecycleCurrent()) return true;
         } catch {
           // The visible error remains available even when the server cannot persist it.
         }
       }
     } finally {
-      setConsoleRunning(false);
+      runningInvocationsRef.current.delete(invocationId);
+      if (lifecycleCurrent()) {
+        setConsoleActivityRevision((current) => current + 1);
+      }
     }
     return true;
   }, [
     activeConversationIdRef,
     applyConversation,
+    cacheOwner,
     cloudApi,
-    consoleRunning,
+    conversationSyncGenerationRef,
     contentRef,
     isChinese,
     notify,
@@ -233,5 +326,13 @@ export function useMobileConsoleController({
     setSlashMenuOpen,
   ]);
 
-  return { consoleRunning, executeConsoleCommand };
+  const consoleConfirmation: MobileConsoleConfirmation | null = confirmationMessage
+    ? {
+        message: confirmationMessage,
+        onCancel: () => settleConfirmation(false),
+        onConfirm: () => settleConfirmation(true),
+      }
+    : null;
+
+  return { consoleConfirmation, consoleRunning, executeConsoleCommand };
 }

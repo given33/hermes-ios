@@ -5,7 +5,11 @@ import Security
 final class HermesAttachmentVault {
   static let shared = HermesAttachmentVault()
 
-  private static let envelopeMagic = Data("HATTV001".utf8)
+  private static let legacyEnvelopeMagic = Data("HATTV001".utf8)
+  private static let chunkedEnvelopeMagic = Data("HATTV002".utf8)
+  private static let maximumPlaintextBytes: UInt64 = 64 * 1024 * 1024
+  private static let chunkBytes = 256 * 1024
+  private static let chunkedHeaderBytes = 8 + 8 + 4 + 4 + 32
   private static let keychainService = "app.hermes.attachment-vault.v1"
   private static let plaintextCacheDirectory = "hermes-attachment-plaintext-v1"
   private let keychainLock = NSLock()
@@ -24,6 +28,7 @@ final class HermesAttachmentVault {
     let normalizedOwner = try normalizeOwner(owner)
     operationLock.lock()
     defer { operationLock.unlock() }
+    let ownerToken = try requireCurrentOwner(normalizedOwner)
     guard try !isRevoked(owner: normalizedOwner) else {
       throw HermesAttachmentVaultError.ownerRevoked
     }
@@ -35,34 +40,92 @@ final class HermesAttachmentVault {
       throw HermesAttachmentVaultError.invalidPath
     }
 
-    let clear = try Data(contentsOf: source, options: [.mappedIfSafe])
-    let sealed = try AES.GCM.seal(
-      clear,
-      using: try symmetricKey(owner: normalizedOwner),
-      authenticating: associatedData(owner: normalizedOwner)
-    )
-    guard let combined = sealed.combined else {
-      throw HermesAttachmentVaultError.invalidEnvelope
+    let plaintextBytes = try fileSize(source)
+    guard plaintextBytes <= Self.maximumPlaintextBytes else {
+      throw HermesAttachmentVaultError.fileTooLarge
     }
-
     try FileManager.default.createDirectory(
       at: target.deletingLastPathComponent(),
       withIntermediateDirectories: true,
       attributes: [.protectionKey: FileProtectionType.complete]
     )
-    var envelope = Self.envelopeMagic
-    envelope.append(combined)
+    let temporary = target.deletingLastPathComponent().appendingPathComponent(
+      ".\(target.lastPathComponent).\(UUID().uuidString.lowercased()).tmp"
+    )
+    let expectedChunks = plaintextBytes == 0
+      ? 0
+      : Int((plaintextBytes + UInt64(Self.chunkBytes) - 1) / UInt64(Self.chunkBytes))
+    let key = try symmetricKey(owner: normalizedOwner)
+    let input = try FileHandle(forReadingFrom: source)
+    guard FileManager.default.createFile(
+      atPath: temporary.path,
+      contents: nil,
+      attributes: [.protectionKey: FileProtectionType.complete]
+    ) else {
+      try? input.close()
+      throw HermesAttachmentVaultError.invalidPath
+    }
+    let output = try FileHandle(forWritingTo: temporary)
+    var hasher = SHA256()
+    var plaintextDigest = Data()
+    var processed: UInt64 = 0
+    var chunkIndex = 0
     do {
-      try envelope.write(to: target, options: [.atomic, .completeFileProtection])
-      try excludeFromBackup(target)
+      try output.write(contentsOf: Self.chunkedEnvelopeMagic)
+      try output.write(contentsOf: uint64Data(plaintextBytes))
+      try output.write(contentsOf: uint32Data(UInt32(Self.chunkBytes)))
+      try output.write(contentsOf: uint32Data(UInt32(expectedChunks)))
+      try output.write(contentsOf: Data(repeating: 0, count: 32))
+      while let clear = try input.read(upToCount: Self.chunkBytes), !clear.isEmpty {
+        guard HermesContextEventQueue.shared.isCurrentCollectorGenerationToken(ownerToken) else {
+          throw HermesAttachmentVaultError.staleOwner
+        }
+        processed += UInt64(clear.count)
+        guard processed <= plaintextBytes, chunkIndex < expectedChunks else {
+          throw HermesAttachmentVaultError.invalidEnvelope
+        }
+        hasher.update(data: clear)
+        let sealed = try AES.GCM.seal(
+          clear,
+          using: key,
+          authenticating: chunkAssociatedData(
+            owner: normalizedOwner,
+            plaintextBytes: plaintextBytes,
+            chunkIndex: chunkIndex,
+            chunkBytes: clear.count
+          )
+        )
+        guard let combined = sealed.combined else {
+          throw HermesAttachmentVaultError.invalidEnvelope
+        }
+        try output.write(contentsOf: uint32Data(UInt32(combined.count)))
+        try output.write(contentsOf: combined)
+        chunkIndex += 1
+      }
+      guard processed == plaintextBytes,
+            chunkIndex == expectedChunks,
+            HermesContextEventQueue.shared.isCurrentCollectorGenerationToken(ownerToken) else {
+        throw HermesAttachmentVaultError.staleOwner
+      }
+      plaintextDigest = Data(hasher.finalize())
+      try output.seek(toOffset: UInt64(Self.chunkedHeaderBytes - 32))
+      try output.write(contentsOf: plaintextDigest)
+      try output.synchronize()
+      try input.close()
+      try output.close()
+      try excludeFromBackup(temporary)
+      try installAtomically(temporary, at: target)
     } catch {
-      try? FileManager.default.removeItem(at: target)
+      try? input.close()
+      try? output.close()
+      try? FileManager.default.removeItem(at: temporary)
       throw error
     }
     return [
-      "format": "aes-gcm-v1",
-      "plaintextBytes": clear.count,
-      "encryptedBytes": envelope.count,
+      "format": "aes-gcm-chunked-v2",
+      "plaintextBytes": Int(plaintextBytes),
+      "encryptedBytes": Int(try fileSize(target)),
+      "sha256": hexDigest(plaintextDigest),
     ]
   }
 
@@ -70,23 +133,19 @@ final class HermesAttachmentVault {
     let normalizedOwner = try normalizeOwner(owner)
     operationLock.lock()
     defer { operationLock.unlock() }
+    let ownerToken = try requireCurrentOwner(normalizedOwner)
     guard try !isRevoked(owner: normalizedOwner) else {
       throw HermesAttachmentVaultError.ownerRevoked
     }
     let source = try fileURL(encryptedURI)
     try requireDescendant(source, of: encryptedOutboxRoot)
-    let envelope = try Data(contentsOf: source, options: [.mappedIfSafe])
-    guard envelope.count > Self.envelopeMagic.count,
-          envelope.prefix(Self.envelopeMagic.count) == Self.envelopeMagic else {
-      throw HermesAttachmentVaultError.invalidEnvelope
+    let encryptedBytes = try fileSize(source)
+    let maximumEnvelopeBytes = Self.maximumPlaintextBytes
+      + UInt64(Self.maximumPlaintextBytes / UInt64(Self.chunkBytes) + 1) * 64
+      + UInt64(Self.chunkedHeaderBytes)
+    guard encryptedBytes <= maximumEnvelopeBytes else {
+      throw HermesAttachmentVaultError.fileTooLarge
     }
-    let combined = envelope.dropFirst(Self.envelopeMagic.count)
-    let clear = try AES.GCM.open(
-      AES.GCM.SealedBox(combined: combined),
-      using: try symmetricKey(owner: normalizedOwner, create: false),
-      authenticating: associatedData(owner: normalizedOwner)
-    )
-
     let root = plaintextCacheRoot.appendingPathComponent(
       try keyAccount(owner: normalizedOwner),
       isDirectory: true
@@ -98,10 +157,30 @@ final class HermesAttachmentVault {
     )
     let safeName = sanitizedFilename(filename)
     let target = root.appendingPathComponent("\(UUID().uuidString.lowercased())-\(safeName)")
+    let temporary = root.appendingPathComponent(".\(UUID().uuidString.lowercased()).tmp")
     do {
-      try clear.write(to: target, options: [.atomic, .completeFileProtection])
-      try excludeFromBackup(target)
+      let input = try FileHandle(forReadingFrom: source)
+      let magic = try readExactly(input, count: 8)
+      try input.close()
+      if magic == Self.chunkedEnvelopeMagic {
+        try decryptChunked(
+          owner: normalizedOwner,
+          ownerToken: ownerToken,
+          source: source,
+          target: temporary
+        )
+      } else if magic == Self.legacyEnvelopeMagic {
+        try decryptLegacy(owner: normalizedOwner, source: source, target: temporary)
+      } else {
+        throw HermesAttachmentVaultError.invalidEnvelope
+      }
+      guard HermesContextEventQueue.shared.isCurrentCollectorGenerationToken(ownerToken) else {
+        throw HermesAttachmentVaultError.staleOwner
+      }
+      try excludeFromBackup(temporary)
+      try installAtomically(temporary, at: target)
     } catch {
+      try? FileManager.default.removeItem(at: temporary)
       try? FileManager.default.removeItem(at: target)
       throw error
     }
@@ -151,6 +230,7 @@ final class HermesAttachmentVault {
     let revokedAccount = try revocationAccount(owner: normalizedOwner)
     operationLock.lock()
     defer { operationLock.unlock() }
+    _ = try requireCurrentOwner(normalizedOwner)
     keychainLock.lock()
     defer { keychainLock.unlock() }
     let status = SecItemDelete(keySelector(account: revokedAccount) as CFDictionary)
@@ -238,6 +318,176 @@ final class HermesAttachmentVault {
 
   private func associatedData(owner: String) -> Data {
     Data("hermes-attachment-v1\0\(owner)".utf8)
+  }
+
+  private func chunkAssociatedData(
+    owner: String,
+    plaintextBytes: UInt64,
+    chunkIndex: Int,
+    chunkBytes: Int
+  ) -> Data {
+    var data = Data("hermes-attachment-v2\0\(owner)".utf8)
+    data.append(uint64Data(plaintextBytes))
+    data.append(uint32Data(UInt32(chunkIndex)))
+    data.append(uint32Data(UInt32(chunkBytes)))
+    return data
+  }
+
+  private func requireCurrentOwner(_ owner: String) throws -> HermesCollectorGenerationToken {
+    guard let token = HermesContextEventQueue.shared.currentCollectorGenerationToken(),
+          token.ownerScope.lowercased() == owner else {
+      throw HermesAttachmentVaultError.staleOwner
+    }
+    return token
+  }
+
+  private func decryptChunked(
+    owner: String,
+    ownerToken: HermesCollectorGenerationToken,
+    source: URL,
+    target: URL
+  ) throws {
+    let input = try FileHandle(forReadingFrom: source)
+    guard FileManager.default.createFile(
+      atPath: target.path,
+      contents: nil,
+      attributes: [.protectionKey: FileProtectionType.complete]
+    ) else {
+      try? input.close()
+      throw HermesAttachmentVaultError.invalidPath
+    }
+    let output = try FileHandle(forWritingTo: target)
+    do {
+      guard try readExactly(input, count: 8) == Self.chunkedEnvelopeMagic else {
+        throw HermesAttachmentVaultError.invalidEnvelope
+      }
+      let plaintextBytes = uint64Value(try readExactly(input, count: 8))
+      let chunkBytes = Int(uint32Value(try readExactly(input, count: 4)))
+      let chunkCount = Int(uint32Value(try readExactly(input, count: 4)))
+      let expectedDigest = try readExactly(input, count: 32)
+      guard plaintextBytes <= Self.maximumPlaintextBytes,
+            chunkBytes > 0,
+            chunkBytes <= 1024 * 1024 else {
+        throw HermesAttachmentVaultError.invalidEnvelope
+      }
+      let expectedChunks = plaintextBytes == 0
+        ? 0
+        : Int((plaintextBytes + UInt64(chunkBytes) - 1) / UInt64(chunkBytes))
+      guard chunkCount == expectedChunks else {
+        throw HermesAttachmentVaultError.invalidEnvelope
+      }
+      let key = try symmetricKey(owner: owner, create: false)
+      var hasher = SHA256()
+      var written: UInt64 = 0
+      for chunkIndex in 0..<chunkCount {
+        guard HermesContextEventQueue.shared.isCurrentCollectorGenerationToken(ownerToken) else {
+          throw HermesAttachmentVaultError.staleOwner
+        }
+        let combinedBytes = Int(uint32Value(try readExactly(input, count: 4)))
+        let expectedClearBytes = Int(min(UInt64(chunkBytes), plaintextBytes - written))
+        guard combinedBytes == expectedClearBytes + 28 else {
+          throw HermesAttachmentVaultError.invalidEnvelope
+        }
+        let combined = try readExactly(input, count: combinedBytes)
+        let clear = try AES.GCM.open(
+          AES.GCM.SealedBox(combined: combined),
+          using: key,
+          authenticating: chunkAssociatedData(
+            owner: owner,
+            plaintextBytes: plaintextBytes,
+            chunkIndex: chunkIndex,
+            chunkBytes: expectedClearBytes
+          )
+        )
+        guard clear.count == expectedClearBytes else {
+          throw HermesAttachmentVaultError.invalidEnvelope
+        }
+        hasher.update(data: clear)
+        try output.write(contentsOf: clear)
+        written += UInt64(clear.count)
+      }
+      let trailing = try input.read(upToCount: 1)
+      guard written == plaintextBytes,
+            trailing == nil || trailing?.isEmpty == true,
+            Data(hasher.finalize()) == expectedDigest else {
+        throw HermesAttachmentVaultError.invalidEnvelope
+      }
+      try output.synchronize()
+      try input.close()
+      try output.close()
+    } catch {
+      try? input.close()
+      try? output.close()
+      throw error
+    }
+  }
+
+  private func decryptLegacy(owner: String, source: URL, target: URL) throws {
+    let envelope = try Data(contentsOf: source, options: [.mappedIfSafe])
+    guard envelope.count > Self.legacyEnvelopeMagic.count,
+          envelope.prefix(Self.legacyEnvelopeMagic.count) == Self.legacyEnvelopeMagic else {
+      throw HermesAttachmentVaultError.invalidEnvelope
+    }
+    let clear = try AES.GCM.open(
+      AES.GCM.SealedBox(combined: envelope.dropFirst(Self.legacyEnvelopeMagic.count)),
+      using: try symmetricKey(owner: owner, create: false),
+      authenticating: associatedData(owner: owner)
+    )
+    guard UInt64(clear.count) <= Self.maximumPlaintextBytes else {
+      throw HermesAttachmentVaultError.fileTooLarge
+    }
+    try clear.write(to: target, options: [.atomic, .completeFileProtection])
+  }
+
+  private func fileSize(_ url: URL) throws -> UInt64 {
+    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+    guard let number = attributes[.size] as? NSNumber else {
+      throw HermesAttachmentVaultError.invalidPath
+    }
+    return number.uint64Value
+  }
+
+  private func installAtomically(_ temporary: URL, at target: URL) throws {
+    if FileManager.default.fileExists(atPath: target.path) {
+      _ = try FileManager.default.replaceItemAt(target, withItemAt: temporary)
+    } else {
+      try FileManager.default.moveItem(at: temporary, to: target)
+    }
+  }
+
+  private func readExactly(_ handle: FileHandle, count: Int) throws -> Data {
+    guard count >= 0 else { throw HermesAttachmentVaultError.invalidEnvelope }
+    var result = Data()
+    result.reserveCapacity(count)
+    while result.count < count {
+      guard let part = try handle.read(upToCount: count - result.count), !part.isEmpty else {
+        throw HermesAttachmentVaultError.invalidEnvelope
+      }
+      result.append(part)
+    }
+    return result
+  }
+
+  private func uint32Data(_ value: UInt32) -> Data {
+    var bigEndian = value.bigEndian
+    return withUnsafeBytes(of: &bigEndian) { Data($0) }
+  }
+
+  private func uint64Data(_ value: UInt64) -> Data {
+    var bigEndian = value.bigEndian
+    return withUnsafeBytes(of: &bigEndian) { Data($0) }
+  }
+
+  private func uint32Value(_ data: Data) -> UInt32 {
+    data.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+  }
+
+  private func uint64Value(_ data: Data) -> UInt64 {
+    data.reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+  }
+
+  private func hexDigest(_ data: Data) -> String {
+    data.map { String(format: "%02x", $0) }.joined()
   }
 
   private func keyAccount(owner: String) throws -> String {
@@ -366,10 +616,12 @@ final class HermesAttachmentVault {
 }
 
 private enum HermesAttachmentVaultError: Error {
+  case fileTooLarge
   case invalidEnvelope
   case invalidOwner
   case invalidPath
   case keyUnavailable
   case keychain(OSStatus)
   case ownerRevoked
+  case staleOwner
 }

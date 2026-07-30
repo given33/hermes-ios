@@ -9,26 +9,22 @@ public final class HermesStandardMapModule: Module {
     }
 
     Function("getProviderStatus") { () -> [String: Any] in
-      let consent = HermesNativeMapConfiguration.persistedPrivacyConsent
-      let configured = HermesNativeMapConfiguration.amapConfigured
-      return [
-        "activeProvider": configured && consent ? "amap" : "mapkit",
-        "amapConfigured": configured,
-        "privacyConsent": consent,
-      ]
+      HermesNativeMapRuntimeState.shared.snapshot()
     }
 
     AsyncFunction("setAmapPrivacyConsent") { (granted: Bool) -> [String: Any] in
       HermesNativeMapConfiguration.persistedPrivacyConsent = granted
-      return [
-        "activeProvider": HermesNativeMapConfiguration.amapConfigured && granted ? "amap" : "mapkit",
-        "amapConfigured": HermesNativeMapConfiguration.amapConfigured,
-        "privacyConsent": granted,
-      ]
+      HermesNativeMapRuntimeState.shared.update(
+        phase: HermesNativeMapConfiguration.amapConfigured
+          ? (granted ? "initializing" : "requestingPermission")
+          : "unconfigured",
+        activeProvider: HermesNativeMapConfiguration.amapConfigured && granted ? "amap" : "mapkit"
+      )
+      return HermesNativeMapRuntimeState.shared.snapshot()
     }
 
     View(HermesStandardMapView.self) {
-      Events("onLocationPress")
+      Events("onLocationPress", "onProviderStatus")
 
       Prop("showsUserLocation") { (view, value: Bool) in
         view.showsUserLocation = value
@@ -38,6 +34,9 @@ public final class HermesStandardMapModule: Module {
       }
       Prop("centerOnUserRequest") { (view, value: Int) in
         view.centerOnUserRequest = value
+      }
+      Prop("providerResetRequest") { (view, value: Int) in
+        view.providerResetRequest = value
       }
       Prop("track") { (view, value: [HermesMapCoordinate]) in
         view.track = value
