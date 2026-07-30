@@ -82,21 +82,57 @@ jobs:
         shell: bash
         run: |
           PROJECT_FILE="$(find ios -maxdepth 2 -name project.pbxproj -print -quit)"
-          test -n "$PROJECT_FILE"
+          if [ -z "$PROJECT_FILE" ]; then
+            echo 'Generated Xcode project file was not found.' >&2
+            exit 1
+          fi
+          verify_contains() {
+            local pattern="$1"
+            local description="$2"
+            if ! grep -q "$pattern" "$PROJECT_FILE"; then
+              echo "Generated Xcode project is missing $description ($pattern)." >&2
+              exit 1
+            fi
+          }
+          plist_value() {
+            local key="$1"
+            local file="$2"
+            local value
+            if ! value="$(plutil -extract "$key" raw -o - "$file")"; then
+              echo "Unable to read $key from $file." >&2
+              exit 1
+            fi
+            printf '%s' "$value"
+          }
           for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport; do
-            grep -q "$target" "$PROJECT_FILE"
+            verify_contains "$target" "native target"
           done
           DEPENDENCY_COUNT="$(grep -c 'isa = PBXTargetDependency;' "$PROJECT_FILE")"
-          test "$DEPENDENCY_COUNT" -ge 5
+          if [ "$DEPENDENCY_COUNT" -lt 5 ]; then
+            echo "Generated Xcode project has $DEPENDENCY_COUNT target dependencies; expected at least 5." >&2
+            exit 1
+          fi
           SHARED_KEYCHAIN_GROUP='$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared'
           for target in HermesDeviceActivityMonitor HermesDeviceActivityReport; do
             ENTITLEMENTS="ios/native-extensions/$target/$target.entitlements"
             INFO="ios/native-extensions/$target/Info.plist"
-            test "$(plutil -extract keychain-access-groups.0 raw "$ENTITLEMENTS")" = "$SHARED_KEYCHAIN_GROUP"
-            test "$(plutil -extract com.apple.security.application-groups.0 raw "$ENTITLEMENTS")" = 'group.app.sunstone1029.fig1171.hermes'
-            test "$(plutil -extract HermesSharedKeychainAccessGroup raw "$INFO")" = "$SHARED_KEYCHAIN_GROUP"
+            ACTUAL_KEYCHAIN="$(plist_value keychain-access-groups.0 "$ENTITLEMENTS")"
+            ACTUAL_APP_GROUP="$(plist_value com.apple.security.application-groups.0 "$ENTITLEMENTS")"
+            ACTUAL_INFO_KEYCHAIN="$(plist_value HermesSharedKeychainAccessGroup "$INFO")"
+            if [ "$ACTUAL_KEYCHAIN" != "$SHARED_KEYCHAIN_GROUP" ]; then
+              echo "$target entitlement keychain group mismatch: $ACTUAL_KEYCHAIN" >&2
+              exit 1
+            fi
+            if [ "$ACTUAL_APP_GROUP" != 'group.app.sunstone1029.fig1171.hermes' ]; then
+              echo "$target App Group mismatch: $ACTUAL_APP_GROUP" >&2
+              exit 1
+            fi
+            if [ "$ACTUAL_INFO_KEYCHAIN" != "$SHARED_KEYCHAIN_GROUP" ]; then
+              echo "$target Info.plist keychain group mismatch: $ACTUAL_INFO_KEYCHAIN" >&2
+              exit 1
+            fi
           done
-          grep -q 'HermesScreenTimeSpool.swift' "$PROJECT_FILE"
+          verify_contains 'HermesScreenTimeSpool.swift' 'shared Screen Time spool source'
       - name: Install CocoaPods
         run: pod install --project-directory=ios
       - name: Verify Release entitlement build settings
