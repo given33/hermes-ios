@@ -315,14 +315,22 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /collaborationState !== 'single'/);
   assert.match(chat, /accessibilityLabel=\{model\.isChinese \? '上传图片或文件'/);
   assert.match(chat, /haptic="light"[\s\S]{0,220}scaleTo=\{0\.9\}/);
-  assert.match(chat, /accessibilityLabel=\{model\.isChinese \? '输入斜杠命令'/);
+  assert.match(chat, /accessibilityLabel=\{model\.isChinese \? '拍照'/);
+  assert.match(chat, /onPress=\{actions\.onTakePhoto\}/);
+  assert.match(chat, /onTakePhoto: \(\) => \{ void pickPhoto\(true\); \}/);
+  assert.match(chat, /onLongPress=\{hasNativeIOSContext \? actions\.onToggleReadRepliesAloud : undefined\}/);
+  assert.match(chat, /accessibilityHint=\{!hasNativeIOSContext/);
+  assert.match(chat, /voicePrimaryAction === 'toggleReadRepliesAloud'/);
+  assert.match(chat, /accessibilityState=\{\{[\s\S]{0,120}disabled: voiceControlDisabled/);
+  assert.match(chat, /delayLongPress=\{400\}/);
+  assert.doesNotMatch(chat, /accessibilityLabel=\{model\.isChinese \? '输入斜杠命令'/);
   assert.match(chat, /filteredSlashCommands/);
   assert.match(chat, /styles\.openMinisSlashPopup/);
   assert.match(chat, /height: 224/);
   assert.match(chat, /showScrollToBottom && !slashMenuOpen/);
   assert.match(chat, /OpenMinisVoiceWaveform/);
   assert.match(chat, /openMinisToolbar: \{[^}]*flexDirection: 'row'/);
-  assert.match(chat, /openMinisRoundControl: \{[^}]*height: 34[^}]*width: 34/);
+  assert.match(chat, /openMinisRoundControl: \{[^}]*height: 42[^}]*width: 42/);
   assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
   assert.match(chat, /styles\.gatewayStatusLabel/);
   assert.match(chat, /styles\.gatewayStatusVersion/);
@@ -358,7 +366,11 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /ActionSheetIOS\.showActionSheetWithOptions/);
   assert.match(chat, /launchImageLibraryAsync/);
   assert.match(chat, /launchCameraAsync/);
+  assert.match(chat, /ImagePicker\.getPendingResultAsync\(\)/);
   assert.match(chat, /DocumentPicker\.getDocumentAsync/);
+  assert.match(chat, /attachmentPickerFlight\.current\.run/);
+  assert.match(chat, /subscribeToWebPickerAbandonment/);
+  assert.match(chat, /cleanupAttachmentSources\(prepared\)/);
   assert.match(chat, /copyToCacheDirectory: true/);
   assert.match(
     chat,
@@ -388,7 +400,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(contextMenuNative, /UIAction/);
   assert.match(chat, /<SymbolView/);
   assert.match(chat, /PlatformColor\('secondarySystemBackground'\)/);
-  assert.match(chat, /DynamicColorIOS\(\{ dark: '#1f1f1f', light: '#ffffff' \}\)/);
+  assert.match(chat, /DynamicColorIOS\(\{ dark: '#3a3a3a', light: '#f2f2f2' \}\)/);
   assert.doesNotMatch(chat, /<HermesLiveBlurView/);
   assert.match(chat, /borderColor: 'transparent', borderWidth: 0/);
   assert.match(chat, /outlineColor: 'transparent', outlineStyle: 'solid', outlineWidth: 0/);

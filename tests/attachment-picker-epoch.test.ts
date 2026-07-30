@@ -44,9 +44,23 @@ test('a picker result from the current epoch is still delivered', async () => {
 
 test('production picker handlers carry the captured epoch through native awaits', () => {
   const source = readFileSync('src/studio/chat/useChatAttachmentController.ts', 'utf8');
+  const webLifecycle = readFileSync('modules/hermes-picker-lifecycle/index.web.ts', 'utf8');
   assert.match(source, /runOwnerEpochBound\([\s\S]*requestCameraPermissionsAsync/);
   assert.match(source, /runOwnerEpochBound\([\s\S]*launchImageLibraryAsync/);
   assert.match(source, /runOwnerEpochBound\([\s\S]*getDocumentAsync/);
   assert.match(source, /appendPickedAttachments\([\s\S]*expectedOwnerEpoch/);
   assert.match(source, /showIOSAttachmentPicker\(ownerEpoch\)/);
+  assert.match(source, /ImagePicker\.getPendingResultAsync\(\)/);
+  assert.match(source, /if \('code' in result\) throw new Error/);
+  assert.match(source, /imagePickerRecoveryMarkers\.record\(\{[\s\S]{0,180}owner: cacheOwner,[\s\S]{0,80}ownerEpoch: expectedOwnerEpoch/);
+  assert.match(source, /matchesImagePickerRecoveryMarker\([\s\S]{0,120}cacheOwner,[\s\S]{0,80}expectedOwnerEpoch/);
+  assert.match(source, /discardImagePickerAssets\(result\.assets\)/);
+  assert.match(source, /consumedPendingResult && recoveryOperationId/);
+  assert.match(source, /attachmentPickerFlight\.current\.run/);
+  assert.match(source, /Platform\.OS === 'web' \? subscribeToWebPickerAbandonment : undefined/);
+  assert.match(source, /catch \(error\) \{[\s\S]{0,100}notify\(serverFailure\(error, isChinese\)\)/);
+  assert.match(source, /cleanupAttachmentSources\(prepared\)/);
+  assert.match(webLifecycle, /window\.addEventListener\('focus'/);
+  assert.match(webLifecycle, /document\.addEventListener\('change'/);
+  assert.match(webLifecycle, /WEB_PICKER_MAX_WAIT_MS/);
 });

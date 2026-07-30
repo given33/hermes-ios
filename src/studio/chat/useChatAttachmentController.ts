@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 
 import { presentQuickLook } from '../../../modules/hermes-quick-look';
+import { subscribeToWebPickerAbandonment } from '../../../modules/hermes-picker-lifecycle';
 import {
   copyAttachmentIntoDraftCache,
   writeTextIntoDraftCache,
@@ -28,9 +29,17 @@ import {
 import { writeBoundedDownload } from '../../api/bounded-download';
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
 import type { HermesChatAttachment as StoredChatAttachment } from '../../api/chat-view-model';
+import { AsyncSingleFlight } from './AsyncSingleFlight';
 import { serverFailure, stableStringHash, uniqueTurnId } from './chat-domain';
 import { largePasteMarker } from './composer-draft-policy';
+import {
+  discardedImagePickerAttachments,
+  ImagePickerRecoveryMarkerStore,
+  matchesImagePickerRecoveryMarker,
+} from './image-picker-recovery-marker';
 import type { ChatAttachment } from './chat-types';
+
+const imagePickerRecoveryMarkers = new ImagePickerRecoveryMarkerStore();
 
 interface ChatAttachmentControllerOptions {
   cacheOwner: string;
@@ -62,6 +71,7 @@ export function useChatAttachmentController({
   updateAttachments,
 }: ChatAttachmentControllerOptions) {
   const attachmentDownloads = useRef(new Set<AbortController>());
+  const attachmentPickerFlight = useRef(new AsyncSingleFlight());
   useEffect(() => () => {
     for (const controller of attachmentDownloads.current) controller.abort();
     attachmentDownloads.current.clear();
@@ -97,6 +107,72 @@ export function useChatAttachmentController({
         : `Each attachment must be ${limit} MB or smaller: ${rejected.map(({ name }) => name).join(', ')}`);
     }
   }, [cacheOwner, cleanupAttachmentSources, isChinese, notify, updateAttachments]);
+
+  const appendImagePickerAssets = useCallback((
+    assets: readonly ImagePicker.ImagePickerAsset[],
+    expectedOwnerEpoch: number,
+  ) => {
+    const prepared: ChatAttachment[] = [];
+    try {
+      for (const [index, asset] of assets.entries()) {
+        const identity = uniqueTurnId(`image-${index}`);
+        const name = asset.fileName
+          ?? (isChinese ? `照片 ${index + 1}` : `Photo ${index + 1}`);
+        prepared.push({
+          draftPersistent: true,
+          id: identity,
+          kind: 'image',
+          mimeType: asset.mimeType,
+          ownedTemporary: Platform.OS !== 'web',
+          name,
+          size: asset.fileSize,
+          uri: Platform.OS === 'web'
+            ? asset.uri
+            : copyAttachmentIntoDraftCache(cacheOwner || 'local', asset.uri, name, identity),
+        });
+      }
+      appendPickedAttachments(prepared, expectedOwnerEpoch);
+    } catch (error) {
+      cleanupAttachmentSources(prepared);
+      throw error;
+    }
+  }, [appendPickedAttachments, cacheOwner, cleanupAttachmentSources, isChinese]);
+
+  const discardImagePickerAssets = useCallback((
+    assets: readonly ImagePicker.ImagePickerAsset[],
+  ) => {
+    cleanupAttachmentSources(discardedImagePickerAttachments(assets));
+  }, [cleanupAttachmentSources]);
+
+  const appendDocumentPickerAssets = useCallback((
+    assets: readonly DocumentPicker.DocumentPickerAsset[],
+    expectedOwnerEpoch: number,
+  ) => {
+    const prepared: ChatAttachment[] = [];
+    try {
+      for (const [index, asset] of assets.entries()) {
+        const identity = uniqueTurnId(`file-${index}`);
+        prepared.push({
+          draftPersistent: true,
+          id: identity,
+          kind: asset.mimeType?.startsWith('image/') ? 'image' : 'file',
+          mimeType: asset.mimeType,
+          ownedTemporary: Platform.OS !== 'web',
+          name: asset.name,
+          size: asset.size,
+          uri: Platform.OS === 'web'
+            ? asset.uri
+            : copyAttachmentIntoDraftCache(
+                cacheOwner || 'local', asset.uri, asset.name, identity,
+              ),
+        });
+      }
+      appendPickedAttachments(prepared, expectedOwnerEpoch);
+    } catch (error) {
+      cleanupAttachmentSources(prepared);
+      throw error;
+    }
+  }, [appendPickedAttachments, cacheOwner, cleanupAttachmentSources]);
 
   const appendLargePastedText = useCallback((content: string) => {
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
@@ -140,63 +216,138 @@ export function useChatAttachmentController({
       cacheOwner,
       expectedOwnerEpoch,
     );
-    if (!lifecycleCurrent()) return;
-    const permission = await runOwnerEpochBound(
-      cacheOwner,
-      expectedOwnerEpoch,
-      () => camera
-        ? ImagePicker.requestCameraPermissionsAsync()
-        : ImagePicker.requestMediaLibraryPermissionsAsync(),
-    );
-    if (!permission || !lifecycleCurrent()) return;
-    if (!permission.granted) {
-      notify(isChinese
-        ? `请在系统设置中允许 Hermes 访问${camera ? '相机' : '照片'}。`
-        : `Allow Hermes to access ${camera ? 'Camera' : 'Photos'} in Settings.`);
-      return;
+    try {
+      await attachmentPickerFlight.current.run(async (flightCurrent) => {
+        const operationCurrent = () => flightCurrent() && lifecycleCurrent();
+        if (!operationCurrent()) return;
+        if (Platform.OS !== 'web') {
+          const permission = await runOwnerEpochBound(
+            cacheOwner,
+            expectedOwnerEpoch,
+            () => camera
+              ? ImagePicker.requestCameraPermissionsAsync()
+              : ImagePicker.requestMediaLibraryPermissionsAsync(),
+          );
+          if (!permission || !operationCurrent()) return;
+          if (!permission.granted) {
+            notify(isChinese
+              ? `请在系统设置中允许 Hermes 访问${camera ? '相机' : '照片'}。`
+              : `Allow Hermes to access ${camera ? 'Camera' : 'Photos'} in Settings.`);
+            return;
+          }
+        }
+        const recoveryOperationId = Platform.OS === 'android' && cacheOwner.trim()
+          ? uniqueTurnId('image-picker-recovery')
+          : '';
+        if (recoveryOperationId) {
+          await imagePickerRecoveryMarkers.record({
+            createdAt: Date.now(),
+            operationId: recoveryOperationId,
+            owner: cacheOwner,
+            ownerEpoch: expectedOwnerEpoch,
+          });
+          if (!operationCurrent()) {
+            await imagePickerRecoveryMarkers.clearIfMatches(recoveryOperationId);
+            return;
+          }
+        }
+        let result: ImagePicker.ImagePickerResult;
+        try {
+          result = await (camera
+            ? ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1 })
+            : ImagePicker.launchImageLibraryAsync({
+                allowsMultipleSelection: true,
+                mediaTypes: ['images'],
+                quality: 1,
+                selectionLimit: 0,
+              }));
+        } finally {
+          if (recoveryOperationId) {
+            await imagePickerRecoveryMarkers.clearIfMatches(recoveryOperationId);
+          }
+        }
+        if (!operationCurrent()) {
+          if (!result.canceled) discardImagePickerAssets(result.assets);
+          return;
+        }
+        if (!result.canceled) {
+          appendImagePickerAssets(result.assets, expectedOwnerEpoch);
+          if (operationCurrent()) setAttachmentsOpen(false);
+        }
+        if (operationCurrent()) keepLatestVisible(false);
+      }, Platform.OS === 'web' ? subscribeToWebPickerAbandonment : undefined);
+    } catch (error) {
+      if (lifecycleCurrent()) notify(serverFailure(error, isChinese));
     }
-    const result = await runOwnerEpochBound(
+  }, [
+    appendImagePickerAssets,
+    cacheOwner,
+    discardImagePickerAssets,
+    isChinese,
+    keepLatestVisible,
+    notify,
+    setAttachmentsOpen,
+  ]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') return undefined;
+    const expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner);
+    let effectCurrent = true;
+    const lifecycleCurrent = () => effectCurrent && isConversationStorageEpochCurrent(
       cacheOwner,
       expectedOwnerEpoch,
-      () => camera
-        ? ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1 })
-        : ImagePicker.launchImageLibraryAsync({
-            allowsMultipleSelection: true,
-            mediaTypes: ['images'],
-            quality: 1,
-            selectionLimit: 0,
-          }),
     );
-    if (!result || !lifecycleCurrent()) return;
-    if (!result.canceled) {
-      try {
-        appendPickedAttachments(
-          result.assets.map((asset, index): ChatAttachment => {
-            const identity = uniqueTurnId(`image-${index}`);
-            const name = asset.fileName ?? (isChinese ? `照片 ${index + 1}` : `Photo ${index + 1}`);
-            return {
-          draftPersistent: true,
-          id: identity,
-          kind: 'image',
-          mimeType: asset.mimeType,
-          ownedTemporary: Platform.OS !== 'web',
-          name,
-          size: asset.fileSize,
-          uri: Platform.OS === 'web'
-            ? asset.uri
-            : copyAttachmentIntoDraftCache(cacheOwner || 'local', asset.uri, name, identity),
-            };
-          }),
-          expectedOwnerEpoch,
-        );
-      } catch (error) {
-        if (lifecycleCurrent()) notify(serverFailure(error, isChinese));
+    let recoveryOperationId = '';
+    let consumedPendingResult = false;
+    void (async () => {
+      const marker = await imagePickerRecoveryMarkers.read();
+      recoveryOperationId = marker?.operationId ?? '';
+      const result = await ImagePicker.getPendingResultAsync();
+      if (!result) return;
+      consumedPendingResult = true;
+      if ('code' in result) throw new Error(result.message || result.code);
+      if (result.canceled) return;
+      if (!effectCurrent) {
+        discardImagePickerAssets(result.assets);
         return;
       }
-      if (lifecycleCurrent()) setAttachmentsOpen(false);
-    }
-    if (lifecycleCurrent()) keepLatestVisible(false);
-  }, [appendPickedAttachments, cacheOwner, isChinese, keepLatestVisible, notify, setAttachmentsOpen]);
+      if (!matchesImagePickerRecoveryMarker(
+        marker,
+        cacheOwner,
+        expectedOwnerEpoch,
+      ) || !lifecycleCurrent()) {
+        discardImagePickerAssets(result.assets);
+        return;
+      }
+      appendImagePickerAssets(result.assets, expectedOwnerEpoch);
+      if (lifecycleCurrent()) {
+        setAttachmentsOpen(false);
+        keepLatestVisible(false);
+      }
+    })()
+      .catch((error) => {
+        if (lifecycleCurrent()) notify(serverFailure(error, isChinese));
+      })
+      .finally(async () => {
+        if (consumedPendingResult && recoveryOperationId) {
+          await imagePickerRecoveryMarkers.clearIfMatches(recoveryOperationId);
+        }
+      })
+      .catch((error) => {
+        if (lifecycleCurrent()) notify(serverFailure(error, isChinese));
+      });
+    return () => {
+      effectCurrent = false;
+    };
+  }, [
+    appendImagePickerAssets,
+    cacheOwner,
+    discardImagePickerAssets,
+    isChinese,
+    keepLatestVisible,
+    notify,
+    setAttachmentsOpen,
+  ]);
 
   const pickFile = useCallback(async (
     expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner),
@@ -205,46 +356,29 @@ export function useChatAttachmentController({
       cacheOwner,
       expectedOwnerEpoch,
     );
-    if (!lifecycleCurrent()) return;
-    const result = await runOwnerEpochBound(
-      cacheOwner,
-      expectedOwnerEpoch,
-      () => DocumentPicker.getDocumentAsync({
-        copyToCacheDirectory: true,
-        multiple: true,
-      }),
-    );
-    if (!result || !lifecycleCurrent()) return;
-    if (!result.canceled && result.assets) {
-      try {
-        appendPickedAttachments(
-          result.assets.map((asset, index): ChatAttachment => {
-            const identity = uniqueTurnId(`file-${index}`);
-            return {
-          draftPersistent: true,
-          id: identity,
-          kind: asset.mimeType?.startsWith('image/') ? 'image' : 'file',
-          mimeType: asset.mimeType,
-          ownedTemporary: Platform.OS !== 'web',
-          name: asset.name,
-          size: asset.size,
-          uri: Platform.OS === 'web'
-            ? asset.uri
-            : copyAttachmentIntoDraftCache(
-                cacheOwner || 'local', asset.uri, asset.name, identity,
-              ),
-            };
-          }),
+    try {
+      await attachmentPickerFlight.current.run(async (flightCurrent) => {
+        const operationCurrent = () => flightCurrent() && lifecycleCurrent();
+        if (!operationCurrent()) return;
+        const result = await runOwnerEpochBound(
+          cacheOwner,
           expectedOwnerEpoch,
+          () => DocumentPicker.getDocumentAsync({
+            copyToCacheDirectory: true,
+            multiple: true,
+          }),
         );
-      } catch (error) {
-        if (lifecycleCurrent()) notify(serverFailure(error, isChinese));
-        return;
-      }
-      if (lifecycleCurrent()) setAttachmentsOpen(false);
+        if (!result || !operationCurrent()) return;
+        if (!result.canceled && result.assets) {
+          appendDocumentPickerAssets(result.assets, expectedOwnerEpoch);
+          if (operationCurrent()) setAttachmentsOpen(false);
+        }
+        if (operationCurrent()) keepLatestVisible(false);
+      }, Platform.OS === 'web' ? subscribeToWebPickerAbandonment : undefined);
+    } catch (error) {
+      if (lifecycleCurrent()) notify(serverFailure(error, isChinese));
     }
-    if (lifecycleCurrent()) keepLatestVisible(false);
-  }, [appendPickedAttachments, cacheOwner, isChinese, keepLatestVisible, notify, setAttachmentsOpen]);
+  }, [appendDocumentPickerAssets, cacheOwner, isChinese, keepLatestVisible, notify, setAttachmentsOpen]);
 
   const showIOSAttachmentPicker = useCallback((
     expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner),

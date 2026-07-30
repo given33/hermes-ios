@@ -75,5 +75,15 @@
     "eas:preview": "npx eas-cli@20.5.1 build --platform ios --profile preview",
     "eas:production": "npx eas-cli@20.5.1 build --platform ios --profile production"
   },
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "@multiavatar/multiavatar",
+          "react-native-markdown-display"
+        ]
+      }
+    }
+  },
   "private": true
 }

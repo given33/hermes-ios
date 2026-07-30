@@ -98,8 +98,11 @@ export function ComposerSurface({ children }: { children: ReactNode }) {
     styles.inputShell,
     {
       backgroundColor: Platform.OS === 'ios'
-        ? DynamicColorIOS({ dark: '#1f1f1f', light: '#ffffff' })
+        ? DynamicColorIOS({ dark: '#3a3a3a', light: '#f2f2f2' })
         : tokens.colors.card,
+      borderColor: Platform.OS === 'ios'
+        ? DynamicColorIOS({ dark: '#565656', light: '#d0d0d0' })
+        : tokens.colors.border,
     },
   ];
 

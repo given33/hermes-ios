@@ -184,7 +184,6 @@ export function ChatPreviewPage({
   const {
     filteredSlashCommands,
     openNavigationAfterKeyboard,
-    openSlashCommand,
     selectSlashCommand,
     setSlashMenuOpen,
     slashMenuOpen,
@@ -704,12 +703,12 @@ export function ChatPreviewPage({
             keepLatestVisible(false);
           },
           onOpenAttachmentPicker: openAttachmentPicker,
-          onOpenSlashCommand: openSlashCommand,
           onPreviewAttachment: (attachment) => { void previewAttachment(attachment); },
           onRemoveAttachment: removeAttachment,
           onSelectSlashCommand: selectSlashCommand,
           onSend: requestSend,
           onShareAttachment: (attachment) => { void shareAttachment(attachment); },
+          onTakePhoto: () => { void pickPhoto(true); },
           onToggleReadRepliesAloud: toggleReadRepliesAloud,
           onToggleVoiceInput: () => { void toggleVoiceInput(); },
         },

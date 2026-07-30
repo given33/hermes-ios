@@ -1,6 +1,7 @@
 import { Directory as ExpoDirectory, File as ExpoFile, Paths } from 'expo-file-system';
 
 import { attachmentOutboxOwnerComponent } from './attachment-outbox-crypto';
+import { copyTargetWithRollback } from './attachment-copy-rollback';
 
 const DRAFT_CACHE_DIRECTORY = 'hermes-drafts';
 
@@ -26,7 +27,7 @@ export function copyAttachmentIntoDraftCache(
   );
   const source = new ExpoFile(sourceUri);
   if (!source.exists) throw new Error(`Attachment source is unavailable: ${name}`);
-  source.copy(target);
+  copyTargetWithRollback(target, (destination) => source.copy(destination));
   return target.uri;
 }
 

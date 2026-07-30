@@ -374,7 +374,7 @@ test('the composer uses the source-attributed OpenMinis solid two-level surface'
   assert.match(native, /selectedModel = \$0\s*props\.onModelChange/);
   assert.match(chat, /<View style=\{surfaceStyle\}>/);
   assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
-  assert.match(chat, /DynamicColorIOS\(\{ dark: '#1f1f1f', light: '#ffffff' \}\)/);
+  assert.match(chat, /DynamicColorIOS\(\{ dark: '#3a3a3a', light: '#f2f2f2' \}\)/);
   assert.match(chat, /styles\.openMinisToolbar/);
   assert.doesNotMatch(chat, /<HermesLiveBlurView/);
   assert.match(chat, /borderWidth: StyleSheet\.hairlineWidth/);

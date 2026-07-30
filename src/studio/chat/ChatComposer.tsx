@@ -1,10 +1,9 @@
 import { SymbolView } from 'expo-symbols';
-import { Keyboard as KeyboardIcon, Mic, Volume2, VolumeX } from 'lucide-react-native';
+import { Camera, Keyboard as KeyboardIcon, Mic, Plus } from 'lucide-react-native';
 import type { RefObject } from 'react';
 import {
   DynamicColorIOS,
   Platform,
-  PlatformColor,
   ScrollView,
   Text,
   TextInput,
@@ -12,7 +11,7 @@ import {
 } from 'react-native';
 import Reanimated, { Easing, FadeIn, FadeInUp, FadeOut } from 'react-native-reanimated';
 
-import type { IOSVoiceState } from '../../../modules/hermes-ios-context';
+import { hasNativeIOSContext, type IOSVoiceState } from '../../../modules/hermes-ios-context';
 import type { ConversationCollaborationState } from '../../api/chat-view-model';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
@@ -25,6 +24,10 @@ import {
   OpenMinisVoiceWaveform,
   PendingDot,
 } from './ChatPresentation';
+import {
+  composerVoicePrimaryAction,
+  isComposerVoiceControlDisabled,
+} from './chat-composer-voice-policy';
 import { styles } from './chat-presentation-styles';
 import type { ChatAttachment, PendingPhase } from './chat-types';
 import type { SlashCommandDescriptor } from './useChatComposerNavigationController';
@@ -58,12 +61,12 @@ interface ChatComposerActions {
   onContentChange(value: string): void;
   onFocus(): void;
   onOpenAttachmentPicker(): void;
-  onOpenSlashCommand(): void;
   onPreviewAttachment(attachment: ChatAttachment): void;
   onRemoveAttachment(attachment: ChatAttachment): void;
   onSelectSlashCommand(command: SlashCommandDescriptor): void;
   onSend(): void;
   onShareAttachment(attachment: ChatAttachment): void;
+  onTakePhoto(): void;
   onToggleReadRepliesAloud(): void;
   onToggleVoiceInput(): void;
 }
@@ -78,6 +81,11 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
   const { tokens } = useTheme();
   const motion = useMotion();
   const attachmentCount = model.attachments.length;
+  const voiceControlDisabled = !hasNativeIOSContext || isComposerVoiceControlDisabled(model);
+  const voicePrimaryAction = hasNativeIOSContext ? composerVoicePrimaryAction(model) : 'none';
+  const readRepliesAccessibilityValue = model.readRepliesAloud
+    ? model.isChinese ? '自动朗读回复已开启' : 'Spoken replies on'
+    : model.isChinese ? '自动朗读回复已关闭' : 'Spoken replies off';
 
   return (
     <>
@@ -225,91 +233,92 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
             scaleTo={0.9}
             style={[
               styles.openMinisRoundControl,
-              {
-                backgroundColor: Platform.OS === 'ios'
-                  ? PlatformColor('secondarySystemBackground')
-                  : tokens.colors.card,
-                borderColor: tokens.colors.border,
-              },
+              { backgroundColor: 'transparent' },
             ]}
           >
-            <Text style={[styles.openMinisPlusGlyph, { color: tokens.colors.textSecondary }]}>+</Text>
+            <SymbolView
+              fallback={<Plus color={tokens.colors.textSecondary} size={24} />}
+              name="plus"
+              size={24}
+              tintColor={tokens.colors.textSecondary}
+              weight="medium"
+            />
           </IOSPressable>
 
           <IOSPressable
-            accessibilityLabel={model.isChinese ? '输入斜杠命令' : 'Enter slash command'}
+            accessibilityLabel={model.isChinese ? '拍照' : 'Take photo'}
             disabled={model.sending}
             haptic="light"
             hitSlop={8}
-            onPress={actions.onOpenSlashCommand}
+            onPress={actions.onTakePhoto}
             opacityTo={0.76}
             scaleTo={0.9}
             style={[
               styles.openMinisRoundControl,
-              {
-                backgroundColor: Platform.OS === 'ios'
-                  ? PlatformColor('secondarySystemBackground')
-                  : tokens.colors.card,
-                borderColor: tokens.colors.border,
-              },
+              { backgroundColor: 'transparent' },
             ]}
           >
-            <Text style={[styles.openMinisSlashGlyph, { color: tokens.colors.textSecondary }]}>/</Text>
+            <SymbolView
+              fallback={<Camera color={tokens.colors.textSecondary} size={22} />}
+              name="camera.fill"
+              size={22}
+              tintColor={tokens.colors.textSecondary}
+              weight="medium"
+            />
           </IOSPressable>
-
-          {model.voiceState === 'listening' || model.readRepliesAloud ? (
-            <IOSPressable
-              accessibilityLabel={model.isChinese ? '切换自动朗读回复' : 'Toggle read replies aloud'}
-              haptic="light"
-              onPress={actions.onToggleReadRepliesAloud}
-              opacityTo={0.76}
-              scaleTo={0.96}
-              style={[
-                styles.openMinisReadAloud,
-                {
-                  backgroundColor: multiplyAlpha(
-                    model.readRepliesAloud ? tokens.colors.accent : tokens.colors.textSecondary,
-                    model.readRepliesAloud ? 0.15 : 0.1,
-                  ),
-                },
-              ]}
-            >
-              <SymbolView
-                fallback={model.readRepliesAloud
-                  ? <Volume2 color={tokens.colors.accent} size={13} />
-                  : <VolumeX color={tokens.colors.textSecondary} size={13} />}
-                name={model.readRepliesAloud ? 'speaker.wave.2.fill' : 'speaker.slash.fill'}
-                size={13}
-                tintColor={model.readRepliesAloud ? tokens.colors.accent : tokens.colors.textSecondary}
-              />
-              <Text style={[
-                styles.openMinisReadAloudText,
-                { color: model.readRepliesAloud ? tokens.colors.accent : tokens.colors.textSecondary },
-              ]}>
-                {model.isChinese ? '朗读回复' : 'Read replies'}
-              </Text>
-            </IOSPressable>
-          ) : null}
 
           <View style={styles.openMinisToolbarSpacer} />
 
           <IOSPressable
-            accessibilityLabel={model.voiceState === 'listening'
-              ? model.isChinese ? '切换到文字输入' : 'Switch to text input'
-              : model.isChinese ? '语音输入' : 'Voice input'}
-            disabled={model.sending && model.voiceState !== 'listening'}
+            accessibilityActions={hasNativeIOSContext ? [{
+              label: model.readRepliesAloud
+                ? model.isChinese ? '关闭自动朗读回复' : 'Turn off spoken replies'
+                : model.isChinese ? '开启自动朗读回复' : 'Turn on spoken replies',
+              name: 'toggleReadRepliesAloud',
+            }] : []}
+            accessibilityLabel={!hasNativeIOSContext
+              ? model.isChinese ? '语音输入不可用' : 'Voice input unavailable'
+              : voicePrimaryAction === 'toggleReadRepliesAloud'
+              ? model.isChinese ? '关闭自动朗读回复' : 'Turn off spoken replies'
+              : model.voiceState === 'listening'
+                ? model.isChinese ? '切换到文字输入' : 'Switch to text input'
+                : model.isChinese ? '语音输入' : 'Voice input'}
+            accessibilityHint={!hasNativeIOSContext
+              ? model.isChinese
+                ? '语音功能需要原生 iPhone 版本'
+                : 'Voice features require the native iPhone build'
+              : model.isChinese
+                ? '长按可切换自动朗读回复'
+                : 'Long press to toggle spoken replies'}
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: voiceControlDisabled,
+              selected: model.readRepliesAloud,
+            }}
+            accessibilityValue={{ text: readRepliesAccessibilityValue }}
+            delayLongPress={400}
+            disabled={voiceControlDisabled}
             haptic={model.voiceState === 'listening' ? 'medium' : 'light'}
             hitSlop={8}
-            onPress={actions.onToggleVoiceInput}
+            onAccessibilityAction={(event) => {
+              if (event.nativeEvent.actionName === 'toggleReadRepliesAloud') {
+                actions.onToggleReadRepliesAloud();
+              }
+            }}
+            onLongPress={hasNativeIOSContext ? actions.onToggleReadRepliesAloud : undefined}
+            onPress={voicePrimaryAction === 'toggleVoiceInput'
+              ? actions.onToggleVoiceInput
+              : voicePrimaryAction === 'toggleReadRepliesAloud'
+                ? actions.onToggleReadRepliesAloud
+                : undefined}
             opacityTo={0.72}
             scaleTo={0.9}
             style={[
               styles.openMinisRoundControl,
               {
-                backgroundColor: Platform.OS === 'ios'
-                  ? PlatformColor('secondarySystemBackground')
-                  : tokens.colors.card,
-                borderColor: tokens.colors.border,
+                backgroundColor: model.readRepliesAloud
+                  ? multiplyAlpha(tokens.colors.accent, 0.18)
+                  : 'transparent',
               },
             ]}
           >
@@ -338,6 +347,11 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
             style={[
               styles.openMinisSendControl,
               {
+                backgroundColor: model.canCancelHostedTurn
+                  ? tokens.colors.destructive
+                  : model.canSend
+                    ? tokens.colors.foreground
+                    : multiplyAlpha(tokens.colors.textSecondary, 0.24),
                 opacity: model.canCancelHostedTurn
                   ? model.cancellingHostedTurn ? 0.55 : 1
                   : model.canSend ? 1 : 0.3,
@@ -368,9 +382,11 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
                   </Text>
                 </View>
               )}
-              name={model.canCancelHostedTurn ? 'stop.circle.fill' : 'arrow.up.circle.fill'}
-              size={34}
-              tintColor={model.canCancelHostedTurn ? tokens.colors.destructive : tokens.colors.foreground}
+              name={model.canCancelHostedTurn ? 'stop.fill' : 'arrow.up'}
+              size={model.canCancelHostedTurn ? 18 : 22}
+              tintColor={model.canCancelHostedTurn
+                ? tokens.colors.destructiveForeground
+                : tokens.colors.background}
               weight="medium"
             />
           </IOSPressable>

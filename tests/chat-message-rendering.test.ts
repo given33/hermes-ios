@@ -301,7 +301,7 @@ test('a running hosted turn exposes the real server cancellation control', () =>
   assert.match(source, /conversationRunningHostedTurnId/);
   assert.match(source, /cancelHostedTurn\(/);
   assert.match(source, /取消当前任务/);
-  assert.match(source, /name=\{model\.canCancelHostedTurn \? 'stop\.circle\.fill' : 'arrow\.up\.circle\.fill'\}/);
+  assert.match(source, /name=\{model\.canCancelHostedTurn \? 'stop\.fill' : 'arrow\.up'\}/);
 });
 
 test('collaboration members keep canonical distinct local avatars without excessive overlap', () => {
