@@ -87,6 +87,7 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
   assert.match(service, /recognitionGeneration == generation/);
   assert.match(service, /if inputTapInstalled/);
   assert.match(service, /activeUtterance === utterance/);
+  assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 4);
   assert.match(podspec, /'AVFoundation'/);
   assert.match(podspec, /'Speech'/);
   assert.match(chat, /requestVoiceAuthorization/);
@@ -608,6 +609,7 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(background, /Could not schedule app refresh/);
   assert.match(background, /Could not schedule background processing/);
   assert.doesNotMatch(background, /try\? BGTaskScheduler\.shared\.submit/);
+  assert.match(background, /Task \{ \[weak self\] in\s+guard let self else \{ return \}/);
   assert.match(background, /performNativeWork\(operationID:/);
   assert.match(background, /HermesScreenTimeService\.shared\.consumeExtensionEvents\(\)/);
   assert.match(background, /HermesHealthService\.shared\.resumeBackgroundCollection\(\)/);

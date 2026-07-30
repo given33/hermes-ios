@@ -238,19 +238,27 @@ public final class HermesIOSContextModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("startVoiceRecognition") { (locale: String?) throws -> Bool in
-      try self.voice.startRecognition(localeIdentifier: locale)
+      try MainActor.assumeIsolated {
+        try self.voice.startRecognition(localeIdentifier: locale)
+      }
     }.runOnQueue(.main)
 
     AsyncFunction("stopVoiceRecognition") { () -> String in
-      self.voice.stopRecognition()
+      MainActor.assumeIsolated {
+        self.voice.stopRecognition()
+      }
     }.runOnQueue(.main)
 
     AsyncFunction("speakText") { (text: String, locale: String?, rate: Double?) throws -> Bool in
-      try self.voice.speak(text: text, localeIdentifier: locale, rate: rate)
+      try MainActor.assumeIsolated {
+        try self.voice.speak(text: text, localeIdentifier: locale, rate: rate)
+      }
     }.runOnQueue(.main)
 
     AsyncFunction("stopSpeaking") { () -> Bool in
-      self.voice.stopSpeaking()
+      MainActor.assumeIsolated {
+        self.voice.stopSpeaking()
+      }
     }.runOnQueue(.main)
 
     AsyncFunction("getVoiceState") { () -> [String: Bool] in

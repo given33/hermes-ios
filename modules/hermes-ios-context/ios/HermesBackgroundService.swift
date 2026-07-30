@@ -168,7 +168,8 @@ final class HermesBackgroundService {
       self?.expireOperation(id: operation.id)
     }
     let worker = Task { [weak self] in
-      await self?.performNativeWork(operationID: operation.id)
+      guard let self else { return }
+      await self.performNativeWork(operationID: operation.id)
     }
     operation.install(worker: worker)
   }
