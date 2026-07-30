@@ -16,10 +16,14 @@ import {
 } from '../src/api/HermesCloudApi';
 import {
   ConversationLocalStore,
+  mergeCachedConversationUpdate,
   mergeDownloadedConversations,
   reconcileConversationCache,
+  replaceCachedConversationSnapshot,
   synchronizeConversationCache,
 } from '../src/api/conversation-local-store';
+import { reconcileOptimisticMessages } from '../src/api/chat-view-model';
+import type { HermesChatViewMessage } from '../src/api/chat-view-types';
 import { decideHostedTurnCancellationFailure } from '../src/api/hosted-turn-delivery-state';
 import {
   awaitConversationStorageWrites,
@@ -1011,6 +1015,88 @@ test('cloud reconciliation reuses unchanged local transcripts and downloads only
     ]),
   ]);
   assert.equal(synchronized.find(({ id }) => id === 'changed')?.messages.length, 3);
+});
+
+test('authoritative cache snapshots delete messages and shrink stale message counts', () => {
+  const baseline = conversation('conversation-1', 100, [
+    { id: 'keep', role: 'user', name: 'You', content: 'keep', created_at: 100 },
+    { id: 'deleted-1', role: 'assistant', name: 'Hermes', content: 'old', created_at: 110 },
+    { id: 'deleted-2', role: 'assistant', name: 'Hermes', content: 'old', created_at: 120 },
+  ], 9);
+  const authoritative = conversation('conversation-1', 200, [
+    { id: 'keep', role: 'user', name: 'You', content: 'keep', created_at: 100 },
+  ], 1);
+
+  const replaced = replaceCachedConversationSnapshot([baseline], authoritative)[0];
+
+  assert.deepEqual(replaced.messages.map(({ id }) => id), ['keep']);
+  assert.equal(replaced.message_count, 1);
+
+  const withoutExplicitCount = { ...authoritative, message_count: undefined };
+  const downloaded = mergeDownloadedConversations(
+    [{ ...baseline, messages: [] }],
+    [withoutExplicitCount],
+  )[0];
+  assert.deepEqual(downloaded.messages.map(({ id }) => id), ['keep']);
+  assert.equal(downloaded.message_count, 1);
+});
+
+test('optimistic cache updates merge locally while later authority confirms exact history', () => {
+  const authoritative = conversation('conversation-1', 100, [
+    { id: 'server-1', role: 'assistant', name: 'Hermes', content: 'ready', created_at: 100 },
+  ]);
+  const optimisticUpdate = conversation('conversation-1', 200, [
+    { id: 'optimistic-1', role: 'user', name: 'You', content: 'continue', created_at: 200 },
+  ], 2);
+  const locallyMerged = mergeCachedConversationUpdate([authoritative], optimisticUpdate)[0];
+  assert.deepEqual(
+    locallyMerged.messages.map(({ id }) => id),
+    ['server-1', 'optimistic-1'],
+  );
+  assert.equal(locallyMerged.message_count, 2);
+
+  const optimisticView: HermesChatViewMessage = {
+    content: 'continue',
+    createdAt: 200,
+    id: 'optimistic-1',
+    name: 'You',
+    role: 'user',
+    status: 'completed',
+  };
+  const absent = reconcileOptimisticMessages([], [optimisticView], 1_000);
+  assert.deepEqual(absent.messages.map(({ id }) => id), ['optimistic-1']);
+  assert.equal(absent.pending.length, 1);
+
+  const confirmedServer = { ...optimisticView };
+  const firstConfirmation = reconcileOptimisticMessages(
+    [confirmedServer],
+    absent.pending,
+    2_000,
+  );
+  assert.equal(firstConfirmation.pending[0].optimisticConfirmedAt, 2_000);
+  const settled = reconcileOptimisticMessages(
+    [confirmedServer],
+    firstConfirmation.pending,
+    122_001,
+  );
+  assert.deepEqual(settled.pending, []);
+  assert.deepEqual(settled.messages.map(({ id }) => id), ['optimistic-1']);
+});
+
+test('lightweight index summaries never clear a complete cached transcript', () => {
+  const cached = conversation('conversation-1', 100, [
+    { id: 'm-1', role: 'user', name: 'You', content: 'one' },
+    { id: 'm-2', role: 'assistant', name: 'Hermes', content: 'two' },
+  ]);
+  const summary = { ...cached, messages: [] };
+
+  const reconciliation = reconcileConversationCache([cached], [summary]);
+
+  assert.deepEqual(reconciliation.downloadIds, []);
+  assert.deepEqual(
+    reconciliation.conversations[0].messages.map(({ id }) => id),
+    ['m-1', 'm-2'],
+  );
 });
 
 test('session-page synchronization stores full changed transcripts for later local-first startup', async () => {

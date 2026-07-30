@@ -15,7 +15,7 @@ import type {
   ConversationLocalStore,
   OptimisticPendingTurn,
 } from '../../api/conversation-local-store';
-import { upsertCachedConversation } from '../../api/conversation-local-store';
+import { replaceCachedConversationSnapshot } from '../../api/conversation-local-store';
 import { reconcileConversationSessionEntries } from '../../api/conversation-session-entries';
 import {
   captureConversationStorageEpoch,
@@ -176,7 +176,7 @@ export function useConversationSnapshotController({
     );
     const currentCursor = hostedEventCursorRef.current.get(incomingConversation.id) || 0;
     if (!resetCursor && incomingCursor < currentCursor) return;
-    const conversation = upsertCachedConversation(
+    const conversation = replaceCachedConversationSnapshot(
       conversationIndexRef.current,
       incomingConversation,
     ).find(({ id }) => id === incomingConversation.id) || incomingConversation;
@@ -348,7 +348,7 @@ export function useConversationSnapshotController({
     setHostedRunning(running);
     setSending(running || pendingTurnActiveRef.current);
     await commitConversationIndex(
-      upsertCachedConversation(conversationIndexRef.current, conversation),
+      replaceCachedConversationSnapshot(conversationIndexRef.current, conversation),
       conversation.id,
       expectedEpoch,
     );

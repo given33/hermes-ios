@@ -93,12 +93,28 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     let session = AVAudioSession.sharedInstance()
-    try session.setCategory(
-      .playAndRecord,
-      mode: .spokenAudio,
-      options: [.allowBluetoothHFP, .defaultToSpeaker, .duckOthers]
-    )
-    try session.setActive(true, options: .notifyOthersOnDeactivation)
+    do {
+      try session.setCategory(
+        .playAndRecord,
+        mode: .spokenAudio,
+        options: [.allowBluetoothHFP, .defaultToSpeaker, .duckOthers]
+      )
+      try session.setActive(true, options: .notifyOthersOnDeactivation)
+    } catch {
+      try? session.setActive(false, options: .notifyOthersOnDeactivation)
+      throw error
+    }
+
+    let input = audioEngine.inputNode
+    let format = input.outputFormat(forBus: 0)
+    guard format.sampleRate > 0, format.channelCount > 0 else {
+      deactivateAudioSession()
+      throw NSError(
+        domain: "HermesVoice",
+        code: 4,
+        userInfo: [NSLocalizedDescriptionKey: "No microphone input route is available"]
+      )
+    }
 
     let request = SFSpeechAudioBufferRecognitionRequest()
     request.shouldReportPartialResults = true
@@ -106,16 +122,6 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     request.taskHint = .dictation
     if recognizer.supportsOnDeviceRecognition {
       request.requiresOnDeviceRecognition = true
-    }
-
-    let input = audioEngine.inputNode
-    let format = input.outputFormat(forBus: 0)
-    guard format.sampleRate > 0, format.channelCount > 0 else {
-      throw NSError(
-        domain: "HermesVoice",
-        code: 4,
-        userInfo: [NSLocalizedDescriptionKey: "No microphone input route is available"]
-      )
     }
     input.installTap(onBus: 0, bufferSize: 1_024, format: format) { buffer, _ in
       request.append(buffer)
@@ -205,8 +211,13 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     if recording { _ = stopRecognition() }
     if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
     let session = AVAudioSession.sharedInstance()
-    try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
-    try session.setActive(true)
+    do {
+      try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+      try session.setActive(true)
+    } catch {
+      deactivateAudioSession()
+      throw error
+    }
     let utterance = AVSpeechUtterance(string: value)
     if let localeIdentifier, !localeIdentifier.isEmpty {
       utterance.voice = AVSpeechSynthesisVoice(language: localeIdentifier)
@@ -220,7 +231,12 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   @MainActor
   func stopSpeaking() -> Bool {
     let wasSpeaking = synthesizer.isSpeaking || synthesizer.isPaused
-    if wasSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+    if wasSpeaking {
+      let utterance = activeUtterance
+      synthesizer.stopSpeaking(at: .immediate)
+      if let utterance { finishSpeaking(utterance) }
+      else { deactivateAudioSession() }
+    }
     return wasSpeaking
   }
 
@@ -306,11 +322,15 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   private func finishSpeaking(_ utterance: AVSpeechUtterance) {
     guard activeUtterance === utterance else { return }
     activeUtterance = nil
+    deactivateAudioSession()
+    emitState("idle")
+  }
+
+  private func deactivateAudioSession() {
     try? AVAudioSession.sharedInstance().setActive(
       false,
       options: .notifyOthersOnDeactivation
     )
-    emitState("idle")
   }
 
   private func emitState(_ state: String, error: String? = nil) {

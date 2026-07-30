@@ -774,6 +774,15 @@ export class HermesCloudApi {
     return this.files.downloadAccountFile(id, preview);
   }
 
+  consumeAccountFile<T>(
+    id: string,
+    preview: boolean,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ) {
+    return this.files.consumeAccountFile(id, preview, consume, signal);
+  }
+
   async uploadAccountFile(upload: NativeUpload, uploadId = newClientRequestId('file-upload')) {
     return this.files.uploadAccountFile(upload, uploadId);
   }

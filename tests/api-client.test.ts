@@ -361,6 +361,60 @@ test('hosted event stream connection attempts have an abortable deadline', async
   assert.equal(requestSignal?.aborted, true);
 });
 
+test('caller abort remains attached after hosted event response headers arrive', async () => {
+  let requestSignal: AbortSignal | undefined;
+  const caller = new AbortController();
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async () => { throw new Error('regular fetch must not serve SSE'); },
+    async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Response(new ReadableStream<Uint8Array>({
+        start() {
+          // Keep the body open after headers so the caller owns its lifetime.
+        },
+      }), { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  );
+
+  const response = await client.openEventStream('/api/plugins/collaboration/events', {
+    signal: caller.signal,
+  });
+  assert.ok(response.body);
+  assert.equal(requestSignal?.aborted, false);
+
+  caller.abort();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(requestSignal?.aborted, true);
+});
+
+test('cancelling a hosted event response body aborts and releases its request', async () => {
+  let requestSignal: AbortSignal | undefined;
+  let sourceCancellations = 0;
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async () => { throw new Error('regular fetch must not serve SSE'); },
+    async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Response(new ReadableStream<Uint8Array>({
+        start() {
+          // The consumer cancellation below owns stream shutdown.
+        },
+        cancel() { sourceCancellations += 1; },
+      }), { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  );
+
+  const response = await client.openEventStream('/api/plugins/collaboration/events');
+  const reader = response.body?.getReader();
+  assert.ok(reader);
+  await reader.cancel('route unmounted');
+  assert.equal(requestSignal?.aborted, true);
+  assert.equal(sourceCancellations, 1);
+});
+
 test('accepts only the actual mobile v1 handshake contract', () => {
   const handshake = {
     api_version: 1,

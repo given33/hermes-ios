@@ -14,6 +14,7 @@ enum HermesAccountLifecycle {
       ownerScope,
       accountGeneration: accountGeneration
     )
+    HermesIOSContextAppDelegateSubscriber.resetForegroundSessionForCurrentOwnerIfActive()
     if let token = HermesContextEventQueue.shared.currentCollectorGenerationToken() {
       HermesLocationService.shared.activateAccountGeneration(token)
       HermesMotionService.shared.activateAccountGeneration(token)
@@ -79,7 +80,7 @@ enum HermesAccountLifecycle {
       accountGeneration: deletion.lifecycleEpoch,
       serverAccountGeneration: deletion.accountGeneration
     )
-    UserDefaults.standard.removeObject(forKey: "app.hermes.screen-time.active-at")
+    HermesIOSContextAppDelegateSubscriber.clearForegroundSession()
     Task {
       guard queue.accountGeneration == deletion.lifecycleEpoch else { return }
       _ = await HermesWatchService.shared.send(payload: [

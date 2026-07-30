@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import test from 'node:test';
@@ -11,6 +12,38 @@ import {
 const root = process.cwd();
 const moduleRoot = resolve(root, 'modules', 'hermes-ios-context');
 const read = (file: string) => readFileSync(resolve(moduleRoot, file), 'utf8');
+
+test('APNs entitlement follows local Debug and EAS signing environments', () => {
+  const require = createRequire(import.meta.url);
+  const configFactory = require(resolve(root, 'app.config.js')) as () => {
+    ios: { entitlements: Record<string, unknown> };
+  };
+  const saved = {
+    EAS_BUILD_PROFILE: process.env.EAS_BUILD_PROFILE,
+    EXPO_PUBLIC_FRONTEND_PREVIEW: process.env.EXPO_PUBLIC_FRONTEND_PREVIEW,
+    HERMES_DISTRIBUTABLE_BUILD: process.env.HERMES_DISTRIBUTABLE_BUILD,
+    NODE_ENV: process.env.NODE_ENV,
+  };
+  const configure = (profile: string | undefined, nodeEnv: string) => {
+    if (profile === undefined) delete process.env.EAS_BUILD_PROFILE;
+    else process.env.EAS_BUILD_PROFILE = profile;
+    delete process.env.HERMES_DISTRIBUTABLE_BUILD;
+    process.env.EXPO_PUBLIC_FRONTEND_PREVIEW = '0';
+    process.env.NODE_ENV = nodeEnv;
+    return configFactory().ios.entitlements['aps-environment'];
+  };
+  try {
+    assert.equal(configure(undefined, 'development'), 'development');
+    assert.equal(configure('development', 'production'), 'development');
+    assert.equal(configure('preview', 'production'), 'production');
+    assert.equal(configure('production', 'production'), 'production');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
 
 test('signed iOS builds declare native context privacy and background capabilities', () => {
   const config = JSON.parse(readFileSync(resolve(root, 'app.base.json'), 'utf8')) as {
@@ -87,6 +120,17 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
   assert.match(service, /recognitionGeneration == generation/);
   assert.match(service, /if inputTapInstalled/);
   assert.match(service, /activeUtterance === utterance/);
+  assert.ok(
+    service.indexOf('try session.setActive(true, options: .notifyOthersOnDeactivation)')
+      < service.indexOf('let format = input.outputFormat(forBus: 0)'),
+    'the recording session is activated before querying the microphone route',
+  );
+  assert.match(
+    service,
+    /guard format\.sampleRate > 0, format\.channelCount > 0 else \{\s*deactivateAudioSession\(\)/,
+  );
+  assert.match(service, /stopSpeaking\(\)[\s\S]*finishSpeaking\(utterance\)/);
+  assert.match(service, /catch \{[\s\S]*deactivateAudioSession\(\)[\s\S]*throw error/);
   assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 4);
   assert.match(podspec, /'AVFoundation'/);
   assert.match(podspec, /'Speech'/);
@@ -274,6 +318,8 @@ test('native event outbox claims and ACKs only after durable atomic replacement'
   assert.match(queue, /Darwin\.fsync\(descriptor\)/);
   assert.match(queue, /pending-events-corrupt-\\\(digest\.prefix\(20\)\)/);
   assert.match(queue, /try quarantineCorruptLinesUnlocked\(corruptLines\)[\s\S]*try persistUnlocked\(events\)/);
+  assert.match(queue, /rewroteCorruptQueue = true/);
+  assert.match(queue, /if !rewroteCorruptQueue \{ cachedEncryptedBytes = data\.count \}/);
   assert.doesNotMatch(queue, /catch \{[\s\S]{0,120}in-memory batch remains intact/);
 
   const claim = provider.indexOf('HermesIOSContext.claimPendingEvents');
@@ -678,6 +724,14 @@ test('HealthKit background delivery advances generation-scoped anchors after dur
   assert.match(queue, /if let cachedRelayState \{ return cachedRelayState \}/);
   assert.match(lifecycle, /HermesHealthService\.shared\.activateAccountGeneration\(token\)/);
   assert.match(subscriber, /HermesHealthService\.shared\.resumeBackgroundCollection\(\)/);
+  assert.match(subscriber, /switch deletion\.outcome/);
+  assert.match(subscriber, /case \.rejectedStale:[\s\S]*completionHandler\(\.noData\)/);
+  assert.match(subscriber, /case \.failed:[\s\S]*completionHandler\(\.failed\)/);
+  assert.doesNotMatch(subscriber, /try\? HermesAttachmentVault\.shared\.deleteKey/);
+  assert.match(queue, /outcome: previouslyDeletedScopes\.contains\(scope\)[\s\S]*\.rejectedStale/);
+  assert.match(queue, /guard persistRelayStateUnlocked\(state\) else/);
+  assert.match(module, /guard deletion\.outcome == \.applied else/);
+  assert.match(module, /throw HermesAccountDeletionError\.persistenceFailed/);
   assert.doesNotMatch(module, /eventQueue\.enqueue\(type: "health"/);
   assert.doesNotMatch(provider, /function healthEvents/);
   assert.doesNotMatch(provider, /snapshotEvent\('health-(?:sleep|heart|oxygen|activity)'/);
@@ -818,6 +872,34 @@ test('distributable builds keep MapKit available when the optional AMap key is a
   assert.match(page, /providerResetRequest=\{mapAttempt\}/);
   assert.match(page, /onProviderStatus=\{\(event\) => setNativeMapProvider\(event\.nativeEvent\)\}/);
   assert.match(page, /smart-weather-provider-warning/);
+});
+
+test('foreground duration settles once and remains bound to its account generation', () => {
+  const subscriber = read('ios/HermesIOSContextAppDelegateSubscriber.swift');
+  const lifecycle = read('ios/HermesAccountLifecycle.swift');
+  assert.match(subscriber, /activeOwnerScopeKey/);
+  assert.match(subscriber, /activeAccountGenerationKey/);
+  assert.match(subscriber, /activeLifecycleEpochKey/);
+  assert.match(
+    subscriber,
+    /clearForegroundSession\(\)[\s\S]*token\.ownerScope == storedOwnerScope[\s\S]*foregroundDurationSeconds/,
+  );
+  assert.doesNotMatch(subscriber, /if state == "background" \{ defaults\.removeObject/);
+  assert.match(lifecycle, /resetForegroundSessionForCurrentOwnerIfActive\(\)/);
+  assert.match(lifecycle, /clearForegroundSession\(\)/);
+});
+
+test('native lifecycle purges dedicated plaintext previews at launch and termination', () => {
+  const subscriber = read('ios/HermesIOSContextAppDelegateSubscriber.swift');
+  const temporaryFiles = readFileSync(
+    resolve(root, 'src/api/temporary-plaintext-files.ts'),
+    'utf8',
+  );
+  assert.match(subscriber, /plaintextPreviewDirectory = "hermes-plaintext-previews-v1"/);
+  assert.match(temporaryFiles, /PLAINTEXT_PREVIEW_DIRECTORY = 'hermes-plaintext-previews-v1'/);
+  assert.match(subscriber, /subscriberDidRegister\(\)[\s\S]*purgePlaintextPreviewCache\(\)/);
+  assert.match(subscriber, /applicationWillTerminate[\s\S]*purgePlaintextPreviewCache\(\)/);
+  assert.match(subscriber, /FileManager\.default\.removeItem\(at: previewDirectory\)/);
 });
 
 test('native map discovery requires the default Expo view manager and runtime config', () => {

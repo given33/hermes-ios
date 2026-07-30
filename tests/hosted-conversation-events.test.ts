@@ -5,6 +5,7 @@ import type { HermesCloudApi } from '../src/api/HermesCloudApi';
 import {
   consumeHostedConversationEvents,
 } from '../src/api/hosted-conversation-events';
+import { MAX_SSE_FRAME_CHARACTERS } from '../src/api/sse-stream-safety';
 
 function streamResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();
@@ -410,4 +411,72 @@ test('hosted event cursor is not accepted when durable frame application fails',
     ),
     /disk full/,
   );
+});
+
+test('hosted SSE rejects an oversized unterminated frame and cancels its reader', async () => {
+  let cancellations = 0;
+  const oversized = new TextEncoder().encode(
+    `event: conversation\ndata: ${'x'.repeat(MAX_SSE_FRAME_CHARACTERS + 1)}`,
+  );
+  const api = {
+    async openHostedConversationEvents() {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(oversized); },
+        cancel() { cancellations += 1; },
+      }), { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  } as unknown as HermesCloudApi;
+
+  await assert.rejects(
+    consumeHostedConversationEvents(
+      api,
+      'chat-oversized',
+      0,
+      'generation-oversized',
+      new AbortController().signal,
+      () => undefined,
+    ),
+    /maximum frame size/,
+  );
+  assert.equal(cancellations, 1);
+});
+
+test('hosted SSE cancels its reader when durable frame application fails', async () => {
+  let cancellations = 0;
+  const payload = JSON.stringify({
+    cursor: 1,
+    account_generation: 'generation-cancel',
+    conversation: {
+      id: 'chat-cancel',
+      account_generation: 'generation-cancel',
+      profile: 'default',
+      title: 'Cancel',
+      messages: [],
+    },
+  });
+  const api = {
+    async openHostedConversationEvents() {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(
+            `id: 1\nevent: conversation\ndata: ${payload}\n\n`,
+          ));
+        },
+        cancel() { cancellations += 1; },
+      }), { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  } as unknown as HermesCloudApi;
+
+  await assert.rejects(
+    consumeHostedConversationEvents(
+      api,
+      'chat-cancel',
+      0,
+      'generation-cancel',
+      new AbortController().signal,
+      async () => { throw new Error('durable write failed'); },
+    ),
+    /durable write failed/,
+  );
+  assert.equal(cancellations, 1);
 });

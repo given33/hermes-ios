@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, type PropsWithChildren } from 'react';
-import { Platform, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState, type PropsWithChildren } from 'react';
+import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
@@ -19,6 +19,14 @@ import {
   useTheme,
 } from '../design/ThemeProvider';
 import { useWebUiFonts } from './webui-fonts';
+import { subscribeHermesDeepLinks } from './hermes-deep-link-coordinator';
+import {
+  parseHermesDeepLink,
+  reconcileHermesDeepLinkAccount,
+  type AccountBoundHermesDeepLinkTarget,
+  type HermesDeepLinkTarget,
+} from './hermes-deep-link';
+import { initializeTemporaryPlaintextFiles } from '../api/temporary-plaintext-files';
 
 // The preview is deliberately limited to the web dev shell. Native builds keep
 // the real authentication boundary even when Metro is running in development.
@@ -29,6 +37,13 @@ export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();
   useEffect(() => {
     startNativeFrameRateController();
+    if (Platform.OS !== 'web') {
+      try {
+        initializeTemporaryPlaintextFiles();
+      } catch {
+        // Preview operations retry and fail closed if stale plaintext cannot be removed.
+      }
+    }
   }, []);
 
   return (
@@ -65,6 +80,12 @@ export function HermesNativeApp() {
 function NativeAuthRoot() {
   const { state, client, deleteAccount, logout } = useAuth();
   const notificationTarget = useTaskNotificationTarget();
+  const navigationTarget = useHermesDeepLinkTarget(
+    state.status === 'authenticated'
+      ? `${state.connection.baseUrl}\u0000${state.connection.username.toLowerCase()}`
+        + `\u0000${state.connection.accountGeneration}`
+      : null,
+  );
   if (state.status !== 'authenticated') return <LoginScreen />;
   if (!client) return null;
   const ownerScope = accountOwnerScope(state.connection);
@@ -90,6 +111,7 @@ function NativeAuthRoot() {
               }}
               cacheOwner={ownerScope}
               client={client}
+              navigationTarget={navigationTarget}
               notificationTarget={notificationTarget}
             />
           </IOSContextProvider>
@@ -97,6 +119,34 @@ function NativeAuthRoot() {
       </ThemedNativeSurface>
     </ThemeProvider>
   );
+}
+
+function useHermesDeepLinkTarget(
+  accountKey: string | null,
+): (HermesDeepLinkTarget & { requestId: number }) | null {
+  const [bound, setBound] = useState<AccountBoundHermesDeepLinkTarget | null>(null);
+  const accountKeyRef = useRef(accountKey);
+  accountKeyRef.current = accountKey;
+  const nextRequestId = useRef(0);
+  const accept = useCallback((url: string) => {
+    const parsed = parseHermesDeepLink(url);
+    if (!parsed) return;
+    nextRequestId.current += 1;
+    setBound({
+      accountKey: accountKeyRef.current,
+      target: { ...parsed, requestId: nextRequestId.current },
+    });
+  }, []);
+
+  useEffect(() => {
+    setBound((current) => reconcileHermesDeepLinkAccount(current, accountKey));
+  }, [accountKey]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') return undefined;
+    return subscribeHermesDeepLinks(Linking, accept);
+  }, [accept]);
+  return bound?.target ?? null;
 }
 
 // A cleartext EXPO_PUBLIC_HERMES_URL used to throw while src/config.ts was

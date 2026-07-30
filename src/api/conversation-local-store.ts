@@ -73,10 +73,11 @@ export type {
 export {
   isCompleteConversation,
   mergeDownloadedConversations,
+  mergeCachedConversationUpdate,
   mergeOptimisticConversationLedgers,
   reconcileConversationCache,
+  replaceCachedConversationSnapshot,
   synchronizeConversationCache,
-  upsertCachedConversation,
 } from './conversation-cache-sync';
 
 export class ConversationLocalStore {

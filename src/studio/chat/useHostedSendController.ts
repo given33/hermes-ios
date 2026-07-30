@@ -6,7 +6,7 @@ import type {
 
 import type { HermesApiClient } from '../../api/HermesApiClient';
 import {
-  upsertCachedConversation,
+  mergeCachedConversationUpdate,
   type ConversationLocalStore,
 } from '../../api/conversation-local-store';
 import type {
@@ -477,7 +477,7 @@ export function useHostedSendController({
           updated_at: completedAt,
         };
         commitConversationIndex(
-          upsertCachedConversation(conversationIndexRef.current, previewConversation),
+          mergeCachedConversationUpdate(conversationIndexRef.current, previewConversation),
           sendingConversationId,
           ownerEpoch,
         );

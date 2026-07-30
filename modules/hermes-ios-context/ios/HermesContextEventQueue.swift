@@ -446,19 +446,22 @@ final class HermesContextEventQueue {
         deletedCount: 0,
         deletedWasCurrent: false,
         accountGeneration: accountGeneration,
-        lifecycleEpoch: accountGenerationUnlocked()
+        lifecycleEpoch: accountGenerationUnlocked(),
+        outcome: .failed
       )
     }
     var state = loadRelayStateUnlocked()
     let currentGeneration = state["accountGeneration"] as? Int ?? 0
     let currentAccountGeneration = state["serverAccountGeneration"] as? String ?? ""
     let generationStartedAt = state["accountGenerationStartedAt"] as? Double ?? 0
+    let previouslyDeletedScopes = Set(state["deletedOwnerScopes"] as? [String] ?? [])
     if let requestedAt, requestedAt < generationStartedAt {
       return HermesOwnerScopeDeletionResult(
         deletedCount: 0,
         deletedWasCurrent: false,
         accountGeneration: accountGeneration,
-        lifecycleEpoch: currentGeneration
+        lifecycleEpoch: currentGeneration,
+        outcome: previouslyDeletedScopes.contains(scope) ? .applied : .rejectedStale
       )
     }
     let deletingCurrentScope = (state["ownerScope"] as? String) == scope
@@ -476,7 +479,8 @@ final class HermesContextEventQueue {
           deletedCount: 0,
           deletedWasCurrent: false,
           accountGeneration: accountGeneration,
-          lifecycleEpoch: currentGeneration
+          lifecycleEpoch: currentGeneration,
+          outcome: .failed
         )
       }
     }
@@ -506,12 +510,21 @@ final class HermesContextEventQueue {
     deletedScopes.insert(scope)
     state["deletedOwnerScopes"] = Array(deletedScopes).sorted()
     state["updatedAt"] = Date().timeIntervalSince1970 * 1000
-    persistRelayStateUnlocked(state)
+    guard persistRelayStateUnlocked(state) else {
+      return HermesOwnerScopeDeletionResult(
+        deletedCount: 0,
+        deletedWasCurrent: false,
+        accountGeneration: accountGeneration,
+        lifecycleEpoch: currentGeneration,
+        outcome: .failed
+      )
+    }
     return HermesOwnerScopeDeletionResult(
       deletedCount: events.count - remaining.count,
       deletedWasCurrent: deletingCurrentScope,
       accountGeneration: accountGeneration,
-      lifecycleEpoch: state["accountGeneration"] as? Int ?? 0
+      lifecycleEpoch: state["accountGeneration"] as? Int ?? 0,
+      outcome: .applied
     )
   }
 
@@ -632,6 +645,7 @@ final class HermesContextEventQueue {
     }
     var events: [[String: Any]] = []
     var corruptLines = Data()
+    var rewroteCorruptQueue = false
     for line in data.split(separator: 0x0a, omittingEmptySubsequences: true) {
       guard let sealed = Data(base64Encoded: Data(line)),
             let clear = try? HermesSecureKeychain.open(sealed),
@@ -647,6 +661,7 @@ final class HermesContextEventQueue {
       do {
         try quarantineCorruptLinesUnlocked(corruptLines)
         try persistUnlocked(events)
+        rewroteCorruptQueue = true
       } catch {
         // Keep the original queue intact. A later read retries quarantine and rewrite.
       }
@@ -657,7 +672,7 @@ final class HermesContextEventQueue {
     cachedEvents = sorted
     cachedEventIDs = Set(sorted.compactMap { $0["id"] as? String })
     cachedMaxSequence = sorted.compactMap { $0["sequence"] as? Int }.max() ?? 0
-    cachedEncryptedBytes = data.count
+    if !rewroteCorruptQueue { cachedEncryptedBytes = data.count }
     return sorted
   }
 
@@ -789,10 +804,11 @@ final class HermesContextEventQueue {
     loadRelayStateUnlocked()["accountGeneration"] as? Int ?? 0
   }
 
-  private func persistRelayStateUnlocked(_ state: [String: Any]) {
+  @discardableResult
+  private func persistRelayStateUnlocked(_ state: [String: Any]) -> Bool {
     guard JSONSerialization.isValidJSONObject(state),
           let clear = try? JSONSerialization.data(withJSONObject: state),
-          let sealed = try? HermesSecureKeychain.seal(clear) else { return }
+          let sealed = try? HermesSecureKeychain.seal(clear) else { return false }
     do {
       try sealed.write(
         to: relayStateURL,
@@ -800,8 +816,10 @@ final class HermesContextEventQueue {
       )
       try applyFileProtection(to: relayStateURL)
       cachedRelayState = state
+      return true
     } catch {
       // Keep the last durable state cached; the caller can retry its mutation.
+      return false
     }
   }
 
@@ -887,6 +905,13 @@ struct HermesOwnerScopeDeletionResult {
   let deletedWasCurrent: Bool
   let accountGeneration: String
   let lifecycleEpoch: Int
+  let outcome: HermesOwnerScopeDeletionOutcome
+}
+
+enum HermesOwnerScopeDeletionOutcome: Equatable {
+  case applied
+  case rejectedStale
+  case failed
 }
 
 struct HermesCollectorGenerationToken: Equatable, Sendable {

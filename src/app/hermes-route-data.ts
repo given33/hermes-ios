@@ -10,6 +10,7 @@ import {
   HermesCloudApi,
   parseOfficialConversationPlaceholderId,
 } from '../api/HermesCloudApi';
+import { writeBoundedDownload } from '../api/bounded-download';
 import {
   isRecord,
   positiveRevision,
@@ -538,16 +539,18 @@ async function presentAccountFile(
   name: string,
   shareOnly: boolean,
 ) {
-  const blob = await api.downloadAccountFile(id, !shareOnly);
-  const [{ File, Paths }, quickLook, Sharing] = await Promise.all([
-    import('expo-file-system'),
+  const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([
     import('../../modules/hermes-quick-look'),
     import('expo-sharing'),
+    import('../api/temporary-plaintext-files'),
   ]);
-  const target = new File(Paths.cache, safeFileName(name));
-  target.create({ intermediates: true, overwrite: true });
-  target.write(new Uint8Array(await blob.arrayBuffer()));
+  const target = temporaryPlaintextFile(name, 'account-file');
   try {
+    await api.consumeAccountFile(
+      id,
+      !shareOnly,
+      (response, signal) => writeBoundedDownload(response, target, { signal }),
+    );
     const presented = shareOnly ? false : await quickLook.presentQuickLook(target.uri, name);
     if (!presented && await Sharing.isAvailableAsync()) {
       await Sharing.shareAsync(target.uri, { dialogTitle: name });
@@ -564,15 +567,14 @@ async function presentSkillContent(
 ) {
   const response = await api.getSkillContent(name, profile);
   const content = structuredContent(response.content ?? response.text);
-  const [{ File, Paths }, quickLook, Sharing] = await Promise.all([
-    import('expo-file-system'),
+  const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([
     import('../../modules/hermes-quick-look'),
     import('expo-sharing'),
+    import('../api/temporary-plaintext-files'),
   ]);
-  const target = new File(Paths.cache, safeFileName(`${name}-SKILL.md`));
-  target.create({ intermediates: true, overwrite: true });
-  target.write(content);
+  const target = temporaryPlaintextFile(`${name}-SKILL.md`, 'skill-preview');
   try {
+    target.write(content);
     const presented = await quickLook.presentQuickLook(target.uri, `${name}/SKILL.md`);
     if (!presented && await Sharing.isAvailableAsync()) {
       await Sharing.shareAsync(target.uri);
@@ -611,11 +613,6 @@ async function removeStagedFileImport(uri: string): Promise<void> {
   } catch {
     // Native stale-batch cleanup remains the fallback after interrupted uploads.
   }
-}
-
-function safeFileName(value: string): string {
-  const normalized = value.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, '_');
-  return normalized.slice(0, 180) || 'Hermes-file';
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {

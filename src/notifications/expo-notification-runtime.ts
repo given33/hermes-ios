@@ -9,11 +9,13 @@ import type {
   NativePushToken,
   NotificationPermission,
 } from './mobile-notifications';
+import { clearNotificationState } from './notification-cleanup';
 
 export interface ExpoNotificationRuntime extends ApnsRegistrationRuntime {
   configureForegroundPresentation(): Promise<void>;
   getLastResponse(): Promise<unknown>;
   clearLastResponse(): Promise<void>;
+  clearAccountNotifications(): Promise<void>;
   subscribeResponses(listener: (response: unknown) => void): Promise<() => void>;
   subscribePushTokens(listener: (token: NativePushToken) => void): Promise<() => void>;
 }
@@ -65,6 +67,19 @@ export function createExpoNotificationRuntime(): ExpoNotificationRuntime {
       const Notifications = await import('expo-notifications');
       await Notifications.clearLastNotificationResponseAsync();
     },
+    async clearAccountNotifications() {
+      if (!available) return;
+      const Notifications = await import('expo-notifications');
+      await clearNotificationState({
+        cancelAllScheduledNotifications: () =>
+          Notifications.cancelAllScheduledNotificationsAsync(),
+        clearLastResponse: () => Notifications.clearLastNotificationResponseAsync(),
+        dismissAllNotifications: () => Notifications.dismissAllNotificationsAsync(),
+        clearBadge: async () => {
+          await Notifications.setBadgeCountAsync(0);
+        },
+      });
+    },
     async subscribeResponses(listener) {
       if (!available) return () => undefined;
       const Notifications = await import('expo-notifications');
@@ -78,6 +93,11 @@ export function createExpoNotificationRuntime(): ExpoNotificationRuntime {
       return () => subscription.remove();
     },
   };
+}
+
+export async function clearExpoAccountNotifications(): Promise<void> {
+  const runtime = createExpoNotificationRuntime();
+  if (runtime.available) await runtime.clearAccountNotifications();
 }
 
 export function currentApnsRegistrationConfig(): ApnsRegistrationConfig {

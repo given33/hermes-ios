@@ -7,7 +7,10 @@ module.exports = () => {
   const frontendPreview = String(process.env.EXPO_PUBLIC_FRONTEND_PREVIEW || '').trim();
   const amapIOSAPIKey = String(process.env.HERMES_AMAP_IOS_API_KEY || '').trim();
   const bundleIdentifier = String(base.ios.bundleIdentifier || '').trim();
-  const apnsEnvironment = buildProfile === 'development' ? 'development' : 'production';
+  const localDevelopmentBuild = !distributableBuild && process.env.NODE_ENV !== 'production';
+  const apnsEnvironment = buildProfile === 'development' || localDevelopmentBuild
+    ? 'development'
+    : 'production';
 
   if (distributableBuild && frontendPreview !== '0') {
     throw new Error(

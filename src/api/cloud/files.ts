@@ -200,6 +200,26 @@ export class HermesFilesCloudApi {
     );
   }
 
+  consumeAccountFile<T>(
+    id: string,
+    preview: boolean,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ) {
+    if (isToolOutputArtifactId(id)) {
+      return this.transport.consumeDownload(
+        `${COLLABORATION}/tool-output-artifacts/${encodeURIComponent(id)}/download`,
+        consume,
+        { signal },
+      );
+    }
+    return this.transport.consumeDownload(
+      `${COLLABORATION}/files/${encodeURIComponent(id)}/download`,
+      consume,
+      { query: { preview: preview || undefined }, signal },
+    );
+  }
+
   async uploadAccountFile(upload: NativeUpload, uploadId: string) {
     const body = await boundedUploadBody(upload.uri, upload.name);
     return this.transport.request<{ file: AccountFileEntry }>(`${COLLABORATION}/files`, {

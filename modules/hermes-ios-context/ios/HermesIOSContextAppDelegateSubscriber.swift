@@ -4,9 +4,14 @@ import ExpoModulesCore
 import UIKit
 
 public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscriber {
+  private static let plaintextPreviewDirectory = "hermes-plaintext-previews-v1"
   private static let activeAtKey = "app.hermes.screen-time.active-at"
+  private static let activeOwnerScopeKey = "app.hermes.screen-time.active-owner-scope"
+  private static let activeAccountGenerationKey = "app.hermes.screen-time.active-account-generation"
+  private static let activeLifecycleEpochKey = "app.hermes.screen-time.active-lifecycle-epoch"
 
   public func subscriberDidRegister() {
+    Self.purgePlaintextPreviewCache()
     HermesBackgroundService.shared.register()
     resumePowerMonitoringIfEligible()
     resumeLocationIfEligible()
@@ -34,6 +39,8 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
   }
 
   public func applicationWillTerminate(_ application: UIApplication) {
+    Self.recordScreenState("terminated")
+    Self.purgePlaintextPreviewCache()
     HermesDeviceService.shared.stopMonitoringPowerChanges()
   }
 
@@ -43,13 +50,24 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
     if let tombstone = Self.accountDeletionTombstone(userInfo) {
-      _ = HermesAccountLifecycle.deleteOwnerScope(
+      let deletion = HermesAccountLifecycle.deleteOwnerScope(
         tombstone.ownerScope,
         accountGeneration: tombstone.accountGeneration,
         requestedAt: tombstone.requestedAt
       )
-      _ = try? HermesAttachmentVault.shared.deleteKey(owner: tombstone.ownerScope)
-      completionHandler(.newData)
+      switch deletion.outcome {
+      case .applied:
+        do {
+          _ = try HermesAttachmentVault.shared.deleteKey(owner: tombstone.ownerScope)
+          completionHandler(.newData)
+        } catch {
+          completionHandler(.failed)
+        }
+      case .rejectedStale:
+        completionHandler(.noData)
+      case .failed:
+        completionHandler(.failed)
+      }
       return
     }
     guard !HermesContextEventQueue.shared.isCollectionSuspended else {
@@ -121,12 +139,55 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
       "timestamp": now,
     ]
     if state == "active" {
-      defaults.set(now, forKey: activeAtKey)
+      resetForegroundSessionForCurrentOwnerIfActive(startedAt: now)
     } else if activeAt > 0 {
-      payload["foregroundDurationSeconds"] = max(0, (now - activeAt) / 1000)
-      if state == "background" { defaults.removeObject(forKey: activeAtKey) }
+      let storedOwnerScope = defaults.string(forKey: activeOwnerScopeKey) ?? ""
+      let storedAccountGeneration = defaults.string(forKey: activeAccountGenerationKey) ?? ""
+      let storedLifecycleEpoch = defaults.integer(forKey: activeLifecycleEpochKey)
+      clearForegroundSession()
+      if let token = HermesContextEventQueue.shared.currentCollectorGenerationToken(),
+         token.ownerScope == storedOwnerScope,
+         token.serverAccountGeneration == storedAccountGeneration,
+         token.lifecycleEpoch == storedLifecycleEpoch {
+        payload["foregroundDurationSeconds"] = max(0, (now - activeAt) / 1000)
+      }
     }
     HermesContextEventQueue.shared.enqueue(type: "screen-time", payload: payload)
+  }
+
+  static func resetForegroundSessionForCurrentOwnerIfActive(
+    startedAt: Double = Date().timeIntervalSince1970 * 1000
+  ) {
+    clearForegroundSession()
+    guard UIApplication.shared.applicationState == .active,
+          let token = HermesContextEventQueue.shared.currentCollectorGenerationToken() else {
+      return
+    }
+    let defaults = UserDefaults.standard
+    defaults.set(startedAt, forKey: activeAtKey)
+    defaults.set(token.ownerScope, forKey: activeOwnerScopeKey)
+    defaults.set(token.serverAccountGeneration, forKey: activeAccountGenerationKey)
+    defaults.set(token.lifecycleEpoch, forKey: activeLifecycleEpochKey)
+  }
+
+  static func clearForegroundSession() {
+    let defaults = UserDefaults.standard
+    defaults.removeObject(forKey: activeAtKey)
+    defaults.removeObject(forKey: activeOwnerScopeKey)
+    defaults.removeObject(forKey: activeAccountGenerationKey)
+    defaults.removeObject(forKey: activeLifecycleEpochKey)
+  }
+
+  private static func purgePlaintextPreviewCache() {
+    guard let cacheDirectory = FileManager.default.urls(
+      for: .cachesDirectory,
+      in: .userDomainMask
+    ).first else { return }
+    let previewDirectory = cacheDirectory.appendingPathComponent(
+      plaintextPreviewDirectory,
+      isDirectory: true
+    )
+    try? FileManager.default.removeItem(at: previewDirectory)
   }
 
   private static func accountDeletionTombstone(

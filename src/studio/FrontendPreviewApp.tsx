@@ -124,6 +124,7 @@ export function FrontendPreviewApp({
   account,
   cacheOwner = '',
   client,
+  navigationTarget,
   notificationTarget,
 }: FrontendPreviewAppProps = {}) {
   const insets = useSafeAreaInsets();
@@ -141,6 +142,11 @@ export function FrontendPreviewApp({
   });
   const [gatewayStatuses, setGatewayStatuses] = useState<SidebarGatewayStatus[]>([]);
   const [preferredConversationId, setPreferredConversationId] = useState('');
+  useEffect(() => {
+    if (navigationTarget?.conversationId) {
+      setPreferredConversationId(navigationTarget.conversationId);
+    }
+  }, [navigationTarget?.conversationId, navigationTarget?.requestId]);
   const clearPreferredConversationId = useCallback((conversationId: string) => {
     setPreferredConversationId((current) => current === conversationId ? '' : current);
   }, []);
@@ -285,9 +291,11 @@ export function FrontendPreviewApp({
     <NativeLocalizationProvider locale={locale}>
       <View style={styles.root}>
       <NativeShell
-        key={notificationTarget?.notificationId ?? 'standard-shell'}
+        key={navigationTarget
+          ? `navigation-${navigationTarget.requestId}`
+          : notificationTarget?.notificationId ?? 'standard-shell'}
         config={{ dashboard: { show_token_analytics: true } }}
-        initialPath={notificationTarget?.routePath ?? "/chat"}
+        initialPath={navigationTarget?.routePath ?? notificationTarget?.routePath ?? "/chat"}
         locale={locale ?? 'zh'}
         manifests={BASELINE_PLUGIN_MANIFESTS}
         nativeRouteChrome={useSwiftUIRoutes}

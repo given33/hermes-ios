@@ -1,4 +1,8 @@
 import type { ManagedResourceCatalog } from './cloud/extensions';
+import {
+  assertSseFrameWithinLimit,
+  decodeSseTextStream,
+} from './sse-stream-safety';
 
 export interface ManagedResourceEventApi {
   openManagedResourceEvents(cursor: number, signal: AbortSignal): Promise<Response>;
@@ -14,24 +18,17 @@ export async function consumeManagedResourceEvents(
   const response = await api.openManagedResourceEvents(initialCursor, signal);
   if (!response.body) throw new Error('Hermes managed-resource event stream has no body');
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let buffer = '';
   let latestCursor = initialCursor;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const drained = await drainFrames(buffer, latestCursor, onFrame);
-      buffer = drained.remaining;
-      latestCursor = drained.cursor;
-      if (done) break;
-    }
-    if (buffer.trim()) {
-      latestCursor = await parseFrame(buffer, latestCursor, onFrame);
-    }
-  } finally {
-    reader.releaseLock();
+  for await (const decoded of decodeSseTextStream(response.body, signal)) {
+    buffer += decoded;
+    const drained = await drainFrames(buffer, latestCursor, onFrame);
+    buffer = drained.remaining;
+    assertSseFrameWithinLimit(buffer.length, 'Hermes managed-resource event stream');
+    latestCursor = drained.cursor;
+  }
+  if (buffer.trim()) {
+    latestCursor = await parseFrame(buffer, latestCursor, onFrame);
   }
   return latestCursor;
 }
@@ -46,6 +43,7 @@ async function drainFrames(
   while (true) {
     const boundary = /\r?\n\r?\n/.exec(remaining);
     if (!boundary || boundary.index === undefined) break;
+    assertSseFrameWithinLimit(boundary.index, 'Hermes managed-resource event stream');
     const frame = remaining.slice(0, boundary.index);
     remaining = remaining.slice(boundary.index + boundary[0].length);
     latestCursor = await parseFrame(frame, latestCursor, onFrame);

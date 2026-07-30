@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { consumeManagedResourceEvents } from '../src/api/managed-resource-events';
+import { MAX_SSE_FRAME_CHARACTERS } from '../src/api/sse-stream-safety';
 
 function eventResponse(frames: string[]): Response {
   const encoder = new TextEncoder();
@@ -82,4 +83,56 @@ test('managed-resource SSE rejects cursor regressions and missing account genera
     ),
     /invalid catalog/,
   );
+});
+
+test('managed-resource SSE bounds partial frames and cancels on failure', async () => {
+  let cancellations = 0;
+  const api = {
+    async openManagedResourceEvents() {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(
+            `event: managed-resources\ndata: ${'x'.repeat(MAX_SSE_FRAME_CHARACTERS + 1)}`,
+          ));
+        },
+        cancel() { cancellations += 1; },
+      }), { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  };
+
+  await assert.rejects(
+    consumeManagedResourceEvents(
+      api,
+      0,
+      new AbortController().signal,
+      () => undefined,
+    ),
+    /maximum frame size/,
+  );
+  assert.equal(cancellations, 1);
+});
+
+test('managed-resource SSE cancels its reader when catalog application fails', async () => {
+  let cancellations = 0;
+  const api = {
+    async openManagedResourceEvents() {
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(frame(1)));
+        },
+        cancel() { cancellations += 1; },
+      }), { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  };
+
+  await assert.rejects(
+    consumeManagedResourceEvents(
+      api,
+      0,
+      new AbortController().signal,
+      async () => { throw new Error('catalog persistence failed'); },
+    ),
+    /catalog persistence failed/,
+  );
+  assert.equal(cancellations, 1);
 });

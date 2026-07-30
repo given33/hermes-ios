@@ -28,6 +28,16 @@ import {
   parseHermesNotificationResponse,
   type HermesNotificationTarget,
 } from './notification-target';
+import {
+  bindNotificationTarget,
+  notificationAccountKey,
+  notificationTargetForAccount,
+  type AccountBoundNotificationTarget,
+} from './notification-account-state';
+import {
+  processSmartWeatherNotificationResponse,
+  type NotificationResponseOutcome,
+} from './notification-response-processing';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
 import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
 import {
@@ -68,17 +78,30 @@ function markNotificationHandled(items: Map<string, number>, key: string): void 
 export function NotificationProvider({ children }: PropsWithChildren) {
   const { client, rememberDeviceId, state } = useAuth();
   const runtime = useMemo(createExpoNotificationRuntime, []);
-  const [target, setTarget] = useState<HermesNotificationTarget | null>(null);
+  const [target, setTarget] = useState<AccountBoundNotificationTarget | null>(null);
   const [notificationHealth, setNotificationHealth] = useState<HermesNotificationHealth>('idle');
   const handledNotifications = useRef(new Map<string, number>());
   const processingNotifications = useRef(new Map<string, Promise<NotificationResponseOutcome>>());
   const authenticatedConnection = state.status === 'authenticated' ? state.connection : null;
+  const activeAccountKey = notificationAccountKey(authenticatedConnection);
   const notificationAccountRef = useRef(authenticatedConnection);
   const deviceIdRef = useRef(authenticatedConnection?.deviceId || '');
   const rememberDeviceIdRef = useRef(rememberDeviceId);
   notificationAccountRef.current = authenticatedConnection;
   deviceIdRef.current = authenticatedConnection?.deviceId || '';
   rememberDeviceIdRef.current = rememberDeviceId;
+
+  const publishTarget = useCallback((
+    nextTarget: HermesNotificationTarget,
+    acceptedConnection: NonNullable<typeof authenticatedConnection>,
+  ) => {
+    const bound = bindNotificationTarget(nextTarget, acceptedConnection);
+    if (
+      !bound
+      || bound.accountKey !== notificationAccountKey(notificationAccountRef.current)
+    ) return;
+    setTarget(bound);
+  }, []);
 
   const acceptResponse = useCallback(async (
     response: unknown,
@@ -92,15 +115,22 @@ export function NotificationProvider({ children }: PropsWithChildren) {
       connection.username,
       connection.accountGeneration,
     )) return 'discarded';
+    const acceptedAccountKey = notificationAccountKey(connection);
+    if (!acceptedAccountKey) return 'deferred';
+    const isCurrentAccount = () => (
+      notificationAccountKey(notificationAccountRef.current) === acceptedAccountKey
+    );
     const dedupeKey = notificationDedupeKey(parsed);
+    const scopedDedupeKey = `${acceptedAccountKey}\u0000${dedupeKey}`;
     pruneHandledNotifications(handledNotifications.current, Date.now());
-    if (handledNotifications.current.has(dedupeKey)) return 'processed';
-    const activeProcessing = processingNotifications.current.get(dedupeKey);
+    if (handledNotifications.current.has(scopedDedupeKey)) return 'processed';
+    const activeProcessing = processingNotifications.current.get(scopedDedupeKey);
     if (activeProcessing) return activeProcessing;
     const processing = (async (): Promise<NotificationResponseOutcome> => {
+      if (!isCurrentAccount()) return 'discarded';
       if (parsed.routePath !== '/smart-weather') {
-        markNotificationHandled(handledNotifications.current, dedupeKey);
-        setTarget(parsed);
+        markNotificationHandled(handledNotifications.current, scopedDedupeKey);
+        publishTarget(parsed, connection);
         return 'processed';
       }
       const sourceID = parsed.sourceNotificationId || parsed.notificationId;
@@ -118,38 +148,74 @@ export function NotificationProvider({ children }: PropsWithChildren) {
           useful: true,
         },
       });
-      try {
-        let persisted = false;
-        if (hasNativeIOSContext) {
-        const timestamp = Date.now();
-        const event = buildSmartWeatherFeedbackEvent(
-          sourceID,
-          connection.deviceId || '',
-          parsed,
-          timestamp,
-        );
-          if (!event) return 'discarded';
-          persisted = await HermesIOSContext.enqueueContextEvents([
-          event as unknown as Record<string, unknown>,
-          ]) > 0;
-        }
-        if (!persisted) await fallback();
-        markNotificationHandled(handledNotifications.current, dedupeKey);
-        setTarget(parsed);
-        return 'processed';
-      } catch {
-        return 'retry';
-      }
+      return processSmartWeatherNotificationResponse({
+        fallback,
+        isCurrentAccount,
+        markHandled: () => markNotificationHandled(
+          handledNotifications.current,
+          scopedDedupeKey,
+        ),
+        persistNative: hasNativeIOSContext
+          ? async () => {
+            const event = buildSmartWeatherFeedbackEvent(
+              sourceID,
+              connection.deviceId || '',
+              parsed,
+              Date.now(),
+            );
+            if (!event) return null;
+            return await HermesIOSContext.enqueueContextEvents([
+              event as unknown as Record<string, unknown>,
+            ]) > 0;
+          }
+          : undefined,
+        publishTarget: () => publishTarget(parsed, connection),
+      });
     })();
-    processingNotifications.current.set(dedupeKey, processing);
+    processingNotifications.current.set(scopedDedupeKey, processing);
     try {
       return await processing;
     } finally {
-      if (processingNotifications.current.get(dedupeKey) === processing) {
-        processingNotifications.current.delete(dedupeKey);
+      if (processingNotifications.current.get(scopedDedupeKey) === processing) {
+        processingNotifications.current.delete(scopedDedupeKey);
       }
     }
-  }, [client]);
+  }, [client, publishTarget]);
+
+  const accountLifecycleInitialized = useRef(false);
+  const previousAccountKey = useRef<string | null>(null);
+  useEffect(() => {
+    const firstRun = !accountLifecycleInitialized.current;
+    const accountChanged = accountLifecycleInitialized.current
+      && previousAccountKey.current !== activeAccountKey;
+    accountLifecycleInitialized.current = true;
+    previousAccountKey.current = activeAccountKey;
+    if ((!firstRun && !accountChanged) || (firstRun && activeAccountKey !== null)) {
+      return undefined;
+    }
+
+    setTarget(null);
+    handledNotifications.current.clear();
+    processingNotifications.current.clear();
+    if (!runtime.available) return undefined;
+
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearNotifications = () => {
+      void runtime.clearAccountNotifications().catch(() => {
+        if (!active) return;
+        setNotificationHealth('error');
+        if (activeAccountKey === null) {
+          retryTimer = setTimeout(clearNotifications, 30_000);
+        }
+      });
+    };
+    clearNotifications();
+    return () => {
+      active = false;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [activeAccountKey, runtime]);
 
   useEffect(() => {
     if (!runtime.available) return undefined;
@@ -291,15 +357,15 @@ export function NotificationProvider({ children }: PropsWithChildren) {
   ]);
 
   return (
-    <TaskNotificationContext.Provider value={target}>
+    <TaskNotificationContext.Provider
+      value={notificationTargetForAccount(target, authenticatedConnection)}
+    >
       <NotificationHealthContext.Provider value={notificationHealth}>
         {children}
       </NotificationHealthContext.Provider>
     </TaskNotificationContext.Provider>
   );
 }
-
-type NotificationResponseOutcome = 'deferred' | 'discarded' | 'processed' | 'retry';
 
 export function useTaskNotificationTarget(): HermesNotificationTarget | null {
   return useContext(TaskNotificationContext);

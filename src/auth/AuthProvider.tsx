@@ -56,6 +56,7 @@ import {
   MobileAuthApiError,
   type MobileAuthSession,
 } from './mobile-auth';
+import { clearExpoAccountNotifications } from '../notifications/expo-notification-runtime';
 import {
   savedSessionFailureInvalidatesCredentials,
   savedSessionFailureIsCleartextBaseUrl,
@@ -99,6 +100,7 @@ const credentialStore = new CredentialStore(authStore);
 const credentialMutations = new CredentialMutationQueue();
 const localAccountCleanupSaga = new LocalAccountCleanupSaga();
 const APNS_LOGOUT_DEADLINE_MS = 2_500;
+const NOTIFICATION_CLEANUP_DEADLINE_MS = 2_500;
 const REMOTE_LOGOUT_DEADLINE_MS = 8_000;
 const SAVED_SESSION_RETRY_DELAY_MS = 5_000;
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
@@ -718,6 +720,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     const operationGeneration = authLifecycle.current.beginOperation();
     if (operationGeneration === null) return;
     try {
+      await runOptionalAuthEffect(clearAccountNotificationsBeforeAuthExit);
       if (state.status === 'authenticated') {
         const connection = state.connection;
         const logoutClient = new HermesApiClient(
@@ -763,6 +766,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (operationGeneration === null) return;
     let serverDeleted = false;
     try {
+      await runOptionalAuthEffect(clearAccountNotificationsBeforeAuthExit);
       const ownerScope = accountOwnerScope(state.connection);
       // Persist the user's deletion intent before the remote request. If the
       // server commits and the app exits before the next line, cold-start
@@ -980,6 +984,14 @@ async function unregisterApnsBeforeLogout(
   } finally {
     abortController.abort();
   }
+}
+
+async function clearAccountNotificationsBeforeAuthExit(): Promise<void> {
+  await withDeadline(
+    clearExpoAccountNotifications(),
+    NOTIFICATION_CLEANUP_DEADLINE_MS,
+    'Hermes notification cleanup timed out',
+  );
 }
 
 function invalidatedSessionError(error: unknown): string {

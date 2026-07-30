@@ -300,7 +300,7 @@ export class HermesApiClient {
     headers.set('Accept', 'text/event-stream');
     const eventFetch = this.streamFetchImpl
       ?? (await import('expo/fetch')).fetch as unknown as typeof fetch;
-    return withRequestDeadline(async (deadlineSignal) => {
+    return withEventStreamConnectionDeadline(async (deadlineSignal) => {
       const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
         url,
         headers,
@@ -578,6 +578,113 @@ async function withRequestDeadline<T>(
     clearTimeout(timer);
     callerSignal?.removeEventListener('abort', onCallerAbort);
   }
+}
+
+async function withEventStreamConnectionDeadline(
+  operation: (signal: AbortSignal) => Promise<Response>,
+  callerSignal: AbortSignal | null | undefined,
+  timeoutMs: number,
+  message: string,
+): Promise<Response> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new AsyncDeadlineError(message);
+  }
+  if (callerSignal?.aborted) throw abortError();
+
+  const controller = new AbortController();
+  let rejectInterruption: (reason: Error) => void = () => undefined;
+  const interruption = new Promise<never>((_resolve, reject) => {
+    rejectInterruption = reject;
+  });
+  const onCallerAbort = () => {
+    rejectInterruption(abortError());
+    controller.abort();
+  };
+  const cleanupCallerAbort = () => {
+    callerSignal?.removeEventListener('abort', onCallerAbort);
+  };
+  callerSignal?.addEventListener('abort', onCallerAbort, { once: true });
+  const timer = setTimeout(() => {
+    rejectInterruption(new AsyncDeadlineError(message));
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    const response = await Promise.race([operation(controller.signal), interruption]);
+    clearTimeout(timer);
+    if (!response.body) {
+      cleanupCallerAbort();
+      return response;
+    }
+    return responseWithStreamingLifetime(
+      response,
+      controller,
+      cleanupCallerAbort,
+    );
+  } catch (error) {
+    clearTimeout(timer);
+    cleanupCallerAbort();
+    controller.abort();
+    throw error;
+  }
+}
+
+function responseWithStreamingLifetime(
+  response: Response,
+  requestController: AbortController,
+  cleanup: () => void,
+): Response {
+  const source = response.body;
+  if (!source) return response;
+  const reader = source.getReader();
+  let settled = false;
+  let released = false;
+  const settle = () => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+  };
+  const release = () => {
+    if (released) return;
+    released = true;
+    reader.releaseLock();
+  };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          settle();
+          release();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        settle();
+        release();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      settle();
+      requestController.abort();
+      try {
+        await reader.cancel(reason);
+      } finally {
+        release();
+      }
+    },
+  });
+  const wrapped = new Response(body, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+  if (response.url) {
+    Object.defineProperty(wrapped, 'url', { configurable: true, value: response.url });
+  }
+  return wrapped;
 }
 
 function abortError(): Error {

@@ -1097,6 +1097,43 @@ test('group collaboration reads and writes the modified Hermes room APIs', async
   assert.match(String(roomBody.turn_id), /^room-turn-/);
 });
 
+test('account file consumers retain the bounded streaming transport contract', async () => {
+  const calls: Array<{ path: string; options: HermesRequestOptions }> = [];
+  const client = {
+    async consumeDownload<T>(
+      path: string,
+      consume: (response: Response, signal: AbortSignal) => Promise<T>,
+      options: HermesRequestOptions = {},
+    ) {
+      calls.push({ path, options });
+      return consume(new Response('streamed account file'), new AbortController().signal);
+    },
+  } as HermesApiClient;
+  const api = new HermesCloudApi(client);
+
+  assert.equal(
+    await api.consumeAccountFile(
+      'file / one',
+      true,
+      (response) => response.text(),
+    ),
+    'streamed account file',
+  );
+  assert.equal(
+    await api.consumeAccountFile(
+      'toolout_1234',
+      false,
+      (response) => response.text(),
+    ),
+    'streamed account file',
+  );
+  assert.deepEqual(calls.map(({ path }) => path), [
+    '/api/plugins/collaboration/files/file%20%2F%20one/download',
+    '/api/plugins/collaboration/tool-output-artifacts/toolout_1234/download',
+  ]);
+  assert.equal(calls[0].options.query?.preview, true);
+});
+
 test('session summaries keep preview, model precedence, and tool counts after the single-pass rewrite', () => {
   const now = 1_800_000_000_000;
   const summary = conversationSessionSummary({

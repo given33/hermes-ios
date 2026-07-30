@@ -91,12 +91,32 @@ export function mergeDownloadedConversations(
     return cloneCachedConversation({
       ...summary,
       ...full,
-      message_count: full.message_count ?? summary.message_count ?? full.messages.length,
+      message_count: Math.max(numberValue(full.message_count), full.messages.length),
     });
   });
 }
 
-export function upsertCachedConversation(
+export function replaceCachedConversationSnapshot(
+  conversations: readonly SingleConversation[],
+  conversation: SingleConversation,
+  replacedId = '',
+): SingleConversation[] {
+  const authoritative = {
+    ...conversation,
+    message_count: Math.max(
+      numberValue(conversation.message_count),
+      conversation.messages.length,
+    ),
+  };
+  return [
+    cloneCachedConversation(authoritative),
+    ...conversations.filter((item) => (
+      item.id !== conversation.id && (!replacedId || item.id !== replacedId)
+    )).map(cloneCachedConversation),
+  ].sort((left, right) => numberValue(right.updated_at) - numberValue(left.updated_at));
+}
+
+export function mergeCachedConversationUpdate(
   conversations: readonly SingleConversation[],
   conversation: SingleConversation,
   replacedId = '',

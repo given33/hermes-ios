@@ -14,7 +14,7 @@ import {
   mergeDownloadedConversations,
   mergeOptimisticConversationLedgers,
   reconcileConversationCache,
-  upsertCachedConversation,
+  replaceCachedConversationSnapshot,
   type ConversationLocalStore,
   type OptimisticPendingTurn,
 } from '../../api/conversation-local-store';
@@ -156,7 +156,7 @@ export function useConversationIndexController({
       ) {
         return result.conversation;
       }
-      conversationIndexRef.current = upsertCachedConversation(
+      conversationIndexRef.current = replaceCachedConversationSnapshot(
         conversationIndexRef.current,
         result.conversation,
         conversationId,

@@ -22,8 +22,139 @@ import {
   parseHermesNotificationPayload,
   parseHermesNotificationResponse,
 } from '../src/notifications/notification-target';
+import {
+  bindNotificationTarget,
+  notificationAccountKey,
+  notificationTargetForAccount,
+} from '../src/notifications/notification-account-state';
+import { clearNotificationState } from '../src/notifications/notification-cleanup';
+import { processSmartWeatherNotificationResponse } from '../src/notifications/notification-response-processing';
 
 const APNS_TOKEN = 'a1'.repeat(32);
+
+test('notification routes remain bound to the server account that accepted them', () => {
+  const target = parseHermesNotificationPayload({
+    account_generation: 'generation-1',
+    conversation_id: 'chat-1',
+    event_key: 'event-1',
+    owner_id: 'owner-a',
+  }, 'notification-1');
+  assert.ok(target);
+  const first = {
+    baseUrl: 'https://one.hermes.test',
+    username: 'owner-a',
+    accountGeneration: 'generation-1',
+  };
+  const sameIdentityOnAnotherServer = {
+    ...first,
+    baseUrl: 'https://two.hermes.test',
+  };
+  const bound = bindNotificationTarget(target, first);
+  assert.ok(bound);
+  assert.equal(notificationTargetForAccount(bound, first), target);
+  assert.equal(notificationTargetForAccount(bound, sameIdentityOnAnotherServer), null);
+  assert.equal(notificationTargetForAccount(bound, null), null);
+});
+
+test('smart-weather processing stops after a native await crosses account generations', async () => {
+  const nativeResult = deferred<boolean | null>();
+  const acceptedAccount = {
+    accountGeneration: 'generation-1',
+    baseUrl: 'https://one.hermes.test',
+    username: 'owner-a',
+  };
+  const acceptedAccountKey = notificationAccountKey(acceptedAccount);
+  let activeAccount = acceptedAccount;
+  const calls: string[] = [];
+  const processing = processSmartWeatherNotificationResponse({
+    fallback: async () => { calls.push('fallback'); },
+    isCurrentAccount: () => notificationAccountKey(activeAccount) === acceptedAccountKey,
+    markHandled: () => { calls.push('handled'); },
+    persistNative: async () => {
+      calls.push('native');
+      return nativeResult.promise;
+    },
+    publishTarget: () => { calls.push('target'); },
+  });
+
+  assert.deepEqual(calls, ['native']);
+  activeAccount = { ...acceptedAccount, accountGeneration: 'generation-2' };
+  nativeResult.resolve(false);
+
+  assert.equal(await processing, 'discarded');
+  assert.deepEqual(calls, ['native']);
+});
+
+test('smart-weather processing cannot publish or mark handled after fallback changes account', async () => {
+  const fallbackFinished = deferred<void>();
+  const fallbackStarted = deferred<void>();
+  const acceptedAccount = {
+    accountGeneration: 'generation-1',
+    baseUrl: 'https://one.hermes.test',
+    username: 'owner-a',
+  };
+  const acceptedAccountKey = notificationAccountKey(acceptedAccount);
+  let activeAccount = acceptedAccount;
+  const calls: string[] = [];
+  const processing = processSmartWeatherNotificationResponse({
+    fallback: async () => {
+      calls.push('fallback');
+      fallbackStarted.resolve();
+      return fallbackFinished.promise;
+    },
+    isCurrentAccount: () => notificationAccountKey(activeAccount) === acceptedAccountKey,
+    markHandled: () => { calls.push('handled'); },
+    persistNative: async () => false,
+    publishTarget: () => { calls.push('target'); },
+  });
+
+  await fallbackStarted.promise;
+  activeAccount = { ...acceptedAccount, baseUrl: 'https://two.hermes.test' };
+  fallbackFinished.resolve();
+
+  assert.equal(await processing, 'discarded');
+  assert.deepEqual(calls, ['fallback']);
+});
+
+test('account notification cleanup attempts every sensitive surface before failing', async () => {
+  const calls: string[] = [];
+  await assert.rejects(
+    clearNotificationState({
+      async cancelAllScheduledNotifications() { calls.push('scheduled'); },
+      async clearLastResponse() { calls.push('response'); },
+      async dismissAllNotifications() {
+        calls.push('delivered');
+        throw new Error('notification center unavailable');
+      },
+      async clearBadge() { calls.push('badge'); },
+    }),
+    /notification center unavailable/,
+  );
+  assert.deepEqual(calls, ['scheduled', 'response', 'delivered', 'badge']);
+
+  const provider = readFileSync(
+    resolve(process.cwd(), 'src', 'notifications', 'NotificationProvider.tsx'),
+    'utf8',
+  );
+  const runtime = readFileSync(
+    resolve(process.cwd(), 'src', 'notifications', 'expo-notification-runtime.ts'),
+    'utf8',
+  );
+  assert.match(provider, /runtime\.clearAccountNotifications\(\)/);
+  assert.match(runtime, /dismissAllNotificationsAsync/);
+  assert.match(runtime, /cancelAllScheduledNotificationsAsync/);
+  assert.match(runtime, /setBadgeCountAsync\(0\)/);
+
+  const auth = readFileSync(
+    resolve(process.cwd(), 'src', 'auth', 'AuthProvider.tsx'),
+    'utf8',
+  );
+  assert.equal(
+    (auth.match(/runOptionalAuthEffect\(clearAccountNotificationsBeforeAuthExit\)/g) || []).length,
+    2,
+  );
+  assert.match(auth, /withDeadline\([\s\S]*clearExpoAccountNotifications\(\)[\s\S]*NOTIFICATION_CLEANUP_DEADLINE_MS/);
+});
 
 function jsonResponse(url: string, body: unknown, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
@@ -351,3 +482,9 @@ test('notification provider exposes registration health and retries transient AP
   assert.match(source, /setNotificationHealth\('error'\)[\s\S]*setTimeout\([\s\S]*30_000/);
   assert.match(source, /useNotificationHealth/);
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => { resolve = settle; });
+  return { promise, resolve };
+}

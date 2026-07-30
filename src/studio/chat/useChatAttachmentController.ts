@@ -27,6 +27,7 @@ import {
   partitionAttachmentsBySize,
 } from '../../api/attachment-size-policy';
 import { writeBoundedDownload } from '../../api/bounded-download';
+import { temporaryPlaintextFile } from '../../api/temporary-plaintext-files';
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
 import type { HermesChatAttachment as StoredChatAttachment } from '../../api/chat-view-model';
 import { AsyncSingleFlight } from './AsyncSingleFlight';
@@ -487,10 +488,9 @@ export function useChatAttachmentController({
     try {
       const downloadIdentity = uniqueTurnId('attachment-download')
         .replace(/[^A-Za-z0-9._-]/g, '');
-      const target = new ExpoFile(
-        Paths.cache,
-        `${stableStringHash(attachment.downloadUrl)}-${ownerEpoch}-${downloadIdentity}`
-          + `-${attachment.name.replace(/[\\/:*?"<>|]+/g, '_')}`,
+      const target = temporaryPlaintextFile(
+        attachment.name,
+        `chat-${stableStringHash(attachment.downloadUrl)}-${ownerEpoch}-${downloadIdentity}`,
       );
       let ownsTarget = false;
       try {

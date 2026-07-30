@@ -1,4 +1,8 @@
 import type { HermesCloudApi, SingleConversation } from './HermesCloudApi';
+import {
+  assertSseFrameWithinLimit,
+  decodeSseTextStream,
+} from './sse-stream-safety';
 
 export const HOSTED_EVENT_SCHEMA_VERSION = 'hermes.hosted-event.v1';
 const MALFORMED_FRAME_REPORT_INTERVAL_MS = 60_000;
@@ -56,8 +60,6 @@ export async function consumeHostedConversationEvents(
   );
   if (!response.body) throw new Error('Hermes hosted event stream has no response body');
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
   let buffer = '';
   let latestCursor = Math.max(0, Math.floor(cursor));
   const reportMalformedFrame = (error: RecoverableHostedFrameError) => {
@@ -67,38 +69,33 @@ export async function consumeHostedConversationEvents(
       onMalformedFrame,
     );
   };
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      const parsed = await drainSseBuffer(
+  for await (const decoded of decodeSseTextStream(response.body, signal)) {
+    buffer += decoded;
+    const parsed = await drainSseBuffer(
+      buffer,
+      latestCursor,
+      conversationId,
+      expectedGeneration,
+      onEvent,
+      reportMalformedFrame,
+    );
+    buffer = parsed.remaining;
+    assertSseFrameWithinLimit(buffer.length, 'Hermes hosted event stream');
+    latestCursor = parsed.cursor;
+  }
+  if (buffer.trim()) {
+    try {
+      latestCursor = await parseSseFrame(
         buffer,
         latestCursor,
         conversationId,
         expectedGeneration,
         onEvent,
-        reportMalformedFrame,
       );
-      buffer = parsed.remaining;
-      latestCursor = parsed.cursor;
-      if (done) break;
+    } catch (error) {
+      if (!(error instanceof RecoverableHostedFrameError)) throw error;
+      reportMalformedFrame(error);
     }
-    if (buffer.trim()) {
-      try {
-        latestCursor = await parseSseFrame(
-          buffer,
-          latestCursor,
-          conversationId,
-          expectedGeneration,
-          onEvent,
-        );
-      } catch (error) {
-        if (!(error instanceof RecoverableHostedFrameError)) throw error;
-        reportMalformedFrame(error);
-      }
-    }
-  } finally {
-    reader.releaseLock();
   }
   return latestCursor;
 }
@@ -116,6 +113,7 @@ async function drainSseBuffer(
   while (true) {
     const boundary = /\r?\n\r?\n/.exec(remaining);
     if (!boundary || boundary.index === undefined) break;
+    assertSseFrameWithinLimit(boundary.index, 'Hermes hosted event stream');
     const frame = remaining.slice(0, boundary.index);
     remaining = remaining.slice(boundary.index + boundary[0].length);
     try {

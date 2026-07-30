@@ -363,6 +363,9 @@ public final class HermesIOSContextModule: Module {
         scope,
         accountGeneration: accountGeneration
       )
+      guard deletion.outcome == .applied else {
+        throw HermesAccountDeletionError.persistenceFailed
+      }
       if !scope.isEmpty { _ = try self.attachmentVault.deleteKey(owner: scope) }
       return [
         "accountGeneration": deletion.accountGeneration,
@@ -750,6 +753,10 @@ enum HermesAuthorization {
     @unknown default: return "unavailable"
     }
   }
+}
+
+private enum HermesAccountDeletionError: Error {
+  case persistenceFailed
 }
 
 enum HermesPower {
