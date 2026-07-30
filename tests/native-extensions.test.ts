@@ -150,8 +150,9 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
     assert.match(info, /<key>HermesSharedKeychainAccessGroup<\/key>[\s\S]*\$\(AppIdentifierPrefix\)app\.sunstone1029\.fig1171\.hermes\.shared/);
   }
   const workflow = read('.github/workflows/ios-unsigned.yml');
-  assert.match(workflow, /plist_value keychain-access-groups\.0/);
-  assert.match(workflow, /plutil -extract "\$key" raw -o - "\$file"/);
+  assert.match(workflow, /import plistlib/);
+  assert.match(workflow, /"keychain-access-groups": \[shared_keychain_group\]/);
+  assert.match(workflow, /"com\.apple\.developer\.family-controls": True/);
   assert.match(
     workflow,
     /verify_contains 'HermesScreenTimeSpool\.swift' 'shared Screen Time spool source'/,

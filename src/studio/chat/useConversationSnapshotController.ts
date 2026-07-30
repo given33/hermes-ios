@@ -119,6 +119,8 @@ export function useConversationSnapshotController({
 }: ConversationSnapshotControllerOptions) {
   const cacheWriteRef = useRef<Promise<void>>(Promise.resolve());
   const sessionEntryStateRef = useRef(new Map<string, { cursor: number; generation: string }>());
+  const reconnectAttemptRef = useRef(reconnectAttempt);
+  reconnectAttemptRef.current = reconnectAttempt;
 
   const persistConversationCache = useCallback((
     conversations: readonly SingleConversation[],
@@ -294,7 +296,7 @@ export function useConversationSnapshotController({
         const reconnectMatch = runtimeStatus.match(/(?:正在重连|reconnecting)\s*[（(](\d+)\s*\/\s*5[）)]/i);
         if (reconnectMatch) {
           const attempt = Number(reconnectMatch[1]);
-          if (pendingPhaseRef.current !== 'reconnecting' || reconnectAttempt !== attempt) {
+          if (pendingPhaseRef.current !== 'reconnecting' || reconnectAttemptRef.current !== attempt) {
             setReconnectAttempt(attempt);
             updatePendingPhase('reconnecting', latestRuntimeStatus?.startedAt || Date.now());
           }
@@ -371,7 +373,6 @@ export function useConversationSnapshotController({
     optimisticPendingByConversationRef,
     pendingPhaseRef,
     pendingTurnActiveRef,
-    reconnectAttempt,
     replaceOptimisticMessages,
     setActiveConversationId,
     setActiveHostedTurnId,

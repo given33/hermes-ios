@@ -62,6 +62,7 @@ interface PersistedIOSDeviceCommand extends IOSDeviceCommand {
 }
 
 const EVENT_BATCH_SIZE = 200;
+const MAX_EVENT_FLUSH_PAGES = 50;
 const FOREGROUND_SYNC_MS = 20_000;
 const SNAPSHOT_SYNC_MS = 30 * 60_000;
 const NETWORK_PROBE_DEADLINE_MS = 5_000;
@@ -128,7 +129,7 @@ export function IOSContextProvider({
     const api = apiRef.current;
     try {
       if (!await awaitCurrentIOSContext(lifecycle, capture, hasUsableNetwork)) return;
-      while (true) {
+      for (let page = 0; page < MAX_EVENT_FLUSH_PAGES; page += 1) {
         const claim = await awaitCurrentIOSContext(
           lifecycle,
           capture,
