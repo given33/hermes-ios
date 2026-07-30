@@ -57,10 +57,9 @@ export class OptimisticConversationLedgerRepository {
         && normalizedMessages.some(
           ({ id, role }) => id === currentEntry.pendingTurn?.userMessageId && role === 'user',
         )
-        && normalizedMessages.some(({ id, role, status }) => (
-          role === 'assistant'
-          && id.includes(currentEntry.pendingTurn?.userMessageId || '')
-          && (status === 'failed' || status === 'completed')
+        && normalizedMessages.some((message) => terminalMessageMatchesPendingTurn(
+          message,
+          currentEntry.pendingTurn!,
         )),
       );
       if (expectedMessageIds && !expectedIdsMatch && !completesCurrentPendingTurn) return;
@@ -458,6 +457,28 @@ function sameMessageIds(
   const expected = [...expectedMessageIds].map(stringValue).filter(Boolean).sort();
   return current.length === expected.length
     && current.every((id, index) => id === expected[index]);
+}
+
+function terminalMessageMatchesPendingTurn(
+  message: CollaborationMessage,
+  pendingTurn: OptimisticPendingTurn,
+): boolean {
+  if (
+    message.role !== 'assistant'
+    || (message.status !== 'failed' && message.status !== 'completed')
+  ) return false;
+  if (new Set([
+    `send-failed-${pendingTurn.userMessageId}`,
+    `connection-unavailable-${pendingTurn.userMessageId}`,
+    `cancelled-${pendingTurn.userMessageId}`,
+  ]).has(message.id)) return true;
+  const meta = isRecord(message.meta) ? message.meta : {};
+  if (
+    stringValue(meta.request_id) === pendingTurn.userMessageId
+    || stringValue(meta.user_message_id) === pendingTurn.userMessageId
+  ) return true;
+  const turnId = stringValue(meta.runtime_turn_id) || stringValue(meta.turn_id);
+  return Boolean(pendingTurn.turnId && turnId === pendingTurn.turnId);
 }
 
 function compareMessages(left: CollaborationMessage, right: CollaborationMessage): number {

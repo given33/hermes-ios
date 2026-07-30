@@ -185,7 +185,7 @@ export class HermesCloudApi {
       ) => this.json<T>(path, method, body, options),
       openEventStream: (
         path: string,
-        options?: Omit<HermesRequestOptions, 'deadlineMs'>,
+        options?: HermesRequestOptions,
       ) => this.client.openEventStream(path, options),
       request: <T>(path: string, options?: HermesRequestOptions) =>
         this.request<T>(path, options),

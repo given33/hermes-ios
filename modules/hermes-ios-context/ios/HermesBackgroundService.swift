@@ -1,5 +1,6 @@
 import BackgroundTasks
 import Foundation
+import os
 import UIKit
 
 final class HermesBackgroundService {
@@ -16,6 +17,7 @@ final class HermesBackgroundService {
   private let wakeLock = NSLock()
   private var pendingWakeCompletions: [String: (Bool) -> Void] = [:]
   private let retryStateKey = "app.hermes.background.retry-state-v1"
+  private let logger = Logger(subsystem: "app.hermes", category: "background-tasks")
 
   func register() {
     stateLock.lock()
@@ -51,7 +53,11 @@ final class HermesBackgroundService {
       Date(timeIntervalSinceNow: 20 * 60),
       retryAt
     )
-    try? BGTaskScheduler.shared.submit(refresh)
+    do {
+      try BGTaskScheduler.shared.submit(refresh)
+    } catch {
+      logger.error("Could not schedule app refresh: \(error.localizedDescription, privacy: .public)")
+    }
 
     let processing = BGProcessingTaskRequest(identifier: Self.processingIdentifier)
     processing.requiresNetworkConnectivity = true
@@ -60,7 +66,11 @@ final class HermesBackgroundService {
       Date(timeIntervalSinceNow: 60 * 60),
       retryAt
     )
-    try? BGTaskScheduler.shared.submit(processing)
+    do {
+      try BGTaskScheduler.shared.submit(processing)
+    } catch {
+      logger.error("Could not schedule background processing: \(error.localizedDescription, privacy: .public)")
+    }
   }
 
   func cancelScheduledTasks() {

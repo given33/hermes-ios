@@ -280,9 +280,10 @@ export class HermesApiClient {
 
   async openEventStream(
     path: string,
-    options: Omit<HermesRequestOptions, 'deadlineMs'> = {},
+    options: HermesRequestOptions = {},
   ): Promise<Response> {
     const {
+      deadlineMs = HERMES_REQUEST_DEADLINE_MS,
       headers: callerHeaders,
       profile,
       query,
@@ -299,24 +300,26 @@ export class HermesApiClient {
     headers.set('Accept', 'text/event-stream');
     const eventFetch = this.streamFetchImpl
       ?? (await import('expo/fetch')).fetch as unknown as typeof fetch;
-    const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
-      url,
-      headers,
-      { ...requestInit, cache: 'no-store', method: 'GET', signal },
-      eventFetch,
-    );
-    if (!response.ok) {
-      const body = await response.text();
-      throw new HermesApiError(
-        response.status,
-        safeResponseDetail(body, response, attemptedTokens),
+    return withRequestDeadline(async (deadlineSignal) => {
+      const { response, attemptedTokens } = await this.fetchAuthorizedResponse(
+        url,
+        headers,
+        { ...requestInit, cache: 'no-store', method: 'GET', signal: deadlineSignal },
+        eventFetch,
       );
-    }
-    const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
-    if (!contentType.includes('text/event-stream')) {
-      throw new Error('Hermes returned a non-streaming hosted event response');
-    }
-    return response;
+      if (!response.ok) {
+        const body = await response.text();
+        throw new HermesApiError(
+          response.status,
+          safeResponseDetail(body, response, attemptedTokens),
+        );
+      }
+      const contentType = response.headers.get('Content-Type')?.toLowerCase() ?? '';
+      if (!contentType.includes('text/event-stream')) {
+        throw new Error('Hermes returned a non-streaming hosted event response');
+      }
+      return response;
+    }, signal, deadlineMs, 'Hermes event stream connection timed out');
   }
 
   createAttachmentUrl(path: string, query?: HermesQuery): string {

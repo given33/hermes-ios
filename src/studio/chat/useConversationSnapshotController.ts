@@ -157,11 +157,16 @@ export function useConversationSnapshotController({
     incomingConversation: SingleConversation,
     expectedEpoch = captureConversationStorageEpoch(cacheOwner),
     resetCursor = false,
+    activateConversation = false,
   ) => {
     if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
     if (
       String(incomingConversation.account_generation || '').trim()
       !== accountGenerationFromOwnerScope(cacheOwner)
+    ) return;
+    if (
+      !activateConversation
+      && activeConversationIdRef.current !== incomingConversation.id
     ) return;
     const incomingCursor = Math.max(
       0,
@@ -388,6 +393,7 @@ export function useConversationSnapshotController({
     conversationId: string,
     expectedGeneration = 0,
     signal?: AbortSignal,
+    activateConversation = false,
   ) => {
     if (!cloudApi || !conversationId) return null;
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
@@ -449,10 +455,13 @@ export function useConversationSnapshotController({
     ) {
       return conversation;
     }
-    if (activeConversationIdRef.current && activeConversationIdRef.current !== conversationId) {
+    if (
+      !activateConversation
+      && activeConversationIdRef.current !== conversationId
+    ) {
       return conversation;
     }
-    await applyConversation(conversation, ownerEpoch);
+    await applyConversation(conversation, ownerEpoch, false, activateConversation);
     return conversation;
   }, [
     activeConversationIdRef,

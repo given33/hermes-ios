@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
 import { withAbortableDeadline } from '../../api/async-deadline';
+import { reconnectDelay } from '../../api/reconnect-backoff';
 import {
   consumeHostedConversationEvents,
 } from '../../api/hosted-conversation-events';
@@ -13,7 +14,7 @@ import {
   isConversationStorageEpochCurrent,
 } from '../../api/conversation-storage-coordinator';
 
-const STREAM_RECONNECT_MS = 1_500;
+const FAILURE_LOG_INTERVAL_MS = 60_000;
 const HEALTHY_POLL_MS = 15_000;
 const DISCONNECTED_POLL_MS = 1_000;
 
@@ -62,6 +63,8 @@ export function useHostedConversationStream({
     let streamController: AbortController | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempt = 0;
+    let lastFailureLogAt = 0;
     const expectedAccountGeneration = accountGenerationFromOwnerScope(cacheOwner);
     let reconciliationQueue = Promise.resolve();
     const activeGeneration = generation.advanceActive();
@@ -76,6 +79,16 @@ export function useHostedConversationStream({
       return result;
     };
 
+    const reportRefreshFailure = (kind: 'poll' | 'stream', error: unknown) => {
+      const now = Date.now();
+      if (now - lastFailureLogAt < FAILURE_LOG_INTERVAL_MS) return;
+      lastFailureLogAt = now;
+      console.warn(
+        `Hermes hosted conversation ${kind} refresh failed`,
+        error instanceof Error ? error.name : 'Error',
+      );
+    };
+
     const scheduleStream = () => {
       if (
         disposed
@@ -86,10 +99,12 @@ export function useHostedConversationStream({
       ) {
         return;
       }
+      const delay = reconnectDelay(reconnectAttempt);
+      reconnectAttempt += 1;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         startStream();
-      }, STREAM_RECONNECT_MS);
+      }, delay);
     };
 
     const startStream = () => {
@@ -147,10 +162,14 @@ export function useHostedConversationStream({
             if (!lifecycleCurrent() || !generation.isActiveCurrent(activeGeneration)) return;
             cursorRef.current.set(activeConversationId, cursor);
             streamHealthy = true;
+            reconnectAttempt = 0;
           });
         },
-      ).catch(() => {
-        if (!streamController?.signal.aborted) streamHealthy = false;
+      ).catch((error: unknown) => {
+        if (!streamController?.signal.aborted) {
+          streamHealthy = false;
+          reportRefreshFailure('stream', error);
+        }
       }).finally(() => {
         streamActive = false;
         streamController = null;
@@ -165,7 +184,9 @@ export function useHostedConversationStream({
           (signal) => loadConversation(activeConversationId, activeGeneration, signal),
           requestTimeoutMs,
           'Hermes conversation polling timed out',
-        )).catch(() => undefined);
+        )).catch((error: unknown) => {
+          reportRefreshFailure('poll', error);
+        });
       }
       if (!disposed && lifecycleCurrent()) {
         pollTimer = setTimeout(

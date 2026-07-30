@@ -3,6 +3,7 @@ const synchronizationGenerations = new Map<string, number>();
 const synchronizationEpochs = new Map<string, Map<number, number>>();
 const lifecycleEpochs = new Map<string, number>();
 const blockedOwners = new Set<string>();
+export const CONVERSATION_STORAGE_WRITE_TIMEOUT_MS = 30_000;
 
 export class ConversationStorageLifecycleChangedError extends Error {
   constructor() {
@@ -11,11 +12,43 @@ export class ConversationStorageLifecycleChangedError extends Error {
   }
 }
 
+export class ConversationStorageWriteTimeoutError extends Error {
+  constructor() {
+    super('Conversation storage write timed out');
+    this.name = 'ConversationStorageWriteTimeoutError';
+  }
+}
+
+async function waitForOwnerOperation(
+  operation: Promise<void>,
+  timeoutMs?: number,
+): Promise<void> {
+  if (timeoutMs === undefined) {
+    await operation;
+    return;
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new ConversationStorageWriteTimeoutError()),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 async function enqueueOwnerOperation(
   owner: string,
   operation: () => Promise<void>,
   allowBlocked: boolean,
   expectedEpoch?: number,
+  timeoutMs?: number,
 ): Promise<void> {
   const previous = writeChains.get(owner) || Promise.resolve();
   const next = previous.catch(() => undefined).then(async () => {
@@ -27,11 +60,10 @@ async function enqueueOwnerOperation(
     await operation();
   });
   writeChains.set(owner, next);
-  try {
-    await next;
-  } finally {
+  void next.finally(() => {
     if (writeChains.get(owner) === next) writeChains.delete(owner);
-  }
+  }).catch(() => undefined);
+  await waitForOwnerOperation(next, timeoutMs);
 }
 
 /** Serialize every local conversation mutation for one account across facades. */
@@ -39,8 +71,11 @@ export async function enqueueConversationStorageWrite(
   owner: string,
   operation: () => Promise<void>,
   expectedEpoch = captureConversationStorageEpoch(owner),
+  timeoutMs = CONVERSATION_STORAGE_WRITE_TIMEOUT_MS,
 ): Promise<void> {
-  await enqueueOwnerOperation(owner, operation, false, expectedEpoch);
+  // Timing out releases the caller, not the operation: the chain remains in
+  // place so a late storage completion cannot be overtaken by a newer write.
+  await enqueueOwnerOperation(owner, operation, false, expectedEpoch, timeoutMs);
 }
 
 /** Serialize account lifecycle work even while ordinary writes are fenced. */

@@ -45,33 +45,61 @@ export type HermesNotificationHealth =
   | 'unavailable'
   | 'error';
 const NotificationHealthContext = createContext<HermesNotificationHealth>('idle');
+const HANDLED_NOTIFICATION_TTL_MS = 24 * 60 * 60 * 1_000;
+const MAX_HANDLED_NOTIFICATIONS = 256;
+
+function pruneHandledNotifications(items: Map<string, number>, now: number): void {
+  for (const [key, handledAt] of items) {
+    if (now - handledAt > HANDLED_NOTIFICATION_TTL_MS) items.delete(key);
+  }
+  while (items.size > MAX_HANDLED_NOTIFICATIONS) {
+    const oldest = items.keys().next().value;
+    if (oldest === undefined) break;
+    items.delete(oldest);
+  }
+}
+
+function markNotificationHandled(items: Map<string, number>, key: string): void {
+  items.delete(key);
+  items.set(key, Date.now());
+  pruneHandledNotifications(items, Date.now());
+}
 
 export function NotificationProvider({ children }: PropsWithChildren) {
   const { client, rememberDeviceId, state } = useAuth();
   const runtime = useMemo(createExpoNotificationRuntime, []);
   const [target, setTarget] = useState<HermesNotificationTarget | null>(null);
   const [notificationHealth, setNotificationHealth] = useState<HermesNotificationHealth>('idle');
-  const handledNotifications = useRef(new Set<string>());
+  const handledNotifications = useRef(new Map<string, number>());
   const processingNotifications = useRef(new Map<string, Promise<NotificationResponseOutcome>>());
+  const authenticatedConnection = state.status === 'authenticated' ? state.connection : null;
+  const notificationAccountRef = useRef(authenticatedConnection);
+  const deviceIdRef = useRef(authenticatedConnection?.deviceId || '');
+  const rememberDeviceIdRef = useRef(rememberDeviceId);
+  notificationAccountRef.current = authenticatedConnection;
+  deviceIdRef.current = authenticatedConnection?.deviceId || '';
+  rememberDeviceIdRef.current = rememberDeviceId;
 
   const acceptResponse = useCallback(async (
     response: unknown,
   ): Promise<NotificationResponseOutcome> => {
-    if (state.status !== 'authenticated' || !client) return 'deferred';
+    const connection = notificationAccountRef.current;
+    if (!connection || !client) return 'deferred';
     const parsed = parseHermesNotificationResponse(response);
     if (!parsed) return 'discarded';
     if (!notificationMatchesAccount(
       parsed,
-      state.connection.username,
-      state.connection.accountGeneration,
+      connection.username,
+      connection.accountGeneration,
     )) return 'discarded';
     const dedupeKey = notificationDedupeKey(parsed);
+    pruneHandledNotifications(handledNotifications.current, Date.now());
     if (handledNotifications.current.has(dedupeKey)) return 'processed';
     const activeProcessing = processingNotifications.current.get(dedupeKey);
     if (activeProcessing) return activeProcessing;
     const processing = (async (): Promise<NotificationResponseOutcome> => {
       if (parsed.routePath !== '/smart-weather') {
-        handledNotifications.current.add(dedupeKey);
+        markNotificationHandled(handledNotifications.current, dedupeKey);
         setTarget(parsed);
         return 'processed';
       }
@@ -96,7 +124,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
         const timestamp = Date.now();
         const event = buildSmartWeatherFeedbackEvent(
           sourceID,
-          state.connection.deviceId || '',
+          connection.deviceId || '',
           parsed,
           timestamp,
         );
@@ -106,7 +134,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
           ]) > 0;
         }
         if (!persisted) await fallback();
-        handledNotifications.current.add(dedupeKey);
+        markNotificationHandled(handledNotifications.current, dedupeKey);
         setTarget(parsed);
         return 'processed';
       } catch {
@@ -121,7 +149,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
         processingNotifications.current.delete(dedupeKey);
       }
     }
-  }, [client, state]);
+  }, [client]);
 
   useEffect(() => {
     if (!runtime.available) return undefined;
@@ -162,7 +190,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
   }, [acceptResponse, runtime]);
 
   useEffect(() => {
-    if (state.status !== 'authenticated' || !client || !runtime.available) {
+    if (!authenticatedConnection || !client || !runtime.available) {
       setNotificationHealth(runtime.available ? 'idle' : 'unavailable');
       return undefined;
     }
@@ -172,6 +200,8 @@ export function NotificationProvider({ children }: PropsWithChildren) {
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const api = new HermesMobileNotificationApi(client);
     const config = currentApnsRegistrationConfig();
+    const ownerScope = accountOwnerScope(authenticatedConnection);
+    const accountGeneration = authenticatedConnection.accountGeneration;
     const enqueueSynchronization = (token?: NativePushToken) => {
       if (retryTimer) {
         clearTimeout(retryTimer);
@@ -180,11 +210,10 @@ export function NotificationProvider({ children }: PropsWithChildren) {
       queue = queue.then(async () => {
         if (!active) return;
         setNotificationHealth('syncing');
-        const ownerScope = accountOwnerScope(state.connection);
         if (hasNativeIOSContext) {
           await HermesIOSContext.setOwnerScope(
             ownerScope,
-            state.connection.accountGeneration,
+            accountGeneration,
           );
           if (!active) return;
           await HermesIOSContext.setPermissionCollectionReady(ownerScope, false);
@@ -203,7 +232,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
         }
         const result = await synchronizeApnsRegistration(
           api,
-          state.connection.deviceId,
+          deviceIdRef.current,
           runtime,
           config,
           token,
@@ -219,9 +248,10 @@ export function NotificationProvider({ children }: PropsWithChildren) {
         if (
           active
           && 'deviceId' in result
-          && result.deviceId !== state.connection.deviceId
+          && result.deviceId !== deviceIdRef.current
         ) {
-          await rememberDeviceId(result.deviceId);
+          deviceIdRef.current = result.deviceId;
+          await rememberDeviceIdRef.current(result.deviceId);
           if (!active) return;
         }
         if (coordinated && !canCollectIOSPermission(coordinated, 'notification')) {
@@ -252,7 +282,13 @@ export function NotificationProvider({ children }: PropsWithChildren) {
       unsubscribeTokens();
       appStateSubscription.remove();
     };
-  }, [client, rememberDeviceId, runtime, state]);
+  }, [
+    authenticatedConnection?.accountGeneration,
+    authenticatedConnection?.baseUrl,
+    authenticatedConnection?.username,
+    client,
+    runtime,
+  ]);
 
   return (
     <TaskNotificationContext.Provider value={target}>

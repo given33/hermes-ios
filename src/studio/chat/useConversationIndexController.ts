@@ -43,7 +43,12 @@ import {
 interface ConversationIndexControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
   activeHostedTurnIdRef: MutableRefObject<string>;
-  applyConversation(conversation: SingleConversation, expectedOwnerEpoch?: number): void;
+  applyConversation(
+    conversation: SingleConversation,
+    expectedOwnerEpoch?: number,
+    resetCursor?: boolean,
+    activateConversation?: boolean,
+  ): void;
   cacheOwner: string;
   clearOptimisticHostedTurn(): void;
   cloudApi: HermesCloudApi | null;
@@ -60,6 +65,7 @@ interface ConversationIndexControllerOptions {
     conversationId: string,
     expectedGeneration?: number,
     signal?: AbortSignal,
+    activateConversation?: boolean,
   ): Promise<SingleConversation | null>;
   localStore: ConversationLocalStore | null;
   notify(message: string): void;
@@ -131,7 +137,7 @@ export function useConversationIndexController({
       ) {
         return cached;
       }
-      applyConversation(cached, ownerEpoch);
+      applyConversation(cached, ownerEpoch, false, true);
       return cached;
     }
     if (conversationId.startsWith('official:')) {
@@ -155,7 +161,7 @@ export function useConversationIndexController({
         result.conversation,
         conversationId,
       );
-      applyConversation(result.conversation, ownerEpoch);
+      applyConversation(result.conversation, ownerEpoch, false, true);
       return result.conversation;
     }
     if (cached && isCompleteConversation(cached)) {
@@ -165,10 +171,10 @@ export function useConversationIndexController({
       ) {
         return cached;
       }
-      applyConversation(cached, ownerEpoch);
+      applyConversation(cached, ownerEpoch, false, true);
       return cached;
     }
-    return loadConversation(conversationId, expectedGeneration);
+    return loadConversation(conversationId, expectedGeneration, undefined, true);
   }, [
     applyConversation,
     cacheOwner,
@@ -262,7 +268,7 @@ export function useConversationIndexController({
         );
         const immediate = localConversations.find(({ id }) => id === immediateId);
         if (immediate && isCompleteConversation(immediate)) {
-          applyConversation(immediate, ownerEpoch);
+          applyConversation(immediate, ownerEpoch, false, true);
         }
       } else if (shouldHydrateCache && mergedOptimisticLedgers.length) {
         localConversations = mergeOptimisticConversationSummaries(
@@ -275,7 +281,7 @@ export function useConversationIndexController({
         conversationIndexRef.current = localConversations;
         setConversations(localConversations);
         const immediate = localConversations[0];
-        if (immediate) applyConversation(immediate, ownerEpoch);
+        if (immediate) applyConversation(immediate, ownerEpoch, false, true);
       }
     }
     if (!cloudApi) {
@@ -301,7 +307,7 @@ export function useConversationIndexController({
       );
       const active = localConversations.find(({ id }) => id === activeId);
       if (active) {
-        applyConversation(active, ownerEpoch);
+        applyConversation(active, ownerEpoch, false, true);
       } else {
         activeConversationIdRef.current = '';
         activeHostedTurnIdRef.current = '';

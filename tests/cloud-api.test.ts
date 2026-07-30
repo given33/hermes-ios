@@ -165,7 +165,7 @@ test('account files and contextual routing use the collaboration cloud contract'
   assert.equal(calls[3].options.method, 'DELETE');
 });
 
-test('account file route drains every server page before SwiftUI search and date filtering', async () => {
+test('account file route reads only the requested merged window prefix', async () => {
   const calls: Call[] = [];
   const client = {
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
@@ -189,17 +189,68 @@ test('account file route drains every server page before SwiftUI search and date
     },
   } as HermesApiClient;
 
-  const result = await new HermesCloudApi(client).loadRoute('files') as { files: unknown[] };
+  const result = await new HermesCloudApi(client).loadRoute('files') as {
+    files: unknown[];
+    total: number;
+  };
 
-  assert.equal(result.files.length, 450);
+  assert.equal(result.files.length, 200);
+  assert.equal(result.total, 450);
   assert.deepEqual(
     calls.filter(({ path }) => path.endsWith('/files')).map(({ options }) => options.query?.offset),
-    [0, 125, 250, 375],
+    [0, 125],
   );
   assert.equal(
     calls.filter(({ path }) => path.endsWith('/tool-output-artifacts')).length,
     1,
   );
+});
+
+test('account file pagination applies limit and offset after merging both sources', async () => {
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      if (path.endsWith('/tool-output-artifacts')) {
+        return Promise.resolve({
+          artifacts: [7, 5, 3].map((created, index) => ({
+            id: `toolout_${index}`,
+            account_generation: 'generation-1',
+            conversation_id: 'conversation-1',
+            created_at: created,
+            retained_until: 99,
+            sha256: `sha-${index}`,
+            size_bytes: 1,
+            state: 'available',
+            tool_call_id: `call-${index}`,
+            tool_name: 'terminal',
+            turn_id: 'turn-1',
+          })),
+          limit: options.query?.limit,
+          offset: options.query?.offset,
+          total: 3,
+        } as T);
+      }
+      return Promise.resolve({
+        files: [6, 4, 2].map((created, index) => ({
+          id: `file-${index}`,
+          name: `file-${index}.txt`,
+          created_at: created * 1_000,
+          file_type: 'text',
+          source: 'user_upload',
+          status: 'available',
+        })),
+        limit: options.query?.limit,
+        offset: options.query?.offset,
+        total: 3,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getAllAccountFiles({ limit: 2, offset: 2 });
+
+  assert.deepEqual(result.files.map(({ id }) => id), ['toolout_1', 'file-1']);
+  assert.equal(result.total, 6);
+  assert.equal(result.limit, 2);
+  assert.equal(result.offset, 2);
 });
 
 test('custom model API keys require an explicit preserve, replace, or delete action', () => {

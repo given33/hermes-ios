@@ -22,7 +22,10 @@ import {
 } from '../src/api/conversation-local-store';
 import { decideHostedTurnCancellationFailure } from '../src/api/hosted-turn-delivery-state';
 import {
+  awaitConversationStorageWrites,
   captureConversationStorageEpoch,
+  ConversationStorageWriteTimeoutError,
+  enqueueConversationStorageWrite,
   isConversationStorageEpochCurrent,
 } from '../src/api/conversation-storage-coordinator';
 
@@ -368,6 +371,43 @@ test('hosted-turn outbox is owner-isolated, idempotently replaced, and removed a
   await store.removePendingEnqueue(ownerA, 'request-stable-1');
   assert.deepEqual(await store.readPendingEnqueues(ownerA), []);
   assert.equal((await store.readPendingEnqueues(ownerB)).length, 1);
+});
+
+test('timed-out owner writes preserve serialization and let callers escape a hung head', async () => {
+  const owner = 'https://example.test|hung-storage@example.test';
+  let releaseHead: () => void = () => undefined;
+  let markHeadStarted: () => void = () => undefined;
+  const headStarted = new Promise<void>((resolve) => { markHeadStarted = resolve; });
+  const headBlocker = new Promise<void>((resolve) => { releaseHead = resolve; });
+  const executionOrder: string[] = [];
+
+  const headResult = assert.rejects(
+    enqueueConversationStorageWrite(owner, async () => {
+      executionOrder.push('head');
+      markHeadStarted();
+      await headBlocker;
+    }, captureConversationStorageEpoch(owner), 10),
+    ConversationStorageWriteTimeoutError,
+  );
+  await headStarted;
+  await headResult;
+
+  await assert.rejects(
+    enqueueConversationStorageWrite(owner, async () => {
+      executionOrder.push('follower');
+    }, captureConversationStorageEpoch(owner), 10),
+    ConversationStorageWriteTimeoutError,
+  );
+  assert.deepEqual(executionOrder, ['head']);
+
+  releaseHead();
+  await awaitConversationStorageWrites(owner);
+  assert.deepEqual(executionOrder, ['head', 'follower']);
+
+  await enqueueConversationStorageWrite(owner, async () => {
+    executionOrder.push('recovered');
+  }, captureConversationStorageEpoch(owner), 50);
+  assert.deepEqual(executionOrder, ['head', 'follower', 'recovered']);
 });
 
 test('hosted-turn replay skips a delayed conversation without reordering that conversation', () => {
@@ -1366,4 +1406,85 @@ test('two live store facades merge interleaved messages instead of overwriting a
     ['m-1', 'm-route', 'm-chat'],
   );
   assert.equal(restored!.conversations[0].message_count, 3);
+});
+
+test('concurrent cache merge respects authoritative deletions and keeps unseen additions', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|three-way@example.test';
+  const serverStore = new ConversationLocalStore(storage);
+  const routeStore = new ConversationLocalStore(storage);
+  const baseline = conversation('shared-chat', 100, [
+    { id: 'keep', role: 'user', name: 'You', content: 'keep', created_at: 100 },
+    { id: 'deleted', role: 'assistant', name: 'Hermes', content: 'delete me', created_at: 110 },
+  ]);
+  await serverStore.write(owner, [baseline], baseline.id);
+  const serverBaseline = await serverStore.read(owner);
+  const routeBaseline = await routeStore.read(owner);
+
+  await routeStore.write(owner, [{
+    ...routeBaseline!.conversations[0],
+    updated_at: 200,
+    message_count: 3,
+    messages: [
+      ...routeBaseline!.conversations[0].messages,
+      { id: 'optimistic', role: 'user', name: 'You', content: 'not uploaded yet', created_at: 200 },
+    ],
+  }], baseline.id);
+  await serverStore.write(owner, [{
+    ...serverBaseline!.conversations[0],
+    updated_at: 300,
+    message_count: 1,
+    messages: [serverBaseline!.conversations[0].messages[0]],
+  }], baseline.id);
+
+  const restored = await new ConversationLocalStore(storage).read(owner);
+  assert.deepEqual(
+    restored!.conversations[0].messages.map(({ id }) => id),
+    ['keep', 'optimistic'],
+  );
+  assert.equal(restored!.conversations[0].message_count, 2);
+});
+
+test('pending turn reconciliation rejects substring collisions and accepts exact metadata', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|pending-correlation@example.test';
+  const fixture = hostedTurnFixture('request-123');
+  await store.replaceOptimisticMessages(
+    owner,
+    fixture.item.conversationId,
+    [fixture.message],
+    fixture.pendingTurn,
+  );
+
+  const collisionCommitted = await store.replaceOptimisticMessages(
+    owner,
+    fixture.item.conversationId,
+    [fixture.message, {
+      id: 'assistant-not-request-123-but-a-substring',
+      role: 'assistant',
+      name: 'Hermes',
+      content: 'unrelated',
+      status: 'completed',
+    }],
+    null,
+    [],
+  );
+  assert.equal(collisionCommitted, false);
+
+  const exactCommitted = await store.replaceOptimisticMessages(
+    owner,
+    fixture.item.conversationId,
+    [fixture.message, {
+      id: 'assistant-server-id',
+      role: 'assistant',
+      name: 'Hermes',
+      content: 'done',
+      status: 'completed',
+      meta: { runtime_turn_id: fixture.pendingTurn.turnId },
+    }],
+    null,
+    [],
+  );
+  assert.equal(exactCommitted, true);
 });

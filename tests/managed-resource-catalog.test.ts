@@ -272,6 +272,62 @@ test('terminal installation state is observed before the same reload refreshes i
   assert.equal(result.resourceCatalog.cursor, 1);
 });
 
+test('skills aggregation preserves healthy sources when peers and catalog fail', async () => {
+  const transport = {
+    async request(path: string) {
+      if (path === '/api/skills') throw new Error('skills unavailable');
+      if (path === '/api/tools/toolsets') return [{ name: 'healthy-toolset' }];
+      if (path === '/api/plugins/collaboration/managed-installations') {
+        return { operations: [{ id: 'operation-1' }] };
+      }
+      if (path === '/api/plugins/collaboration/managed-resources') {
+        throw new Error('catalog unavailable');
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  } as unknown as HermesCloudTransport;
+  const api = new HermesExtensionsCloudApi(
+    transport,
+    new ManagedResourceCatalogController(new MemoryStorage()),
+  );
+  api.bindManagedResourceOwner('degraded-owner');
+
+  const result = await api.getSkills('default');
+
+  assert.deepEqual(result.skills, []);
+  assert.deepEqual(result.toolsets, [{ name: 'healthy-toolset' }]);
+  assert.deepEqual(result.installations.operations, [{ id: 'operation-1' }]);
+  assert.deepEqual(result.resourceCatalog.resources, []);
+});
+
+test('MCP aggregation preserves healthy sources when peers and catalog fail', async () => {
+  const transport = {
+    async request(path: string) {
+      if (path === '/api/mcp/servers') return { servers: [{ name: 'healthy-server' }] };
+      if (path === '/api/mcp/catalog') throw new Error('MCP catalog unavailable');
+      if (path === '/api/plugins/collaboration/managed-installations') {
+        throw new Error('installations unavailable');
+      }
+      if (path === '/api/plugins/collaboration/managed-resources') {
+        throw new Error('resource catalog unavailable');
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  } as unknown as HermesCloudTransport;
+  const api = new HermesExtensionsCloudApi(
+    transport,
+    new ManagedResourceCatalogController(new MemoryStorage()),
+  );
+  api.bindManagedResourceOwner('degraded-mcp-owner');
+
+  const result = await api.getMcp('default');
+
+  assert.deepEqual(result.servers, { servers: [{ name: 'healthy-server' }] });
+  assert.deepEqual(result.catalog, {});
+  assert.deepEqual(result.installations.operations, []);
+  assert.deepEqual(result.resourceCatalog.resources, []);
+});
+
 test('account cleanup removes only that owner resource cursor and projection', async () => {
   const storage = new MemoryStorage();
   const firstOwner = new ManagedResourceCatalogController(storage);

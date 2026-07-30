@@ -89,8 +89,14 @@ enum HermesScreenTimeSpool {
     let descriptor = Darwin.open(url.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
     guard descriptor >= 0 else { return nil }
     defer { Darwin.close(descriptor) }
-    guard Darwin.flock(descriptor, LOCK_EX) == 0 else { return nil }
-    defer { Darwin.flock(descriptor, LOCK_UN) }
+    var fileLock = Darwin.flock()
+    fileLock.l_type = Int16(F_WRLCK)
+    fileLock.l_whence = Int16(SEEK_SET)
+    guard Darwin.fcntl(descriptor, F_SETLKW, &fileLock) != -1 else { return nil }
+    defer {
+      fileLock.l_type = Int16(F_UNLCK)
+      _ = Darwin.fcntl(descriptor, F_SETLK, &fileLock)
+    }
     let current = (try? String(contentsOf: url, encoding: .utf8))
       .flatMap(Int64.init) ?? 0
     let next = current + 1

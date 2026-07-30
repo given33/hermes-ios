@@ -139,7 +139,8 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(spool, /HermesSharedKeychainAccessGroup/);
   assert.match(spool, /kSecAttrAccessGroup as String: accessGroup/);
   assert.match(spool, /AES\.GCM\.seal/);
-  assert.match(spool, /Darwin\.flock/);
+  assert.match(spool, /Darwin\.fcntl\(descriptor, F_SETLKW, &fileLock\)/);
+  assert.match(spool, /fileLock\.l_type = Int16\(F_UNLCK\)/);
   assert.match(spool, /"checksum": checksum/);
   assert.match(spool, /"sequence": sequence/);
   assert.match(spool, /\.chunk/);

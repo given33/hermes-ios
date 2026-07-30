@@ -69,7 +69,6 @@ import type { HostedOutboxReplayController } from './useHostedOutboxReplayContro
 interface HostedSendControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
   activeHostedTurnIdRef: MutableRefObject<string>;
-  attachments: readonly ChatAttachment[];
   attachmentsRef: MutableRefObject<ChatAttachment[]>;
   autoFollowStreamRef: MutableRefObject<boolean>;
   beginOptimisticHostedTurn(conversationId: string, turnId: string): void;
@@ -104,7 +103,7 @@ interface HostedSendControllerOptions {
     signal?: AbortSignal,
   ): Promise<unknown>;
   localStore: ConversationLocalStore | null;
-  messages: readonly ChatMessage[];
+  messagesRef: MutableRefObject<ChatMessage[]>;
   notify(message: string): void;
   optimisticMessagesByConversationRef: MutableRefObject<Map<string, ChatMessage[]>>;
   optimisticMessagesRef: MutableRefObject<ChatMessage[]>;
@@ -156,7 +155,6 @@ export interface HostedSendController {
 export function useHostedSendController({
   activeConversationIdRef,
   activeHostedTurnIdRef,
-  attachments,
   attachmentsRef,
   autoFollowStreamRef,
   beginOptimisticHostedTurn,
@@ -180,7 +178,7 @@ export function useHostedSendController({
   isChinese,
   loadConversation,
   localStore,
-  messages,
+  messagesRef,
   notify,
   optimisticMessagesByConversationRef,
   optimisticMessagesRef,
@@ -210,7 +208,9 @@ export function useHostedSendController({
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     const currentContent = contentRef.current;
     const trimmed = currentContent.trim();
-    const attachmentCount = attachments.length;
+    const pendingAttachments = [...attachmentsRef.current];
+    const currentMessages = [...messagesRef.current];
+    const attachmentCount = pendingAttachments.length;
     const interventionRequested = hostedRunning
       && attachmentCount === 0
       && trimmed.startsWith('@');
@@ -223,7 +223,6 @@ export function useHostedSendController({
       return;
     }
 
-    const pendingAttachments = [...attachments];
     const hadActiveConversation = Boolean(activeConversationIdRef.current);
     const userMessageCreatedAt = Date.now();
     const userMessageId = uniqueTurnId('user');
@@ -335,7 +334,7 @@ export function useHostedSendController({
       deliveryContext: '由服务端意图路由判断是否需要交付文件；需要时上传账户云端并在会话中返回。',
       message: serverUserMessage,
       profiles: [conversationProfile],
-      recentMessages: [...messages, userMessage].slice(-12).map((message) => ({
+      recentMessages: [...currentMessages, userMessage].slice(-12).map((message) => ({
         content: message.content,
         role: message.role,
       })),
@@ -440,7 +439,7 @@ export function useHostedSendController({
           startedAt: executionStartedAt,
           turnId: hostedTurnId,
         });
-        let completedMessages = [...messages, userMessage];
+        let completedMessages = [...currentMessages, userMessage];
         for (const reply of previewReplies) {
           await previewDelay(collaborative ? 380 : 620);
           if (!isCurrentSend()) return;

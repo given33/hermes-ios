@@ -36,6 +36,8 @@ interface ConversationActionsControllerOptions {
   applyConversation(
     conversation: SingleConversation,
     expectedOwnerEpoch?: number,
+    resetCursor?: boolean,
+    activateConversation?: boolean,
   ): void | Promise<void>;
   autoFollowStreamRef: MutableRefObject<boolean>;
   cacheOwner: string;
@@ -168,7 +170,7 @@ export function useConversationActionsController({
         optimisticMessagesRef.current = [];
         setCollaborationState('single');
         resetPendingStateMachine();
-        await applyConversation(result.conversation, ownerEpoch);
+        await applyConversation(result.conversation, ownerEpoch, false, true);
         prepareComposerNavigation();
       } catch (error) {
         if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
@@ -397,7 +399,7 @@ export function useConversationActionsController({
         },
       );
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
-      applyConversation(response.conversation, ownerEpoch);
+      applyConversation(response.conversation, ownerEpoch, false, true);
       notify(isChinese ? '已从所选消息创建分支。' : 'Created a branch from this message.');
     } catch (error) {
       if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {

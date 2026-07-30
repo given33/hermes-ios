@@ -72,12 +72,12 @@ export class HermesFilesCloudApi {
     });
   }
 
-  private async drainAccountFiles(query: AccountFilesQuery = {}) {
-    const pageSize = Math.max(1, Math.min(200, Math.trunc(query.limit || 200)));
+  private async accountFilePrefix(query: AccountFilesQuery, wanted: number) {
+    const pageSize = Math.max(1, Math.min(200, wanted));
     const files = new Map<string, AccountFileEntry>();
     let offset = 0;
     let total = Number.POSITIVE_INFINITY;
-    while (offset < total) {
+    while (offset < total && files.size < wanted) {
       const page = await this.getAccountFiles({ ...query, limit: pageSize, offset });
       const entries = Array.isArray(page.files) ? page.files : [];
       for (const entry of entries) {
@@ -89,7 +89,7 @@ export class HermesFilesCloudApi {
       if (!entries.length || offset + entries.length >= total) break;
       offset += entries.length;
     }
-    return [...files.values()];
+    return { files: [...files.values()], total: Number.isFinite(total) ? total : files.size };
   }
 
   getToolOutputArtifacts(limit = 200, offset = 0) {
@@ -99,16 +99,25 @@ export class HermesFilesCloudApi {
     );
   }
 
-  private async drainToolOutputArtifacts() {
+  private async toolOutputArtifactPrefix(query: AccountFilesQuery, wanted: number) {
+    if (
+      (query.source && query.source !== 'model_output')
+      || (query.status && query.status !== 'available')
+      || (query.fileType && query.fileType !== 'tool_output')
+    ) return { files: [] as AccountFileEntry[], total: 0 };
     const artifacts = new Map<string, ToolOutputArtifactEntry>();
-    const pageSize = 200;
+    const matching: AccountFileEntry[] = [];
+    const pageSize = Math.max(1, Math.min(200, wanted));
     let offset = 0;
     let total = Number.POSITIVE_INFINITY;
-    while (offset < total) {
+    while (offset < total && matching.length < wanted) {
       const page = await this.getToolOutputArtifacts(pageSize, offset);
       const entries = Array.isArray(page.artifacts) ? page.artifacts : [];
       for (const entry of entries) {
-        if (entry?.id) artifacts.set(entry.id, entry);
+        if (!entry?.id || artifacts.has(entry.id)) continue;
+        artifacts.set(entry.id, entry);
+        const file = toolOutputArtifactFile(entry);
+        if (accountFileMatches(file, query)) matching.push(file);
       }
       total = Number.isFinite(page.total)
         ? Math.max(0, page.total)
@@ -116,26 +125,28 @@ export class HermesFilesCloudApi {
       if (!entries.length || offset + entries.length >= total) break;
       offset += entries.length;
     }
-    return [...artifacts.values()];
+    return { files: matching, total: Number.isFinite(total) ? total : matching.length };
   }
 
   async getAllAccountFiles(query: AccountFilesQuery = {}) {
-    const [storedFiles, artifacts] = await Promise.all([
-      this.drainAccountFiles(query),
-      this.drainToolOutputArtifacts(),
-    ]);
+    const limit = Math.max(1, Math.min(200, Math.trunc(query.limit || 200)));
     const startOffset = Math.max(0, Math.trunc(query.offset || 0));
+    const wanted = startOffset + limit;
+    const [stored, artifacts] = await Promise.all([
+      this.accountFilePrefix({ ...query, limit: undefined, offset: undefined }, wanted),
+      this.toolOutputArtifactPrefix(query, wanted),
+    ]);
     const files = [
-      ...storedFiles,
-      ...artifacts.map(toolOutputArtifactFile),
+      ...stored.files,
+      ...artifacts.files,
     ]
       .filter((entry) => accountFileMatches(entry, query))
       .sort((left, right) => right.created_at - left.created_at || left.id.localeCompare(right.id))
-      .slice(startOffset);
+      .slice(startOffset, wanted);
     return {
       files,
-      total: files.length,
-      limit: Math.max(1, Math.min(200, Math.trunc(query.limit || 200))),
+      total: stored.total + artifacts.total,
+      limit,
       offset: startOffset,
     } satisfies AccountFilesResponse;
   }

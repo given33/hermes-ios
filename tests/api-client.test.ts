@@ -342,6 +342,25 @@ test('hosted event streams refresh one rejected token without putting credential
   assert.doesNotMatch(calls.map(({ url }) => url).join('\n'), /stream-token/);
 });
 
+test('hosted event stream connection attempts have an abortable deadline', async () => {
+  let requestSignal: AbortSignal | undefined;
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'mobile-secret',
+    async () => { throw new Error('regular fetch must not serve SSE'); },
+    async (_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      return new Promise<Response>(() => undefined);
+    },
+  );
+
+  await assert.rejects(
+    client.openEventStream('/api/plugins/collaboration/events', { deadlineMs: 5 }),
+    /event stream connection timed out/,
+  );
+  assert.equal(requestSignal?.aborted, true);
+});
+
 test('accepts only the actual mobile v1 handshake contract', () => {
   const handshake = {
     api_version: 1,

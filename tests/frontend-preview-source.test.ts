@@ -693,6 +693,43 @@ test('stale conversation selection is removed instead of surfacing another 404',
   assert.match(chat, /await openConversation\(fallbackId, generation\)/);
 });
 
+test('chat and notification lifecycles fence stale work without restarting account services', () => {
+  const route = read('src/app/useHermesSwiftUIRouteData.ts');
+  const notifications = read('src/notifications/NotificationProvider.tsx');
+  const indexLifecycle = read('src/studio/chat/useConversationIndexLifecycle.ts');
+  const snapshot = read('src/studio/chat/useConversationSnapshotController.ts');
+  const state = read('src/studio/chat/useChatPageState.ts');
+  const send = read('src/studio/chat/useHostedSendController.ts');
+
+  assert.match(route, /let pollInFlight = false/);
+  assert.doesNotMatch(route, /const pollInFlight = useRef/);
+  assert.match(route, /EVENT_FAILURE_LOG_INTERVAL_MS = 60_000/);
+  assert.match(route, /Hermes managed-resource event refresh failed/);
+  assert.doesNotMatch(
+    route,
+    /consumeManagedResourceEvents\([\s\S]{0,800}\.catch\(\(\) => undefined\)/,
+  );
+  assert.match(notifications, /new Map<string, number>\(\)/);
+  assert.match(notifications, /MAX_HANDLED_NOTIFICATIONS = 256/);
+  assert.match(notifications, /notificationAccountRef\.current/);
+  assert.doesNotMatch(notifications, /\}, \[client, state\]\)/);
+  assert.doesNotMatch(notifications, /\[client, rememberDeviceId, runtime, state\]/);
+  assert.match(indexLifecycle, /openNotificationConversation\(notificationConversationId\)/);
+  assert.doesNotMatch(
+    indexLifecycle,
+    /preferredConversationId \|\| notificationConversationId/,
+  );
+  assert.doesNotMatch(indexLifecycle, /catch\(\(\) => undefined\)/);
+  assert.match(
+    snapshot,
+    /!activateConversation[\s\S]{0,100}activeConversationIdRef\.current !== incomingConversation\.id/,
+  );
+  assert.match(state, /messagesRef\.current = next/);
+  assert.match(send, /const pendingAttachments = \[\.\.\.attachmentsRef\.current\]/);
+  assert.match(send, /const currentMessages = \[\.\.\.messagesRef\.current\]/);
+  assert.doesNotMatch(send, /recentMessages: \[\.\.\.messages, userMessage\]/);
+});
+
 test('same-owner account epochs fence every long-lived chat callback', () => {
   const snapshot = read('src/studio/chat/useConversationSnapshotController.ts');
   const index = read('src/studio/chat/useConversationIndexController.ts');
@@ -704,10 +741,10 @@ test('same-owner account epochs fence every long-lived chat callback', () => {
     assert.match(source, /captureConversationStorageEpoch/);
     assert.match(source, /isConversationStorageEpochCurrent/);
   }
-  assert.match(snapshot, /applyConversation\(conversation, ownerEpoch\)/);
+  assert.match(snapshot, /applyConversation\(conversation, ownerEpoch, false, activateConversation\)/);
   assert.match(index, /commitConversationIndex\(synchronized, activeId, ownerEpoch\)/);
-  assert.match(actions, /applyConversation\(result\.conversation, ownerEpoch\)/);
-  assert.match(actions, /applyConversation\(response\.conversation, ownerEpoch\)/);
+  assert.match(actions, /applyConversation\(result\.conversation, ownerEpoch, false, true\)/);
+  assert.match(actions, /applyConversation\(response\.conversation, ownerEpoch, false, true\)/);
   assert.match(
     stream,
     /applyConversation\([\s\S]*hosted_event_cursor:[\s\S]*ownerEpoch, resetCursor\)/,

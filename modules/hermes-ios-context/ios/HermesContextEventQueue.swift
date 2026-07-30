@@ -11,6 +11,13 @@ final class HermesContextEventQueue {
   private let eventsURL: URL
   private let relayStateURL: URL
   private let legacyURL: URL
+  private let maximumEventCount = 10_000
+  private let maximumEncryptedBytes = 16 * 1024 * 1024
+  private var cachedEvents: [[String: Any]]?
+  private var cachedEventIDs = Set<String>()
+  private var cachedMaxSequence = 0
+  private var cachedEncryptedBytes = 0
+  private var cachedRelayState: [String: Any]?
 
   private init() {
     let applicationSupport = FileManager.default.urls(
@@ -116,8 +123,9 @@ final class HermesContextEventQueue {
             occurredAt.timeIntervalSince1970 * 1000 >= generationStartedAt else {
         return false
       }
+      if cachedEvents == nil { _ = loadUnlocked() }
       if let eventID, !eventID.isEmpty,
-         loadUnlocked().contains(where: { ($0["id"] as? String) == String(eventID.prefix(256)) }) {
+         cachedEventIDs.contains(String(eventID.prefix(256))) {
         return true
       }
       let scopedEvent = self.makeEventUnlocked(
@@ -606,7 +614,22 @@ final class HermesContextEventQueue {
   }
 
   private func loadUnlocked() -> [[String: Any]] {
-    guard let data = try? Data(contentsOf: eventsURL), !data.isEmpty else { return [] }
+    if let cachedEvents { return cachedEvents }
+    guard FileManager.default.fileExists(atPath: eventsURL.path) else {
+      cachedEvents = []
+      cachedEventIDs = []
+      cachedMaxSequence = 0
+      cachedEncryptedBytes = 0
+      return []
+    }
+    guard let data = try? Data(contentsOf: eventsURL) else { return [] }
+    if data.isEmpty {
+      cachedEvents = []
+      cachedEventIDs = []
+      cachedMaxSequence = 0
+      cachedEncryptedBytes = 0
+      return []
+    }
     var events: [[String: Any]] = []
     var corruptLines = Data()
     for line in data.split(separator: 0x0a, omittingEmptySubsequences: true) {
@@ -628,9 +651,14 @@ final class HermesContextEventQueue {
         // Keep the original queue intact. A later read retries quarantine and rewrite.
       }
     }
-    return events.sorted {
+    let sorted = events.sorted {
       ($0["sequence"] as? Int ?? 0) < ($1["sequence"] as? Int ?? 0)
     }
+    cachedEvents = sorted
+    cachedEventIDs = Set(sorted.compactMap { $0["id"] as? String })
+    cachedMaxSequence = sorted.compactMap { $0["sequence"] as? Int }.max() ?? 0
+    cachedEncryptedBytes = data.count
+    return sorted
   }
 
   private func makeEventUnlocked(
@@ -646,10 +674,10 @@ final class HermesContextEventQueue {
     if let sequenceOverride {
       sequence = sequenceOverride
     } else {
-      let persistedSequence = loadUnlocked().compactMap { $0["sequence"] as? Int }.max() ?? 0
+      if cachedEvents == nil { _ = loadUnlocked() }
       sequence = max(
         UserDefaults.standard.integer(forKey: sequenceKey),
-        persistedSequence
+        cachedMaxSequence
       ) + 1
       UserDefaults.standard.set(sequence, forKey: sequenceKey)
       UserDefaults.standard.synchronize()
@@ -679,6 +707,8 @@ final class HermesContextEventQueue {
   @discardableResult
   private func appendBatchUnlocked(_ events: [[String: Any]]) -> Bool {
     guard !events.isEmpty else { return true }
+    if cachedEvents == nil { _ = loadUnlocked() }
+    guard (cachedEvents?.count ?? 0) + events.count <= maximumEventCount else { return false }
     var data = Data()
     for event in events {
       guard JSONSerialization.isValidJSONObject(event),
@@ -689,6 +719,7 @@ final class HermesContextEventQueue {
       data.append(sealed.base64EncodedData())
       data.append(0x0a)
     }
+    guard cachedEncryptedBytes + data.count <= maximumEncryptedBytes else { return false }
     do {
       let created = !FileManager.default.fileExists(atPath: eventsURL.path)
       if created && !FileManager.default.createFile(atPath: eventsURL.path, contents: nil) {
@@ -702,6 +733,20 @@ final class HermesContextEventQueue {
       try handle.synchronize()
       try applyFileProtection(to: eventsURL)
       if created { try synchronizeDirectoryUnlocked(eventsURL.deletingLastPathComponent()) }
+      let minimumNewSequence = events.compactMap { $0["sequence"] as? Int }.min() ?? 0
+      if minimumNewSequence >= cachedMaxSequence {
+        cachedEvents?.append(contentsOf: events)
+      } else {
+        cachedEvents = ((cachedEvents ?? []) + events).sorted {
+          ($0["sequence"] as? Int ?? 0) < ($1["sequence"] as? Int ?? 0)
+        }
+      }
+      cachedEventIDs.formUnion(events.compactMap { $0["id"] as? String })
+      cachedMaxSequence = max(
+        cachedMaxSequence,
+        events.compactMap { $0["sequence"] as? Int }.max() ?? 0
+      )
+      cachedEncryptedBytes += data.count
       return true
     } catch {
       return false
@@ -720,13 +765,19 @@ final class HermesContextEventQueue {
       data.append(0x0a)
     }
     try durableReplaceUnlocked(data, at: eventsURL)
+    cachedEvents = events
+    cachedEventIDs = Set(events.compactMap { $0["id"] as? String })
+    cachedMaxSequence = events.compactMap { $0["sequence"] as? Int }.max() ?? 0
+    cachedEncryptedBytes = data.count
   }
 
   private func loadRelayStateUnlocked() -> [String: Any] {
+    if let cachedRelayState { return cachedRelayState }
     guard let sealed = try? Data(contentsOf: relayStateURL),
           let clear = try? HermesSecureKeychain.open(sealed),
           let object = try? JSONSerialization.jsonObject(with: clear),
           let state = object as? [String: Any] else { return [:] }
+    cachedRelayState = state
     return state
   }
 
@@ -742,11 +793,16 @@ final class HermesContextEventQueue {
     guard JSONSerialization.isValidJSONObject(state),
           let clear = try? JSONSerialization.data(withJSONObject: state),
           let sealed = try? HermesSecureKeychain.seal(clear) else { return }
-    try? sealed.write(
-      to: relayStateURL,
-      options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
-    )
-    try? applyFileProtection(to: relayStateURL)
+    do {
+      try sealed.write(
+        to: relayStateURL,
+        options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication]
+      )
+      try applyFileProtection(to: relayStateURL)
+      cachedRelayState = state
+    } catch {
+      // Keep the last durable state cached; the caller can retry its mutation.
+    }
   }
 
   private func migrateLegacyEventsUnlocked() {

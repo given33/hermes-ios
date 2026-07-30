@@ -604,6 +604,10 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /\['place-visit'\],\s+ownerScope,/);
   assert.match(background, /BGAppRefreshTaskRequest/);
   assert.match(background, /BGProcessingTaskRequest/);
+  assert.match(background, /Logger\(subsystem: "app\.hermes", category: "background-tasks"\)/);
+  assert.match(background, /Could not schedule app refresh/);
+  assert.match(background, /Could not schedule background processing/);
+  assert.doesNotMatch(background, /try\? BGTaskScheduler\.shared\.submit/);
   assert.match(background, /performNativeWork\(operationID:/);
   assert.match(background, /HermesScreenTimeService\.shared\.consumeExtensionEvents\(\)/);
   assert.match(background, /HermesHealthService\.shared\.resumeBackgroundCollection\(\)/);
@@ -665,7 +669,11 @@ test('HealthKit background delivery advances generation-scoped anchors after dur
     'HealthKit anchor advances only after raw samples reach the durable queue',
   );
   assert.match(queue, /eventID: String\? = nil/);
-  assert.match(queue, /loadUnlocked\(\)\.contains\(where:/);
+  assert.match(queue, /cachedEventIDs\.contains/);
+  assert.match(queue, /maximumEventCount = 10_000/);
+  assert.match(queue, /maximumEncryptedBytes = 16 \* 1024 \* 1024/);
+  assert.match(queue, /if let cachedEvents \{ return cachedEvents \}/);
+  assert.match(queue, /if let cachedRelayState \{ return cachedRelayState \}/);
   assert.match(lifecycle, /HermesHealthService\.shared\.activateAccountGeneration\(token\)/);
   assert.match(subscriber, /HermesHealthService\.shared\.resumeBackgroundCollection\(\)/);
   assert.doesNotMatch(module, /eventQueue\.enqueue\(type: "health"/);

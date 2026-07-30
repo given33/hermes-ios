@@ -75,14 +75,20 @@ export class HermesExtensionsCloudApi {
   }
 
   getSkills(profile = 'default') {
-    return Promise.all([
+    return Promise.allSettled([
       this.transport.request<JsonRecord[]>('/api/skills', { profile }),
       this.transport.request<JsonRecord[]>('/api/tools/toolsets', { profile }),
       this.getManagedInstallations('skill', profile),
-    ]).then(async ([skills, toolsets, installations]) => {
+    ]).then(async ([skillsResult, toolsetsResult, installationsResult]) => {
       // Read operation state first. When a background install becomes terminal,
       // this same reload observes its catalog commit instead of waiting one poll.
-      const resources = await this.getManagedResourceCatalog();
+      const resources = await this.getManagedResourceCatalog()
+        .catch(() => emptyManagedResourceCatalog());
+      const skills = skillsResult.status === 'fulfilled' ? skillsResult.value : [];
+      const toolsets = toolsetsResult.status === 'fulfilled' ? toolsetsResult.value : [];
+      const installations = installationsResult.status === 'fulfilled'
+        ? installationsResult.value
+        : { operations: [] };
       return {
         skills: mergeManagedSkills(skills, resources),
         toolsets,
@@ -179,12 +185,20 @@ export class HermesExtensionsCloudApi {
   }
 
   getMcp(profile = 'default') {
-    return Promise.all([
+    return Promise.allSettled([
       this.transport.request<JsonRecord>('/api/mcp/servers', { query: { profile } }),
       this.transport.request<JsonRecord>('/api/mcp/catalog', { query: { profile } }),
       this.getManagedInstallations('mcp', profile),
-    ]).then(async ([servers, catalog, installations]) => {
-      const resources = await this.getManagedResourceCatalog();
+    ]).then(async ([serversResult, catalogResult, installationsResult]) => {
+      const resources = await this.getManagedResourceCatalog()
+        .catch(() => emptyManagedResourceCatalog());
+      const servers = serversResult.status === 'fulfilled'
+        ? serversResult.value
+        : { servers: [] };
+      const catalog = catalogResult.status === 'fulfilled' ? catalogResult.value : {};
+      const installations = installationsResult.status === 'fulfilled'
+        ? installationsResult.value
+        : { operations: [] };
       return {
         servers: mergeManagedMcpServers(servers, resources),
         catalog,
@@ -218,6 +232,17 @@ export class HermesExtensionsCloudApi {
       },
     );
   }
+}
+
+function emptyManagedResourceCatalog(): ManagedResourceCatalog {
+  return {
+    account_generation: '',
+    resources: [],
+    diagnostics: [],
+    events: [],
+    cursor: 0,
+    has_more: false,
+  };
 }
 
 export function mergeManagedSkills(

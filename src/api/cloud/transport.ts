@@ -28,7 +28,7 @@ export interface HermesCloudTransport {
   ): Promise<T>;
   openEventStream(
     path: string,
-    options?: Omit<HermesRequestOptions, 'deadlineMs'>,
+    options?: HermesRequestOptions,
   ): Promise<Response>;
   request<T>(path: string, options?: HermesRequestOptions): Promise<T>;
 }

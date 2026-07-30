@@ -1,4 +1,12 @@
-import { useMemo, useRef, useState, type MutableRefObject } from 'react';
+import {
+  useCallback,
+  useMemo,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
+} from 'react';
 import type { TextInput } from 'react-native';
 
 import type { SingleConversation } from '../../api/HermesCloudApi';
@@ -19,7 +27,13 @@ import { usePendingTurnState } from './usePendingTurnState';
  */
 export function useChatPageState(cacheOwner: string) {
   const [content, setContent] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessagesState] = useState<ChatMessage[]>([]);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const setMessages = useCallback<Dispatch<SetStateAction<ChatMessage[]>>>((update) => {
+    const next = typeof update === 'function' ? update(messagesRef.current) : update;
+    messagesRef.current = next;
+    setMessagesState(next);
+  }, []);
   const [conversations, setConversations] = useState<SingleConversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState('');
   const [, setActiveHostedTurnId] = useState('');
@@ -96,6 +110,7 @@ export function useChatPageState(cacheOwner: string) {
     hostedRunning,
     hostedTurnDeliveryClaimsRef,
     messages,
+    messagesRef,
     mountedRef,
     pendingAttachmentCleanup,
     pendingChatSendRef,

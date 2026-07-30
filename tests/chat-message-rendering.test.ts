@@ -279,7 +279,9 @@ test('new conversation creation persists its staged snapshot before switching UI
   const generationCheck = create.indexOf('accountGenerationFromOwnerScope(cacheOwner)');
   const durableIndex = create.indexOf('await commitConversationIndex(');
   const clearOldState = create.indexOf('clearOptimisticHostedTurn()');
-  const switchConversation = create.indexOf('await applyConversation(result.conversation, ownerEpoch)');
+  const switchConversation = create.indexOf(
+    'await applyConversation(result.conversation, ownerEpoch, false, true)',
+  );
 
   assert.ok(serverCreate >= 0);
   assert.ok(generationCheck > serverCreate);

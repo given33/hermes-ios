@@ -54,6 +54,7 @@ interface HermesSwiftUIRouteDataController {
 const FOREGROUND_REFRESH_MS = 15_000;
 const INSTALLATION_REFRESH_MS = 2_000;
 const COLLABORATION_SEND_TIMEOUT_MS = 20_000;
+const EVENT_FAILURE_LOG_INTERVAL_MS = 60_000;
 
 function sendCollaborationRoomMessageWithDeadline(
   api: HermesCloudApi,
@@ -103,8 +104,8 @@ export function useHermesSwiftUIRouteData({
   const acknowledgedRoomRequestId = useRef('');
   const collaborationReplay = useRef<Promise<string> | null>(null);
   const operationRef = useRef<HermesSwiftUIRouteOperationSnapshot | undefined>(undefined);
-  const pollInFlight = useRef(false);
   const resetRefreshCadence = useRef<() => void>(() => undefined);
+  const lastEventFailureLogAt = useRef(0);
   const [dataJson, setDataJson] = useState(() => encodeHermesSwiftUIRouteSnapshot({
     version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
     route: routeId,
@@ -254,7 +255,16 @@ export function useHermesSwiftUIRouteData({
         },
       ).then((nextCursor) => {
         cursor = Math.max(cursor, nextCursor);
-      }).catch(() => undefined).finally(() => {
+      }).catch((error: unknown) => {
+        if (activeController.signal.aborted) return;
+        const now = Date.now();
+        if (now - lastEventFailureLogAt.current < EVENT_FAILURE_LOG_INTERVAL_MS) return;
+        lastEventFailureLogAt.current = now;
+        console.warn(
+          'Hermes managed-resource event refresh failed',
+          error instanceof Error ? error.name : 'Error',
+        );
+      }).finally(() => {
         if (controller === activeController) controller = null;
         if (!disposed && AppState.currentState === 'active') {
           reconnectTimer = setTimeout(connect, INSTALLATION_REFRESH_MS);
@@ -304,6 +314,7 @@ export function useHermesSwiftUIRouteData({
     const installationRoute = routeId === 'skills' || routeId === 'mcp';
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
+    let pollInFlight = false;
     let delayMs = initialRouteRefreshDelay(
       routeId,
       FOREGROUND_REFRESH_MS,
@@ -327,12 +338,12 @@ export function useHermesSwiftUIRouteData({
         }
         // A poll never stacks onto a poll still on the wire; on a slow link
         // the old fixed interval kept issuing identical snapshot requests.
-        if (!pollInFlight.current) {
-          pollInFlight.current = true;
+        if (!pollInFlight) {
+          pollInFlight = true;
           try {
             await reload();
           } finally {
-            pollInFlight.current = false;
+            pollInFlight = false;
           }
         }
       }

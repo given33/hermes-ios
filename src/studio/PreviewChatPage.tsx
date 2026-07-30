@@ -115,7 +115,7 @@ export function ChatPreviewPage({
     composerRevisionRef, content, contentRef, conversationIndexRef, conversations,
     conversationSyncGenerationRef, historyCollapsed, historyModalOpen,
     hostedAccountGenerationRef, hostedEventCursorRef, hostedRunning,
-    hostedTurnDeliveryClaimsRef, messages,
+    hostedTurnDeliveryClaimsRef, messages, messagesRef,
     mountedRef, pendingAttachmentCleanup, pendingChatSendRef, pendingTurn,
     sendOperationGenerationRef, sendSubmissionGateRef, sending,
     setActiveConversationId, setActiveHostedTurnId, setAttachments,
@@ -381,7 +381,6 @@ export function ChatPreviewPage({
   const hostedSend = useHostedSendController({
     activeConversationIdRef,
     activeHostedTurnIdRef,
-    attachments,
     attachmentsRef,
     autoFollowStreamRef,
     beginOptimisticHostedTurn,
@@ -409,7 +408,7 @@ export function ChatPreviewPage({
     isChinese,
     loadConversation,
     localStore,
-    messages,
+    messagesRef,
     notify,
     optimisticMessagesByConversationRef,
     optimisticMessagesRef,
@@ -547,11 +546,17 @@ export function ChatPreviewPage({
     notify(serverFailure(error, isChinese));
   }, [isChinese, notify]);
 
+  const openNotificationConversation = useCallback((conversationId: string) => {
+    const generation = conversationSyncGenerationRef.current.advanceActive();
+    return openConversation(conversationId, generation);
+  }, [conversationSyncGenerationRef, openConversation]);
+
   useConversationIndexLifecycle({
     activeConversationIdRef,
     notificationConversationId: notificationTarget?.conversationId,
     notificationIdentity: notificationTarget?.notificationId,
     onError: notifyConversationLifecycleError,
+    openNotificationConversation,
     onPreferredConversationConsumed,
     preferredConversationId,
     refreshConversationIndex,

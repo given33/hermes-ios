@@ -6,6 +6,7 @@ interface ConversationIndexLifecycleOptions {
   notificationConversationId?: string;
   notificationIdentity?: string;
   onError(error: unknown): void;
+  openNotificationConversation(conversationId: string): Promise<unknown>;
   onPreferredConversationConsumed?(conversationId: string): void;
   preferredConversationId?: string;
   refreshConversationIndex(preferredId?: string): Promise<unknown>;
@@ -19,6 +20,7 @@ export function useConversationIndexLifecycle({
   notificationConversationId = '',
   notificationIdentity = '',
   onError,
+  openNotificationConversation,
   onPreferredConversationConsumed,
   preferredConversationId = '',
   refreshConversationIndex,
@@ -27,10 +29,12 @@ export function useConversationIndexLifecycle({
 }: ConversationIndexLifecycleOptions): void {
   useEffect(() => {
     let disposed = false;
-    const requestedConversationId = preferredConversationId || notificationConversationId;
+    const reportError = (error: unknown) => {
+      if (!disposed) onError(error);
+    };
     void replayDurableOutboxes()
-      .catch(() => undefined)
-      .then(() => refreshConversationIndex(requestedConversationId))
+      .catch(reportError)
+      .then(() => refreshConversationIndex(preferredConversationId))
       .then(() => {
         if (!disposed && preferredConversationId) {
           onPreferredConversationConsumed?.(preferredConversationId);
@@ -43,7 +47,7 @@ export function useConversationIndexLifecycle({
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       void replayDurableOutboxes()
-        .catch(() => undefined)
+        .catch(reportError)
         .then(() => refreshConversationIndex(activeConversationIdRef.current))
         .catch((error) => {
           if (!disposed) onError(error);
@@ -55,8 +59,8 @@ export function useConversationIndexLifecycle({
     const refresh = async () => {
       if (stopped) return;
       if (AppState.currentState === 'active') {
-        await replayDurableOutboxes().catch(() => undefined);
-        await refreshConversationIndex(activeConversationIdRef.current).catch(() => undefined);
+        await replayDurableOutboxes().catch(reportError);
+        await refreshConversationIndex(activeConversationIdRef.current).catch(reportError);
       }
       if (!stopped) timer = setTimeout(() => void refresh(), refreshIntervalMs);
     };
@@ -70,13 +74,25 @@ export function useConversationIndexLifecycle({
     };
   }, [
     activeConversationIdRef,
-    notificationConversationId,
-    notificationIdentity,
     onError,
     onPreferredConversationConsumed,
     preferredConversationId,
     refreshConversationIndex,
     refreshIntervalMs,
     replayDurableOutboxes,
+  ]);
+
+  useEffect(() => {
+    if (!notificationIdentity || !notificationConversationId) return undefined;
+    let disposed = false;
+    void openNotificationConversation(notificationConversationId).catch((error) => {
+      if (!disposed) onError(error);
+    });
+    return () => { disposed = true; };
+  }, [
+    notificationConversationId,
+    notificationIdentity,
+    onError,
+    openNotificationConversation,
   ]);
 }
