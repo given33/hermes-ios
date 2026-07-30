@@ -102,6 +102,11 @@ jobs:
             echo "Generated Xcode project has $DEPENDENCY_COUNT target dependencies; expected at least 5." >&2
             exit 1
           fi
+          SPOOL_BUILD_FILE_COUNT="$(grep -c 'HermesScreenTimeSpool.swift in Sources.*isa = PBXBuildFile' "$PROJECT_FILE")"
+          if [ "$SPOOL_BUILD_FILE_COUNT" -ne 2 ]; then
+            echo "Generated Xcode project has $SPOOL_BUILD_FILE_COUNT shared spool build files; expected 2 isolated records." >&2
+            exit 1
+          fi
           SHARED_KEYCHAIN_GROUP='$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared'
           for target in HermesDeviceActivityMonitor HermesDeviceActivityReport; do
             ENTITLEMENTS="ios/native-extensions/$target/$target.entitlements"

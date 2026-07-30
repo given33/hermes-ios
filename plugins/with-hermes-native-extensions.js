@@ -95,7 +95,61 @@ function addSourceGroup(project, name, sourcePaths) {
   mainGroup.children.push({ value: group.uuid, comment: name });
 }
 
-function configureTarget(project, definition, buildNumber, version) {
+function addSharedBuildFiles(
+  project,
+  buildPhase,
+  sharedSourcePaths,
+  sharedFileReferences,
+  orphanedBuildFiles,
+) {
+  const buildFiles = project.pbxBuildFileSection();
+  const fileReferences = project.pbxFileReferenceSection();
+  for (const sourcePath of sharedSourcePaths) {
+    let fileRefUuid = sharedFileReferences.get(sourcePath);
+    if (!fileRefUuid) {
+      fileRefUuid = Object.entries(fileReferences).find(([uuid, fileReference]) => (
+        !uuid.endsWith('_comment')
+        && fileReference
+        && unquote(fileReference.path) === sourcePath
+      ))?.[0];
+      if (!fileRefUuid) throw new Error(`Missing shared source file reference for ${sourcePath}`);
+      sharedFileReferences.set(sourcePath, fileRefUuid);
+      for (const [uuid, buildFile] of Object.entries(buildFiles)) {
+        if (!uuid.endsWith('_comment') && buildFile?.fileRef === fileRefUuid) {
+          orphanedBuildFiles.add(uuid);
+        }
+      }
+    }
+
+    const buildFileUuid = project.generateUuid();
+    const basename = sourcePath.split('/').pop();
+    const comment = `${basename} in Sources`;
+    buildFiles[buildFileUuid] = {
+      isa: 'PBXBuildFile',
+      fileRef: fileRefUuid,
+      fileRef_comment: basename,
+    };
+    buildFiles[`${buildFileUuid}_comment`] = comment;
+    buildPhase.files.push({ value: buildFileUuid, comment });
+  }
+}
+
+function removeOrphanedBuildFiles(project, orphanedBuildFiles) {
+  const buildFiles = project.pbxBuildFileSection();
+  for (const uuid of orphanedBuildFiles) {
+    delete buildFiles[uuid];
+    delete buildFiles[`${uuid}_comment`];
+  }
+}
+
+function configureTarget(
+  project,
+  definition,
+  buildNumber,
+  version,
+  sharedFileReferences,
+  orphanedBuildFiles,
+) {
   const directory = definition.directory ?? definition.name;
   let target = findTarget(project, definition.name);
   if (!target) {
@@ -105,14 +159,30 @@ function configureTarget(project, definition, buildNumber, version) {
       definition.name,
       definition.bundleIdentifier,
     );
-    const sourcePaths = [
-      ...(definition.source ? [`native-extensions/${directory}/${definition.source}`] : []),
-      ...(definition.sharedSources ?? []).map((source) => `native-extensions/${source}`),
-    ];
-    project.addBuildPhase(sourcePaths, 'PBXSourcesBuildPhase', 'Sources', target.uuid);
+    const targetSourcePaths = definition.source
+      ? [`native-extensions/${directory}/${definition.source}`]
+      : [];
+    const sharedSourcePaths = (definition.sharedSources ?? [])
+      .map((source) => `native-extensions/${source}`);
+    addSourceGroup(project, definition.name, targetSourcePaths);
+    if (sharedSourcePaths.length) {
+      addSourceGroup(project, 'HermesScreenTimeShared', sharedSourcePaths);
+    }
+    const sourcesPhase = project.addBuildPhase(
+      targetSourcePaths,
+      'PBXSourcesBuildPhase',
+      'Sources',
+      target.uuid,
+    );
     project.addBuildPhase([], 'PBXFrameworksBuildPhase', 'Frameworks', target.uuid);
     project.addBuildPhase([], 'PBXResourcesBuildPhase', 'Resources', target.uuid);
-    addSourceGroup(project, definition.name, sourcePaths);
+    addSharedBuildFiles(
+      project,
+      sourcesPhase.buildPhase,
+      sharedSourcePaths,
+      sharedFileReferences,
+      orphanedBuildFiles,
+    );
   }
 
   for (const configuration of targetConfigurations(project, target)) {
@@ -165,12 +235,22 @@ module.exports = function withHermesNativeExtensions(config) {
   return withXcodeProject(withSources, (modConfig) => {
     const project = modConfig.modResults;
     ensureDependencySections(project);
+    const sharedFileReferences = new Map();
+    const orphanedBuildFiles = new Set();
     const targets = new Map(
       TARGETS.map((definition) => [
         definition.name,
-        configureTarget(project, definition, buildNumber, version),
+        configureTarget(
+          project,
+          definition,
+          buildNumber,
+          version,
+          sharedFileReferences,
+          orphanedBuildFiles,
+        ),
       ]),
     );
+    removeOrphanedBuildFiles(project, orphanedBuildFiles);
     const appTarget = project.getFirstTarget();
     for (const name of [
       'HermesWeatherWidget',

@@ -20,6 +20,10 @@ test('native extension config declares every V4 companion target', () => {
   }
   assert.match(plugin, /objects\.PBXContainerItemProxy \?\?= \{\}/);
   assert.match(plugin, /objects\.PBXTargetDependency \?\?= \{\}/);
+  assert.match(plugin, /function addSharedBuildFiles/);
+  assert.match(plugin, /buildPhase\.files\.push\(\{ value: buildFileUuid, comment \}\)/);
+  assert.match(plugin, /removeOrphanedBuildFiles\(project, orphanedBuildFiles\)/);
+  assert.match(plugin, /addSourceGroup\(project, 'HermesScreenTimeShared', sharedSourcePaths\)/);
   assert.match(plugin, /ensureTargetDependency/);
   assert.match(plugin, /withDangerousMod/);
   assert.match(plugin, /cpSync\(source, destination, \{ recursive: true \}\)/);
@@ -153,6 +157,7 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(workflow, /import plistlib/);
   assert.match(workflow, /"keychain-access-groups": \[shared_keychain_group\]/);
   assert.match(workflow, /"com\.apple\.developer\.family-controls": True/);
+  assert.match(workflow, /SPOOL_BUILD_FILE_COUNT/);
   assert.match(
     workflow,
     /verify_contains 'HermesScreenTimeSpool\.swift' 'shared Screen Time spool source'/,
