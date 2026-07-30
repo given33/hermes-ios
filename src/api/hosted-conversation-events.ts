@@ -1,6 +1,13 @@
 import type { HermesCloudApi, SingleConversation } from './HermesCloudApi';
 
 export const HOSTED_EVENT_SCHEMA_VERSION = 'hermes.hosted-event.v1';
+const MALFORMED_FRAME_REPORT_INTERVAL_MS = 60_000;
+const MAX_MALFORMED_FRAME_REPORT_KEYS = 256;
+const malformedFrameReportTimes = new Map<string, number>();
+
+class RecoverableHostedFrameError extends Error {
+  readonly name = 'RecoverableHostedFrameError';
+}
 
 export interface HostedLifecycleEvent {
   event_id: string;
@@ -35,6 +42,7 @@ export async function consumeHostedConversationEvents(
   expectedAccountGeneration: string,
   signal: AbortSignal,
   onEvent: (event: HostedConversationEventFrame) => void | Promise<void>,
+  onMalformedFrame: (error: Error) => void = defaultMalformedFrameReporter,
 ): Promise<number> {
   const expectedGeneration = expectedAccountGeneration.trim();
   if (!conversationId.trim() || !expectedGeneration) {
@@ -52,6 +60,13 @@ export async function consumeHostedConversationEvents(
   const decoder = new TextDecoder();
   let buffer = '';
   let latestCursor = Math.max(0, Math.floor(cursor));
+  const reportMalformedFrame = (error: RecoverableHostedFrameError) => {
+    reportMalformedHostedFrame(
+      `${expectedGeneration}\u0000${conversationId}`,
+      error,
+      onMalformedFrame,
+    );
+  };
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -62,19 +77,25 @@ export async function consumeHostedConversationEvents(
         conversationId,
         expectedGeneration,
         onEvent,
+        reportMalformedFrame,
       );
       buffer = parsed.remaining;
       latestCursor = parsed.cursor;
       if (done) break;
     }
     if (buffer.trim()) {
-      latestCursor = await parseSseFrame(
-        buffer,
-        latestCursor,
-        conversationId,
-        expectedGeneration,
-        onEvent,
-      );
+      try {
+        latestCursor = await parseSseFrame(
+          buffer,
+          latestCursor,
+          conversationId,
+          expectedGeneration,
+          onEvent,
+        );
+      } catch (error) {
+        if (!(error instanceof RecoverableHostedFrameError)) throw error;
+        reportMalformedFrame(error);
+      }
     }
   } finally {
     reader.releaseLock();
@@ -88,6 +109,7 @@ async function drainSseBuffer(
   expectedConversationId: string,
   expectedAccountGeneration: string,
   onEvent: (event: HostedConversationEventFrame) => void | Promise<void>,
+  reportMalformedFrame: (error: RecoverableHostedFrameError) => void,
 ): Promise<{ cursor: number; remaining: string }> {
   let remaining = input;
   let latestCursor = cursor;
@@ -96,13 +118,18 @@ async function drainSseBuffer(
     if (!boundary || boundary.index === undefined) break;
     const frame = remaining.slice(0, boundary.index);
     remaining = remaining.slice(boundary.index + boundary[0].length);
-    latestCursor = await parseSseFrame(
-      frame,
-      latestCursor,
-      expectedConversationId,
-      expectedAccountGeneration,
-      onEvent,
-    );
+    try {
+      latestCursor = await parseSseFrame(
+        frame,
+        latestCursor,
+        expectedConversationId,
+        expectedAccountGeneration,
+        onEvent,
+      );
+    } catch (error) {
+      if (!(error instanceof RecoverableHostedFrameError)) throw error;
+      reportMalformedFrame(error);
+    }
   }
   return { cursor: latestCursor, remaining };
 }
@@ -134,11 +161,27 @@ async function parseSseFrame(
   try {
     payload = JSON.parse(data.join('\n'));
   } catch {
-    throw new Error('Hermes hosted event stream returned invalid JSON');
+    throw new RecoverableHostedFrameError('Hermes hosted event stream returned invalid JSON');
   }
   if (!isRecord(payload)) {
-    throw new Error('Hermes hosted event stream returned an invalid envelope');
+    throw new RecoverableHostedFrameError(
+      'Hermes hosted event stream returned an invalid envelope',
+    );
   }
+
+  const hasGap = payload.has_gap === true;
+  const resetCursor = payload.reset_cursor === true;
+  const accountGeneration = stringValue(payload.account_generation);
+  preflightFrameIntegrity(
+    payload,
+    eventId,
+    cursor,
+    expectedConversationId,
+    expectedAccountGeneration,
+    accountGeneration,
+    hasGap,
+    resetCursor,
+  );
 
   const conversation = payload.conversation === undefined
     ? undefined
@@ -146,12 +189,6 @@ async function parseSseFrame(
   const events = payload.events === undefined
     ? []
     : parseLifecycleEvents(payload.events);
-  const hasGap = payload.has_gap === true;
-  const resetCursor = payload.reset_cursor === true;
-  const accountGeneration = stringValue(payload.account_generation);
-  if (!accountGeneration || accountGeneration !== expectedAccountGeneration) {
-    throw new Error('Hermes hosted event stream account generation changed');
-  }
   if (conversation) {
     if (conversation.id !== expectedConversationId) {
       throw new Error('Hermes hosted event stream returned another conversation');
@@ -177,7 +214,9 @@ async function parseSseFrame(
     throw new Error('Hermes hosted event stream gap is missing its recovery snapshot');
   }
   if (!conversation && !events.length) {
-    throw new Error('Hermes hosted event stream returned an empty envelope');
+    throw new RecoverableHostedFrameError(
+      'Hermes hosted event stream returned an empty envelope',
+    );
   }
 
   const payloadCursor = nonNegativeInteger(payload.cursor);
@@ -208,7 +247,7 @@ async function parseSseFrame(
 
 function parseLifecycleEvents(value: unknown): HostedLifecycleEvent[] {
   if (!Array.isArray(value)) {
-    throw new Error('Hermes hosted event stream returned invalid events');
+    throw new RecoverableHostedFrameError('Hermes hosted event stream returned invalid events');
   }
   return value.map((event) => {
     if (!isRecord(event)
@@ -221,7 +260,9 @@ function parseLifecycleEvents(value: unknown): HostedLifecycleEvent[] {
       || !stringValue(event.event_type)
       || !stringValue(event.idempotency_key)
       || !isRecord(event.payload)) {
-      throw new Error('Hermes hosted event stream returned an invalid lifecycle event');
+      throw new RecoverableHostedFrameError(
+        'Hermes hosted event stream returned an invalid lifecycle event',
+      );
     }
     const eventCursor = strictNonNegativeInteger(event.cursor);
     const sequence = strictNonNegativeInteger(event.sequence);
@@ -243,13 +284,74 @@ function parseLifecycleEvents(value: unknown): HostedLifecycleEvent[] {
   });
 }
 
+function preflightFrameIntegrity(
+  payload: Record<string, unknown>,
+  eventId: string,
+  cursor: number,
+  expectedConversationId: string,
+  expectedAccountGeneration: string,
+  accountGeneration: string,
+  hasGap: boolean,
+  resetCursor: boolean,
+): void {
+  if (!accountGeneration || accountGeneration !== expectedAccountGeneration) {
+    throw new Error('Hermes hosted event stream account generation changed');
+  }
+  if (isRecord(payload.conversation)) {
+    const frameConversationId = stringValue(payload.conversation.id);
+    const frameGeneration = stringValue(payload.conversation.account_generation);
+    if (frameConversationId && frameConversationId !== expectedConversationId) {
+      throw new Error('Hermes hosted event stream returned another conversation');
+    }
+    if (frameGeneration && frameGeneration !== accountGeneration) {
+      throw new Error('Hermes hosted event snapshot account generation changed');
+    }
+  }
+  const rawEvents = Array.isArray(payload.events) ? payload.events : [];
+  const rawEventCursors: number[] = [];
+  let previousEventCursor = resetCursor ? -1 : cursor;
+  for (const rawEvent of rawEvents) {
+    if (!isRecord(rawEvent)) continue;
+    const eventConversationId = stringValue(rawEvent.conversation_id);
+    const eventGeneration = stringValue(rawEvent.account_generation);
+    if ((eventConversationId && eventConversationId !== expectedConversationId)
+      || (eventGeneration && eventGeneration !== accountGeneration)) {
+      throw new Error('Hermes hosted lifecycle event crossed its identity boundary');
+    }
+    const eventCursor = optionalNonNegativeInteger(rawEvent.cursor);
+    if (eventCursor !== undefined) {
+      if (eventCursor <= previousEventCursor) {
+        throw new Error('Hermes hosted lifecycle events are not strictly ordered');
+      }
+      previousEventCursor = eventCursor;
+      rawEventCursors.push(eventCursor);
+    }
+  }
+  if (hasGap && !isRecord(payload.conversation)) {
+    throw new Error('Hermes hosted event stream gap is missing its recovery snapshot');
+  }
+  if (resetCursor && !isRecord(payload.conversation)) {
+    throw new Error('Hermes hosted event cursor reset is missing its snapshot');
+  }
+  const frameCursors = [
+    optionalNonNegativeInteger(payload.cursor),
+    optionalNonNegativeInteger(eventId),
+    ...rawEventCursors,
+  ].filter((value): value is number => value !== undefined);
+  if (!resetCursor && frameCursors.length && Math.max(...frameCursors) < cursor) {
+    throw new Error('Hermes hosted event stream cursor regressed');
+  }
+}
+
 function parseConversation(value: unknown): SingleConversation {
   if (!isRecord(value)
     || typeof value.id !== 'string'
     || typeof value.profile !== 'string'
     || typeof value.title !== 'string'
     || !Array.isArray(value.messages)) {
-    throw new Error('Hermes hosted event stream returned an invalid conversation');
+    throw new RecoverableHostedFrameError(
+      'Hermes hosted event stream returned an invalid conversation',
+    );
   }
   return value as unknown as SingleConversation;
 }
@@ -257,7 +359,9 @@ function parseConversation(value: unknown): SingleConversation {
 function strictNonNegativeInteger(value: unknown): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
-    throw new Error('Hermes hosted event stream returned an invalid event cursor');
+    throw new RecoverableHostedFrameError(
+      'Hermes hosted event stream returned an invalid event cursor',
+    );
   }
   return parsed;
 }
@@ -267,10 +371,43 @@ function nonNegativeInteger(value: unknown): number {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+function optionalNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value === 'string' && !value.trim()) return undefined;
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function reportMalformedHostedFrame(
+  identity: string,
+  error: RecoverableHostedFrameError,
+  reporter: (error: Error) => void,
+): void {
+  const now = Date.now();
+  const lastReportedAt = malformedFrameReportTimes.get(identity) ?? Number.NEGATIVE_INFINITY;
+  if (now - lastReportedAt < MALFORMED_FRAME_REPORT_INTERVAL_MS) return;
+  if (!malformedFrameReportTimes.has(identity)
+    && malformedFrameReportTimes.size >= MAX_MALFORMED_FRAME_REPORT_KEYS) {
+    const oldest = malformedFrameReportTimes.keys().next().value;
+    if (oldest !== undefined) malformedFrameReportTimes.delete(oldest);
+  }
+  malformedFrameReportTimes.delete(identity);
+  malformedFrameReportTimes.set(identity, now);
+  try {
+    reporter(error);
+  } catch {
+    // Diagnostics must never turn a recoverable frame into a stream failure.
+  }
+}
+
+function defaultMalformedFrameReporter(error: Error): void {
+  console.warn('Hermes hosted event stream skipped a malformed frame', error.message);
 }

@@ -318,7 +318,7 @@ jobs:
           shasum -a 256 -c Hermes-Agent-unsigned.ipa.sha256
           SHORT_SHA="${GITHUB_SHA:0:7}"
           ARTIFACT_NAME="Hermes-Agent-build-${APP_BUILD_NUMBER}-${SHORT_SHA}"
-          APP_MANIFEST_SHA256="$(shasum -a 256 app.base.json | awk '{print $1}')"
+          APP_MANIFEST_SHA256="$(shasum -a 256 "$GITHUB_WORKSPACE/app.base.json" | awk '{print $1}')"
           printf '{"build":"%s","commit":"%s","frontend_preview":%s,"manifest_sha256":"%s","sha256":"%s"}\n' \
             "$APP_BUILD_NUMBER" \
             "$GITHUB_SHA" \

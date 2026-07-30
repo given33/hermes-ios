@@ -49,25 +49,181 @@ test('hosted conversation SSE survives fragmented frames and advances its cursor
   assert.equal(cursor, 9);
 });
 
-test('hosted conversation SSE rejects malformed payloads instead of erasing chat state', async () => {
+test('hosted conversation SSE skips one malformed snapshot without erasing chat state', async () => {
   const api = {
     openHostedConversationEvents() {
       return Promise.resolve(streamResponse([
-        'id: 2\nevent: conversation\ndata: {"cursor":2,"account_generation":"generation-1","conversation":{}}\n\n',
+        'id: 2\nevent: conversation\ndata: {"cursor":2,"account_generation":"generation-malformed","conversation":{}}\n\n',
       ]));
     },
   } as unknown as HermesCloudApi;
+  const reports: string[] = [];
+  const events: number[] = [];
 
+  const cursor = await consumeHostedConversationEvents(
+    api,
+    'chat-malformed',
+    1,
+    'generation-malformed',
+    new AbortController().signal,
+    (frame) => { events.push(frame.cursor); },
+    (error) => { reports.push(error.message); },
+  );
+
+  assert.equal(cursor, 1);
+  assert.deepEqual(events, []);
+  assert.deepEqual(reports, ['Hermes hosted event stream returned an invalid conversation']);
+});
+
+test('hosted conversation SSE isolates malformed frames and rate-limits reports', async () => {
+  const api = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        'id: 2\nevent: conversation\ndata: {not-json}\n\n',
+        'id: 3\nevent: conversation\ndata: {"cursor":3,"account_generation":"generation-recovery","events":{}}\n\n',
+        'id: 4\nevent: conversation\ndata: {"cursor":4,"account_generation":"generation-recovery",'
+          + '"conversation":{"id":"chat-recovery","account_generation":"generation-recovery",'
+          + '"profile":"default","title":"Recovered","messages":[]}}\n\n',
+      ]));
+    },
+  } as unknown as HermesCloudApi;
+  const reports: string[] = [];
+  const events: number[] = [];
+
+  const cursor = await consumeHostedConversationEvents(
+    api,
+    'chat-recovery',
+    1,
+    'generation-recovery',
+    new AbortController().signal,
+    (frame) => { events.push(frame.cursor); },
+    (error) => { reports.push(error.message); },
+  );
+
+  assert.equal(cursor, 4);
+  assert.deepEqual(events, [4]);
+  assert.equal(reports.length, 1);
+  assert.match(reports[0], /invalid JSON/);
+});
+
+test('hosted conversation SSE treats a malformed frame without any cursor as recoverable', async () => {
+  const api = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        'event: conversation\ndata: {"account_generation":"generation-missing-cursor",'
+          + '"events":{}}\n\n',
+        'id: 6\nevent: conversation\ndata: {"cursor":6,'
+          + '"account_generation":"generation-missing-cursor",'
+          + '"conversation":{"id":"chat-missing-cursor",'
+          + '"account_generation":"generation-missing-cursor",'
+          + '"profile":"default","title":"Recovered","messages":[]}}\n\n',
+      ]));
+    },
+  } as unknown as HermesCloudApi;
+  const events: number[] = [];
+  const reports: string[] = [];
+
+  const cursor = await consumeHostedConversationEvents(
+    api,
+    'chat-missing-cursor',
+    5,
+    'generation-missing-cursor',
+    new AbortController().signal,
+    (frame) => { events.push(frame.cursor); },
+    (error) => { reports.push(error.message); },
+  );
+
+  assert.equal(cursor, 6);
+  assert.deepEqual(events, [6]);
+  assert.deepEqual(reports, ['Hermes hosted event stream returned invalid events']);
+});
+
+test('malformed-frame isolation never hides identity or cursor integrity violations', async () => {
+  const crossedApi = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        'event: conversation\ndata: {not-json}\n\n',
+        'id: 3\nevent: conversation\ndata: {"cursor":3,"account_generation":"generation-other",'
+          + '"conversation":{"id":"chat-integrity","account_generation":"generation-other",'
+          + '"profile":"default","title":"Crossed","messages":[]}}\n\n',
+      ]));
+    },
+  } as unknown as HermesCloudApi;
   await assert.rejects(
     consumeHostedConversationEvents(
-      api,
-      'chat-1',
-      1,
-      'generation-1',
+      crossedApi,
+      'chat-integrity',
+      2,
+      'generation-integrity',
       new AbortController().signal,
       () => undefined,
+      () => undefined,
     ),
-    /invalid conversation/,
+    /account generation changed/,
+  );
+
+  const regressedMalformedApi = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        'id: 4\nevent: conversation\ndata: {"cursor":4,"account_generation":"generation-regression",'
+          + '"conversation":{}}\n\n',
+      ]));
+    },
+  } as unknown as HermesCloudApi;
+  await assert.rejects(
+    consumeHostedConversationEvents(
+      regressedMalformedApi,
+      'chat-regression',
+      5,
+      'generation-regression',
+      new AbortController().signal,
+      () => undefined,
+      () => undefined,
+    ),
+    /cursor regressed/,
+  );
+
+  const malformedGapApi = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        'id: 6\nevent: conversation\ndata: {"cursor":6,"has_gap":true,'
+          + '"account_generation":"generation-gap","conversation":null}\n\n',
+      ]));
+    },
+  } as unknown as HermesCloudApi;
+  await assert.rejects(
+    consumeHostedConversationEvents(
+      malformedGapApi,
+      'chat-gap',
+      5,
+      'generation-gap',
+      new AbortController().signal,
+      () => undefined,
+      () => undefined,
+    ),
+    /gap is missing its recovery snapshot/,
+  );
+
+  const malformedOrderedEventsApi = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        'id: 8\nevent: conversation\ndata: {"cursor":8,"account_generation":"generation-order",'
+          + '"events":[{"cursor":8,"conversation_id":"chat-order",'
+          + '"account_generation":"generation-order"},{"cursor":7}]}\n\n',
+      ]));
+    },
+  } as unknown as HermesCloudApi;
+  await assert.rejects(
+    consumeHostedConversationEvents(
+      malformedOrderedEventsApi,
+      'chat-order',
+      6,
+      'generation-order',
+      new AbortController().signal,
+      () => undefined,
+      () => undefined,
+    ),
+    /not strictly ordered/,
   );
 });
 

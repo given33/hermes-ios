@@ -34,7 +34,11 @@ test('composer attachments and console prompts stay bound to their conversation'
   );
   assert.match(
     hostedSend,
-    /restoreQueuedComposer\(\)[\s\S]*localStore\.writeDraft[\s\S]*attachmentSourcesReleased/,
+    /durableMutation[\s\S]*cleanupAttachmentSources\(pendingAttachments\)[\s\S]*deliveryClaim/,
+  );
+  assert.doesNotMatch(
+    hostedSend,
+    /finally \{[\s\S]{0,200}cleanupAttachmentSources\(pendingAttachments\)/,
   );
 });
 

@@ -459,6 +459,7 @@ test('managed and account files keep their wire contract through cloud/files', a
   assert.deepEqual(calls[4].options.query, {
     date_from: undefined,
     date_to: undefined,
+    filter_contract: 'account-files-v1',
     limit: 25,
     offset: 5,
     q: 'report',

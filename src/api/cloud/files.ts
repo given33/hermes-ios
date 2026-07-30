@@ -12,6 +12,7 @@ import type { HermesCloudTransport, JsonRecord } from './transport';
 
 const COLLABORATION = '/api/plugins/collaboration';
 const TOOL_OUTPUT_PREFIX = 'toolout_';
+const TOOL_OUTPUT_FILTER_CONTRACT = 'account-files-v1';
 
 /** Managed workspace files and account-scoped cloud file library. */
 export class HermesFilesCloudApi {
@@ -68,6 +69,7 @@ export class HermesFilesCloudApi {
         source: query.source,
         status: query.status,
         type: query.fileType,
+        filter_contract: TOOL_OUTPUT_FILTER_CONTRACT,
       },
     });
   }
@@ -79,6 +81,9 @@ export class HermesFilesCloudApi {
     let total = Number.POSITIVE_INFINITY;
     while (offset < total && files.size < wanted) {
       const page = await this.getAccountFiles({ ...query, limit: pageSize, offset });
+      if (page.filter_contract !== TOOL_OUTPUT_FILTER_CONTRACT) {
+        throw new Error('Hermes server does not support account-file pagination ordering');
+      }
       const entries = Array.isArray(page.files) ? page.files : [];
       for (const entry of entries) {
         if (entry?.id) files.set(entry.id, entry);
@@ -92,10 +97,15 @@ export class HermesFilesCloudApi {
     return { files: [...files.values()], total: Number.isFinite(total) ? total : files.size };
   }
 
-  getToolOutputArtifacts(limit = 200, offset = 0) {
+  getToolOutputArtifacts(
+    limit = 200,
+    offset = 0,
+    query: AccountFilesQuery = {},
+  ) {
+    const filters = toolOutputServerFilters(query);
     return this.transport.request<ToolOutputArtifactsResponse>(
       `${COLLABORATION}/tool-output-artifacts`,
-      { query: { limit, offset } },
+      { query: { limit, offset, ...filters } },
     );
   }
 
@@ -107,17 +117,25 @@ export class HermesFilesCloudApi {
     ) return { files: [] as AccountFileEntry[], total: 0 };
     const artifacts = new Map<string, ToolOutputArtifactEntry>();
     const matching: AccountFileEntry[] = [];
+    const filters = toolOutputServerFilters(query);
+    const requiresServerFiltering = filters.filter_contract === TOOL_OUTPUT_FILTER_CONTRACT;
     const pageSize = Math.max(1, Math.min(200, wanted));
     let offset = 0;
     let total = Number.POSITIVE_INFINITY;
     while (offset < total && matching.length < wanted) {
-      const page = await this.getToolOutputArtifacts(pageSize, offset);
+      const page = await this.getToolOutputArtifacts(pageSize, offset, query);
+      if (requiresServerFiltering && page.filter_contract !== TOOL_OUTPUT_FILTER_CONTRACT) {
+        throw new Error('Hermes server does not support filtered tool-output pagination');
+      }
       const entries = Array.isArray(page.artifacts) ? page.artifacts : [];
       for (const entry of entries) {
         if (!entry?.id || artifacts.has(entry.id)) continue;
         artifacts.set(entry.id, entry);
         const file = toolOutputArtifactFile(entry);
         if (accountFileMatches(file, query)) matching.push(file);
+        else if (requiresServerFiltering) {
+          throw new Error('Hermes server returned an invalid filtered tool-output page');
+        }
       }
       total = Number.isFinite(page.total)
         ? Math.max(0, page.total)
@@ -227,6 +245,19 @@ function safeArtifactName(value: string) {
   return value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'tool';
 }
 
+function toolOutputServerFilters(query: AccountFilesQuery): Record<string, string> {
+  const filters: Record<string, string> = {
+    filter_contract: TOOL_OUTPUT_FILTER_CONTRACT,
+  };
+  const keyword = query.keyword?.trim();
+  const dateFrom = query.dateFrom?.trim();
+  const dateTo = query.dateTo?.trim();
+  if (keyword) filters.q = keyword;
+  if (dateFrom && Number.isFinite(accountFileDate(dateFrom))) filters.date_from = dateFrom;
+  if (dateTo && Number.isFinite(accountFileDate(dateTo))) filters.date_to = dateTo;
+  return filters;
+}
+
 function accountFileMatches(entry: AccountFileEntry, query: AccountFilesQuery) {
   if (query.source && entry.source !== query.source) return false;
   if (query.status && entry.status !== query.status) return false;
@@ -236,10 +267,10 @@ function accountFileMatches(entry: AccountFileEntry, query: AccountFilesQuery) {
     return false;
   }
   const createdAt = Number(entry.created_at) || 0;
-  const dateFrom = query.dateFrom ? Date.parse(query.dateFrom) : Number.NaN;
+  const dateFrom = query.dateFrom ? accountFileDate(query.dateFrom) : Number.NaN;
   if (Number.isFinite(dateFrom) && createdAt < dateFrom) return false;
   if (query.dateTo) {
-    const dateTo = Date.parse(query.dateTo);
+    const dateTo = accountFileDate(query.dateTo);
     if (Number.isFinite(dateTo)) {
       const inclusiveEnd = /^\d{4}-\d{2}-\d{2}$/.test(query.dateTo)
         ? dateTo + 86_400_000 - 1
@@ -248,4 +279,14 @@ function accountFileMatches(entry: AccountFileEntry, query: AccountFilesQuery) {
     }
   }
   return true;
+}
+
+function accountFileDate(value: string): number {
+  const normalized = value.trim();
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
+    const numeric = Number(normalized);
+    if (!Number.isFinite(numeric)) return Number.NaN;
+    return numeric < 100_000_000_000 ? numeric * 1_000 : numeric;
+  }
+  return Date.parse(normalized);
 }

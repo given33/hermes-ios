@@ -345,7 +345,6 @@ export function useHostedSendController({
     let hostedAccepted = false;
     let enqueuePersisted = false;
     let deliveryRetryScheduled = false;
-    let attachmentSourcesReleased = false;
     let queuedItem: HostedTurnOutboxItem | null = {
       attempts: 0,
       conversationId: sendingConversationId,
@@ -526,7 +525,6 @@ export function useHostedSendController({
       if (!durableMutation.updated || !durableMutation.item) return;
       queuedItem = durableMutation.item;
       cleanupAttachmentSources(pendingAttachments);
-      attachmentSourcesReleased = true;
       deliveryClaim = hostedTurnDeliveryClaimsRef.current.tryAcquire(sendKey);
       if (!deliveryClaim) {
         deliveryRetryScheduled = true;
@@ -662,9 +660,6 @@ export function useHostedSendController({
           : `The server is still running the task. Conversation sync failed temporarily: ${failure}`);
       }
     } finally {
-      if (attachmentSourcesReleased) {
-        cleanupAttachmentSources(pendingAttachments);
-      }
       if (deliveryClaim) hostedTurnDeliveryClaimsRef.current.release(sendKey, deliveryClaim);
       if (!hostedAccepted && !deliveryRetryScheduled && isCurrentSend()) {
         pendingTurnActiveRef.current = false;

@@ -97,6 +97,24 @@ function createApi() {
           resources: [],
         } as T);
       }
+      if (path.endsWith('/tool-output-artifacts')) {
+        return Promise.resolve({
+          artifacts: [],
+          filter_contract: 'account-files-v1',
+          limit: 200,
+          offset: 0,
+          total: 0,
+        } as T);
+      }
+      if (path.endsWith('/files')) {
+        return Promise.resolve({
+          files: [],
+          filter_contract: 'account-files-v1',
+          limit: 200,
+          offset: 0,
+          total: 0,
+        } as T);
+      }
       return Promise.resolve({} as T);
     },
   } as HermesApiClient;
@@ -142,6 +160,7 @@ test('account files and contextual routing use the collaboration cloud contract'
   assert.deepEqual(calls[0].options.query, {
     date_from: undefined,
     date_to: undefined,
+    filter_contract: 'account-files-v1',
     limit: 200,
     offset: 0,
     q: undefined,
@@ -150,7 +169,11 @@ test('account files and contextual routing use the collaboration cloud contract'
     type: undefined,
   });
   assert.equal(calls[1].path, '/api/plugins/collaboration/tool-output-artifacts');
-  assert.deepEqual(calls[1].options.query, { limit: 200, offset: 0 });
+  assert.deepEqual(calls[1].options.query, {
+    filter_contract: 'account-files-v1',
+    limit: 200,
+    offset: 0,
+  });
   assert.equal(calls[2].path, '/api/plugins/collaboration/route');
   assert.deepEqual(JSON.parse(String(calls[2].options.body)), {
     attachments: [{ name: 'input.csv', mime_type: 'text/csv', source: 'user_upload' }],
@@ -171,7 +194,13 @@ test('account file route reads only the requested merged window prefix', async (
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
       calls.push({ path, options });
       if (path.endsWith('/tool-output-artifacts')) {
-        return Promise.resolve({ artifacts: [], limit: 200, offset: 0, total: 0 } as T);
+        return Promise.resolve({
+          artifacts: [],
+          filter_contract: 'account-files-v1',
+          limit: 200,
+          offset: 0,
+          total: 0,
+        } as T);
       }
       const offset = Number(options.query?.offset || 0);
       const limit = Number(options.query?.limit || 200);
@@ -182,6 +211,7 @@ test('account file route reads only the requested merged window prefix', async (
           id: `file-${offset + index}`,
           name: `artifact-${offset + index}.txt`,
         })),
+        filter_contract: 'account-files-v1',
         limit,
         offset,
         total: 450,
@@ -224,6 +254,7 @@ test('account file pagination applies limit and offset after merging both source
             tool_name: 'terminal',
             turn_id: 'turn-1',
           })),
+          filter_contract: 'account-files-v1',
           limit: options.query?.limit,
           offset: options.query?.offset,
           total: 3,
@@ -238,6 +269,7 @@ test('account file pagination applies limit and offset after merging both source
           source: 'user_upload',
           status: 'available',
         })),
+        filter_contract: 'account-files-v1',
         limit: options.query?.limit,
         offset: options.query?.offset,
         total: 3,
@@ -251,6 +283,158 @@ test('account file pagination applies limit and offset after merging both source
   assert.equal(result.total, 6);
   assert.equal(result.limit, 2);
   assert.equal(result.offset, 2);
+});
+
+test('account file pagination keeps id-ascending ties from both source prefixes', async () => {
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      if (path.endsWith('/tool-output-artifacts')) {
+        return Promise.resolve({
+          artifacts: ['toolout_a', 'toolout_b'].map((id) => ({
+            account_generation: 'generation-1',
+            conversation_id: 'conversation-1',
+            created_at: 10,
+            id,
+            retained_until: 99,
+            sha256: id,
+            size_bytes: 1,
+            state: 'available',
+            tool_call_id: id,
+            tool_name: 'terminal',
+            turn_id: 'turn-1',
+          })),
+          filter_contract: 'account-files-v1',
+          limit: options.query?.limit,
+          offset: options.query?.offset,
+          total: 2,
+        } as T);
+      }
+      return Promise.resolve({
+        files: ['file_a', 'file_b'].map((id) => ({
+          created_at: 10_000,
+          file_type: 'document',
+          id,
+          name: `${id}.txt`,
+          source: 'user_upload',
+          status: 'available',
+        })),
+        filter_contract: 'account-files-v1',
+        limit: options.query?.limit,
+        offset: options.query?.offset,
+        total: 2,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getAllAccountFiles({ limit: 2 });
+
+  assert.deepEqual(result.files.map(({ id }) => id), ['file_a', 'file_b']);
+});
+
+test('numeric epoch date filters are forwarded to both account-file sources', async () => {
+  const queries: Array<Record<string, unknown> | undefined> = [];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      queries.push(options.query);
+      if (path.endsWith('/tool-output-artifacts')) {
+        return Promise.resolve({
+          artifacts: [], filter_contract: 'account-files-v1', limit: 1, offset: 0, total: 0,
+        } as T);
+      }
+      return Promise.resolve({
+        files: [], filter_contract: 'account-files-v1', limit: 1, offset: 0, total: 0,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  await new HermesCloudApi(client).getAllAccountFiles({
+    dateFrom: '1750000000',
+    dateTo: '1750000000123',
+    limit: 1,
+  });
+
+  assert.ok(queries.every((query) => query?.date_from === '1750000000'));
+  assert.ok(queries.every((query) => query?.date_to === '1750000000123'));
+});
+
+test('filtered artifact pagination uses the server filtered total without draining all pages', async () => {
+  const calls: Call[] = [];
+  const createdAt = Math.floor(Date.parse('2026-07-15T12:00:00Z') / 1_000);
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ path, options });
+      if (path.endsWith('/files')) {
+        return Promise.resolve({
+          files: [],
+          filter_contract: 'account-files-v1',
+          limit: 2,
+          offset: 0,
+          total: 0,
+        } as T);
+      }
+      assert.deepEqual(options.query, {
+        limit: 2,
+        offset: 0,
+        q: 'report',
+        date_from: '2026-01-01',
+        date_to: '2026-12-31',
+        filter_contract: 'account-files-v1',
+      });
+      return Promise.resolve({
+        artifacts: [0, 1].map((index) => ({
+          id: `toolout_report_${index}`,
+          account_generation: 'generation-1',
+          conversation_id: 'conversation-1',
+          created_at: createdAt - index,
+          retained_until: createdAt + 1_000,
+          sha256: `sha-${index}`,
+          size_bytes: 1,
+          state: 'available',
+          tool_call_id: `call-${index}`,
+          tool_name: 'report',
+          turn_id: 'turn-1',
+        })),
+        filter_contract: 'account-files-v1',
+        limit: 2,
+        offset: 0,
+        total: 2,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getAllAccountFiles({
+    keyword: 'report',
+    dateFrom: '2026-01-01',
+    dateTo: '2026-12-31',
+    limit: 1,
+    offset: 1,
+  });
+
+  assert.deepEqual(result.files.map(({ id }) => id), ['toolout_report_1']);
+  assert.equal(result.total, 2);
+  assert.equal(calls.filter(({ path }) => path.endsWith('/tool-output-artifacts')).length, 1);
+});
+
+test('filtered artifact pagination fails closed when the server ignores the filter contract', async () => {
+  const client = {
+    request<T>(path: string): Promise<T> {
+      if (path.endsWith('/files')) {
+        return Promise.resolve({
+          files: [],
+          filter_contract: 'account-files-v1',
+          limit: 1,
+          offset: 0,
+          total: 0,
+        } as T);
+      }
+      return Promise.resolve({ artifacts: [], limit: 1, offset: 0, total: 500 } as T);
+    },
+  } as HermesApiClient;
+
+  await assert.rejects(
+    new HermesCloudApi(client).getAllAccountFiles({ keyword: 'report', limit: 1 }),
+    /does not support filtered tool-output pagination/,
+  );
 });
 
 test('custom model API keys require an explicit preserve, replace, or delete action', () => {
@@ -271,7 +455,13 @@ test('encrypted tool outputs are real account files with working download and de
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
       calls.push({ path, options });
       if (path.endsWith('/files')) {
-        return Promise.resolve({ files: [], limit: 200, offset: 0, total: 0 } as T);
+        return Promise.resolve({
+          files: [],
+          filter_contract: 'account-files-v1',
+          limit: 200,
+          offset: 0,
+          total: 0,
+        } as T);
       }
       if (path.endsWith('/tool-output-artifacts')) {
         return Promise.resolve({
@@ -288,6 +478,7 @@ test('encrypted tool outputs are real account files with working download and de
             tool_name: 'terminal',
             turn_id: 'turn-1',
           }],
+          filter_contract: 'account-files-v1',
           limit: 200,
           offset: 0,
           total: 1,

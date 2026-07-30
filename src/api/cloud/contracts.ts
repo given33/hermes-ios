@@ -65,6 +65,7 @@ export interface AccountFileEntry {
 
 export interface AccountFilesResponse {
   files: AccountFileEntry[];
+  filter_contract?: string;
   total: number;
   limit: number;
   offset: number;
@@ -97,6 +98,7 @@ export interface ToolOutputArtifactEntry {
 
 export interface ToolOutputArtifactsResponse {
   artifacts: ToolOutputArtifactEntry[];
+  filter_contract?: string;
   total: number;
   limit: number;
   offset: number;
