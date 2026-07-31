@@ -110,6 +110,8 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(share, /NSExtensionItem/);
   assert.match(share, /agent-trigger-inbox-v1/);
   assert.match(share, /loadFileRepresentation/);
+  assert.match(share, /attachmentPath/);
+  assert.match(share, /removeItem\(at: root\.appendingPathComponent\(filename\)\)/);
   assert.equal((share.match(/completeRequest\(returningItems: nil\)/g) || []).length, 1);
   assert.match(read('native-extensions/HermesShareExtension/Info.plist'), /com\.apple\.share-services/);
   assert.match(read('native-extensions/HermesShareExtension/HermesShareExtension.entitlements'), /group\.app\.sunstone1029\.fig1171\.hermes/);

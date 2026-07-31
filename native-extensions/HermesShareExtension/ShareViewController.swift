@@ -29,6 +29,11 @@ final class ShareViewController: UIViewController {
         lock.lock(); defer { lock.unlock() }
         if let entry, entries.count < Self.maxItems, totalBytes + bytes <= Self.maxBytes {
           entries.append(entry); totalBytes += bytes
+        } else if let filename = entry?["attachmentPath"] as? String, let root {
+          // A rejected attachment has already been copied out of the
+          // provider's temporary sandbox. Remove it immediately so repeated
+          // oversized shares cannot fill the App Group container.
+          try? FileManager.default.removeItem(at: root.appendingPathComponent(filename))
         }
         work.leave()
       }
