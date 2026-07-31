@@ -1,0 +1,142 @@
+name: Build signed production iOS IPA
+
+run-name: Backend release ${{ github.event.client_payload.commit || github.sha }}
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types:
+      - hermes-backend-release
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-production-${{ github.event.client_payload.commit || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'repository_dispatch' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
+      HERMES_DISTRIBUTABLE_BUILD: '1'
+      HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      BACKEND_COMMIT: ${{ github.event.client_payload.commit || '' }}
+      BACKEND_VERSION: ${{ github.event.client_payload.version || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate backend release event
+        if: github.event_name == 'repository_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BACKEND_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'repository_dispatch commit must be a 40-character lowercase SHA.' >&2
+            exit 1
+          }
+          [[ "$BACKEND_VERSION" =~ ^[0-9A-Za-z.+_-]+$ ]] || {
+            echo 'repository_dispatch version contains unsupported characters.' >&2
+            exit 1
+          }
+      - name: Require Expo credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo 'EXPO_TOKEN is required for a signed production EAS build.' >&2
+            exit 1
+          fi
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm typecheck
+      - run: pnpm exec expo config --type public
+      - name: Verify the production source graph
+        run: node scripts/verify-production-source-graph.mjs .
+      - name: Build and wait for the signed production IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          message="github:${GITHUB_SHA}"
+          if [ -n "$BACKEND_COMMIT" ]; then
+            message="$message backend:$BACKEND_COMMIT version:$BACKEND_VERSION"
+          fi
+          npx --yes eas-cli@20.5.1 build \
+            --platform ios \
+            --profile production \
+            --message "$message" \
+            --non-interactive \
+            --wait \
+            --json > "$RUNNER_TEMP/eas-build.json"
+      - name: Verify EAS build result
+        shell: bash
+        env:
+          EAS_OUTPUT: ${{ runner.temp }}/eas-build.json
+          EAS_OUTPUT_URL: ${{ runner.temp }}/eas-build-url
+        run: |
+          set -euo pipefail
+          node --input-type=module - <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const raw = readFileSync(process.env.EAS_OUTPUT, 'utf8');
+          const values = [raw.trim(), ...raw.split(/\r?\n/)].flatMap((value) => {
+            try { return [JSON.parse(value)]; } catch { return []; }
+          });
+          const flattened = values.flatMap((value) => Array.isArray(value) ? value : [value]);
+          const build = flattened.find((value) => value && typeof value === 'object' && (
+            value.artifacts?.buildUrl || value.artifacts?.applicationArchiveUrl || value.buildUrl
+          ));
+          if (!build) throw new Error('EAS JSON did not contain a completed build artifact URL.');
+          const status = String(build.status || '').toUpperCase();
+          if (status && !['FINISHED', 'SUCCEEDED'].includes(status)) {
+            throw new Error(`EAS build finished with unexpected status: ${status}`);
+          }
+          const artifactUrl = build.artifacts?.buildUrl || build.artifacts?.applicationArchiveUrl || build.buildUrl;
+          if (!/^https:\/\//.test(String(artifactUrl))) {
+            throw new Error('EAS build artifact URL is not an HTTPS URL.');
+          }
+          writeFileSync(process.env.EAS_OUTPUT_URL, String(artifactUrl));
+          console.log(`Verified signed production EAS artifact: ${artifactUrl}`);
+          NODE
+      - name: Download and verify the signed IPA
+        shell: bash
+        env:
+          EAS_OUTPUT_URL: ${{ runner.temp }}/eas-build-url
+        run: |
+          set -euo pipefail
+          artifact_url="$(cat "$EAS_OUTPUT_URL")"
+          curl --fail --location --retry 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 300 \
+            "$artifact_url" \
+            --output "$RUNNER_TEMP/Hermes-Agent-production.ipa"
+          test -s "$RUNNER_TEMP/Hermes-Agent-production.ipa"
+          unzip -t "$RUNNER_TEMP/Hermes-Agent-production.ipa"
+          rm -rf "$RUNNER_TEMP/production-ipa"
+          mkdir -p "$RUNNER_TEMP/production-ipa"
+          unzip -q "$RUNNER_TEMP/Hermes-Agent-production.ipa" -d "$RUNNER_TEMP/production-ipa"
+          APP_PATH="$(find "$RUNNER_TEMP/production-ipa/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          node scripts/verify-production-app.mjs "$APP_PATH"
+          shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-production.ipa" \
+            | awk '{print $1 "  Hermes-Agent-production.ipa"}' \
+            > "$RUNNER_TEMP/Hermes-Agent-production.ipa.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hermes-Agent-production-eas-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/eas-build.json
+            ${{ runner.temp }}/Hermes-Agent-production.ipa
+            ${{ runner.temp }}/Hermes-Agent-production.ipa.sha256

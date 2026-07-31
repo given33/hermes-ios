@@ -1,7 +1,12 @@
 name: Build unsigned iOS IPA
 
+run-name: Backend release ${{ github.event.client_payload.commit || github.sha }}
+
 on:
   workflow_dispatch:
+  repository_dispatch:
+    types:
+      - hermes-backend-release
   push:
     branches:
       - main
@@ -12,8 +17,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: ios-unsigned-${{ github.ref }}
-  cancel-in-progress: false
+  group: ios-unsigned-${{ github.event.client_payload.commit || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'repository_dispatch' }}
 
 jobs:
   build:
@@ -23,8 +28,26 @@ jobs:
       EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
       HERMES_DISTRIBUTABLE_BUILD: '1'
       HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
+      BACKEND_COMMIT: ${{ github.event.client_payload.commit || '' }}
+      BACKEND_VERSION: ${{ github.event.client_payload.version || '' }}
     steps:
       - uses: actions/checkout@v4
+      - name: Validate backend release event
+        if: github.event_name == 'repository_dispatch'
+        env:
+          BACKEND_COMMIT: ${{ github.event.client_payload.commit }}
+          BACKEND_VERSION: ${{ github.event.client_payload.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BACKEND_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'repository_dispatch commit must be a 40-character lowercase SHA.' >&2
+            exit 1
+          }
+          [[ "$BACKEND_VERSION" =~ ^[0-9A-Za-z.+_-]+$ ]] || {
+            echo 'repository_dispatch version contains unsupported characters.' >&2
+            exit 1
+          }
       - uses: pnpm/action-setup@v4
         with:
           version: 10.15.1
@@ -319,9 +342,12 @@ jobs:
           SHORT_SHA="${GITHUB_SHA:0:7}"
           ARTIFACT_NAME="Hermes-Agent-build-${APP_BUILD_NUMBER}-${SHORT_SHA}"
           APP_MANIFEST_SHA256="$(shasum -a 256 "$GITHUB_WORKSPACE/app.base.json" | awk '{print $1}')"
-          printf '{"build":"%s","commit":"%s","frontend_preview":%s,"manifest_sha256":"%s","sha256":"%s"}\n' \
+          printf '{"build":"%s","commit":"%s","backend_commit":"%s","backend_version":"%s","trigger":"%s","frontend_preview":%s,"manifest_sha256":"%s","sha256":"%s"}\n' \
             "$APP_BUILD_NUMBER" \
             "$GITHUB_SHA" \
+            "${BACKEND_COMMIT:-}" \
+            "${BACKEND_VERSION:-}" \
+            "$GITHUB_EVENT_NAME" \
             "$([ "$EXPO_PUBLIC_FRONTEND_PREVIEW" = "1" ] && printf true || printf false)" \
             "$APP_MANIFEST_SHA256" \
             "$IPA_SHA256" \
