@@ -31,6 +31,7 @@ export interface IOSContextCapabilities {
   liveActivity: boolean;
   backgroundTasks: boolean;
   apns: boolean;
+  clipboard?: boolean;
   photos?: boolean;
   voiceInput?: boolean;
   voiceOutput?: boolean;
@@ -257,6 +258,10 @@ export interface IOSContextNativeModule {
     notes?: string;
     title: string;
   }): Promise<Record<string, unknown>>;
+  readClipboard(): Promise<{ text: string; hasText: boolean }>;
+  readClipboardForCommand(commandId: string): Promise<Record<string, unknown>>;
+  writeClipboard(text: string): Promise<boolean>;
+  writeClipboardForCommand(commandId: string, text: string): Promise<Record<string, unknown>>;
   shareTextToNotes(text: string, title?: string): Promise<boolean>;
   shareTextToNotesForCommand(
     commandId: string,
@@ -442,6 +447,12 @@ export const HermesIOSContext = {
     commandId: string,
     input: Parameters<IOSContextNativeModule['createReminder']>[0],
   ) => requireContextModule().createReminderForCommand(commandId, input),
+  readClipboard: () => requireContextModule().readClipboard(),
+  readClipboardForCommand: (commandId: string) =>
+    requireContextModule().readClipboardForCommand(commandId),
+  writeClipboard: (text: string) => requireContextModule().writeClipboard(text),
+  writeClipboardForCommand: (commandId: string, text: string) =>
+    requireContextModule().writeClipboardForCommand(commandId, text),
   shareTextToNotes: (text: string, title?: string) =>
     requireContextModule().shareTextToNotes(text, title),
   shareTextToNotesForCommand: (commandId: string, text: string, title?: string) =>

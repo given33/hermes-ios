@@ -48,6 +48,7 @@ public final class HermesIOSContextModule: Module {
     eventQueueDefinitions()
     healthDefinitions()
     calendarDefinitions()
+    clipboardDefinitions()
     notificationDefinitions()
     watchDefinitions()
     screenTimeDefinitions()
@@ -183,6 +184,7 @@ public final class HermesIOSContextModule: Module {
         "liveActivity": HermesLiveActivityService.isAvailable,
         "backgroundTasks": true,
         "apns": true,
+        "clipboard": true,
         "photos": true,
         "voiceInput": true,
         "voiceOutput": true,
@@ -502,6 +504,41 @@ public final class HermesIOSContextModule: Module {
         return existing
       }
       let result: [String: Any] = ["shown": Self.presentSharedText(text, title: title)]
+      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      return result
+    }.runOnQueue(.main)
+  }
+
+  @ModuleDefinitionBuilder
+  private func clipboardDefinitions() -> ModuleDefinition {
+    AsyncFunction("readClipboard") { () -> [String: Any] in
+      let text = UIPasteboard.general.string ?? ""
+      return ["text": text, "hasText": !text.isEmpty]
+    }.runOnQueue(.main)
+
+    AsyncFunction("readClipboardForCommand") {
+      (commandID: String) -> [String: Any] in
+      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+        return existing
+      }
+      let text = UIPasteboard.general.string ?? ""
+      let result: [String: Any] = ["text": text, "hasText": !text.isEmpty]
+      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      return result
+    }.runOnQueue(.main)
+
+    AsyncFunction("writeClipboard") { (text: String) -> Bool in
+      UIPasteboard.general.string = text
+      return true
+    }.runOnQueue(.main)
+
+    AsyncFunction("writeClipboardForCommand") {
+      (commandID: String, text: String) -> [String: Any] in
+      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+        return existing
+      }
+      UIPasteboard.general.string = text
+      let result: [String: Any] = ["written": true, "length": text.count]
       self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
       return result
     }.runOnQueue(.main)

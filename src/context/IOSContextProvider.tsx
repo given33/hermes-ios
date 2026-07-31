@@ -28,6 +28,11 @@ import {
   type IOSDeviceCommand,
   type IOSIntelligenceSnapshot,
 } from './IOSIntelligenceApi';
+import {
+  hasIOSNativeActionConfirmation,
+  nativeActionMetadata,
+  type IOSNativeActionMetadata,
+} from './ios-command-contract';
 import { predictedDepartureTimestamp } from './ios-command-contract';
 import {
   awaitCurrentIOSContext,
@@ -274,6 +279,9 @@ export function IOSContextProvider({
           !command._relay_execution_status
           || command._relay_execution_status === 'executing'
         ) {
+          const actionMetadata = nativeActionMetadata(command);
+          const actionAttempt = Math.max(1, command._relay_attempts || 1);
+          const actionAuditId = `ios-action:${command.id}`;
           command = {
             ...command,
             _relay_error: undefined,
@@ -283,7 +291,16 @@ export function IOSContextProvider({
           await runCurrent(() => HermesIOSContext.storePendingCommand(
             command as unknown as Record<string, unknown>,
           ));
+          await recordIOSActionAudit(
+            runCurrent,
+            command,
+            actionMetadata,
+            actionAuditId,
+            'started',
+            actionAttempt,
+          );
           try {
+            assertIOSNativeActionReady(command, actionMetadata);
             const result = await runCurrent(() => executeDeviceCommand(
               command,
               () => flushPendingEvents(capture),
@@ -293,13 +310,44 @@ export function IOSContextProvider({
               () => api.snapshot(undefined, capture.signal),
               runCurrent,
             ));
-            command = { ...command, _relay_execution_status: 'completed', _relay_result: result };
-          } catch (error) {
+            const auditedResult = {
+              ...result,
+              _ios_action: {
+                action_id: actionMetadata.action_id,
+                audit_id: actionAuditId,
+                attempt: actionAttempt,
+                max_attempts: actionMetadata.max_attempts,
+              },
+            };
             command = {
               ...command,
-              _relay_error: error instanceof Error ? error.message : String(error),
+              _relay_execution_status: 'completed',
+              _relay_result: auditedResult,
+            };
+            await recordIOSActionAudit(
+              runCurrent,
+              command,
+              actionMetadata,
+              actionAuditId,
+              'completed',
+              actionAttempt,
+            );
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            command = {
+              ...command,
+              _relay_error: message,
               _relay_execution_status: 'failed',
             };
+            await recordIOSActionAudit(
+              runCurrent,
+              command,
+              actionMetadata,
+              actionAuditId,
+              'failed',
+              actionAttempt,
+              message,
+            );
           }
           await runCurrent(() => HermesIOSContext.storePendingCommand(
             command as unknown as Record<string, unknown>,
@@ -581,6 +629,47 @@ function normalizeNativeEvent(event: NativeIOSContextEvent): IOSContextEvent {
   };
 }
 
+function assertIOSNativeActionReady(
+  command: IOSDeviceCommand,
+  metadata: IOSNativeActionMetadata,
+): void {
+  if (metadata.confirmation === 'required' && !hasIOSNativeActionConfirmation(command)) {
+    throw new Error(`user confirmation required for ${metadata.action_id}`);
+  }
+}
+
+async function recordIOSActionAudit(
+  runCurrent: <T>(operation: () => Promise<T>) => Promise<T>,
+  command: IOSDeviceCommand,
+  metadata: IOSNativeActionMetadata,
+  auditId: string,
+  status: 'started' | 'completed' | 'failed',
+  attempt: number,
+  error?: string,
+): Promise<void> {
+  try {
+    await runCurrent(() => HermesIOSContext.enqueueContextEvents([{
+      id: `${auditId}:${attempt}:${status}`,
+      kind: metadata.audit_kind,
+      timestamp: Date.now(),
+      payload: {
+        action_id: metadata.action_id,
+        attempt,
+        capability: metadata.capability,
+        command_id: command.id,
+        confirmation: metadata.confirmation,
+        max_attempts: metadata.max_attempts,
+        risk: metadata.risk,
+        status,
+        ...(error ? { error: error.slice(0, 512) } : {}),
+      },
+    }]));
+  } catch {
+    // Auditing must never turn a successful native action into a retry. The
+    // encrypted queue will be retried by the normal context relay when ready.
+  }
+}
+
 async function executeDeviceCommand(
   command: IOSDeviceCommand,
   flushPendingEvents: () => Promise<void>,
@@ -743,6 +832,17 @@ async function executeDeviceCommand(
         : prefix === 'oxygen' ? 'oxygenSaturation'
         : 'steps';
       return { health, value: health[field] ?? null };
+    }
+    case 'ios-clipboard:read':
+    case 'ios-clipboard:get': {
+      return HermesIOSContext.readClipboardForCommand(command.id);
+    }
+    case 'ios-clipboard:write':
+    case 'ios-clipboard:set': {
+      return HermesIOSContext.writeClipboardForCommand(
+        command.id,
+        requiredString(payload.text, 'text'),
+      );
     }
     case 'ios-calendar:create': {
       return HermesIOSContext.createCalendarEventForCommand(command.id, {
@@ -946,6 +1046,9 @@ function parseStoredCommand(value: Record<string, unknown>): PersistedIOSDeviceC
       : {}),
     ...(typeof value._relay_result === 'object' && value._relay_result
       ? { _relay_result: value._relay_result as Record<string, unknown> }
+      : {}),
+    ...(typeof value.action_metadata === 'object' && value.action_metadata
+      ? { action_metadata: value.action_metadata as IOSDeviceCommand['action_metadata'] }
       : {}),
     id: value.id,
     capability: value.capability,

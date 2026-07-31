@@ -1,4 +1,5 @@
 import type { HermesApiClient } from '../api/HermesApiClient';
+import type { IOSNativeActionMetadata } from './ios-command-contract';
 
 const IOS_INTELLIGENCE = '/api/plugins/ios-intelligence';
 
@@ -69,6 +70,7 @@ export interface IOSDeviceCommand {
   capability: string;
   action: string;
   payload: Record<string, unknown>;
+  action_metadata?: Partial<IOSNativeActionMetadata> | null;
   created_at: number;
   expires_at?: number | null;
 }
