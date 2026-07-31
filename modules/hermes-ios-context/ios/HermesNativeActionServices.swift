@@ -924,6 +924,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   private var peripherals: [UUID: CBPeripheral] = [:]
   private var connectContinuation: CheckedContinuation<[String: Any], Error>?
   private var serviceContinuation: CheckedContinuation<[[String: Any]], Error>?
+  private var pendingCharacteristicServices: [CBService] = []
   private var readContinuations: [CBUUID: CheckedContinuation<[String: Any], Error>] = [:]
   private var writeContinuations: [CBUUID: CheckedContinuation<[String: Any], Error>] = [:]
   private var notifyContinuation: CheckedContinuation<[String: Any], Error>?
@@ -1025,6 +1026,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     connectContinuation = nil
     serviceContinuation?.resume(throwing: CancellationError())
     serviceContinuation = nil
+    pendingCharacteristicServices.removeAll()
     readContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
     readContinuations.removeAll()
     writeContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
@@ -1042,7 +1044,10 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
           let peripheral = peripheral(identifier) else {
       throw HermesNativeActionError.unavailable("bluetooth-session")
     }
-    if let services = peripheral.services { return serializeServices(services) }
+    guard serviceContinuation == nil else { throw HermesNativeActionError.unavailable("bluetooth-services-busy") }
+    if let services = peripheral.services, services.allSatisfy({ $0.characteristics != nil }) {
+      return serializeServices(services)
+    }
     return try await withCheckedThrowingContinuation { continuation in
       serviceContinuation = continuation
       peripheral.delegate = self
@@ -1050,6 +1055,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
       DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
         guard let self, let pending = self.serviceContinuation else { return }
         self.serviceContinuation = nil
+        self.pendingCharacteristicServices.removeAll()
         pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-services-timeout"))
       }
     }
@@ -1150,13 +1156,17 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   }
 
   func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-    guard let continuation = serviceContinuation else { return }
-    serviceContinuation = nil
-    if let error { continuation.resume(throwing: error) }
-    else { continuation.resume(returning: serializeServices(peripheral.services ?? [])) }
+    guard serviceContinuation != nil else { return }
+    if let error { finishServices(error: error); return }
+    pendingCharacteristicServices = peripheral.services ?? []
+    discoverNextCharacteristics(for: peripheral)
   }
 
-  func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {}
+  func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+    guard serviceContinuation != nil else { return }
+    if let error { finishServices(error: error); return }
+    discoverNextCharacteristics(for: peripheral)
+  }
 
   func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
     if let continuation = readContinuations.removeValue(forKey: characteristic.uuid) {
@@ -1218,6 +1228,31 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     services.map { service in
       ["uuid": service.uuid.uuidString, "primary": service.isPrimary, "characteristics": service.characteristics?.map { ["uuid": $0.uuid.uuidString, "properties": $0.properties.rawValue] } ?? []]
     }
+  }
+
+  private func discoverNextCharacteristics(for peripheral: CBPeripheral) {
+    guard serviceContinuation != nil else {
+      pendingCharacteristicServices.removeAll()
+      return
+    }
+    guard !pendingCharacteristicServices.isEmpty else {
+      finishServices(result: serializeServices(peripheral.services ?? []))
+      return
+    }
+    let service = pendingCharacteristicServices.removeFirst()
+    if service.characteristics != nil {
+      discoverNextCharacteristics(for: peripheral)
+    } else {
+      peripheral.discoverCharacteristics(nil, for: service)
+    }
+  }
+
+  private func finishServices(result: [[String: Any]]? = nil, error: Error? = nil) {
+    pendingCharacteristicServices.removeAll()
+    let continuation = serviceContinuation
+    serviceContinuation = nil
+    if let error { continuation?.resume(throwing: error) }
+    else { continuation?.resume(returning: result ?? []) }
   }
 
   private func finishScan() {
