@@ -865,13 +865,15 @@ public final class HermesIOSContextModule: Module {
       #endif
     }.runOnQueue(.main)
 
-    AsyncFunction("scanBluetooth") { (seconds: Double?) async throws -> [[String: Any]] in
-      #if canImport(CoreBluetooth)
-      return try await HermesBluetoothService.shared.scan(seconds: seconds ?? 5)
-      #else
-      throw HermesNativeActionError.unavailable("bluetooth")
-      #endif
-    }.runOnQueue(.main)
+    AsyncFunction("scanBluetooth") { (seconds: Double?, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreBluetooth)
+        return try await HermesBluetoothService.shared.scan(seconds: seconds ?? 5)
+        #else
+        throw HermesNativeActionError.unavailable("bluetooth")
+        #endif
+      }
+    }
 
     AsyncFunction("connectBluetooth") { (ownerScope: String, deviceID: String, promise: Promise) in
       self.resolveAsync(promise) {
