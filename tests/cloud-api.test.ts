@@ -223,6 +223,10 @@ test('conversation attachment downloads accept current and legacy server routes 
     '/api/plugins/collaboration/files/file_1/%2e%2e/status',
     '/api/plugins/collaboration/single/conversations/chat-1/attachments/uploads/../../status',
     '/api/plugins/collaboration/tool-output-artifacts/toolout_1/download',
+    '/api/plugins/collaboration/files//file_1/download',
+    '/api/plugins/collaboration/files/file_1/download/',
+    '/api/plugins/collaboration/single/conversations/chat-1/attachments/uploads//report.pdf',
+    '/api/plugins/collaboration/single/conversations/chat-1/attachments/uploads/report.pdf/',
   ]) {
     await assert.rejects(
       async () => api.consumeConversationAttachment(invalid, (response) => response.text()),

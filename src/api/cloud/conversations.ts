@@ -350,7 +350,14 @@ function isConversationAttachmentDownloadUrl(downloadUrl: string): boolean {
   // URL normalizes dot segments and backslashes. Requiring the exact encoded
   // path prevents an allowed prefix from being used to reach another API.
   if (parsed.pathname !== rawPath) return false;
-  const segments = parsed.pathname.split('/').filter(Boolean);
+  const pathParts = parsed.pathname.split('/');
+  // A canonical route has exactly one leading slash and no empty path
+  // segments. Rejecting duplicate/trailing slashes prevents alternate URL
+  // spellings from bypassing route allowlists or cache keys.
+  if (pathParts[0] !== '' || pathParts.slice(1).some((segment) => !segment)) {
+    return false;
+  }
+  const segments = pathParts.slice(1);
   const decoded = segments.map(decodePathSegment);
   if (decoded.some((segment) => segment === null || !segment)) return false;
 

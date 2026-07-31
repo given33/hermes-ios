@@ -4,6 +4,7 @@ import type {
   SetStateAction,
 } from 'react';
 
+import { hasNativeIOSContext } from '../../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../../api/HermesApiClient';
 import {
   mergeCachedConversationUpdate,
@@ -218,6 +219,13 @@ export function useHostedSendController({
       (!trimmed && attachmentCount === 0)
       || (sending && !interventionRequested)
     ) return;
+    // Attachment envelopes are intentionally owned by the iOS vault. Do not
+    // create a durable outbox item that can only fail later on web, Android,
+    // or Expo Go where the native module is unavailable.
+    if (attachmentCount > 0 && !hasNativeIOSContext && !fixtureMode) {
+      notify('Attachments require the Hermes iOS app build.');
+      return;
+    }
     if (interventionRequested) {
       await intervention.sendIntervention(trimmed);
       return;
