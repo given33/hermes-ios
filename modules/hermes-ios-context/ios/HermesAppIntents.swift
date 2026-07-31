@@ -422,14 +422,8 @@ struct HermesTaskShortcuts: AppShortcutsProvider {
         shortTitle: "Voice note",
         systemImageName: "mic"
       )
-      AppShortcut(intent: HermesSendPromptIntent(), phrases: ["Send a prompt to Hermes"], shortTitle: "Send prompt", systemImageName: "paperplane")
-      AppShortcut(intent: HermesAskIntent(), phrases: ["Ask Hermes"], shortTitle: "Ask Hermes", systemImageName: "questionmark.bubble")
-      AppShortcut(intent: HermesQuickTaskIntent(), phrases: ["Run a Hermes quick task"], shortTitle: "Quick task", systemImageName: "bolt")
-      AppShortcut(intent: HermesFollowUpSessionIntent(), phrases: ["Follow up in a Hermes session"], shortTitle: "Follow up", systemImageName: "arrow.turn.up.right")
-      AppShortcut(intent: HermesGetSessionStatusIntent(), phrases: ["Get Hermes session status"], shortTitle: "Session status", systemImageName: "info.circle")
-      AppShortcut(intent: HermesListSessionsIntent(), phrases: ["List Hermes sessions"], shortTitle: "List sessions", systemImageName: "list.bullet")
-      AppShortcut(intent: HermesOpenSessionIntent(), phrases: ["Open a Hermes session"], shortTitle: "Open session", systemImageName: "rectangle.portrait.and.arrow.right")
-      AppShortcut(intent: HermesRetryRunIntent(), phrases: ["Retry a Hermes run"], shortTitle: "Retry run", systemImageName: "arrow.clockwise")
+      AppShortcut(intent: HermesSendPromptIntent(), phrases: ["Send a prompt to \(.applicationName)"], shortTitle: "Send prompt", systemImageName: "paperplane")
+      AppShortcut(intent: HermesQuickTaskIntent(), phrases: ["Run a quick task in \(.applicationName)"], shortTitle: "Quick task", systemImageName: "bolt")
   }
 }
 
@@ -438,22 +432,5 @@ private enum HermesTaskControlError: LocalizedError {
 
   var errorDescription: String? {
     "A valid Hermes task id is required."
-  }
-}
-
-struct HermesContextShortcuts: AppShortcutsProvider {
-  static var appShortcuts: [AppShortcut] {
-      AppShortcut(
-        intent: HermesRefreshContextIntent(),
-        phrases: ["Refresh Hermes context", "刷新 Hermes 上下文"],
-        shortTitle: "Refresh Hermes",
-        systemImageName: "arrow.clockwise"
-      )
-      AppShortcut(
-        intent: HermesCurrentLocationIntent(),
-        phrases: ["Get my Hermes location", "获取 Hermes 位置"],
-        shortTitle: "Hermes location",
-        systemImageName: "location.fill"
-      )
   }
 }

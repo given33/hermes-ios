@@ -721,6 +721,11 @@ test('native relay covers durable cursors, background services, health, watch, n
     assert.match(appIntents, new RegExp(`struct ${intent}: AppIntent`));
   }
   assert.match(appIntents, /struct HermesTaskShortcuts: AppShortcutsProvider/);
+  assert.equal((appIntents.match(/AppShortcutsProvider/g) ?? []).length, 1);
+  assert.equal((appIntents.match(/AppShortcut\(/g) ?? []).length, 10);
+  for (const line of appIntents.split('\n').filter((value) => value.includes('phrases:'))) {
+    assert.match(line, /\\\(\.applicationName\)/, `App Shortcut phrase is app-scoped: ${line}`);
+  }
   assert.match(appIntents, /func pending()/);
   assert.match(appIntents, /func consume\(requestID: String\)/);
   assert.match(appIntents, /allowedActions/);
