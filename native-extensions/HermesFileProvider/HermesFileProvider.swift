@@ -193,6 +193,7 @@ final class HermesFileProvider: NSObject, NSFileProviderReplicatedExtension {
 
   func modifyItem(_ item: NSFileProviderItem, baseVersion version: NSFileProviderItemVersion, changedFields: NSFileProviderItemFields, contents newContents: URL?, options: NSFileProviderModifyItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
     guard writable(item.itemIdentifier.rawValue), let source = safeURL(item.itemIdentifier.rawValue) else { completionHandler(nil, [], false, NSFileProviderError(.noSuchItem)); return Progress() }
+    let oldParent = item.parentItemIdentifier
     do {
       var destination = source
       if changedFields.contains(.filename) || changedFields.contains(.parentItemIdentifier) {
@@ -205,7 +206,13 @@ final class HermesFileProvider: NSObject, NSFileProviderReplicatedExtension {
         try FileManager.default.copyItem(at: newContents, to: destination)
       }
       completionHandler(HermesFileProviderItem(url: destination, parent: item.parentItemIdentifier, root: Self.root), [], false, nil)
-      signal(item.parentItemIdentifier)
+      // A move invalidates both enumerators. Without the old-parent signal,
+      // Files can keep rendering a stale entry until the user manually
+      // refreshes the provider.
+      signal(oldParent)
+      let newParentPath = (destination.path.replacingOccurrences(of: Self.root.path, with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/")) as NSString).deletingLastPathComponent
+      let newParent = newParentPath.isEmpty ? NSFileProviderItemIdentifier.rootContainer : NSFileProviderItemIdentifier(newParentPath)
+      if newParent.rawValue != oldParent.rawValue { signal(newParent) }
     } catch { completionHandler(nil, [], false, error) }
     return Progress()
   }
