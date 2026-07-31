@@ -789,6 +789,7 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(services, /func triggerScene/);
   assert.match(services, /func playSearch/);
   assert.match(services, /func notify/);
+  assert.match(read('ios/HermesEventStore.swift'), /return calendarEvents\(start: start, end: end\)\.map/);
   assert.match(module, /HermesNFCService\.shared\.scan/);
   for (const capability of [
     'ios-contacts', 'ios-photos', 'ios-media', 'ios-bluetooth', 'ios-nfc', 'ios-homekit',

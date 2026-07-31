@@ -56,7 +56,7 @@ final class HermesEventStore {
 
   func freeBusy(start: Date, end: Date) -> [[String: Any]] {
     guard end > start else { return [] }
-    calendarEvents(start: start, end: end).map { event in
+    return calendarEvents(start: start, end: end).map { event in
       ["start": event["start"] ?? 0, "end": event["end"] ?? 0, "title": event["title"] ?? "", "busy": true]
     }
   }
