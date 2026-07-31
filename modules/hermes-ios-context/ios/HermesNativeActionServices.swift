@@ -170,7 +170,7 @@ enum HermesContactsService {
       CNContactPhoneNumbersKey as NSString,
       CNContactEmailAddressesKey as NSString,
     ]
-    let request = CNFetchRequest(keysToFetch: keys)
+    let request = CNFetchRequest<CNContact>(keysToFetch: keys)
     var result: [[String: Any]] = []
     try CNContactStore().enumerateContacts(with: request) { contact, stop in
       if !normalizedQuery.isEmpty {
@@ -424,8 +424,9 @@ enum HermesPhotosService {
         throw HermesNativeActionError.invalidInput("imageURL")
       }
       try await performChanges {
-        identifier = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
-          .placeholderForCreatedAsset?.localIdentifier
+        if let request = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url) {
+          identifier = request.placeholderForCreatedAsset?.localIdentifier
+        }
       }
     }
     return ["imported": true, "id": identifier ?? "", "mediaType": UIImage(contentsOfFile: url.path) == nil ? "video" : "image"]
@@ -472,7 +473,7 @@ enum HermesPhotosService {
   }
 
   private static func performChanges(_ changes: @escaping () -> Void) async throws {
-    try await withCheckedThrowingContinuation { continuation in
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       PHPhotoLibrary.shared().performChanges(changes) { success, error in
         if let error { continuation.resume(throwing: error) }
         else if success { continuation.resume(returning: ()) }
@@ -617,7 +618,7 @@ enum HermesMediaService {
     let player = MPMusicPlayerController.systemMusicPlayer
     var result: [String: Any] = [
       "playbackState": playbackState(player.playbackState),
-      "volume": player.volume,
+      "volume": AVAudioSession.sharedInstance().outputVolume,
     ]
     if let item = player.nowPlayingItem {
       result["title"] = item.title ?? ""
@@ -665,8 +666,12 @@ enum HermesMediaService {
   static func setVolume(_ rawValue: Double) throws -> [String: Any] {
     guard authorization() == "authorized" else { throw HermesNativeActionError.authorizationRequired("media") }
     guard rawValue.isFinite, rawValue >= 0, rawValue <= 1 else { throw HermesNativeActionError.invalidInput("volume") }
-    let player = MPMusicPlayerController.systemMusicPlayer
-    player.volume = Float(rawValue)
+    let volumeView = MPVolumeView(frame: .zero)
+    guard let slider = volumeView.subviews.compactMap({ $0 as? UISlider }).first else {
+      throw HermesNativeActionError.unavailable("media-volume")
+    }
+    slider.value = Float(rawValue)
+    slider.sendActions(for: .valueChanged)
     return snapshot()
   }
 
@@ -810,13 +815,13 @@ private final class HermesQRScannerViewController: UIViewController {
 }
 
 #if canImport(CoreBluetooth)
-final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
+final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
   static let shared = HermesBluetoothService()
   private var manager: CBCentralManager!
   private var scanContinuation: CheckedContinuation<[[String: Any]], Error>?
   private var scanResults: [[String: Any]] = []
   private var scanTask: Task<Void, Never>?
-  private var stateWaiters: [CheckedContinuation<CBCentralManagerState, Never>] = []
+  private var stateWaiters: [CheckedContinuation<CBManagerState, Never>] = []
   private var peripherals: [UUID: CBPeripheral] = [:]
   private var connectContinuation: CheckedContinuation<[String: Any], Error>?
   private var serviceContinuation: CheckedContinuation<[[String: Any]], Error>?
@@ -840,7 +845,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
       finishScan()
     }
     let currentState = manager.state
-    let resolvedState: CBCentralManagerState
+    let resolvedState: CBManagerState
     if currentState == .unknown || currentState == .resetting {
       resolvedState = await withCheckedContinuation { continuation in
         stateWaiters.append(continuation)
@@ -960,7 +965,11 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
     let uuid = characteristic.uuid
     return try await withCheckedThrowingContinuation { continuation in
       readContinuations[uuid] = continuation
-      characteristic.service?.peripheral.readValue(for: characteristic)
+      guard let peripheral = characteristic.service?.peripheral else {
+        continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
+        return
+      }
+      peripheral.readValue(for: characteristic)
       DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
         guard let self, let pending = self.readContinuations.removeValue(forKey: uuid) else { return }
         pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-read-timeout"))
@@ -977,13 +986,20 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
       throw HermesNativeActionError.invalidInput("characteristic")
     }
     if !withResponse {
-      characteristic.service?.peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+      guard let peripheral = characteristic.service?.peripheral else {
+        throw HermesNativeActionError.unavailable("bluetooth-peripheral")
+      }
+      peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
       return ["written": true, "bytes": data.count]
     }
     let uuid = characteristic.uuid
     return try await withCheckedThrowingContinuation { continuation in
       writeContinuations[uuid] = continuation
-      characteristic.service?.peripheral.writeValue(data, for: characteristic, type: .withResponse)
+      guard let peripheral = characteristic.service?.peripheral else {
+        continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
+        return
+      }
+      peripheral.writeValue(data, for: characteristic, type: .withResponse)
       DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
         guard let self, let pending = self.writeContinuations.removeValue(forKey: uuid) else { return }
         pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-write-timeout"))
@@ -1001,7 +1017,10 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
     }
     notifySamples = []
     notifyCharacteristic = characteristic
-    characteristic.service?.peripheral.setNotifyValue(true, for: characteristic)
+    guard let peripheral = characteristic.service?.peripheral else {
+      throw HermesNativeActionError.unavailable("bluetooth-peripheral")
+    }
+    peripheral.setNotifyValue(true, for: characteristic)
     return try await withCheckedThrowingContinuation { continuation in
       notifyContinuation = continuation
       notifyTask = Task { [weak self] in
@@ -1059,7 +1078,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
   private func finishNotify() {
     notifyTask = nil
     if let characteristic = notifyCharacteristic {
-      characteristic.service?.peripheral.setNotifyValue(false, for: characteristic)
+      characteristic.service?.peripheral?.setNotifyValue(false, for: characteristic)
     }
     let continuation = notifyContinuation
     notifyContinuation = nil
@@ -1071,7 +1090,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
     let current = manager.state
     if current == .poweredOn { return }
     let resolved = current == .unknown || current == .resetting
-      ? await withCheckedContinuation { continuation in
+      ? await withCheckedContinuation { (continuation: CheckedContinuation<CBManagerState, Never>) in
         stateWaiters.append(continuation)
         let state = manager.state
         if state != .unknown && state != .resetting {
@@ -1155,7 +1174,7 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
                     "name": characteristic.localizedDescription,
                     "type": characteristic.characteristicType,
                     "value": characteristic.value ?? NSNull(),
-                    "writable": characteristic.properties.contains(.write),
+                    "writable": characteristic.properties.contains(HMCharacteristicPropertyWrite),
                   ]
                 },
               ]
@@ -1196,7 +1215,7 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
           let actionSet = home.actionSets.first(where: { $0.uniqueIdentifier.uuidString == normalized }) else {
       throw HermesNativeActionError.invalidInput("sceneID")
     }
-    try await withCheckedThrowingContinuation { continuation in
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       home.executeActionSet(actionSet) { error in
         if let error { continuation.resume(throwing: error) }
         else { continuation.resume(returning: ()) }
@@ -1214,10 +1233,10 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
       .first(where: { $0.uniqueIdentifier.uuidString == characteristicID }) else {
       throw HermesNativeActionError.invalidInput("HomeKit characteristic")
     }
-    guard characteristic.properties.contains(.write) else {
+    guard characteristic.properties.contains(HMCharacteristicPropertyWrite) else {
       throw HermesNativeActionError.invalidInput("read-only HomeKit characteristic")
     }
-    let format = characteristic.metadata?.format.lowercased() ?? ""
+    let format = characteristic.metadata?.format?.lowercased() ?? ""
     let writeValue: Any
     if format == HMCharacteristicMetadataFormatBool.lowercased() {
       if let value = value as? Bool { writeValue = value }
@@ -1234,7 +1253,7 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
     } else {
       throw HermesNativeActionError.invalidInput("value")
     }
-    try await withCheckedThrowingContinuation { continuation in
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       characteristic.writeValue(writeValue) { error in
         if let error { continuation.resume(throwing: error) }
         else { continuation.resume(returning: ()) }

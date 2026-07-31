@@ -374,64 +374,62 @@ struct HermesRetryRunIntent: AppIntent {
 
 struct HermesTaskShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
-    [
       AppShortcut(
         intent: HermesResumeTaskIntent(),
         phrases: ["Resume a Hermes task in \(.applicationName)"],
         shortTitle: "Resume Hermes task",
         systemImageName: "play.fill"
-      ),
+      )
       AppShortcut(
         intent: HermesPauseTaskIntent(),
         phrases: ["Pause a Hermes task in \(.applicationName)"],
         shortTitle: "Pause Hermes task",
         systemImageName: "pause.fill"
-      ),
+      )
       AppShortcut(
         intent: HermesCancelTaskIntent(),
         phrases: ["Cancel a Hermes task in \(.applicationName)"],
         shortTitle: "Cancel Hermes task",
         systemImageName: "xmark"
-      ),
+      )
       AppShortcut(
         intent: HermesRetryTaskIntent(),
         phrases: ["Retry a Hermes task in \(.applicationName)"],
         shortTitle: "Retry Hermes task",
         systemImageName: "arrow.clockwise"
-      ),
+      )
       AppShortcut(
         intent: HermesSummarizeMeetingIntent(),
         phrases: ["Summarize today's meetings with \(.applicationName)"],
         shortTitle: "Summarize meetings",
         systemImageName: "calendar"
-      ),
+      )
       AppShortcut(
         intent: HermesClipboardToEmailIntent(),
         phrases: ["Turn my clipboard into an email with \(.applicationName)"],
         shortTitle: "Clipboard to email",
         systemImageName: "doc.on.clipboard"
-      ),
+      )
       AppShortcut(
         intent: HermesDailyReportIntent(),
         phrases: ["Run my daily report with \(.applicationName)"],
         shortTitle: "Daily report",
         systemImageName: "doc.text"
-      ),
+      )
       AppShortcut(
         intent: HermesVoiceCaptureIntent(),
         phrases: ["Record a voice note with \(.applicationName)"],
         shortTitle: "Voice note",
         systemImageName: "mic"
-      ),
-      AppShortcut(intent: HermesSendPromptIntent(), phrases: ["Send a prompt to Hermes"], shortTitle: "Send prompt", systemImageName: "paperplane"),
-      AppShortcut(intent: HermesAskIntent(), phrases: ["Ask Hermes"], shortTitle: "Ask Hermes", systemImageName: "questionmark.bubble"),
-      AppShortcut(intent: HermesQuickTaskIntent(), phrases: ["Run a Hermes quick task"], shortTitle: "Quick task", systemImageName: "bolt"),
-      AppShortcut(intent: HermesFollowUpSessionIntent(), phrases: ["Follow up in a Hermes session"], shortTitle: "Follow up", systemImageName: "arrow.turn.up.right"),
-      AppShortcut(intent: HermesGetSessionStatusIntent(), phrases: ["Get Hermes session status"], shortTitle: "Session status", systemImageName: "info.circle"),
-      AppShortcut(intent: HermesListSessionsIntent(), phrases: ["List Hermes sessions"], shortTitle: "List sessions", systemImageName: "list.bullet"),
-      AppShortcut(intent: HermesOpenSessionIntent(), phrases: ["Open a Hermes session"], shortTitle: "Open session", systemImageName: "rectangle.portrait.and.arrow.right"),
-      AppShortcut(intent: HermesRetryRunIntent(), phrases: ["Retry a Hermes run"], shortTitle: "Retry run", systemImageName: "arrow.clockwise"),
-    ]
+      )
+      AppShortcut(intent: HermesSendPromptIntent(), phrases: ["Send a prompt to Hermes"], shortTitle: "Send prompt", systemImageName: "paperplane")
+      AppShortcut(intent: HermesAskIntent(), phrases: ["Ask Hermes"], shortTitle: "Ask Hermes", systemImageName: "questionmark.bubble")
+      AppShortcut(intent: HermesQuickTaskIntent(), phrases: ["Run a Hermes quick task"], shortTitle: "Quick task", systemImageName: "bolt")
+      AppShortcut(intent: HermesFollowUpSessionIntent(), phrases: ["Follow up in a Hermes session"], shortTitle: "Follow up", systemImageName: "arrow.turn.up.right")
+      AppShortcut(intent: HermesGetSessionStatusIntent(), phrases: ["Get Hermes session status"], shortTitle: "Session status", systemImageName: "info.circle")
+      AppShortcut(intent: HermesListSessionsIntent(), phrases: ["List Hermes sessions"], shortTitle: "List sessions", systemImageName: "list.bullet")
+      AppShortcut(intent: HermesOpenSessionIntent(), phrases: ["Open a Hermes session"], shortTitle: "Open session", systemImageName: "rectangle.portrait.and.arrow.right")
+      AppShortcut(intent: HermesRetryRunIntent(), phrases: ["Retry a Hermes run"], shortTitle: "Retry run", systemImageName: "arrow.clockwise")
   }
 }
 
@@ -445,19 +443,17 @@ private enum HermesTaskControlError: LocalizedError {
 
 struct HermesContextShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
-    [
       AppShortcut(
         intent: HermesRefreshContextIntent(),
         phrases: ["Refresh Hermes context", "刷新 Hermes 上下文"],
         shortTitle: "Refresh Hermes",
         systemImageName: "arrow.clockwise"
-      ),
+      )
       AppShortcut(
         intent: HermesCurrentLocationIntent(),
         phrases: ["Get my Hermes location", "获取 Hermes 位置"],
         shortTitle: "Hermes location",
         systemImageName: "location.fill"
-      ),
-    ]
+      )
   }
 }

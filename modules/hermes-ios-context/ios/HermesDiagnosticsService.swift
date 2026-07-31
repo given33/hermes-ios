@@ -48,7 +48,6 @@ final class HermesDiagnosticsService: NSObject, MXMetricManagerSubscriber {
         "kind": "metric",
         "begin": payload.timeStampBegin.timeIntervalSince1970 * 1000,
         "end": payload.timeStampEnd.timeIntervalSince1970 * 1000,
-        "multiple": payload.includesMultiplePayloads,
       ])
     }
   }
