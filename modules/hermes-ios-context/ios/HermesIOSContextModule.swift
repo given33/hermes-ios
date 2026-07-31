@@ -3,6 +3,7 @@ import CoreMotion
 import EventKit
 import ExpoModulesCore
 import HealthKit
+import Contacts
 import Security
 import UIKit
 import UserNotifications
@@ -23,6 +24,31 @@ struct HermesReminderInput: Record {
 }
 
 public final class HermesIOSContextModule: Module {
+  #if canImport(CoreBluetooth)
+  private static let nativeBluetoothAvailable = true
+  #else
+  private static let nativeBluetoothAvailable = false
+  #endif
+  #if canImport(CoreNFC)
+  private static let nativeNFCAvailable = true
+  #else
+  private static let nativeNFCAvailable = false
+  #endif
+  #if canImport(HomeKit)
+  private static let nativeHomeKitAvailable = true
+  #else
+  private static let nativeHomeKitAvailable = false
+  #endif
+  private static let nativeActionCapabilities: [[String: Any]] = [
+    ["capability": "ios-contacts", "actions": ["list", "search", "create"], "permission": "contacts", "confirmation": "create"],
+    ["capability": "ios-photos", "actions": ["list", "search", "capture", "scan", "ocr"], "permission": "photos/camera", "confirmation": "capture"],
+    ["capability": "ios-media", "actions": ["get", "control", "play", "pause", "next", "previous", "stop"], "permission": NSNull(), "confirmation": "controls"],
+    ["capability": "ios-bluetooth", "actions": ["state", "scan"], "permission": "bluetooth", "confirmation": "none"],
+    ["capability": "ios-nfc", "actions": ["scan"], "permission": "nfc", "confirmation": "required"],
+    ["capability": "ios-homekit", "actions": ["list", "get", "set"], "permission": "homekit", "confirmation": "set"],
+    ["capability": "ios-health-write", "actions": ["authorize", "write"], "permission": "health", "confirmation": "write"],
+    ["capability": "ios-device", "actions": ["open-url", "settings"], "permission": "device", "confirmation": "open-url"],
+  ]
   private let location = HermesLocationService.shared
   private let motion = HermesMotionService.shared
   private let health = HermesHealthService.shared
@@ -49,6 +75,7 @@ public final class HermesIOSContextModule: Module {
     healthDefinitions()
     calendarDefinitions()
     clipboardDefinitions()
+    nativeActionDefinitions()
     taskControlDefinitions()
     notificationDefinitions()
     watchDefinitions()
@@ -187,6 +214,11 @@ public final class HermesIOSContextModule: Module {
         "apns": true,
         "clipboard": true,
         "photos": true,
+        "contacts": HermesContactsService.authorization() != "unavailable",
+        "media": true,
+        "bluetooth": Self.nativeBluetoothAvailable,
+        "nfc": Self.nativeNFCAvailable,
+        "homekit": Self.nativeHomeKitAvailable,
         "voiceInput": true,
         "voiceOutput": true,
       ]
@@ -430,6 +462,26 @@ public final class HermesIOSContextModule: Module {
         return payload
       }
     }
+
+    AsyncFunction("requestHealthWriteAuthorization") { (identifier: String, promise: Promise) in
+      self.resolveAsync(promise) { await self.health.requestWriteAuthorization(identifier: identifier) }
+    }
+
+    AsyncFunction("writeHealthSampleForCommand") {
+      (commandID: String, identifier: String, value: Double, unit: String, start: Double, end: Double, promise: Promise) in
+      self.resolveAsync(promise) {
+        if let existing = self.eventQueue.commandExecutionResult(id: commandID) { return existing }
+        let result = try await self.health.writeQuantitySample(
+          identifier: identifier,
+          value: value,
+          unit: unit,
+          start: Date(timeIntervalSince1970: start / 1000),
+          end: Date(timeIntervalSince1970: end / 1000)
+        )
+        self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+        return result
+      }
+    }
   }
 
   @ModuleDefinitionBuilder
@@ -542,6 +594,155 @@ public final class HermesIOSContextModule: Module {
       let result: [String: Any] = ["written": true, "length": text.count]
       self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
       return result
+    }.runOnQueue(.main)
+  }
+
+  @ModuleDefinitionBuilder
+  private func nativeActionDefinitions() -> ModuleDefinition {
+    AsyncFunction("getContactsAuthorization") { () -> String in
+      HermesContactsService.authorization()
+    }.runOnQueue(.main)
+
+    AsyncFunction("requestContactsAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { try await HermesContactsService.requestAuthorization() }
+    }.runOnQueue(.main)
+
+    AsyncFunction("searchContacts") { (query: String?, limit: Int?) throws -> [[String: Any]] in
+      try HermesContactsService.search(query: query, limit: limit ?? 50)
+    }.runOnQueue(.main)
+
+    AsyncFunction("createContact") {
+      (givenName: String, familyName: String?, organization: String?, phone: String?, email: String?) throws -> [String: Any] in
+      try HermesContactsService.create(
+        givenName: givenName,
+        familyName: familyName,
+        organization: organization,
+        phone: phone,
+        email: email
+      )
+    }.runOnQueue(.main)
+
+    AsyncFunction("createContactForCommand") {
+      (commandID: String, givenName: String, familyName: String?, organization: String?, phone: String?, email: String?) throws -> [String: Any] in
+      if let existing = self.eventQueue.commandExecutionResult(id: commandID) { return existing }
+      let result = try HermesContactsService.create(
+        givenName: givenName,
+        familyName: familyName,
+        organization: organization,
+        phone: phone,
+        email: email
+      )
+      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      return result
+    }.runOnQueue(.main)
+
+    AsyncFunction("getPhotosAuthorization") { () -> String in
+      HermesPhotosService.authorization()
+    }.runOnQueue(.main)
+
+    AsyncFunction("requestPhotosAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await HermesPhotosService.requestAuthorization() }
+    }.runOnQueue(.main)
+
+    AsyncFunction("searchPhotos") {
+      (query: String?, start: Double?, end: Double?, limit: Int?) throws -> [[String: Any]] in
+      try HermesPhotosService.search(query: query, start: start, end: end, limit: limit ?? 50)
+    }.runOnQueue(.main)
+
+    AsyncFunction("ocrImage") {
+      (imageURL: String, recognitionLevel: String?, languages: [String]?) throws -> [String: Any] in
+      try HermesPhotosService.recognizeText(
+        imageURL: imageURL,
+        recognitionLevel: recognitionLevel,
+        languages: languages
+      )
+    }
+
+    AsyncFunction("getMediaSnapshot") { () -> [String: Any] in
+      HermesMediaService.snapshot()
+    }.runOnQueue(.main)
+
+    AsyncFunction("getMediaAuthorization") { () -> String in
+      HermesMediaService.authorization()
+    }.runOnQueue(.main)
+
+    AsyncFunction("requestMediaAuthorization") { (promise: Promise) in
+      self.resolveAsync(promise) { await HermesMediaService.requestAuthorization() }
+    }.runOnQueue(.main)
+
+    AsyncFunction("controlMedia") { (action: String) throws -> [String: Any] in
+      try HermesMediaService.control(action)
+    }.runOnQueue(.main)
+
+    AsyncFunction("getBluetoothState") { () -> String in
+      #if canImport(CoreBluetooth)
+      return HermesBluetoothService.shared.state()
+      #else
+      return "unsupported"
+      #endif
+    }.runOnQueue(.main)
+
+    AsyncFunction("scanBluetooth") { (seconds: Double?) async throws -> [[String: Any]] in
+      #if canImport(CoreBluetooth)
+      return try await HermesBluetoothService.shared.scan(seconds: seconds ?? 5)
+      #else
+      throw HermesNativeActionError.unavailable("bluetooth")
+      #endif
+    }.runOnQueue(.main)
+
+    AsyncFunction("getHomeKitSnapshot") { () -> [[String: Any]] in
+      #if canImport(HomeKit)
+      return HermesHomeKitService.shared.snapshot()
+      #else
+      return []
+      #endif
+    }.runOnQueue(.main)
+
+    AsyncFunction("setHomeKitValue") {
+      (accessoryID: String, characteristicID: String, value: String) async throws -> [String: Any] in
+      #if canImport(HomeKit)
+      let typedValue: Any
+      switch value.lowercased() {
+      case "true": typedValue = true
+      case "false": typedValue = false
+      default: typedValue = Double(value) ?? value
+      }
+      return try await HermesHomeKitService.shared.set(
+        accessoryID: accessoryID,
+        characteristicID: characteristicID,
+        value: typedValue
+      )
+      #else
+      throw HermesNativeActionError.unavailable("homekit")
+      #endif
+    }.runOnQueue(.main)
+
+    AsyncFunction("startNFCReader") { () async throws -> [String: Any] in
+      #if canImport(CoreNFC)
+      return try await HermesNFCService.shared.scan()
+      #else
+      throw HermesNativeActionError.unavailable("nfc-reader-session")
+      #endif
+    }.runOnQueue(.main)
+
+    AsyncFunction("scanQRCode") { () async throws -> [String: Any] in
+      try await HermesQRScannerService.shared.scan()
+    }
+
+    AsyncFunction("openURL") { (url: String) async throws -> [String: Any] in
+      try await self.device.openURL(url)
+    }.runOnQueue(.main)
+
+    Function("getNativeActionCapabilities") { () -> [[String: Any]] in
+      Self.nativeActionCapabilities
+    }
+
+    AsyncFunction("readPendingAgentTriggers") { () -> [[String: Any]] in
+      HermesAgentTriggerStore.shared.pending()
+    }.runOnQueue(.main)
+
+    AsyncFunction("consumePendingAgentTrigger") { (requestID: String) -> Bool in
+      HermesAgentTriggerStore.shared.consume(requestID: requestID)
     }.runOnQueue(.main)
   }
 

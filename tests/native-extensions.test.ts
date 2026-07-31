@@ -15,6 +15,7 @@ test('native extension config declares every V4 companion target', () => {
     'HermesWatchExtension',
     'HermesDeviceActivityMonitor',
     'HermesDeviceActivityReport',
+    'HermesShareExtension',
   ]) {
   assert.match(plugin, new RegExp(target));
   }
@@ -77,6 +78,7 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
     'native-extensions/HermesWeatherWidget/Info.plist',
     'native-extensions/HermesDeviceActivityMonitor/Info.plist',
     'native-extensions/HermesDeviceActivityReport/Info.plist',
+    'native-extensions/HermesShareExtension/Info.plist',
     'native-extensions/HermesWatchApp/Info.plist',
     'native-extensions/HermesWatchApp/Extension-Info.plist',
   ]) {
@@ -97,8 +99,13 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(widget, /action: "pause"/);
   assert.match(widget, /action: "cancel"/);
   assert.match(widget, /action: "retry"/);
-  assert.match(widget, /action: "approve"/);
+  assert.doesNotMatch(widget, /action: "approve"/);
   assert.ok(existsSync(resolve(projectRoot, 'native-extensions/HermesWeatherWidget/Info.plist')));
+  const share = read('native-extensions/HermesShareExtension/ShareViewController.swift');
+  assert.match(share, /NSExtensionItem/);
+  assert.match(share, /agent-trigger-inbox-v1/);
+  assert.match(read('native-extensions/HermesShareExtension/Info.plist'), /com\.apple\.share-services/);
+  assert.match(read('native-extensions/HermesShareExtension/HermesShareExtension.entitlements'), /group\.app\.sunstone1029\.fig1171\.hermes/);
 
   const watch = read('native-extensions/HermesWatchApp/HermesWatchApp.swift');
   assert.match(watch, /WCSession/);

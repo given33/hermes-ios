@@ -27,6 +27,15 @@ const TARGETS = [
     platform: 'ios',
   },
   {
+    name: 'HermesShareExtension',
+    type: 'app_extension',
+    bundleIdentifier: 'app.sunstone1029.fig1171.share-extension',
+    source: 'ShareViewController.swift',
+    infoPlist: 'Info.plist',
+    entitlements: 'HermesShareExtension.entitlements',
+    platform: 'ios',
+  },
+  {
     name: 'HermesWatchApp',
     type: 'watch2_app',
     bundleIdentifier: 'app.sunstone1029.fig1171.watchapp',
@@ -256,6 +265,7 @@ module.exports = function withHermesNativeExtensions(config) {
       'HermesWeatherWidget',
       'HermesDeviceActivityMonitor',
       'HermesDeviceActivityReport',
+      'HermesShareExtension',
       'HermesWatchApp',
     ]) {
       ensureTargetDependency(project, appTarget.uuid, targets.get(name).uuid);

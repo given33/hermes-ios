@@ -95,6 +95,36 @@ final class HermesDeviceService {
     return true
   }
 
+  func openURL(_ rawValue: String) async throws -> [String: Any] {
+    let raw = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard raw.count <= 2048, let parsed = URLComponents(string: raw),
+          let scheme = parsed.scheme?.lowercased(),
+          ["http", "https", "mailto", "tel", "facetime", "maps", "shortcuts", "app-settings"].contains(scheme)
+    else { throw HermesNativeActionError.invalidInput("url") }
+    if ["http", "https", "facetime", "maps", "shortcuts"].contains(scheme),
+       (parsed.host?.isEmpty ?? true) {
+      throw HermesNativeActionError.invalidInput("url")
+    }
+    let url: URL
+    if scheme == "app-settings" {
+      guard let settingsURL = URL(string: UIApplication.openSettingsURLString) else {
+        throw HermesNativeActionError.unavailable("app-settings")
+      }
+      url = settingsURL
+    } else if let parsedURL = parsed.url {
+      url = parsedURL
+    } else {
+      throw HermesNativeActionError.invalidInput("url")
+    }
+    guard UIApplication.shared.canOpenURL(url) else {
+      throw HermesNativeActionError.unavailable("url")
+    }
+    let opened = await withCheckedContinuation { continuation in
+      UIApplication.shared.open(url, options: [:]) { success in continuation.resume(returning: success) }
+    }
+    return ["opened": opened, "url": url.absoluteString]
+  }
+
   private func thermalState(_ state: ProcessInfo.ThermalState) -> String {
     switch state {
     case .nominal: return "nominal"

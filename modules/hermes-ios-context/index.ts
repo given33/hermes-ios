@@ -33,6 +33,11 @@ export interface IOSContextCapabilities {
   apns: boolean;
   clipboard?: boolean;
   photos?: boolean;
+  contacts?: boolean;
+  media?: boolean;
+  bluetooth?: boolean;
+  nfc?: boolean;
+  homekit?: boolean;
   voiceInput?: boolean;
   voiceOutput?: boolean;
 }
@@ -141,6 +146,25 @@ export interface IOSReminderItem {
   title: string;
 }
 
+export interface IOSContactItem {
+  emails: string[];
+  familyName: string;
+  givenName: string;
+  id: string;
+  organization: string;
+  phones: string[];
+}
+
+export interface IOSPhotoItem {
+  createdAt: number;
+  favorite: boolean;
+  filename: string;
+  height: number;
+  id: string;
+  location?: { latitude: number; longitude: number } | null;
+  width: number;
+}
+
 export interface IOSContextNativeModule {
   addListener(
     eventName: 'onLocation',
@@ -188,6 +212,7 @@ export interface IOSContextNativeModule {
   getPowerSnapshot(): Promise<IOSPowerSnapshot>;
   getDeviceSnapshot(): Promise<Record<string, unknown>>;
   openDeviceSettings(): Promise<boolean>;
+  openURL(url: string): Promise<{ opened: boolean; url: string }>;
   getVoiceAuthorization(): Promise<Record<'microphone' | 'speech', IOSAuthorizationState>>;
   requestVoiceAuthorization(): Promise<Record<'microphone' | 'speech', IOSAuthorizationState>>;
   startVoiceRecognition(locale?: string | null): Promise<boolean>;
@@ -230,6 +255,11 @@ export interface IOSContextNativeModule {
   requestHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthSummary(start: number, end: number): Promise<IOSHealthSummary>;
+  requestHealthWriteAuthorization(identifier: string): Promise<IOSAuthorizationState>;
+  writeHealthSampleForCommand(
+    commandId: string,
+    input: { end: number; identifier: string; start: number; unit: string; value: number },
+  ): Promise<Record<string, unknown>>;
   requestCalendarAuthorization(): Promise<IOSAuthorizationState>;
   getCalendarAuthorization(): Promise<IOSAuthorizationState>;
   requestReminderAuthorization(): Promise<IOSAuthorizationState>;
@@ -264,6 +294,50 @@ export interface IOSContextNativeModule {
   readClipboardForCommand(commandId: string): Promise<Record<string, unknown>>;
   writeClipboard(text: string): Promise<boolean>;
   writeClipboardForCommand(commandId: string, text: string): Promise<Record<string, unknown>>;
+  getContactsAuthorization(): Promise<IOSAuthorizationState>;
+  requestContactsAuthorization(): Promise<IOSAuthorizationState>;
+  searchContacts(query?: string | null, limit?: number): Promise<IOSContactItem[]>;
+  createContact(input: {
+    email?: string;
+    familyName?: string;
+    givenName: string;
+    organization?: string;
+    phone?: string;
+  }): Promise<IOSContactItem>;
+  createContactForCommand(
+    commandId: string,
+    input: Parameters<IOSContextNativeModule['createContact']>[0],
+  ): Promise<Record<string, unknown>>;
+  getPhotosAuthorization(): Promise<IOSAuthorizationState>;
+  requestPhotosAuthorization(): Promise<IOSAuthorizationState>;
+  searchPhotos(input?: {
+    end?: number;
+    limit?: number;
+    query?: string;
+    start?: number;
+  }): Promise<IOSPhotoItem[]>;
+  ocrImage(input: {
+    imageURL: string;
+    languages?: string[];
+    recognitionLevel?: 'accurate' | 'fast';
+  }): Promise<Record<string, unknown>>;
+  getMediaAuthorization(): Promise<IOSAuthorizationState>;
+  requestMediaAuthorization(): Promise<IOSAuthorizationState>;
+  getMediaSnapshot(): Promise<Record<string, unknown>>;
+  controlMedia(action: string): Promise<Record<string, unknown>>;
+  getBluetoothState(): Promise<string>;
+  scanBluetooth(seconds?: number): Promise<Array<Record<string, unknown>>>;
+  getHomeKitSnapshot(): Promise<Array<Record<string, unknown>>>;
+  setHomeKitValue(
+    accessoryId: string,
+    characteristicId: string,
+    value: string,
+  ): Promise<Record<string, unknown>>;
+  startNFCReader(): Promise<Record<string, unknown>>;
+  scanQRCode(): Promise<Record<string, unknown>>;
+  readPendingAgentTriggers(): Promise<Array<Record<string, unknown>>>;
+  consumePendingAgentTrigger(requestId: string): Promise<boolean>;
+  getNativeActionCapabilities?(): Array<Record<string, unknown>>;
   shareTextToNotes(text: string, title?: string): Promise<boolean>;
   shareTextToNotesForCommand(
     commandId: string,
@@ -375,6 +449,7 @@ export const HermesIOSContext = {
   getPowerSnapshot: () => requireContextModule().getPowerSnapshot(),
   getDeviceSnapshot: () => requireContextModule().getDeviceSnapshot(),
   openDeviceSettings: () => requireContextModule().openDeviceSettings(),
+  openURL: (url: string) => requireContextModule().openURL(url),
   getVoiceAuthorization: () => requireContextModule().getVoiceAuthorization(),
   requestVoiceAuthorization: () => requireContextModule().requestVoiceAuthorization(),
   startVoiceRecognition: (locale?: string | null) =>
@@ -433,6 +508,12 @@ export const HermesIOSContext = {
   getHealthAuthorization: () => requireContextModule().getHealthAuthorization(),
   getHealthSummary: (start: number, end: number) =>
     requireContextModule().getHealthSummary(start, end),
+  requestHealthWriteAuthorization: (identifier: string) =>
+    requireContextModule().requestHealthWriteAuthorization(identifier),
+  writeHealthSampleForCommand: (
+    commandId: string,
+    input: Parameters<IOSContextNativeModule['writeHealthSampleForCommand']>[1],
+  ) => requireContextModule().writeHealthSampleForCommand(commandId, input),
   requestCalendarAuthorization: () => requireContextModule().requestCalendarAuthorization(),
   getCalendarAuthorization: () => requireContextModule().getCalendarAuthorization(),
   requestReminderAuthorization: () => requireContextModule().requestReminderAuthorization(),
@@ -458,6 +539,37 @@ export const HermesIOSContext = {
   writeClipboard: (text: string) => requireContextModule().writeClipboard(text),
   writeClipboardForCommand: (commandId: string, text: string) =>
     requireContextModule().writeClipboardForCommand(commandId, text),
+  getContactsAuthorization: () => requireContextModule().getContactsAuthorization(),
+  requestContactsAuthorization: () => requireContextModule().requestContactsAuthorization(),
+  searchContacts: (query?: string | null, limit?: number) =>
+    requireContextModule().searchContacts(query, limit),
+  createContact: (input: Parameters<IOSContextNativeModule['createContact']>[0]) =>
+    requireContextModule().createContact(input),
+  createContactForCommand: (
+    commandId: string,
+    input: Parameters<IOSContextNativeModule['createContact']>[0],
+  ) => requireContextModule().createContactForCommand(commandId, input),
+  getPhotosAuthorization: () => requireContextModule().getPhotosAuthorization(),
+  requestPhotosAuthorization: () => requireContextModule().requestPhotosAuthorization(),
+  searchPhotos: (input?: Parameters<IOSContextNativeModule['searchPhotos']>[0]) =>
+    requireContextModule().searchPhotos(input),
+  ocrImage: (input: Parameters<IOSContextNativeModule['ocrImage']>[0]) =>
+    requireContextModule().ocrImage(input),
+  getMediaAuthorization: () => requireContextModule().getMediaAuthorization(),
+  requestMediaAuthorization: () => requireContextModule().requestMediaAuthorization(),
+  getMediaSnapshot: () => requireContextModule().getMediaSnapshot(),
+  controlMedia: (action: string) => requireContextModule().controlMedia(action),
+  getBluetoothState: () => requireContextModule().getBluetoothState(),
+  scanBluetooth: (seconds?: number) => requireContextModule().scanBluetooth(seconds),
+  getHomeKitSnapshot: () => requireContextModule().getHomeKitSnapshot(),
+  setHomeKitValue: (accessoryId: string, characteristicId: string, value: string) =>
+    requireContextModule().setHomeKitValue(accessoryId, characteristicId, value),
+  startNFCReader: () => requireContextModule().startNFCReader(),
+  scanQRCode: () => requireContextModule().scanQRCode(),
+  readPendingAgentTriggers: () => requireContextModule().readPendingAgentTriggers(),
+  consumePendingAgentTrigger: (requestId: string) =>
+    requireContextModule().consumePendingAgentTrigger(requestId),
+  getNativeActionCapabilities: () => requireContextModule().getNativeActionCapabilities?.() ?? [],
   shareTextToNotes: (text: string, title?: string) =>
     requireContextModule().shareTextToNotes(text, title),
   shareTextToNotesForCommand: (commandId: string, text: string, title?: string) =>

@@ -14,7 +14,6 @@ struct HermesWeatherActivityAttributes: ActivityAttributes {
     var status: String?
     var progress: Double?
     var currentTool: String?
-    var approvalRequired: Bool?
     var actionDeepLink: String?
   }
 
@@ -34,19 +33,21 @@ private extension Color {
 struct HermesWeatherLiveActivity: Widget {
   var body: some WidgetConfiguration {
     ActivityConfiguration(for: HermesWeatherActivityAttributes.self) { context in
-      if context.state.kind == "agent-task" {
-        AgentTaskLockScreenView(context: context)
-      } else {
-        HStack(spacing: 10) {
-          Image(systemName: "cloud.rain.fill")
-            .foregroundStyle(Color.hermesSeverity(context.state.severity))
-          VStack(alignment: .leading, spacing: 2) {
-            Text(context.state.title).font(.headline).lineLimit(1)
-            Text(context.state.body).font(.caption).lineLimit(2)
+      Group {
+        if context.state.kind == "agent-task" {
+          AgentTaskLockScreenView(context: context)
+        } else {
+          HStack(spacing: 10) {
+            Image(systemName: "cloud.rain.fill")
+              .foregroundStyle(Color.hermesSeverity(context.state.severity))
+            VStack(alignment: .leading, spacing: 2) {
+              Text(context.state.title).font(.headline).lineLimit(1)
+              Text(context.state.body).font(.caption).lineLimit(2)
+            }
+            Spacer(minLength: 0)
           }
-          Spacer(minLength: 0)
+          .padding()
         }
-        .padding()
       }
       .activityBackgroundTint(Color(uiColor: .secondarySystemBackground))
       .activitySystemActionForegroundColor(.primary)
@@ -134,9 +135,6 @@ private struct AgentTaskExpandedView: View {
       HStack(spacing: 8) {
         Text(context.state.status ?? context.state.body).font(.caption).lineLimit(1)
         Spacer(minLength: 0)
-        if context.state.approvalRequired == true {
-          Text("Approval required").font(.caption2).foregroundStyle(.orange).lineLimit(1)
-        }
       }
       if let progress = context.state.progress {
         ProgressView(value: progress)
@@ -169,10 +167,6 @@ private struct AgentTaskLinks: View {
         if state.status == "failed" {
           Link(destination: taskURL(taskID: taskID, action: "retry")) {
             Label("Retry", systemImage: "arrow.clockwise")
-          }
-        } else if state.approvalRequired == true {
-          Link(destination: taskURL(taskID: taskID, action: "approve")) {
-            Label("Approve", systemImage: "checkmark")
           }
         } else {
           Link(destination: taskURL(taskID: taskID, action: "open")) {

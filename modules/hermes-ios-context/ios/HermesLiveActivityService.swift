@@ -16,7 +16,6 @@ struct HermesWeatherActivityAttributes: ActivityAttributes {
     var status: String?
     var progress: Double?
     var currentTool: String?
-    var approvalRequired: Bool?
     var actionDeepLink: String?
   }
 
@@ -57,7 +56,6 @@ final class HermesLiveActivityService {
       status: normalizedString(payload["status"])?.lowercased(),
       progress: progressValue(payload["progress"]),
       currentTool: normalizedString(payload["currentTool"] ?? payload["current_tool"]),
-      approvalRequired: boolValue(payload["approvalRequired"] ?? payload["approval_required"]),
       actionDeepLink: safeTaskDeepLink(
         payload["actionDeepLink"] ?? payload["action_deep_link"],
         taskID: taskID
@@ -96,19 +94,6 @@ final class HermesLiveActivityService {
     return min(max(progress, 0), 1)
   }
 
-  private func boolValue(_ value: Any?) -> Bool? {
-    if let value = value as? Bool { return value }
-    if let value = value as? NSNumber { return value.boolValue }
-    if let value = value as? String {
-      switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-      case "true", "1", "yes": return true
-      case "false", "0", "no": return false
-      default: return nil
-      }
-    }
-    return nil
-  }
-
   private func safeTaskDeepLink(_ value: Any?, taskID: String?) -> String? {
     guard let raw = normalizedString(value), let components = URLComponents(string: raw),
           components.scheme == "hermes-agent", components.host == "task",
@@ -126,7 +111,7 @@ final class HermesLiveActivityService {
     var components = URLComponents()
     components.scheme = "hermes-agent"
     components.host = "task"
-    components.path = "/(encoded)"
+    components.path = "/\(encoded)"
     if let action, !action.isEmpty {
       components.queryItems = [URLQueryItem(name: "action", value: action)]
     }

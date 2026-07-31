@@ -48,6 +48,11 @@
         "NSMicrophoneUsageDescription": "用于在 Hermes 会话中录制并上传音频。",
         "NSSpeechRecognitionUsageDescription": "Hermes 使用 Apple 语音识别将你主动录制的语音转换为会话文字。",
         "NSPhotoLibraryUsageDescription": "用于从照片图库选择图片并上传到 Hermes 会话。",
+        "NSContactsUsageDescription": "Hermes accesses contacts only after explicit authorization and request.",
+        "NSBluetoothAlwaysUsageDescription": "Hermes scans nearby Bluetooth devices only after an explicit request.",
+        "NSHomeKitUsageDescription": "Hermes reads HomeKit device state only after explicit authorization and request.",
+        "NSAppleMusicUsageDescription": "Hermes controls media playback only after explicit authorization and request.",
+        "NFCReaderUsageDescription": "Hermes reads NFC tags only after an explicit request.",
         "UIFileSharingEnabled": true,
         "LSSupportsOpeningDocumentsInPlace": true,
         "UIBackgroundModes": [

@@ -69,6 +69,30 @@ test('unknown native actions fail closed until a read policy is declared', () =>
   assert.equal(metadata.confirmation, 'required');
 });
 
+test('native action bridge policies cover contacts, photos, media, Bluetooth, NFC, and HomeKit', () => {
+  const cases = [
+    ['ios-contacts', 'search', 'read', 'none'],
+    ['ios-contacts', 'create', 'write', 'required'],
+    ['ios-photos', 'search', 'read', 'none'],
+    ['ios-photos', 'capture', 'write', 'required'],
+    ['ios-media', 'pause', 'write', 'required'],
+    ['ios-bluetooth', 'scan', 'read', 'none'],
+    ['ios-nfc', 'scan', 'read', 'required'],
+    ['ios-homekit', 'list', 'read', 'none'],
+    ['ios-homekit', 'set', 'write', 'required'],
+    ['ios-health-write', 'authorize', 'write', 'required'],
+    ['ios-health-write', 'write', 'write', 'required'],
+    ['ios-photos', 'ocr', 'read', 'none'],
+    ['ios-device', 'open-url', 'write', 'required'],
+  ] as const;
+  for (const [capability, action, risk, confirmation] of cases) {
+    const metadata = nativeActionMetadata({ capability, action });
+    assert.equal(metadata.risk, risk, `${capability}:${action} risk`);
+    assert.equal(metadata.confirmation, confirmation, `${capability}:${action} confirmation`);
+    assert.equal(metadata.audit_kind, 'ios-action-audit');
+  }
+});
+
 test('account deletion calls the linked server cleanup endpoint with confirmation', async () => {
   const calls: Array<{ path: string; init?: RequestInit }> = [];
   const client = {

@@ -128,12 +128,12 @@ jobs:
               exit 1
             fi
           }
-          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport; do
+          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension; do
             verify_contains "$target" "native target"
           done
           DEPENDENCY_COUNT="$(grep -c 'isa = PBXTargetDependency;' "$PROJECT_FILE")"
-          if [ "$DEPENDENCY_COUNT" -lt 5 ]; then
-            echo "Generated Xcode project has $DEPENDENCY_COUNT target dependencies; expected at least 5." >&2
+          if [ "$DEPENDENCY_COUNT" -lt 6 ]; then
+            echo "Generated Xcode project has $DEPENDENCY_COUNT target dependencies; expected at least 6." >&2
             exit 1
           fi
           SPOOL_BUILD_FILE_COUNT="$(grep -c 'HermesScreenTimeSpool.swift in Sources.*isa = PBXBuildFile' "$PROJECT_FILE")"
@@ -222,7 +222,7 @@ jobs:
                       f"Main Release entitlement {key} mismatch: {entitlements.get(key)!r}"
                   )
           PY
-          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport; do
+          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension; do
             directory="$target"
             entitlement_file="$target.entitlements"
             if [ "$target" = HermesWatchExtension ]; then
@@ -323,12 +323,15 @@ jobs:
               exit 1
             fi
           }
-          for extension in HermesWeatherWidget HermesDeviceActivityMonitor HermesDeviceActivityReport; do
+          for extension in HermesWeatherWidget HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension; do
             EXTENSION_PATH="$APP_PATH/PlugIns/$extension.appex"
             test -d "$EXTENSION_PATH"
             plutil -extract CFBundleIdentifier raw "$EXTENSION_PATH/Info.plist" >/dev/null
             if [ "$extension" = 'HermesDeviceActivityMonitor' ] || [ "$extension" = 'HermesDeviceActivityReport' ]; then
               test "$(plutil -extract HermesSharedKeychainAccessGroup raw "$EXTENSION_PATH/Info.plist")" = "$SHARED_KEYCHAIN_GROUP"
+            fi
+            if [ "$extension" = 'HermesShareExtension' ]; then
+              plutil -extract NSExtension.NSExtensionPointIdentifier raw "$EXTENSION_PATH/Info.plist" | grep -qx 'com.apple.share-services'
             fi
             verify_bundle_version "$EXTENSION_PATH"
           done

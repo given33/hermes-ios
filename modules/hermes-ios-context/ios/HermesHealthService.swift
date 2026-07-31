@@ -351,6 +351,92 @@ final class HermesHealthService {
     }
   }
 
+  func requestWriteAuthorization(identifier: String) async -> String {
+    guard HKHealthStore.isHealthDataAvailable(),
+          let type = quantityType(identifier: identifier) else { return "unavailable" }
+    do {
+      _ = try await store.requestAuthorization(toShare: [type], read: [])
+      return store.authorizationStatus(for: type) == .sharingAuthorized ? "authorized" : "denied"
+    } catch {
+      return "unavailable"
+    }
+  }
+
+  func writeQuantitySample(
+    identifier: String,
+    value: Double,
+    unit: String,
+    start: Date,
+    end: Date
+  ) async throws -> [String: Any] {
+    guard HKHealthStore.isHealthDataAvailable() else {
+      throw HermesNativeActionError.unavailable("healthkit")
+    }
+    guard value.isFinite, end > start,
+          end.timeIntervalSince(start) <= 31 * 24 * 60 * 60 else {
+      throw HermesNativeActionError.invalidInput("health sample range or value")
+    }
+    guard let type = quantityType(identifier: identifier),
+          let hkUnit = quantityUnit(unit) else {
+      throw HermesNativeActionError.invalidInput("health sample type or unit")
+    }
+    guard store.authorizationStatus(for: type) == .sharingAuthorized else {
+      throw HermesNativeActionError.authorizationRequired("health-write")
+    }
+    let sample = HKQuantitySample(
+      type: type,
+      quantity: HKQuantity(unit: hkUnit, doubleValue: value),
+      start: start,
+      end: end
+    )
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      store.save(sample) { success, error in
+        if let error { continuation.resume(throwing: error) }
+        else if success { continuation.resume(returning: ()) }
+        else { continuation.resume(throwing: HermesNativeActionError.unavailable("healthkit-save")) }
+      }
+    }
+    return [
+      "identifier": identifier,
+      "value": value,
+      "unit": unit,
+      "start": start.timeIntervalSince1970 * 1000,
+      "end": end.timeIntervalSince1970 * 1000,
+      "saved": true,
+    ]
+  }
+
+  private func quantityType(identifier: String) -> HKQuantityType? {
+    let normalized = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return nil }
+    return HKQuantityType.quantityType(forIdentifier: HKQuantityTypeIdentifier(rawValue: normalized))
+  }
+
+  private func quantityUnit(_ unit: String) -> HKUnit? {
+    switch unit.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "count": return .count()
+    case "kcal", "kilocalorie", "kilocalories": return .kilocalorie()
+    case "bpm", "count/min", "countperminute": return .count().unitDivided(by: .minute())
+    case "%", "percent": return .percent()
+    case "kg", "kilogram", "kilograms": return .gramUnit(with: .kilo)
+    case "g", "gram", "grams": return .gram()
+    case "lb", "lbs", "pound", "pounds": return .pound()
+    case "m", "meter", "meters": return .meter()
+    case "cm", "centimeter", "centimeters": return .meterUnit(with: .centi)
+    case "km", "kilometer", "kilometers": return .meterUnit(with: .kilo)
+    case "mi", "mile", "miles": return .mile()
+    case "ml", "milliliter", "milliliters": return .literUnit(with: .milli)
+    case "l", "liter", "liters": return .liter()
+    case "mmhg": return .millimeterOfMercury()
+    case "degc", "c", "celsius": return .degreeCelsius()
+    case "degf", "f", "fahrenheit": return .degreeFahrenheit()
+    case "s", "sec", "second", "seconds": return .second()
+    case "min", "minute", "minutes": return .minute()
+    case "h", "hr", "hour", "hours": return .hour()
+    default: return nil
+    }
+  }
+
   func summary(start: Date, end: Date) async throws -> [String: Any] {
     guard HKHealthStore.isHealthDataAvailable() else {
       return emptySummary(authorization: "unavailable")

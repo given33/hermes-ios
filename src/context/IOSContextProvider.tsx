@@ -12,6 +12,7 @@ import {
 } from 'react';
 import { AppState, Platform, StyleSheet } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
+import * as ImagePicker from 'expo-image-picker';
 
 import {
   HermesIOSContext,
@@ -21,6 +22,7 @@ import {
   type IOSContextEvent as NativeIOSContextEvent,
 } from '../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../api/HermesApiClient';
+import { HermesCloudApi, type CollaborationMessage } from '../api/HermesCloudApi';
 import { withDeadline } from '../api/async-deadline';
 import {
   IOSIntelligenceApi,
@@ -396,13 +398,26 @@ export function IOSContextProvider({
     const runCurrent = <T,>(operation: () => Promise<T>) => (
       awaitCurrentIOSContext(lifecycle, capture, operation)
     );
+    const cloud = new HermesCloudApi(client);
+    let agentTriggersRunning = false;
     let snapshotTimer: ReturnType<typeof setInterval> | undefined;
     let eventFlushTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const drainTriggers = async () => {
+      if (agentTriggersRunning || !current()) return;
+      agentTriggersRunning = true;
+      try {
+        await drainPendingAgentTriggers(runCurrent, cloud, deviceId);
+      } finally {
+        agentTriggersRunning = false;
+      }
+    };
 
     const synchronize = () => {
       if (!current()) return;
       void flushPendingEvents(capture).catch(() => undefined);
       void executeCommands(capture).catch(() => undefined);
+      void drainTriggers().catch(() => undefined);
     };
     const scheduleEventSync = () => {
       if (!current() || eventFlushTimer) return;
@@ -417,6 +432,7 @@ export function IOSContextProvider({
         if (!await runCurrent(hasUsableNetwork)) throw new Error('network unavailable');
         await flushPendingEvents(capture);
         await executeCommands(capture);
+        await drainTriggers();
         await syncSnapshots(capture);
       } catch {
         success = false;
@@ -544,6 +560,7 @@ export function IOSContextProvider({
     flushPendingEvents,
     ownerScope,
     accountGeneration,
+    client,
     permissionAttempt,
     syncSnapshots,
     updatePermissionSnapshot,
@@ -839,6 +856,28 @@ async function executeDeviceCommand(
         : 'steps';
       return { health, value: health[field] ?? null };
     }
+    case 'ios-health-write:authorize': {
+      return {
+        authorization: await HermesIOSContext.requestHealthWriteAuthorization(
+          requiredString(payload.identifier, 'identifier'),
+        ),
+      };
+    }
+    case 'ios-health-write:write': {
+      const value = requiredNumber(payload.value, 'value');
+      const start = requiredTimestamp(payload.start);
+      const end = requiredTimestamp(payload.end);
+      if (end <= start || end - start > 31 * 24 * 60 * 60_000) {
+        throw new Error('health sample range is invalid');
+      }
+      return HermesIOSContext.writeHealthSampleForCommand(command.id, {
+        identifier: requiredString(payload.identifier, 'identifier'),
+        value,
+        unit: requiredString(payload.unit, 'unit'),
+        start,
+        end,
+      });
+    }
     case 'ios-clipboard:read':
     case 'ios-clipboard:get': {
       return HermesIOSContext.readClipboardForCommand(command.id);
@@ -881,6 +920,135 @@ async function executeDeviceCommand(
     case 'ios-reminders:list': {
       const completed = typeof payload.completed === 'boolean' ? payload.completed : false;
       return { reminders: await HermesIOSContext.listReminders(completed) };
+    }
+    case 'ios-contacts:list':
+    case 'ios-contacts:search': {
+      const authorization = await HermesIOSContext.getContactsAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') {
+        throw new Error('contacts permission is not authorized');
+      }
+      return {
+        contacts: await HermesIOSContext.searchContacts(
+          typeof payload.query === 'string' ? payload.query : undefined,
+          typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50,
+        ),
+      };
+    }
+    case 'ios-contacts:create': {
+      const authorization = await HermesIOSContext.getContactsAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') {
+        throw new Error('contacts permission is not authorized');
+      }
+      return {
+        contact: await HermesIOSContext.createContactForCommand(command.id, {
+          givenName: requiredString(payload.givenName ?? payload.given_name, 'givenName'),
+          ...(typeof payload.familyName === 'string' ? { familyName: payload.familyName } : {}),
+          ...(typeof payload.organization === 'string' ? { organization: payload.organization } : {}),
+          ...(typeof payload.phone === 'string' ? { phone: payload.phone } : {}),
+          ...(typeof payload.email === 'string' ? { email: payload.email } : {}),
+        }),
+      };
+    }
+    case 'ios-photos:list':
+    case 'ios-photos:search': {
+      const authorization = await HermesIOSContext.getPhotosAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') {
+        throw new Error('photos permission is not authorized');
+      }
+      return {
+        photos: await HermesIOSContext.searchPhotos({
+          ...(typeof payload.query === 'string' ? { query: payload.query } : {}),
+          ...(typeof payload.start === 'number' ? { start: payload.start } : {}),
+          ...(typeof payload.end === 'number' ? { end: payload.end } : {}),
+          limit: typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50,
+        }),
+      };
+    }
+    case 'ios-photos:ocr': {
+      return HermesIOSContext.ocrImage({
+        imageURL: requiredString(payload.imageURL ?? payload.image_url ?? payload.uri, 'imageURL'),
+        ...(payload.recognitionLevel === 'fast' || payload.recognitionLevel === 'accurate'
+          ? { recognitionLevel: payload.recognitionLevel }
+          : {}),
+        ...(Array.isArray(payload.languages)
+          ? { languages: payload.languages.filter((item): item is string => typeof item === 'string').slice(0, 8) }
+          : {}),
+      });
+    }
+    case 'ios-photos:capture':
+    case 'ios-photos:scan': {
+      if (AppState.currentState !== 'active') {
+        throw new Error('camera actions require the Hermes app in the foreground');
+      }
+      if (command.action === 'scan') {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) throw new Error('camera permission is not authorized');
+        return HermesIOSContext.scanQRCode();
+      }
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) throw new Error('camera permission is not authorized');
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+        exif: true,
+      });
+      if (result.canceled) return { cancelled: true, assets: [] };
+      return {
+        cancelled: false,
+        assets: result.assets.map((asset) => ({
+          uri: asset.uri,
+          width: asset.width,
+          height: asset.height,
+          fileName: asset.fileName || null,
+          type: asset.type || 'image',
+          exif: asset.exif || null,
+          scanRequested: command.action === 'scan',
+        })),
+      };
+    }
+    case 'ios-media:get': {
+      const authorization = await HermesIOSContext.getMediaAuthorization();
+      if (authorization !== 'authorized') throw new Error('media permission is not authorized');
+      return { media: await HermesIOSContext.getMediaSnapshot() };
+    }
+    case 'ios-media:play':
+    case 'ios-media:resume':
+    case 'ios-media:pause':
+    case 'ios-media:next':
+    case 'ios-media:previous':
+    case 'ios-media:stop':
+    case 'ios-media:control': {
+      const authorization = await HermesIOSContext.getMediaAuthorization();
+      if (authorization !== 'authorized') throw new Error('media permission is not authorized');
+      const action = command.action === 'control'
+        ? requiredString(payload.action, 'action')
+        : command.action;
+      return { media: await HermesIOSContext.controlMedia(action) };
+    }
+    case 'ios-bluetooth:state':
+      return { state: await HermesIOSContext.getBluetoothState() };
+    case 'ios-bluetooth:scan':
+      return { devices: await HermesIOSContext.scanBluetooth(
+        typeof payload.seconds === 'number' ? payload.seconds : 5,
+      ) };
+    case 'ios-nfc:scan':
+      return HermesIOSContext.startNFCReader();
+    case 'ios-homekit:list':
+    case 'ios-homekit:get':
+      return { homes: await HermesIOSContext.getHomeKitSnapshot() };
+    case 'ios-homekit:set': {
+      const value = typeof payload.value === 'string'
+        ? payload.value
+        : typeof payload.value === 'number' || typeof payload.value === 'boolean'
+          ? String(payload.value)
+          : requiredString(payload.value, 'value');
+      return {
+        homeKit: await HermesIOSContext.setHomeKitValue(
+          requiredString(payload.accessoryId ?? payload.accessory_id, 'accessoryId'),
+          requiredString(payload.characteristicId ?? payload.characteristic_id, 'characteristicId'),
+          value,
+        ),
+      };
     }
     case 'ios-screen-time:capabilities':
       return { screenTime: await HermesIOSContext.getScreenTimeCapabilities() };
@@ -981,6 +1149,9 @@ async function executeDeviceCommand(
     case 'ios-device:settings': {
       return { opened: await HermesIOSContext.openDeviceSettings() };
     }
+    case 'ios-device:open-url': {
+      return HermesIOSContext.openURL(requiredString(payload.url, 'url'));
+    }
     case 'ios-device:delete-account-data': {
       return {
         deletion: await HermesIOSContext.deleteOwnerScope(ownerScope, accountGeneration),
@@ -1026,6 +1197,68 @@ async function drainPendingTaskControls(
       // Network and server transient errors therefore do not lose a Siri or
       // Live Activity control request.
     }
+  }
+}
+
+async function drainPendingAgentTriggers(
+  runCurrent: <T>(operation: () => Promise<T>) => Promise<T>,
+  cloud: HermesCloudApi,
+  deviceId: string,
+): Promise<void> {
+  const pending = await runCurrent(() => HermesIOSContext.readPendingAgentTriggers());
+  for (const trigger of pending.slice(0, 10)) {
+    const requestID = typeof trigger.requestID === 'string' ? trigger.requestID.trim() : '';
+    const kind = typeof trigger.kind === 'string' ? trigger.kind.trim().toLowerCase() : '';
+    const rawContent = typeof trigger.content === 'string' ? trigger.content.trim() : '';
+    if (!requestID || !rawContent) continue;
+    const content = kind === 'clipboard-to-email'
+      ? `请把以下剪贴板内容整理成一封可发送的邮件，补全主题、收件人建议和正文：\n\n${rawContent}`
+      : kind === 'summarize-meeting'
+        ? rawContent
+        : kind === 'daily-report'
+          ? rawContent
+          : `请分析以下内容，并给出结构化结论、风险和下一步行动：\n\n${rawContent}`;
+    const title = kind === 'daily-report'
+      ? 'Hermes daily work report'
+      : kind === 'summarize-meeting'
+        ? 'Hermes meeting summary'
+        : kind === 'clipboard-to-email'
+          ? 'Hermes clipboard email'
+          : 'Hermes shared analysis';
+    const createdAt = Date.now();
+    const messageID = `ios-trigger-${requestID}`;
+    const response = await runCurrent(() => cloud.createConversation(
+      'default',
+      title,
+      `ios-trigger-${requestID}`,
+    ));
+    const conversation = (response as { conversation?: { id?: string } }).conversation;
+    const conversationID = typeof conversation?.id === 'string' ? conversation.id.trim() : '';
+    if (!conversationID) throw new Error('agent trigger conversation was not created');
+    const message: CollaborationMessage = {
+      content,
+      created_at: createdAt,
+      id: messageID,
+      kind: 'message',
+      meta: { source: 'ios-agent-trigger', trigger_kind: kind, trigger_id: requestID },
+      name: 'You',
+      role: 'user',
+      sender_id: 'ios-agent-trigger',
+      sender_name: 'You',
+      status: 'completed',
+      updated_at: createdAt,
+    };
+    await runCurrent(() => cloud.enqueueHostedTurn(conversationID, {
+      attachmentIds: [],
+      attachmentContext: '',
+      deliveryContext: '由 iPhone Siri、分享菜单或 Action Button 触发的 Hermes 任务。',
+      message,
+      profiles: ['default'],
+      recentMessages: [],
+      requestId: requestID,
+      turnId: `ios-trigger-turn-${requestID}`,
+    }));
+    await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
   }
 }
 

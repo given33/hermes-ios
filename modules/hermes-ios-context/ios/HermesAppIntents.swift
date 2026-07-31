@@ -1,5 +1,59 @@
 import AppIntents
 import Foundation
+import UIKit
+
+final class HermesAgentTriggerStore {
+  static let shared = HermesAgentTriggerStore()
+  static let appGroup = "group.app.sunstone1029.fig1171.hermes"
+  private let key = "agent-trigger-inbox-v1"
+  private let lock = NSLock()
+
+  private init() {}
+
+  @discardableResult
+  func enqueue(kind: String, content: String) -> String? {
+    let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let normalizedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    let allowed = ["summarize-meeting", "clipboard-to-email", "daily-report", "analyze-text", "voice-capture"]
+    guard allowed.contains(normalizedKind), !normalizedContent.isEmpty, normalizedContent.count <= 12_000 else {
+      return nil
+    }
+    let requestID = UUID().uuidString.lowercased()
+    lock.lock()
+    defer { lock.unlock() }
+    let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
+    var entries = defaults.array(forKey: key) as? [[String: Any]] ?? []
+    entries.append([
+      "content": normalizedContent,
+      "createdAt": Date().timeIntervalSince1970 * 1000,
+      "kind": normalizedKind,
+      "requestID": requestID,
+    ])
+    defaults.set(Array(entries.suffix(50)), forKey: key)
+    return requestID
+  }
+
+  func pending() -> [[String: Any]] {
+    lock.lock()
+    defer { lock.unlock() }
+    let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
+    return defaults.array(forKey: key) as? [[String: Any]] ?? []
+  }
+
+  @discardableResult
+  func consume(requestID: String) -> Bool {
+    let normalized = requestID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return false }
+    lock.lock()
+    defer { lock.unlock() }
+    let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
+    let entries = defaults.array(forKey: key) as? [[String: Any]] ?? []
+    let remaining = entries.filter { ($0["requestID"] as? String) != normalized }
+    guard remaining.count != entries.count else { return false }
+    defaults.set(remaining, forKey: key)
+    return true
+  }
+}
 
 /// App Intents are invoked outside the JavaScript lifecycle (for example by
 /// Siri or a Live Activity deep link). Persisting the request lets the next
@@ -145,6 +199,74 @@ struct HermesRetryTaskIntent: AppIntent {
   }
 }
 
+struct HermesSummarizeMeetingIntent: AppIntent {
+  static var title: LocalizedStringResource = "Summarize today's meetings with Hermes"
+  static var description = IntentDescription("Queue a Hermes task to summarize today's calendar meetings.")
+  static var openAppWhenRun = true
+
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueue(
+      kind: "summarize-meeting",
+      content: "总结今天的会议，提取每场会议的结论、待办事项和负责人。"
+    ) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesClipboardToEmailIntent: AppIntent {
+  static var title: LocalizedStringResource = "Turn clipboard into an email with Hermes"
+  static var description = IntentDescription("Queue the current clipboard text for Hermes to organize as an email draft.")
+  static var openAppWhenRun = true
+
+  func perform() async throws -> some IntentResult {
+    guard let text = UIPasteboard.general.string,
+          HermesAgentTriggerStore.shared.enqueue(kind: "clipboard-to-email", content: text) != nil else {
+      throw HermesTaskControlError.invalidTaskID
+    }
+    return .result()
+  }
+}
+
+struct HermesDailyReportIntent: AppIntent {
+  static var title: LocalizedStringResource = "Run Hermes daily work report"
+  static var description = IntentDescription("Queue the daily work report task for Hermes.")
+  static var openAppWhenRun = true
+
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueue(
+      kind: "daily-report",
+      content: "生成今天的工作报告，汇总会议、提醒、任务进度和需要关注的风险。"
+    ) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesAnalyzeTextIntent: AppIntent {
+  static var title: LocalizedStringResource = "Analyze text with Hermes"
+  static var description = IntentDescription("Queue selected text for Hermes analysis.")
+  static var openAppWhenRun = true
+
+  @Parameter(title: "Text") var text: String
+
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueue(kind: "analyze-text", content: text) != nil else {
+      throw HermesTaskControlError.invalidTaskID
+    }
+    return .result()
+  }
+}
+
+struct HermesVoiceCaptureIntent: AppIntent {
+  static var title: LocalizedStringResource = "Record a voice note with Hermes"
+  static var description = IntentDescription("Start Hermes voice capture and send the transcript to the agent.")
+  static var openAppWhenRun = true
+
+  func perform() async throws -> some IntentResult {
+    try await HermesVoiceService.shared.startAgentCapture(localeIdentifier: nil)
+    return .result()
+  }
+}
+
 struct HermesTaskShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     [
@@ -171,6 +293,30 @@ struct HermesTaskShortcuts: AppShortcutsProvider {
         phrases: ["Retry a Hermes task in \(.applicationName)"],
         shortTitle: "Retry Hermes task",
         systemImageName: "arrow.clockwise"
+      ),
+      AppShortcut(
+        intent: HermesSummarizeMeetingIntent(),
+        phrases: ["Summarize today's meetings with \(.applicationName)"],
+        shortTitle: "Summarize meetings",
+        systemImageName: "calendar"
+      ),
+      AppShortcut(
+        intent: HermesClipboardToEmailIntent(),
+        phrases: ["Turn my clipboard into an email with \(.applicationName)"],
+        shortTitle: "Clipboard to email",
+        systemImageName: "doc.on.clipboard"
+      ),
+      AppShortcut(
+        intent: HermesDailyReportIntent(),
+        phrases: ["Run my daily report with \(.applicationName)"],
+        shortTitle: "Daily report",
+        systemImageName: "doc.text"
+      ),
+      AppShortcut(
+        intent: HermesVoiceCaptureIntent(),
+        phrases: ["Record a voice note with \(.applicationName)"],
+        shortTitle: "Voice note",
+        systemImageName: "mic"
       ),
     ]
   }

@@ -74,6 +74,11 @@ test('signed iOS builds declare native context privacy and background capabiliti
     'NSMicrophoneUsageDescription',
     'NSSpeechRecognitionUsageDescription',
     'NSPhotoLibraryUsageDescription',
+    'NSContactsUsageDescription',
+    'NSBluetoothAlwaysUsageDescription',
+    'NSHomeKitUsageDescription',
+    'NSAppleMusicUsageDescription',
+    'NFCReaderUsageDescription',
   ]) {
     assert.equal(typeof infoPlist[key], 'string', `${key} is declared`);
   }
@@ -155,6 +160,8 @@ test('native context exposes independently callable collectors and event streams
     'getPowerSnapshot',
     'requestHealthAuthorization',
     'getHealthSummary',
+    'requestHealthWriteAuthorization',
+    'writeHealthSampleForCommand',
     'listCalendarEvents',
     'createCalendarEvent',
     'listReminders',
@@ -588,7 +595,7 @@ test('native relay covers durable cursors, background services, health, watch, n
     'qweather', 'amap-route', 'ios-map', 'ios-power', 'ios-health-sleep',
     'ios-health-heart', 'ios-health-oxygen', 'ios-health-activity', 'ios-calendar',
     'ios-reminders', 'ios-clipboard', 'ios-notes', 'ios-screen-time', 'ios-watch', 'ios-notification',
-    'ios-live-activity', 'ios-device',
+    'ios-live-activity', 'ios-health-write', 'ios-device',
   ]) {
     assert.match(provider, new RegExp(capability.replace('-', '[-]')));
   }
@@ -612,6 +619,9 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /user confirmation required/);
   assert.match(provider, /ios-clipboard:read/);
   assert.match(provider, /ios-clipboard:write/);
+  assert.match(provider, /ios-health-write:write/);
+  assert.match(provider, /ios-photos:ocr/);
+  assert.match(provider, /ios-device:open-url/);
   assert.match(provider, /createCalendarEventForCommand\(command\.id/);
   assert.match(provider, /createReminderForCommand\(command\.id/);
   assert.match(provider, /_relay_device_id: deviceId/);
@@ -687,10 +697,11 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(watch, /WCSessionDelegate/);
   assert.match(liveActivity, /ActivityAttributes/);
   for (const field of [
-    'kind', 'taskID', 'status', 'progress', 'currentTool', 'approvalRequired', 'actionDeepLink',
+    'kind', 'taskID', 'status', 'progress', 'currentTool', 'actionDeepLink',
   ]) {
     assert.match(liveActivity, new RegExp(`var ${field}:`));
   }
+  assert.doesNotMatch(liveActivity, /approvalRequired/);
   assert.match(liveActivity, /safeTaskDeepLink/);
   assert.match(liveActivity, /progressValue/);
   assert.match(appIntents, /HermesTaskControlStore/);
@@ -703,6 +714,9 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(appIntents, /func pending()/);
   assert.match(appIntents, /func consume\(requestID: String\)/);
   assert.match(appIntents, /allowedActions/);
+  assert.match(appIntents, /HermesVoiceCaptureIntent/);
+  assert.match(read('ios/HermesVoiceService.swift'), /startAgentCapture/);
+  assert.match(read('ios/HermesVoiceService.swift'), /kind: "voice-capture"/);
 });
 
 test('HealthKit sleep totals retain generic asleep samples', () => {
@@ -716,6 +730,46 @@ test('HealthKit sleep totals retain generic asleep samples', () => {
   assert.match(health, /case \.unnecessary: return "limited"/);
   assert.match(health, /interval\.start <= current\.end/);
   assert.match(health, /current\.end = max\(current\.end, interval\.end\)/);
+});
+
+test('native action bridge exposes contact, photo, media, radio, and HomeKit boundaries', () => {
+  const module = read('ios/HermesIOSContextModule.swift');
+  const services = read('ios/HermesNativeActionServices.swift');
+  const bridge = readFileSync(resolve(moduleRoot, 'index.ts'), 'utf8');
+  const provider = readFileSync(resolve(root, 'src/context/IOSContextProvider.tsx'), 'utf8');
+  for (const operation of [
+    'getContactsAuthorization', 'requestContactsAuthorization', 'searchContacts', 'createContact', 'createContactForCommand',
+    'getPhotosAuthorization', 'requestPhotosAuthorization', 'searchPhotos', 'ocrImage',
+    'requestHealthWriteAuthorization', 'writeHealthSampleForCommand', 'openURL',
+    'readPendingAgentTriggers', 'consumePendingAgentTrigger',
+    'getMediaSnapshot', 'controlMedia', 'getBluetoothState', 'scanBluetooth',
+    'getHomeKitSnapshot', 'setHomeKitValue', 'startNFCReader', 'scanQRCode', 'getNativeActionCapabilities',
+  ]) {
+    assert.match(module, new RegExp(`(?:AsyncFunction|Function)\\("${operation}"\\)`));
+    assert.match(bridge, new RegExp(operation));
+  }
+  assert.match(services, /CNContactStore/);
+  assert.match(services, /PHAsset.fetchAssets/);
+  assert.match(services, /MPMusicPlayerController.systemMusicPlayer/);
+  assert.match(services, /CBCentralManager/);
+  assert.match(services, /HMHomeManager/);
+  assert.match(services, /writeValue/);
+  assert.match(services, /AVCaptureMetadataOutput/);
+  assert.match(services, /VNRecognizeTextRequest/);
+  assert.match(read('ios/HermesAppIntents.swift'), /HermesSummarizeMeetingIntent/);
+  assert.match(read('ios/HermesAppIntents.swift'), /HermesClipboardToEmailIntent/);
+  assert.match(provider, /drainPendingAgentTriggers/);
+  assert.match(provider, /agentTriggersRunning/);
+  assert.match(services, /HermesQRScannerViewController/);
+  assert.match(services, /onCancel/);
+  assert.match(services, /stateWaiters/);
+  assert.match(services, /characteristics/);
+  assert.match(module, /HermesNFCService\.shared\.scan/);
+  for (const capability of [
+    'ios-contacts', 'ios-photos', 'ios-media', 'ios-bluetooth', 'ios-nfc', 'ios-homekit',
+  ]) assert.match(provider, new RegExp(capability.replace('-', '[-]')));
+  assert.match(provider, /launchCameraAsync/);
+  assert.match(provider, /camera actions require the Hermes app in the foreground/);
 });
 
 test('HealthKit background delivery advances generation-scoped anchors after durable writes', () => {

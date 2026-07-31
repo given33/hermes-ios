@@ -14,6 +14,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   private var recognitionTask: SFSpeechRecognitionTask?
   private var recognitionTimeout: DispatchWorkItem?
   private var latestTranscript = ""
+  private var enqueueAgentTriggerOnFinalTranscript = false
   private var recording = false
   private var inputTapInstalled = false
   private var interruptionObserver: NSObjectProtocol?
@@ -143,6 +144,14 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
             "timestamp": Date().timeIntervalSince1970 * 1_000,
           ])
           if result.isFinal {
+            if self.enqueueAgentTriggerOnFinalTranscript,
+               !self.latestTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              _ = HermesAgentTriggerStore.shared.enqueue(
+                kind: "voice-capture",
+                content: self.latestTranscript
+              )
+            }
+            self.enqueueAgentTriggerOnFinalTranscript = false
             self.stopRecognition(emitState: true)
             return
           }
@@ -177,9 +186,22 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   }
 
   @MainActor
+  func startAgentCapture(localeIdentifier: String?) throws -> Bool {
+    do {
+      let started = try startRecognition(localeIdentifier: localeIdentifier)
+      enqueueAgentTriggerOnFinalTranscript = true
+      return started
+    } catch {
+      enqueueAgentTriggerOnFinalTranscript = false
+      throw error
+    }
+  }
+
+  @MainActor
   @discardableResult
   func stopRecognition(emitState: Bool = true) -> String {
     recognitionGeneration += 1
+    enqueueAgentTriggerOnFinalTranscript = false
     recognitionTimeout?.cancel()
     recognitionTimeout = nil
     if audioEngine.isRunning { audioEngine.stop() }
