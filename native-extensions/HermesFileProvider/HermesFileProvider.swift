@@ -1,8 +1,10 @@
+import CryptoKit
 import FileProvider
 import Foundation
 import UniformTypeIdentifiers
 
 private let hermesFileProviderGroup = "group.app.sunstone1029.fig1171.hermes"
+private let hermesFileProviderOwnerKey = "hermes-file-provider-owner-v1"
 
 final class HermesFileProviderItem: NSObject, NSFileProviderItem {
   private let url: URL
@@ -140,10 +142,19 @@ final class HermesFileProvider: NSObject, NSFileProviderReplicatedExtension {
 
   static var root: URL {
     let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: hermesFileProviderGroup) ?? FileManager.default.temporaryDirectory
-    let root = container.appendingPathComponent("HermesFiles", isDirectory: true)
+    let root = container
+      .appendingPathComponent("HermesFiles", isDirectory: true)
+      .appendingPathComponent(ownerComponent(), isDirectory: true)
     try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     folders.forEach { try? FileManager.default.createDirectory(at: root.appendingPathComponent($0, isDirectory: true), withIntermediateDirectories: true) }
     return root
+  }
+
+  private static func ownerComponent() -> String {
+    let owner = (UserDefaults(suiteName: hermesFileProviderGroup)?.string(forKey: hermesFileProviderOwnerKey) ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !owner.isEmpty else { return "anonymous" }
+    return SHA256.hash(data: Data(owner.utf8)).map { String(format: "%02x", $0) }.joined()
   }
 
   required init(domain: NSFileProviderDomain) {

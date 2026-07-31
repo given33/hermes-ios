@@ -804,6 +804,8 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(services, /bluetooth-notify-busy/);
   assert.match(read('ios/HermesEventStore.swift'), /return calendarEvents\(start: start, end: end\)\.map/);
   assert.match(module, /HermesNFCService\.shared\.scan/);
+  assert.match(module, /setFileProviderOwnerScope\(scope\)/);
+  assert.match(module, /hermes-file-provider-owner-v1/);
   for (const capability of [
     'ios-contacts', 'ios-photos', 'ios-media', 'ios-bluetooth', 'ios-nfc', 'ios-homekit',
   ]) assert.match(provider, new RegExp(capability.replace('-', '[-]')));

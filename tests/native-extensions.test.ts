@@ -124,6 +124,8 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(fileProvider, /let oldParent = item\.parentItemIdentifier/);
   assert.match(fileProvider, /signal\(oldParent\)/);
   assert.match(fileProvider, /newParent\.rawValue != oldParent\.rawValue/);
+  assert.match(fileProvider, /hermes-file-provider-owner-v1/);
+  assert.match(fileProvider, /SHA256\.hash/);
   assert.match(read('.github/workflows/ios-unsigned.yml'), /HermesFileProvider/);
 
   const nativeActions = read('modules/hermes-ios-context/ios/HermesNativeActionServices.swift');

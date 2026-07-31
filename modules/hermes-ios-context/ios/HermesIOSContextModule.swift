@@ -9,6 +9,9 @@ import UIKit
 import UserNotifications
 import WatchConnectivity
 
+private let hermesFileProviderGroup = "group.app.sunstone1029.fig1171.hermes"
+private let hermesFileProviderOwnerKey = "hermes-file-provider-owner-v1"
+
 struct HermesCalendarEventInput: Record {
   @Field var title: String = ""
   @Field var start: Double = 0
@@ -71,6 +74,17 @@ public final class HermesIOSContextModule: Module {
       throw HermesNativeActionError.invalidInput("commandID")
     }
     return value
+  }
+
+  private static func setFileProviderOwnerScope(_ scope: String) {
+    let defaults = UserDefaults(suiteName: hermesFileProviderGroup)
+    let normalized = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+    if normalized.isEmpty {
+      defaults?.removeObject(forKey: hermesFileProviderOwnerKey)
+    } else {
+      defaults?.set(normalized, forKey: hermesFileProviderOwnerKey)
+    }
+    defaults?.synchronize()
   }
 
   public func definition() -> ModuleDefinition {
@@ -392,6 +406,7 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("setOwnerScope") { (scope: String, accountGeneration: String) in
       self.eventQueue.setOwnerScope(scope, accountGeneration: accountGeneration)
+      Self.setFileProviderOwnerScope(scope)
       HermesPermissionCollectionGate.shared.prepare(ownerScope: scope)
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
     }.runOnQueue(.main)
@@ -405,6 +420,7 @@ public final class HermesIOSContextModule: Module {
         scope,
         accountGeneration: accountGeneration
       )
+      Self.setFileProviderOwnerScope(scope)
       if !scope.isEmpty { try self.attachmentVault.activate(owner: scope) }
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
       return generation
@@ -419,6 +435,10 @@ public final class HermesIOSContextModule: Module {
         throw HermesAccountDeletionError.persistenceFailed
       }
       if !scope.isEmpty { _ = try self.attachmentVault.deleteKey(owner: scope) }
+      if (UserDefaults(suiteName: hermesFileProviderGroup)?.string(forKey: hermesFileProviderOwnerKey) ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines) == scope.trimmingCharacters(in: .whitespacesAndNewlines) {
+        Self.setFileProviderOwnerScope("")
+      }
       return [
         "accountGeneration": deletion.accountGeneration,
         "deletedCount": deletion.deletedCount,
