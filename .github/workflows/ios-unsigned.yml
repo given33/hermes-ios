@@ -63,7 +63,18 @@ jobs:
           else
             echo 'No app-bound AMap key is configured; native MapKit fallback is enabled.'
           fi
-      - run: pnpm install --frozen-lockfile
+      - name: Install locked dependencies with network retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if pnpm install --frozen-lockfile; then
+              exit 0
+            fi
+            echo "::warning::pnpm install attempt ${attempt}/3 failed" >&2
+            [ "${attempt}" -lt 3 ] && sleep $((attempt * 10))
+          done
+          exit 1
       - run: pnpm doctor
       - run: pnpm test
       - run: pnpm typecheck

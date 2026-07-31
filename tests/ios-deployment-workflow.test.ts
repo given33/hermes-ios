@@ -17,6 +17,9 @@ test('iOS unsigned builds accept only validated backend release events', () => {
   assert.match(workflow, /trigger/);
   assert.match(workflow, /run-name: Backend release \$\{\{ github\.event\.client_payload\.commit \|\| github\.sha \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /Install locked dependencies with network retry/);
+  assert.match(workflow, /pnpm install attempt \$\{attempt\}\/3 failed/);
+  assert.match(workflow, /sleep \$\(\(attempt \* 10\)\)/);
 });
 
 test('production EAS builds fail closed and verify signed artifact output', () => {
@@ -45,6 +48,9 @@ test('production EAS builds fail closed and verify signed artifact output', () =
   assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/);
   assert.match(workflow, /run-name: Backend release signed/);
   assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /Install locked dependencies with network retry/);
+  assert.match(workflow, /pnpm install attempt \$\{attempt\}\/3 failed/);
+  assert.match(workflow, /sleep \$\(\(attempt \* 10\)\)/);
   assert.match(workflow, /name: Deduplicate backend release dispatch/);
   assert.match(workflow, /actions\/runs\?event=repository_dispatch/);
   assert.match(workflow, /Backend release signed /);
