@@ -524,6 +524,42 @@ enum HermesPhotosService {
     return true
   }
 
+  static func visionImage(imageURL: String, owner: String) throws -> CIImage {
+    let normalizedURL = imageURL.trimmingCharacters(in: .whitespacesAndNewlines)
+    if normalizedURL.lowercased().hasPrefix("ph://") {
+      guard authorization() == "authorized" || authorization() == "limited" else {
+        throw HermesNativeActionError.authorizationRequired("photos")
+      }
+      let assetID = String(normalizedURL.dropFirst("ph://".count))
+      guard !assetID.isEmpty,
+            let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject else {
+        throw HermesNativeActionError.invalidInput("imageURL")
+      }
+      let options = PHImageRequestOptions()
+      options.isSynchronous = true
+      options.isNetworkAccessAllowed = false
+      options.deliveryMode = .highQualityFormat
+      var imageData: Data?
+      PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) {
+        data, _, _, _ in
+        imageData = data
+      }
+      guard let imageData, let image = CIImage(data: imageData) else {
+        throw HermesNativeActionError.unavailable("photo-asset-data")
+      }
+      return image
+    }
+    guard let url = URL(string: normalizedURL), url.isFileURL,
+          FileManager.default.fileExists(atPath: url.path) else {
+      throw HermesNativeActionError.invalidInput("imageURL")
+    }
+    try HermesAttachmentVault.shared.requireAllowedImportSource(owner: owner, uri: normalizedURL)
+    guard let image = CIImage(contentsOf: url) else {
+      throw HermesNativeActionError.invalidInput("imageURL")
+    }
+    return image
+  }
+
   private static func videoMimeType(for pathExtension: String) -> String {
     switch pathExtension.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "mp4": return "video/mp4"
