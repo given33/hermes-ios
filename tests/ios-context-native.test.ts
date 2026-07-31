@@ -169,6 +169,7 @@ test('native context exposes independently callable collectors and event streams
     'readClipboard',
     'writeClipboard',
     'shareTextToNotes',
+    'deleteExportedPhoto',
     'enqueueContextEvents',
     'claimPendingEvents',
     'readPendingEvents',
@@ -654,6 +655,9 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /source: snapshot \? 'server_snapshot' : 'local_pending_after_flush'/);
   assert.match(provider, /trajectory: snapshot\?\.trajectory \|\| \[\]/);
   assert.match(provider, /places: snapshot\?\.places \|\| \[\]/);
+  assert.match(provider, /case 'ios-photos:export'/);
+  assert.match(provider, /cloud\.uploadAccountFile\(/);
+  assert.match(provider, /deleteExportedPhoto\(ownerScope, uri\)/);
   // Pull cursor is server-owned; command ids only dedupe completions.
   assert.match(provider, /Do not treat command ids as the server pull cursor/);
   assert.match(provider, /if \(response\.cursor\) \{\s*commandCursorRef\.current = response\.cursor;/);

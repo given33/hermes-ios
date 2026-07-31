@@ -455,8 +455,7 @@ enum HermesPhotosService {
     guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [normalizedID], options: nil).firstObject else {
       throw HermesNativeActionError.invalidInput("assetID")
     }
-    let account = Data(owner.utf8).map { String(format: "%02x", $0) }.joined().prefix(32)
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent("hermes-photo-export-\(account)", isDirectory: true)
+    let root = exportRoot(owner: owner)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let name = PHAssetResource.assetResources(for: asset).first?.originalFilename ?? "photo.jpg"
     let safeName = name.replacingOccurrences(of: "/", with: "_").prefix(128)
@@ -474,7 +473,14 @@ enum HermesPhotosService {
         }
       }
       let bytes = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.intValue ?? 0
-      return ["uri": target.absoluteString, "bytes": bytes, "assetID": normalizedID, "mediaType": "video"]
+      return [
+        "uri": target.absoluteString,
+        "name": target.lastPathComponent,
+        "mimeType": "video/\(target.pathExtension.lowercased() == "m4v" ? "x-m4v" : "quicktime")",
+        "bytes": bytes,
+        "assetID": normalizedID,
+        "mediaType": "video",
+      ]
     }
     let options = PHImageRequestOptions()
     options.isSynchronous = true
@@ -484,7 +490,36 @@ enum HermesPhotosService {
     PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { imageData, _, _, _ in data = imageData }
     guard let data else { throw HermesNativeActionError.unavailable("photo-asset-data") }
     try data.write(to: target, options: .completeFileProtection)
-    return ["uri": target.absoluteString, "bytes": data.count, "assetID": normalizedID, "mediaType": "image"]
+    return [
+      "uri": target.absoluteString,
+      "name": target.lastPathComponent,
+      "mimeType": "image/\(target.pathExtension.lowercased())",
+      "bytes": data.count,
+      "assetID": normalizedID,
+      "mediaType": "image",
+    ]
+  }
+
+  static func deleteExport(owner: String, uri: String) throws -> Bool {
+    guard let url = URL(string: uri), url.isFileURL else {
+      throw HermesNativeActionError.invalidInput("exportURI")
+    }
+    let root = exportRoot(owner: owner).standardizedFileURL
+    let target = url.standardizedFileURL
+    guard target.path.hasPrefix(root.path + "/") else {
+      throw HermesNativeActionError.invalidInput("exportURI")
+    }
+    guard FileManager.default.fileExists(atPath: target.path) else { return false }
+    try FileManager.default.removeItem(at: target)
+    return true
+  }
+
+  private static func exportRoot(owner: String) -> URL {
+    let account = Data(owner.utf8).map { String(format: "%02x", $0) }.joined().prefix(32)
+    return FileManager.default.temporaryDirectory.appendingPathComponent(
+      "hermes-photo-export-\(account)",
+      isDirectory: true
+    )
   }
 
   private static func performChanges(_ changes: @escaping () -> Void) async throws {

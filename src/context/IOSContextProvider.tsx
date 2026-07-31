@@ -224,6 +224,7 @@ export function IOSContextProvider({
     commandsRunningRef.current = runToken;
     const lifecycle = lifecycleRef.current;
     const api = apiRef.current;
+    const cloud = new HermesCloudApi(client);
     const runCurrent = <T,>(operation: () => Promise<T>) => (
       awaitCurrentIOSContext(lifecycle, capture, operation)
     );
@@ -316,6 +317,7 @@ export function IOSContextProvider({
               accountGeneration,
               permissionSnapshotRef.current,
               () => api.snapshot(undefined, capture.signal),
+              cloud,
               runCurrent,
             ));
             const auditedResult = {
@@ -387,7 +389,7 @@ export function IOSContextProvider({
     } finally {
       if (commandsRunningRef.current === runToken) commandsRunningRef.current = null;
     }
-  }, [accountGeneration, deviceId, flushPendingEvents, ownerScope]);
+  }, [accountGeneration, client, deviceId, flushPendingEvents, ownerScope]);
 
   useEffect(() => {
     if (Platform.OS !== 'ios' || !hasNativeIOSContext || !deviceId.trim()) return undefined;
@@ -782,6 +784,7 @@ async function executeDeviceCommand(
   accountGeneration: string,
   permissionSnapshot: IOSPermissionSnapshot,
   loadSnapshot?: () => Promise<IOSIntelligenceSnapshot>,
+  cloud?: HermesCloudApi,
   runCurrent: <T>(operation: () => Promise<T>) => Promise<T> = (operation) => operation(),
 ): Promise<Record<string, unknown>> {
   const payload = command.payload || {};
@@ -1128,7 +1131,35 @@ async function executeDeviceCommand(
     case 'ios-photos:export': {
       const authorization = await HermesIOSContext.getPhotosAuthorization();
       if (authorization !== 'authorized' && authorization !== 'limited') throw new Error('photos permission is not authorized');
-      return HermesIOSContext.exportPhoto(ownerScope, requiredString(payload.assetID ?? payload.asset_id, 'assetID'), payload.original === true);
+      if (!cloud) throw new Error('cloud file service is unavailable');
+      const exported = await HermesIOSContext.exportPhoto(
+        ownerScope,
+        requiredString(payload.assetID ?? payload.asset_id, 'assetID'),
+        payload.original === true,
+      );
+      const uri = requiredString(exported.uri, 'exportURI');
+      const name = typeof exported.name === 'string' && exported.name.trim()
+        ? exported.name.trim().slice(0, 160)
+        : `photo-${requiredString(payload.assetID ?? payload.asset_id, 'assetID')}.jpg`;
+      const mimeType = typeof exported.mimeType === 'string' ? exported.mimeType : 'application/octet-stream';
+      try {
+        const uploaded = await cloud.uploadAccountFile(
+          {
+            name,
+            mimeType,
+            size: typeof exported.bytes === 'number' ? exported.bytes : undefined,
+            uri,
+          },
+          `ios-photo-export:${command.id}`,
+        );
+        return {
+          ...exported,
+          file: uploaded.file,
+          uploaded: true,
+        };
+      } finally {
+        await runCurrent(() => HermesIOSContext.deleteExportedPhoto(ownerScope, uri)).catch(() => false);
+      }
     }
     case 'ios-photos:ocr': {
       const authorization = await HermesIOSContext.getPhotosAuthorization();

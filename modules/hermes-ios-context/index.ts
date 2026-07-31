@@ -345,6 +345,7 @@ export interface IOSContextNativeModule {
   addPhotosToAlbum(assetIDs: string[], albumID: string): Promise<Record<string, unknown>>;
   importPhoto(ownerScope: string, imageURL: string): Promise<Record<string, unknown>>;
   exportPhoto(ownerScope: string, assetID: string, original?: boolean): Promise<Record<string, unknown>>;
+  deleteExportedPhoto(ownerScope: string, uri: string): Promise<boolean>;
   ocrImage(input: {
     imageURL: string;
     ownerScope: string;
@@ -639,6 +640,7 @@ export const HermesIOSContext = {
   addPhotosToAlbum: (assetIDs: string[], albumID: string) => requireContextModule().addPhotosToAlbum(assetIDs, albumID),
   importPhoto: (ownerScope: string, imageURL: string) => requireContextModule().importPhoto(ownerScope, imageURL),
   exportPhoto: (ownerScope: string, assetID: string, original?: boolean) => requireContextModule().exportPhoto(ownerScope, assetID, original),
+  deleteExportedPhoto: (ownerScope: string, uri: string) => requireContextModule().deleteExportedPhoto(ownerScope, uri),
   ocrImage: (input: Parameters<IOSContextNativeModule['ocrImage']>[0]) =>
     requireContextModule().ocrImage(input),
   analyzeVision: (imageURL: string, ownerScope: string) => requireContextModule().analyzeVision(imageURL, ownerScope),

@@ -807,6 +807,10 @@ public final class HermesIOSContextModule: Module {
       self.resolveAsync(promise) { try await HermesPhotosService.export(assetID: assetID, owner: ownerScope, original: original ?? false) }
     }
 
+    AsyncFunction("deleteExportedPhoto") { (ownerScope: String, uri: String) throws -> Bool in
+      try HermesPhotosService.deleteExport(owner: ownerScope, uri: uri)
+    }
+
     AsyncFunction("ocrImage") {
       (imageURL: String, ownerScope: String, recognitionLevel: String?, languages: [String]?) throws -> [String: Any] in
       try HermesPhotosService.recognizeText(
