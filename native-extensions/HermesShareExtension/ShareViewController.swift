@@ -56,8 +56,8 @@ final class ShareViewController: UIViewController {
       return
     }
     let type: UTType = provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) ? .url : provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) ? .image : provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ? .movie : .item
-    provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { [weak self] temporaryURL, _ in
-      guard let self, let temporaryURL, let root else { completion(nil, 0); return }
+    provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { temporaryURL, _ in
+      guard let temporaryURL, let root else { completion(nil, 0); return }
       let accessed = temporaryURL.startAccessingSecurityScopedResource()
       defer { if accessed { temporaryURL.stopAccessingSecurityScopedResource() } }
       guard let values = try? temporaryURL.resourceValues(forKeys: [.fileSizeKey]), let size = values.fileSize, size <= Self.maxBytes else { completion(nil, 0); return }

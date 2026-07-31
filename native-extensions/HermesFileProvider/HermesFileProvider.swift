@@ -234,7 +234,7 @@ final class HermesFileProvider: NSObject, NSFileProviderReplicatedExtension {
 
   private func writable(_ id: String) -> Bool {
     let top = id.split(separator: "/").first.map(String.init) ?? ""
-    top == "uploads" || top == "workspace"
+    return top == "uploads" || top == "workspace"
   }
 
   private func signal(_ identifier: NSFileProviderItemIdentifier) {
