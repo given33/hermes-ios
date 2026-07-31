@@ -1001,11 +1001,17 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
       resolvedState = currentState
     }
     guard resolvedState == .poweredOn else { throw HermesNativeActionError.unavailable("bluetooth") }
-    scanResults = []
-    manager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
         scanContinuation = continuation
+        // Install the continuation before starting CoreBluetooth so a caller
+        // that cancels at the boundary cannot leave an unresumable scan.
+        guard !Task.isCancelled else {
+          finishScan()
+          return
+        }
+        scanResults = []
+        manager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         scanTask = Task { [weak self] in
           let nanoseconds = UInt64(max(1, min(seconds, 15)) * 1_000_000_000)
           try? await Task.sleep(nanoseconds: nanoseconds)
@@ -1039,6 +1045,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
       throw HermesNativeActionError.invalidInput("deviceID")
     }
     if sessionOwner != normalizedOwner { disconnect() }
+    guard connectContinuation == nil else { throw HermesNativeActionError.unavailable("bluetooth-connect-busy") }
     sessionOwner = normalizedOwner
     let peripheral = peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
     guard let peripheral else { throw HermesNativeActionError.unavailable("bluetooth-device") }
@@ -1059,7 +1066,9 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   }
 
   func disconnect() {
-    peripherals.values.filter { $0.state == .connected }.forEach { manager.cancelPeripheralConnection($0) }
+    peripherals.values
+      .filter { $0.state == .connected || $0.state == .connecting }
+      .forEach { manager.cancelPeripheralConnection($0) }
     connectContinuation?.resume(throwing: CancellationError())
     connectContinuation = nil
     serviceContinuation?.resume(throwing: CancellationError())
@@ -1106,6 +1115,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     }
     guard characteristic.properties.contains(.read) else { throw HermesNativeActionError.invalidInput("characteristic") }
     let uuid = characteristic.uuid
+    guard readContinuations[uuid] == nil else { throw HermesNativeActionError.unavailable("bluetooth-read-busy") }
     return try await withCheckedThrowingContinuation { continuation in
       readContinuations[uuid] = continuation
       guard let peripheral = characteristic.service?.peripheral else {
@@ -1136,6 +1146,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
       return ["written": true, "bytes": data.count]
     }
     let uuid = characteristic.uuid
+    guard writeContinuations[uuid] == nil else { throw HermesNativeActionError.unavailable("bluetooth-write-busy") }
     return try await withCheckedThrowingContinuation { continuation in
       writeContinuations[uuid] = continuation
       guard let peripheral = characteristic.service?.peripheral else {
@@ -1158,6 +1169,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     guard characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) else {
       throw HermesNativeActionError.invalidInput("characteristic")
     }
+    guard notifyContinuation == nil else { throw HermesNativeActionError.unavailable("bluetooth-notify-busy") }
     notifySamples = []
     notifyCharacteristic = characteristic
     guard let peripheral = characteristic.service?.peripheral else {

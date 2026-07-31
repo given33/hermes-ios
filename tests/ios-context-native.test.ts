@@ -794,6 +794,12 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(services, /func triggerScene/);
   assert.match(services, /func playSearch/);
   assert.match(services, /func notify/);
+  assert.match(services, /scanContinuation = continuation[\s\S]*guard !Task\.isCancelled/);
+  assert.match(services, /\.state == \.connected \|\| \$0\.state == \.connecting/);
+  assert.match(services, /bluetooth-connect-busy/);
+  assert.match(services, /bluetooth-read-busy/);
+  assert.match(services, /bluetooth-write-busy/);
+  assert.match(services, /bluetooth-notify-busy/);
   assert.match(read('ios/HermesEventStore.swift'), /return calendarEvents\(start: start, end: end\)\.map/);
   assert.match(module, /HermesNFCService\.shared\.scan/);
   for (const capability of [
