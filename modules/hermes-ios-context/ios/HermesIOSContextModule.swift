@@ -822,13 +822,13 @@ public final class HermesIOSContextModule: Module {
     }
 
     AsyncFunction("analyzeVision") {
-      (imageURL: String, ownerScope: String, promise: Promise) in
+      (imageURL: String, ownerScope: String, mode: String?, promise: Promise) in
       self.resolveAsync(promise) {
         try HermesAttachmentVault.shared.requireAllowedImportSource(owner: ownerScope, uri: imageURL)
         guard let url = URL(string: imageURL), let image = CIImage(contentsOf: url) else {
           throw HermesNativeActionError.invalidInput("imageURL")
         }
-        return try HermesVisionService.analyze(image: image)
+        return try HermesVisionService.analyze(image: image, mode: mode ?? "analyze")
       }
     }
 

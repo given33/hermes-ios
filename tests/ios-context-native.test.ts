@@ -658,6 +658,11 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /case 'ios-photos:export'/);
   assert.match(provider, /cloud\.uploadAccountFile\(/);
   assert.match(provider, /deleteExportedPhoto\(ownerScope, uri\)/);
+  assert.match(provider, /retryableFailure/);
+  assert.match(provider, /command\._relay_attempts \|\| 0\) < actionMetadata\.max_attempts/);
+  assert.match(provider, /case 'ios-vision:classify'/);
+  assert.match(provider, /case 'ios-vision:detect'/);
+  assert.match(provider, /case 'ios-vision:faces'/);
   // Pull cursor is server-owned; command ids only dedupe completions.
   assert.match(provider, /Do not treat command ids as the server pull cursor/);
   assert.match(provider, /if \(response\.cursor\) \{\s*commandCursorRef\.current = response\.cursor;/);

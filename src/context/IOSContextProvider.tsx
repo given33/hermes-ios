@@ -266,6 +266,8 @@ export function IOSContextProvider({
           continue;
         }
 
+        const actionMetadata = nativeActionMetadata(command);
+
         const recoveredResult = command._relay_execution_status === 'executing'
           ? await runCurrent(() => HermesIOSContext.getCommandExecutionResult(command.id))
           : null;
@@ -287,9 +289,12 @@ export function IOSContextProvider({
         } else if (
           !command._relay_execution_status
           || command._relay_execution_status === 'executing'
+          || (
+            command._relay_execution_status === 'failed'
+            && (command._relay_attempts || 0) < actionMetadata.max_attempts
+          )
         ) {
-          const actionMetadata = nativeActionMetadata(command);
-          const actionAttempt = Math.max(1, command._relay_attempts || 1);
+          const actionAttempt = Math.max(1, (command._relay_attempts || 0) + 1);
           const actionAuditId = `ios-action:${command.id}`;
           command = {
             ...command,
@@ -373,10 +378,14 @@ export function IOSContextProvider({
           capture.signal,
         ));
         // Persist completion for dedupe only; pull cursor is server-owned.
-        await runCurrent(() => HermesIOSContext.recordCommandCompletion(
-          command.id,
-          commandCursorRef.current || command.id,
-        ));
+        const retryableFailure = command._relay_execution_status === 'failed'
+          && (command._relay_attempts || 0) < actionMetadata.max_attempts;
+        if (!retryableFailure) {
+          await runCurrent(() => HermesIOSContext.recordCommandCompletion(
+            command.id,
+            commandCursorRef.current || command.id,
+          ));
+        }
         await runCurrent(() => HermesIOSContext.removePendingCommand(command.id));
       }
       if (response.cursor) {
@@ -1178,7 +1187,14 @@ async function executeDeviceCommand(
       });
     }
     case 'ios-vision:analyze':
-      return HermesIOSContext.analyzeVision(requiredString(payload.imageURL ?? payload.image_url ?? payload.uri, 'imageURL'), ownerScope);
+    case 'ios-vision:classify':
+    case 'ios-vision:detect':
+    case 'ios-vision:faces':
+      return HermesIOSContext.analyzeVision(
+        requiredString(payload.imageURL ?? payload.image_url ?? payload.uri, 'imageURL'),
+        ownerScope,
+        command.action as 'analyze' | 'classify' | 'detect' | 'faces',
+      );
     case 'ios-photos:capture':
     case 'ios-photos:scan': {
       if (AppState.currentState !== 'active') {

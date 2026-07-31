@@ -359,7 +359,7 @@ export interface IOSContextNativeModule {
     title?: string;
   }): Promise<Record<string, unknown>>;
   deleteReminderForCommand(commandId: string, reminderID: string): Promise<Record<string, unknown>>;
-  analyzeVision(imageURL: string, ownerScope: string): Promise<Record<string, unknown>>;
+  analyzeVision(imageURL: string, ownerScope: string, mode?: 'analyze' | 'classify' | 'detect' | 'faces'): Promise<Record<string, unknown>>;
   getMediaAuthorization(): Promise<IOSAuthorizationState>;
   requestMediaAuthorization(): Promise<IOSAuthorizationState>;
   getMediaSnapshot(): Promise<Record<string, unknown>>;
@@ -643,7 +643,7 @@ export const HermesIOSContext = {
   deleteExportedPhoto: (ownerScope: string, uri: string) => requireContextModule().deleteExportedPhoto(ownerScope, uri),
   ocrImage: (input: Parameters<IOSContextNativeModule['ocrImage']>[0]) =>
     requireContextModule().ocrImage(input),
-  analyzeVision: (imageURL: string, ownerScope: string) => requireContextModule().analyzeVision(imageURL, ownerScope),
+  analyzeVision: (imageURL: string, ownerScope: string, mode?: 'analyze' | 'classify' | 'detect' | 'faces') => requireContextModule().analyzeVision(imageURL, ownerScope, mode),
   openURLForCommand: (commandId: string, url: string) =>
     requireContextModule().openURLForCommand(commandId, url),
   getMediaAuthorization: () => requireContextModule().getMediaAuthorization(),

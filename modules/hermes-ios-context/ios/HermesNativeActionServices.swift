@@ -476,7 +476,7 @@ enum HermesPhotosService {
       return [
         "uri": target.absoluteString,
         "name": target.lastPathComponent,
-        "mimeType": "video/\(target.pathExtension.lowercased() == "m4v" ? "x-m4v" : "quicktime")",
+        "mimeType": videoMimeType(for: target.pathExtension),
         "bytes": bytes,
         "assetID": normalizedID,
         "mediaType": "video",
@@ -512,6 +512,16 @@ enum HermesPhotosService {
     guard FileManager.default.fileExists(atPath: target.path) else { return false }
     try FileManager.default.removeItem(at: target)
     return true
+  }
+
+  private static func videoMimeType(for pathExtension: String) -> String {
+    switch pathExtension.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "mp4": return "video/mp4"
+    case "m4v": return "video/x-m4v"
+    case "webm": return "video/webm"
+    case "avi": return "video/x-msvideo"
+    default: return "video/quicktime"
+    }
   }
 
   private static func exportRoot(owner: String) -> URL {
@@ -607,7 +617,11 @@ enum HermesPhotosService {
 }
 
 enum HermesVisionService {
-  static func analyze(image: CIImage) throws -> [String: Any] {
+  static func analyze(image: CIImage, mode: String = "analyze") throws -> [String: Any] {
+    let normalizedMode = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard ["analyze", "classify", "detect", "faces"].contains(normalizedMode) else {
+      throw HermesNativeActionError.invalidInput("visionMode")
+    }
     var classifications: [[String: Any]] = []
     let classify = VNClassifyImageRequest { request, _ in
       classifications = (request.results as? [VNClassificationObservation] ?? []).prefix(20).map {
@@ -626,8 +640,16 @@ enum HermesVisionService {
         ["confidence": $0.confidence, "boundingBox": box($0.boundingBox)]
       }
     }
-    try VNImageRequestHandler(ciImage: image, options: [:]).perform([classify, rectangle, face])
+    let requests: [VNRequest]
+    switch normalizedMode {
+    case "classify": requests = [classify]
+    case "detect": requests = [rectangle]
+    case "faces": requests = [face]
+    default: requests = [classify, rectangle, face]
+    }
+    try VNImageRequestHandler(ciImage: image, options: [:]).perform(requests)
     return [
+      "mode": normalizedMode,
       "classifications": classifications,
       "rectangles": rectangles,
       "faces": faces,
