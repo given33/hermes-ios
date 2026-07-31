@@ -1344,7 +1344,7 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
                     "name": characteristic.localizedDescription,
                     "type": characteristic.characteristicType,
                     "value": characteristic.value ?? NSNull(),
-                    "writable": characteristic.properties.contains(HMCharacteristicPropertyWrite),
+                    "writable": characteristic.properties.contains(HMCharacteristicPropertyWritable),
                   ]
                 },
               ]
@@ -1403,7 +1403,7 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
       .first(where: { $0.uniqueIdentifier.uuidString == characteristicID }) else {
       throw HermesNativeActionError.invalidInput("HomeKit characteristic")
     }
-    guard characteristic.properties.contains(HMCharacteristicPropertyWrite) else {
+    guard characteristic.properties.contains(HMCharacteristicPropertyWritable) else {
       throw HermesNativeActionError.invalidInput("read-only HomeKit characteristic")
     }
     let format = characteristic.metadata?.format?.lowercased() ?? ""

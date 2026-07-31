@@ -131,6 +131,7 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(nativeActions, /didDiscoverCharacteristicsFor service: CBService/);
   assert.match(nativeActions, /static func visionImage\(imageURL: String, owner: String\)/);
   assert.match(read('modules/hermes-ios-context/ios/HermesIOSContextModule.swift'), /HermesPhotosService\.visionImage/);
+  assert.match(nativeActions, /HMCharacteristicPropertyWritable/);
 
   const watch = read('native-extensions/HermesWatchApp/HermesWatchApp.swift');
   assert.match(watch, /WCSession/);
