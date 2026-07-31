@@ -122,6 +122,8 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
 
   const nativeActions = read('modules/hermes-ios-context/ios/HermesNativeActionServices.swift');
   assert.match(nativeActions, /mediaTypes = \[\.image, \.video\]/);
+  assert.match(nativeActions, /for mediaType in \[PHAssetMediaType\.image, \.video\]/);
+  assert.match(nativeActions, /"mediaType": asset\.mediaType == \.video/);
   assert.match(nativeActions, /MPVolumeView only changes the system volume/);
   assert.match(nativeActions, /window\.addSubview\(mounted\)/);
   assert.match(nativeActions, /case "mp4": return "video\/mp4"/);

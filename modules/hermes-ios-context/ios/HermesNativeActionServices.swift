@@ -339,18 +339,28 @@ enum HermesPhotosService {
           abs(latitude) <= 90, abs(longitude) <= 180, radiusMeters > 0 else {
       throw HermesNativeActionError.invalidInput("location")
     }
-    let assets = PHAsset.fetchAssets(with: .image, options: nil)
+    var assets: [PHAsset] = []
+    for mediaType in [PHAssetMediaType.image, .video] {
+      let fetched = PHAsset.fetchAssets(with: mediaType, options: nil)
+      fetched.enumerateObjects { asset, _, _ in assets.append(asset) }
+    }
+    assets.sort {
+      let left = $0.creationDate ?? .distantPast
+      let right = $1.creationDate ?? .distantPast
+      return left > right
+    }
     let cappedLimit = min(max(limit, 1), 100)
     let origin = CLLocation(latitude: latitude, longitude: longitude)
     var result: [[String: Any]] = []
-    assets.enumerateObjects { asset, _, stop in
-      guard result.count < cappedLimit else { stop.pointee = true; return }
-      guard let location = asset.location, origin.distance(from: location) <= radiusMeters else { return }
+    for asset in assets {
+      guard result.count < cappedLimit else { break }
+      guard let location = asset.location, origin.distance(from: location) <= radiusMeters else { continue }
       let filename = PHAssetResource.assetResources(for: asset).first?.originalFilename ?? ""
       result.append([
         "id": asset.localIdentifier,
         "filename": filename,
         "createdAt": (asset.creationDate?.timeIntervalSince1970 ?? 0) * 1000,
+        "mediaType": asset.mediaType == .video ? "video" : "image",
         "latitude": location.coordinate.latitude,
         "longitude": location.coordinate.longitude,
         "distanceMeters": origin.distance(from: location),
