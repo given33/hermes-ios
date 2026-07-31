@@ -78,7 +78,13 @@ final class HermesLiveActivityService {
     let kind = normalizedString(payload["kind"] ?? payload["type"])
       ?? (taskID == nil ? "weather" : "agent-task")
     if kind == "agent-task" || taskID != nil || payload["sessions"] != nil {
+      if let legacy = activities.removeValue(forKey: id) {
+        await legacy.end(nil, dismissalPolicy: .immediate)
+      }
       return try await updateAgent(payload: payload, id: id, taskID: taskID)
+    }
+    if let agent = agentActivities.removeValue(forKey: id) {
+      await agent.end(nil, dismissalPolicy: .immediate)
     }
     let content = HermesWeatherActivityAttributes.ContentState(
       body: payload["body"] as? String ?? "",

@@ -827,6 +827,8 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(read('ios/HermesLiveActivityService.swift'), /sessionCount/);
   assert.match(read('ios/HermesLiveActivityService.swift'), /privacyMode/);
   assert.match(read('ios/HermesLiveActivityService.swift'), /ttsEnabled/);
+  assert.match(read('ios/HermesLiveActivityService.swift'), /activities\.removeValue\(forKey: id\)[\s\S]*legacy\.end/);
+  assert.match(read('ios/HermesLiveActivityService.swift'), /agentActivities\.removeValue\(forKey: id\)[\s\S]*agent\.end/);
   for (const operation of [
     'writeHealthSampleForCommand', 'createCalendarEventForCommand', 'createReminderForCommand',
     'shareTextToNotesForCommand', 'readClipboardForCommand', 'writeClipboardForCommand',
