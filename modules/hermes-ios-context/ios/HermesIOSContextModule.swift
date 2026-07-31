@@ -987,12 +987,14 @@ public final class HermesIOSContextModule: Module {
       }
     }
 
-    AsyncFunction("startNFCReader") { () async throws -> [String: Any] in
-      #if canImport(CoreNFC)
-      return try await HermesNFCService.shared.scan()
-      #else
-      throw HermesNativeActionError.unavailable("nfc-reader-session")
-      #endif
+    AsyncFunction("startNFCReader") { (promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreNFC)
+        return try await HermesNFCService.shared.scan()
+        #else
+        throw HermesNativeActionError.unavailable("nfc-reader-session")
+        #endif
+      }
     }.runOnQueue(.main)
 
     AsyncFunction("writeNFCTag") { (text: String, promise: Promise) in
@@ -1005,12 +1007,16 @@ public final class HermesIOSContextModule: Module {
       }
     }.runOnQueue(.main)
 
-    AsyncFunction("scanQRCode") { () async throws -> [String: Any] in
-      try await HermesQRScannerService.shared.scan()
+    AsyncFunction("scanQRCode") { (promise: Promise) in
+      self.resolveAsync(promise) {
+        try await HermesQRScannerService.shared.scan()
+      }
     }
 
-    AsyncFunction("openURL") { (url: String) async throws -> [String: Any] in
-      try await self.device.openURL(url)
+    AsyncFunction("openURL") { (url: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        try await self.device.openURL(url)
+      }
     }.runOnQueue(.main)
 
     AsyncFunction("openURLForCommand") {
