@@ -783,6 +783,8 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(read('ios/HermesAppIntents.swift'), /HermesClipboardToEmailIntent/);
   assert.match(provider, /drainPendingAgentTriggers/);
   assert.match(provider, /agentTriggersRunning/);
+  assert.match(provider, /ios-calendar:\(create\|list\|calendars\|freebusy\|update\|delete\)/);
+  assert.match(provider, /ios-reminders:\(create\|list\|update\|complete\|delete\)/);
   assert.match(services, /HermesQRScannerViewController/);
   assert.match(services, /onCancel/);
   assert.match(services, /stateWaiters/);

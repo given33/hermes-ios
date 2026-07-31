@@ -1619,8 +1619,8 @@ function permissionForCommand(key: string): IOSPermissionKey | null {
   if (/^ios-motion:(snapshot|get|start)$/.test(key)) return 'motion';
   if (/^ios-health-write:/.test(key)) return null;
   if (/^ios-health-/.test(key)) return 'health';
-  if (/^ios-calendar:(create|list)$/.test(key)) return 'calendar';
-  if (/^ios-reminders:(create|list)$/.test(key)) return 'reminders';
+  if (/^ios-calendar:(create|list|calendars|freebusy|update|delete)$/.test(key)) return 'calendar';
+  if (/^ios-reminders:(create|list|update|complete|delete)$/.test(key)) return 'reminders';
   if (/^ios-screen-time:(get|start)$/.test(key)) return 'screenTime';
   if (/^ios-notification:(send|schedule)$/.test(key)) return 'notification';
   return null;
