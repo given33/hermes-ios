@@ -967,23 +967,25 @@ public final class HermesIOSContextModule: Module {
     }
 
     AsyncFunction("setHomeKitValue") {
-      (accessoryID: String, characteristicID: String, value: String) async throws -> [String: Any] in
-      #if canImport(HomeKit)
-      let typedValue: Any
-      switch value.lowercased() {
-      case "true": typedValue = true
-      case "false": typedValue = false
-      default: typedValue = Double(value) ?? value
+      (accessoryID: String, characteristicID: String, value: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(HomeKit)
+        let typedValue: Any
+        switch value.lowercased() {
+        case "true": typedValue = true
+        case "false": typedValue = false
+        default: typedValue = Double(value) ?? value
+        }
+        return try await HermesHomeKitService.shared.set(
+          accessoryID: accessoryID,
+          characteristicID: characteristicID,
+          value: typedValue
+        )
+        #else
+        throw HermesNativeActionError.unavailable("homekit")
+        #endif
       }
-      return try await HermesHomeKitService.shared.set(
-        accessoryID: accessoryID,
-        characteristicID: characteristicID,
-        value: typedValue
-      )
-      #else
-      throw HermesNativeActionError.unavailable("homekit")
-      #endif
-    }.runOnQueue(.main)
+    }
 
     AsyncFunction("startNFCReader") { () async throws -> [String: Any] in
       #if canImport(CoreNFC)

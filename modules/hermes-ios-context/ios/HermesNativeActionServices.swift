@@ -170,7 +170,7 @@ enum HermesContactsService {
       CNContactPhoneNumbersKey as NSString,
       CNContactEmailAddressesKey as NSString,
     ]
-    let request = CNFetchRequest(keysToFetch: keys)
+    let request = CNContactFetchRequest(keysToFetch: keys)
     var result: [[String: Any]] = []
     try CNContactStore().enumerateContacts(with: request) { contact, stop in
       if !normalizedQuery.isEmpty {
