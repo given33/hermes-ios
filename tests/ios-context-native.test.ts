@@ -556,6 +556,8 @@ test('native relay covers durable cursors, background services, health, watch, n
     'storePendingCommand',
     'readPendingCommands',
     'removePendingCommand',
+    'readPendingTaskControls',
+    'consumePendingTaskControl',
     'setOwnerScope',
     'activateOwnerScope',
     'deleteOwnerScope',
@@ -698,6 +700,8 @@ test('native relay covers durable cursors, background services, health, watch, n
     assert.match(appIntents, new RegExp(`struct ${intent}: AppIntent`));
   }
   assert.match(appIntents, /struct HermesTaskShortcuts: AppShortcutsProvider/);
+  assert.match(appIntents, /func pending()/);
+  assert.match(appIntents, /func consume\(requestID: String\)/);
   assert.match(appIntents, /allowedActions/);
 });
 

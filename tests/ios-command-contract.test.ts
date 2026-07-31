@@ -59,6 +59,16 @@ test('remote metadata cannot downgrade a known write action confirmation', () =>
   assert.equal(metadata.risk, 'write');
 });
 
+test('unknown native actions fail closed until a read policy is declared', () => {
+  const metadata = nativeActionMetadata({
+    capability: 'ios-device',
+    action: 'future-write',
+    action_metadata: { confirmation: 'none', risk: 'read' },
+  });
+  assert.equal(metadata.risk, 'destructive');
+  assert.equal(metadata.confirmation, 'required');
+});
+
 test('account deletion calls the linked server cleanup endpoint with confirmation', async () => {
   const calls: Array<{ path: string; init?: RequestInit }> = [];
   const client = {

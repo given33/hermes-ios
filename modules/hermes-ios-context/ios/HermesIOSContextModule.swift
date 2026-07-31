@@ -49,6 +49,7 @@ public final class HermesIOSContextModule: Module {
     healthDefinitions()
     calendarDefinitions()
     clipboardDefinitions()
+    taskControlDefinitions()
     notificationDefinitions()
     watchDefinitions()
     screenTimeDefinitions()
@@ -542,6 +543,17 @@ public final class HermesIOSContextModule: Module {
       self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
       return result
     }.runOnQueue(.main)
+  }
+
+  @ModuleDefinitionBuilder
+  private func taskControlDefinitions() -> ModuleDefinition {
+    AsyncFunction("readPendingTaskControls") { () -> [[String: Any]] in
+      HermesTaskControlStore.shared.pending()
+    }
+
+    AsyncFunction("consumePendingTaskControl") { (requestID: String) -> Bool in
+      HermesTaskControlStore.shared.consume(requestID: requestID)
+    }
   }
 
   @ModuleDefinitionBuilder

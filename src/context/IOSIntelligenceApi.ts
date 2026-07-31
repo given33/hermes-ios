@@ -124,6 +124,22 @@ export class IOSIntelligenceApi {
     );
   }
 
+  controlRuntimeTask(
+    runId: string,
+    input: { action: 'cancel' | 'retry' | 'pause' | 'resume'; requestId: string; reason?: string },
+    signal?: AbortSignal,
+  ) {
+    return this.json<Record<string, unknown>>(
+      `/api/plugins/collaboration/mobile/runtime-runs/${encodeURIComponent(runId)}/control`,
+      {
+        action: input.action,
+        request_id: input.requestId,
+        reason: input.reason || 'iOS task control',
+      },
+      signal,
+    );
+  }
+
   acknowledgeCommand(
     deviceId: string,
     commandId: string,

@@ -88,6 +88,11 @@ const NATIVE_ACTION_POLICIES: Record<string, Partial<IOSNativeActionMetadata>> =
   },
 };
 
+const NATIVE_READ_ACTIONS = new Set([
+  'get', 'latest', 'list', 'current', 'refresh', 'read', 'today', 'snapshot',
+  'history', 'capabilities', 'evaluate', 'server', 'query', 'plan',
+]);
+
 export function nativeActionMetadata(
   command: IOSNativeActionCommandLike,
 ): IOSNativeActionMetadata {
@@ -97,13 +102,19 @@ export function nativeActionMetadata(
   const suppliedRisk = supplied.risk === 'read' || supplied.risk === 'write' || supplied.risk === 'destructive'
     ? supplied.risk
     : undefined;
-  const risk = policy.risk || suppliedRisk || 'read';
+  const inferredRisk = NATIVE_READ_ACTIONS.has(command.action.toLowerCase())
+    ? 'read'
+    : 'destructive';
+  const hasKnownPolicy = Object.keys(policy).length > 0;
+  const risk = hasKnownPolicy
+    ? policy.risk || suppliedRisk || inferredRisk
+    : inferredRisk;
   const suppliedConfirmation = supplied.confirmation === 'required' || supplied.confirmation === 'none'
     ? supplied.confirmation
     : undefined;
   // A server-supplied policy may add a confirmation requirement, but cannot
   // downgrade a device-known write/destructive action to no-confirmation.
-  const confirmation = policy.confirmation === 'required'
+  const confirmation = policy.confirmation === 'required' || (!hasKnownPolicy && inferredRisk === 'destructive')
     ? 'required'
     : suppliedConfirmation || 'none';
   const maxAttempts = Number.isInteger(supplied.max_attempts)

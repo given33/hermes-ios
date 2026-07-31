@@ -38,6 +38,26 @@ final class HermesTaskControlStore {
     UserDefaults.standard.synchronize()
     return requestID
   }
+
+  func pending() -> [[String: Any]] {
+    lock.lock()
+    defer { lock.unlock() }
+    return UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []
+  }
+
+  @discardableResult
+  func consume(requestID: String) -> Bool {
+    let normalized = requestID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { return false }
+    lock.lock()
+    defer { lock.unlock() }
+    let requests = UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []
+    let remaining = requests.filter { ($0["requestID"] as? String) != normalized }
+    guard remaining.count != requests.count else { return false }
+    UserDefaults.standard.set(remaining, forKey: key)
+    UserDefaults.standard.synchronize()
+    return true
+  }
 }
 
 struct HermesRefreshContextIntent: AppIntent {
@@ -164,7 +184,7 @@ private enum HermesTaskControlError: LocalizedError {
   }
 }
 
-struct HermesTaskShortcuts: AppShortcutsProvider {
+struct HermesContextShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     [
       AppShortcut(
@@ -178,12 +198,6 @@ struct HermesTaskShortcuts: AppShortcutsProvider {
         phrases: ["Get my Hermes location", "获取 Hermes 位置"],
         shortTitle: "Hermes location",
         systemImageName: "location.fill"
-      ),
-      AppShortcut(
-        intent: HermesResumeTaskIntent(taskID: ""),
-        phrases: ["Resume my Hermes task", "继续 Hermes 任务"],
-        shortTitle: "Resume Hermes task",
-        systemImageName: "play.fill"
       ),
     ]
   }

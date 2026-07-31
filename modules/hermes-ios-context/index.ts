@@ -225,6 +225,8 @@ export interface IOSContextNativeModule {
   storePendingCommand(command: Record<string, unknown>): Promise<void>;
   readPendingCommands(): Promise<Array<Record<string, unknown>>>;
   removePendingCommand(id: string): Promise<void>;
+  readPendingTaskControls?(): Promise<Array<Record<string, unknown>>>;
+  consumePendingTaskControl?(requestId: string): Promise<boolean>;
   requestHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthSummary(start: number, end: number): Promise<IOSHealthSummary>;
@@ -424,6 +426,9 @@ export const HermesIOSContext = {
     requireContextModule().storePendingCommand(command),
   readPendingCommands: () => requireContextModule().readPendingCommands(),
   removePendingCommand: (id: string) => requireContextModule().removePendingCommand(id),
+  readPendingTaskControls: () => requireContextModule().readPendingTaskControls?.() ?? Promise.resolve([]),
+  consumePendingTaskControl: (requestId: string) =>
+    requireContextModule().consumePendingTaskControl?.(requestId) ?? Promise.resolve(false),
   requestHealthAuthorization: () => requireContextModule().requestHealthAuthorization(),
   getHealthAuthorization: () => requireContextModule().getHealthAuthorization(),
   getHealthSummary: (start: number, end: number) =>

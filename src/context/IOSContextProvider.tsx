@@ -227,6 +227,12 @@ export function IOSContextProvider({
     );
     try {
       if (!await runCurrent(hasUsableNetwork)) return;
+      await drainPendingTaskControls(
+        runCurrent,
+        api,
+        capture.signal,
+        () => flushPendingEvents(capture),
+      );
       const storedCommands = (await runCurrent(
         () => HermesIOSContext.readPendingCommands(),
       ))
@@ -982,6 +988,44 @@ async function executeDeviceCommand(
     }
     default:
       throw new Error(`Unsupported native command: ${command.capability}:${command.action}`);
+  }
+}
+
+async function drainPendingTaskControls(
+  runCurrent: <T>(operation: () => Promise<T>) => Promise<T>,
+  api: IOSIntelligenceApi,
+  signal: AbortSignal,
+  flushPendingEvents: () => Promise<void>,
+): Promise<void> {
+  const controls = await runCurrent(() => HermesIOSContext.readPendingTaskControls());
+  for (const control of controls.slice(0, 20)) {
+    const requestId = typeof control.requestID === 'string' ? control.requestID : '';
+    const taskID = typeof control.taskID === 'string' ? control.taskID : '';
+    const action = control.action === 'cancel'
+      || control.action === 'retry'
+      || control.action === 'pause'
+      || control.action === 'resume'
+      ? control.action
+      : null;
+    if (!requestId || !taskID || !action) continue;
+    try {
+      await runCurrent(() => api.controlRuntimeTask(taskID, {
+        action,
+        requestId,
+      }, signal));
+      await runCurrent(() => HermesIOSContext.consumePendingTaskControl(requestId));
+      await runCurrent(() => HermesIOSContext.enqueueContextEvents([{
+        id: `ios-task-control:${requestId}`,
+        kind: 'ios-task-control-audit',
+        timestamp: Date.now(),
+        payload: { action, request_id: requestId, task_id: taskID, status: 'completed' },
+      }]));
+      await runCurrent(flushPendingEvents);
+    } catch {
+      // Keep the request durable for the next foreground/background relay.
+      // Network and server transient errors therefore do not lose a Siri or
+      // Live Activity control request.
+    }
   }
 }
 
