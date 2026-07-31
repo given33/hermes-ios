@@ -329,10 +329,58 @@ export class HermesConversationsCloudApi {
     consume: (response: Response, signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
   ) {
-    if (!downloadUrl.startsWith(`${COLLABORATION}/single/conversations/`)) {
+    if (!isConversationAttachmentDownloadUrl(downloadUrl)) {
       throw new Error('Invalid conversation attachment URL');
     }
     return this.transport.consumeDownload(downloadUrl, consume, { signal });
+  }
+}
+
+function isConversationAttachmentDownloadUrl(downloadUrl: string): boolean {
+  if (!downloadUrl.startsWith('/') || downloadUrl.includes('#')) return false;
+  let parsed: URL;
+  try {
+    parsed = new URL(downloadUrl, 'https://hermes.invalid');
+  } catch {
+    return false;
+  }
+  if (parsed.origin !== 'https://hermes.invalid') return false;
+
+  const rawPath = downloadUrl.split(/[?#]/, 1)[0];
+  // URL normalizes dot segments and backslashes. Requiring the exact encoded
+  // path prevents an allowed prefix from being used to reach another API.
+  if (parsed.pathname !== rawPath) return false;
+  const segments = parsed.pathname.split('/').filter(Boolean);
+  const decoded = segments.map(decodePathSegment);
+  if (decoded.some((segment) => segment === null || !segment)) return false;
+
+  if (
+    decoded.length === 6
+    && decoded[0] === 'api'
+    && decoded[1] === 'plugins'
+    && decoded[2] === 'collaboration'
+    && decoded[3] === 'files'
+    && decoded[5] === 'download'
+  ) return true;
+
+  return decoded.length >= 9
+    && decoded[0] === 'api'
+    && decoded[1] === 'plugins'
+    && decoded[2] === 'collaboration'
+    && decoded[3] === 'single'
+    && decoded[4] === 'conversations'
+    && decoded[6] === 'attachments'
+    && (decoded[7] === 'uploads' || decoded[7] === 'outputs');
+}
+
+function decodePathSegment(value: string): string | null {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\')
+      ? null
+      : decoded;
+  } catch {
+    return null;
   }
 }
 

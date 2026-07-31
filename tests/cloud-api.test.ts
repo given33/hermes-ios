@@ -188,6 +188,50 @@ test('account files and contextual routing use the collaboration cloud contract'
   assert.equal(calls[3].options.method, 'DELETE');
 });
 
+test('conversation attachment downloads accept current and legacy server routes only', async () => {
+  const calls: Array<{ options: HermesRequestOptions; path: string }> = [];
+  const client = {
+    consumeDownload<T>(
+      path: string,
+      consume: (response: Response, signal: AbortSignal) => Promise<T>,
+      options: HermesRequestOptions = {},
+    ): Promise<T> {
+      calls.push({ options, path });
+      return consume(
+        new Response('attachment'),
+        options.signal ?? new AbortController().signal,
+      );
+    },
+  } as HermesApiClient;
+  const api = new HermesCloudApi(client);
+  const current = '/api/plugins/collaboration/files/file_report_123/download';
+  const legacy = '/api/plugins/collaboration/single/conversations/chat-1'
+    + '/attachments/outputs/reports/final%20report.pdf';
+
+  assert.equal(
+    await api.consumeConversationAttachment(current, (response) => response.text()),
+    'attachment',
+  );
+  assert.equal(
+    await api.consumeConversationAttachment(legacy, (response) => response.text()),
+    'attachment',
+  );
+
+  for (const invalid of [
+    'https://attacker.invalid/api/plugins/collaboration/files/file_1/download',
+    '/api/plugins/collaboration/files/file_1/download/extra',
+    '/api/plugins/collaboration/files/file_1/%2e%2e/status',
+    '/api/plugins/collaboration/single/conversations/chat-1/attachments/uploads/../../status',
+    '/api/plugins/collaboration/tool-output-artifacts/toolout_1/download',
+  ]) {
+    await assert.rejects(
+      async () => api.consumeConversationAttachment(invalid, (response) => response.text()),
+      /Invalid conversation attachment URL/,
+    );
+  }
+  assert.deepEqual(calls.map(({ path }) => path), [current, legacy]);
+});
+
 test('account file route reads only the requested merged window prefix', async () => {
   const calls: Call[] = [];
   const client = {
