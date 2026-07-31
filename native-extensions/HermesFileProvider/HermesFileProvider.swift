@@ -204,7 +204,10 @@ final class HermesFileProvider: NSObject, NSFileProviderReplicatedExtension {
 
   func modifyItem(_ item: NSFileProviderItem, baseVersion version: NSFileProviderItemVersion, changedFields: NSFileProviderItemFields, contents newContents: URL?, options: NSFileProviderModifyItemOptions = [], request: NSFileProviderRequest, completionHandler: @escaping (NSFileProviderItem?, NSFileProviderItemFields, Bool, Error?) -> Void) -> Progress {
     guard writable(item.itemIdentifier.rawValue), let source = safeURL(item.itemIdentifier.rawValue) else { completionHandler(nil, [], false, NSFileProviderError(.noSuchItem)); return Progress() }
-    let oldParent = item.parentItemIdentifier
+    // The callback item can already contain the new parent. Derive the old
+    // parent from the pre-move identifier so both enumerators are invalidated.
+    let oldParentPath = (item.itemIdentifier.rawValue as NSString).deletingLastPathComponent
+    let oldParent = oldParentPath.isEmpty ? NSFileProviderItemIdentifier.rootContainer : NSFileProviderItemIdentifier(oldParentPath)
     do {
       var destination = source
       if changedFields.contains(.filename) || changedFields.contains(.parentItemIdentifier) {

@@ -121,7 +121,8 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /workspace/);
   assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /safeURL/);
   const fileProvider = read('native-extensions/HermesFileProvider/HermesFileProvider.swift');
-  assert.match(fileProvider, /let oldParent = item\.parentItemIdentifier/);
+  assert.match(fileProvider, /let oldParentPath = \(item\.itemIdentifier\.rawValue as NSString\)\.deletingLastPathComponent/);
+  assert.match(fileProvider, /let oldParent = oldParentPath\.isEmpty \? NSFileProviderItemIdentifier\.rootContainer/);
   assert.match(fileProvider, /signal\(oldParent\)/);
   assert.match(fileProvider, /newParent\.rawValue != oldParent\.rawValue/);
   assert.match(fileProvider, /hermes-file-provider-owner-v1/);
