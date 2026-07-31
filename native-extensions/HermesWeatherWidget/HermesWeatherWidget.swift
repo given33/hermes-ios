@@ -152,11 +152,19 @@ private struct AgentTaskLinks: View {
   var body: some View {
     HStack(spacing: 12) {
       if let taskID = state.taskID {
-        Link(destination: taskURL(taskID: taskID, action: "pause")) {
-          Label("Pause", systemImage: "pause.fill")
+        if state.status == "running" || state.status == "starting" {
+          Link(destination: taskURL(taskID: taskID, action: "pause")) {
+            Label("Pause", systemImage: "pause.fill")
+          }
+        } else if state.status == "paused" {
+          Link(destination: taskURL(taskID: taskID, action: "resume")) {
+            Label("Resume", systemImage: "play.fill")
+          }
         }
-        Link(destination: taskURL(taskID: taskID, action: "cancel")) {
-          Label("Cancel", systemImage: "xmark")
+        if state.status != "completed", state.status != "cancelled", state.status != "failed" {
+          Link(destination: taskURL(taskID: taskID, action: "cancel")) {
+            Label("Cancel", systemImage: "xmark")
+          }
         }
         if state.status == "failed" {
           Link(destination: taskURL(taskID: taskID, action: "retry")) {
@@ -178,6 +186,9 @@ private struct AgentTaskLinks: View {
 }
 
 private func activityURL(_ state: HermesWeatherActivityAttributes.ContentState) -> URL? {
+  if let deepLink = state.actionDeepLink, let url = URL(string: deepLink) {
+    return url
+  }
   if state.kind == "agent-task", let taskID = state.taskID {
     return taskURL(taskID: taskID, action: "open")
   }

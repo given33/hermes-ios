@@ -54,7 +54,7 @@ final class HermesLiveActivityService {
       title: payload["title"] as? String ?? "Hermes",
       kind: kind,
       taskID: taskID,
-      status: normalizedString(payload["status"]),
+      status: normalizedString(payload["status"])?.lowercased(),
       progress: progressValue(payload["progress"]),
       currentTool: normalizedString(payload["currentTool"] ?? payload["current_tool"]),
       approvalRequired: boolValue(payload["approvalRequired"] ?? payload["approval_required"]),
