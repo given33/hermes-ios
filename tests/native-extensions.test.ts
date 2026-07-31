@@ -120,6 +120,11 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /safeURL/);
   assert.match(read('.github/workflows/ios-unsigned.yml'), /HermesFileProvider/);
 
+  const nativeActions = read('modules/hermes-ios-context/ios/HermesNativeActionServices.swift');
+  assert.match(nativeActions, /mediaTypes = \[\.image, \.video\]/);
+  assert.match(nativeActions, /MPVolumeView only changes the system volume/);
+  assert.match(nativeActions, /window\.addSubview\(mounted\)/);
+
   const watch = read('native-extensions/HermesWatchApp/HermesWatchApp.swift');
   assert.match(watch, /WCSession/);
   assert.match(watch, /CLLocationManager/);

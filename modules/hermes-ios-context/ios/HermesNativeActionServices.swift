@@ -268,20 +268,35 @@ enum HermesPhotosService {
     if !predicates.isEmpty { options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates) }
     options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
     let requestedType = mediaType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    let assetMediaType: PHAssetMediaType
+    let mediaTypes: [PHAssetMediaType]
     switch requestedType {
-    case nil, "", "image": assetMediaType = .image
-    case "video": assetMediaType = .video
-    default: throw HermesNativeActionError.invalidInput("mediaType")
+    case nil, "":
+      // An omitted media type means the agent asked for the complete photo
+      // library, not an image-only shortcut. Fetch both asset classes and
+      // merge them below so creation-date ordering remains deterministic.
+      mediaTypes = [.image, .video]
+    case "image":
+      mediaTypes = [.image]
+    case "video":
+      mediaTypes = [.video]
+    default:
+      throw HermesNativeActionError.invalidInput("mediaType")
     }
-    let assets = PHAsset.fetchAssets(with: assetMediaType, options: options)
+    var assets: [PHAsset] = []
+    for mediaType in mediaTypes {
+      let fetched = PHAsset.fetchAssets(with: mediaType, options: options)
+      fetched.enumerateObjects { asset, _, _ in assets.append(asset) }
+    }
+    assets.sort {
+      ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast)
+    }
     let cappedLimit = min(max(limit, 1), 100)
     var result: [[String: Any]] = []
-    assets.enumerateObjects { asset, _, stop in
-      guard result.count < cappedLimit else { stop.pointee = true; return }
+    for asset in assets {
+      guard result.count < cappedLimit else { break }
       let resources = PHAssetResource.assetResources(for: asset)
       let filename = resources.first?.originalFilename ?? ""
-      if !normalizedQuery.isEmpty && !filename.lowercased().contains(normalizedQuery) { return }
+      if !normalizedQuery.isEmpty && !filename.lowercased().contains(normalizedQuery) { continue }
       result.append([
         "id": asset.localIdentifier,
         "filename": filename,
@@ -591,6 +606,8 @@ enum HermesVisionService {
 }
 
 enum HermesMediaService {
+  private static var volumeView: MPVolumeView?
+
   static func authorization() -> String {
     switch MPMediaLibrary.authorizationStatus() {
     case .authorized: return "authorized"
@@ -666,8 +683,23 @@ enum HermesMediaService {
   static func setVolume(_ rawValue: Double) throws -> [String: Any] {
     guard authorization() == "authorized" else { throw HermesNativeActionError.authorizationRequired("media") }
     guard rawValue.isFinite, rawValue >= 0, rawValue <= 1 else { throw HermesNativeActionError.invalidInput("volume") }
-    let volumeView = MPVolumeView(frame: .zero)
-    guard let slider = volumeView.subviews.compactMap({ $0 as? UISlider }).first else {
+    // MPVolumeView only changes the system volume when it is attached to a
+    // live window. Keep one hidden instance mounted for the lifetime of the
+    // app; a detached temporary view silently leaves the actual volume alone.
+    if volumeView == nil {
+      let mounted = MPVolumeView(frame: CGRect(x: -100, y: -100, width: 1, height: 1))
+      mounted.alpha = 0.01
+      mounted.showsRouteButton = false
+      guard let scene = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene })
+        .first(where: { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }),
+        let window = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first else {
+        throw HermesNativeActionError.unavailable("media-volume-window")
+      }
+      window.addSubview(mounted)
+      volumeView = mounted
+    }
+    guard let slider = volumeView?.subviews.compactMap({ $0 as? UISlider }).first else {
       throw HermesNativeActionError.unavailable("media-volume")
     }
     slider.value = Float(rawValue)
