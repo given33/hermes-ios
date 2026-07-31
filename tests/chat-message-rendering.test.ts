@@ -249,6 +249,10 @@ test('sending is one durable idempotent enqueue with foreground outbox compensat
   assert.doesNotMatch(source, /const userMessageId = `user-\$\{userMessageCreatedAt\}`/);
   assert.match(source, /removePendingEnqueueIfActive\([\s\S]*cacheOwner,[\s\S]*source\.input\.requestId/);
   assert.match(source, /replayPendingEnqueues/);
+  assert.match(
+    outboxReplayControllerSource,
+    /pendingItem\.pendingAttachments\?\.length[\s\S]*HERMES_NATIVE_ATTACHMENTS_UNAVAILABLE/,
+  );
   assert.doesNotMatch(source, /recordConversationMessage\(conversationId|routeMessage\(/);
   assert.doesNotMatch(source, /new HermesChatStream|createNativeHermesChatStreamRuntime/);
 });

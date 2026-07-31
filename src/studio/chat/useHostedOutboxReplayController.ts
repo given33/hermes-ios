@@ -7,6 +7,7 @@ import {
   type SetStateAction,
 } from 'react';
 
+import { hasNativeIOSContext } from '../../../modules/hermes-ios-context';
 import type { ConversationLocalStore } from '../../api/conversation-local-store';
 import type {
   HostedInterventionOutboxItem,
@@ -364,6 +365,23 @@ export function useHostedOutboxReplayController({
             );
             if (!lifecycleCurrent()) return;
             if (settled === 'cleanup-pending') continue;
+            continue;
+          }
+          if (pendingItem.pendingAttachments?.length && !hasNativeIOSContext) {
+            // Attachments are encrypted by the iOS vault. An old outbox row
+            // can survive a platform upgrade, so terminate it explicitly
+            // instead of retrying a permanently unavailable native call.
+            await handleOutboxFailure(
+              pendingItem,
+              {
+                certainty: 'definitive',
+                code: 'HERMES_NATIVE_ATTACHMENTS_UNAVAILABLE',
+                message: 'Queued attachments require the Hermes iOS app build.',
+                retryable: false,
+              },
+              expectedOwnerEpoch,
+            );
+            if (!lifecycleCurrent()) return;
             continue;
           }
           const claimKey = hostedTurnDeliveryClaimKey(cacheOwner, pendingItem.input.requestId);
