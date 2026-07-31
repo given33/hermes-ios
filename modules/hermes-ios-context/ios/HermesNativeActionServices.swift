@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import Contacts
 import CoreImage
+import CoreLocation
 import MediaPlayer
 import Photos
 import UIKit
@@ -18,6 +19,7 @@ final class HermesNFCService: NSObject, NFCNDEFReaderSessionDelegate {
   static let shared = HermesNFCService()
   private var session: NFCNDEFReaderSession?
   private var continuation: CheckedContinuation<[String: Any], Error>?
+  private var writeMessage: NFCNDEFMessage?
 
   private override init() {}
 
@@ -37,14 +39,39 @@ final class HermesNFCService: NSObject, NFCNDEFReaderSessionDelegate {
     }
   }
 
+  func write(text: String) async throws -> [String: Any] {
+    guard NFCNDEFReaderSession.readingAvailable else {
+      throw HermesNativeActionError.unavailable("nfc-reader-session")
+    }
+    guard continuation == nil else { throw HermesNativeActionError.unavailable("nfc-reader-busy") }
+    let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty, normalized.count <= 4_000 else {
+      throw HermesNativeActionError.invalidInput("text")
+    }
+    let language = Data("en".utf8)
+    var payload = Data([0x02, UInt8(language.count)])
+    payload.append(language)
+    payload.append(Data(normalized.utf8))
+    writeMessage = NFCNDEFMessage(records: [NFCNDEFPayload(format: .nfcWellKnown, type: Data("T".utf8), identifier: Data(), payload: payload)])
+    return try await withCheckedThrowingContinuation { continuation in
+      self.continuation = continuation
+      let session = NFCNDEFReaderSession(delegate: self, queue: .main, invalidateAfterFirstRead: true)
+      session.alertMessage = "Hold your iPhone near an NFC tag to write."
+      self.session = session
+      session.begin()
+    }
+  }
+
   func readerSession(_ session: NFCNDEFReaderSession, didInvalidateWithError error: Error) {
     self.session = nil
+    writeMessage = nil
     let continuation = self.continuation
     self.continuation = nil
     continuation?.resume(throwing: error)
   }
 
   func readerSession(_ session: NFCNDEFReaderSession, didDetectNDEFs messages: [NFCNDEFMessage]) {
+    guard writeMessage == nil else { return }
     let records = messages.flatMap { $0.records }.map { record in
       [
         "type": String(decoding: record.type, as: UTF8.self),
@@ -59,6 +86,33 @@ final class HermesNFCService: NSObject, NFCNDEFReaderSessionDelegate {
     let continuation = self.continuation
     self.continuation = nil
     continuation?.resume(returning: ["records": records])
+  }
+
+  func readerSession(_ session: NFCNDEFReaderSession, didDetect tags: [NFCNDEFTag]) {
+    guard let tag = tags.first, let message = writeMessage else { return }
+    session.connect(to: tag) { [weak self] error in
+      guard let self else { return }
+      if let error { self.finishWrite(error: error); return }
+      tag.queryNDEFStatus { status, _, error in
+        if let error { self.finishWrite(error: error); return }
+        guard status == .readWrite else { self.finishWrite(error: HermesNativeActionError.unavailable("nfc-tag-read-only")); return }
+        tag.writeNDEF(message) { error in
+          if let error { self.finishWrite(error: error) }
+          else { self.finishWrite(result: ["written": true, "recordCount": message.records.count]) }
+        }
+      }
+    }
+  }
+
+  private func finishWrite(result: [String: Any]? = nil, error: Error? = nil) {
+    session?.alertMessage = error == nil ? "Tag written." : "Unable to write tag."
+    session?.invalidate()
+    session = nil
+    writeMessage = nil
+    let pending = continuation
+    continuation = nil
+    if let error { pending?.resume(throwing: error) }
+    else { pending?.resume(returning: result ?? [:]) }
   }
 }
 #endif
@@ -201,7 +255,7 @@ enum HermesPhotosService {
     }
   }
 
-  static func search(query: String?, start: Double?, end: Double?, limit: Int) throws -> [[String: Any]] {
+  static func search(query: String?, start: Double?, end: Double?, limit: Int, mediaType: String? = nil) throws -> [[String: Any]] {
     guard authorization() == "authorized" || authorization() == "limited" else {
       throw HermesNativeActionError.authorizationRequired("photos")
     }
@@ -210,9 +264,17 @@ enum HermesPhotosService {
     var predicates: [NSPredicate] = []
     if let start { predicates.append(NSPredicate(format: "creationDate >= %@", Date(timeIntervalSince1970: start / 1000) as NSDate)) }
     if let end { predicates.append(NSPredicate(format: "creationDate <= %@", Date(timeIntervalSince1970: end / 1000) as NSDate)) }
+    if let start, let end, end < start { throw HermesNativeActionError.invalidInput("dateRange") }
     if !predicates.isEmpty { options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: predicates) }
     options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-    let assets = PHAsset.fetchAssets(with: .image, options: options)
+    let requestedType = mediaType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let assetMediaType: PHAssetMediaType
+    switch requestedType {
+    case nil, "", "image": assetMediaType = .image
+    case "video": assetMediaType = .video
+    default: throw HermesNativeActionError.invalidInput("mediaType")
+    }
+    let assets = PHAsset.fetchAssets(with: assetMediaType, options: options)
     let cappedLimit = min(max(limit, 1), 100)
     var result: [[String: Any]] = []
     assets.enumerateObjects { asset, _, stop in
@@ -226,6 +288,7 @@ enum HermesPhotosService {
         "createdAt": (asset.creationDate?.timeIntervalSince1970 ?? 0) * 1000,
         "width": asset.pixelWidth,
         "height": asset.pixelHeight,
+        "mediaType": asset.mediaType == .video ? "video" : "image",
         "favorite": asset.isFavorite,
         "location": asset.location.map { ["latitude": $0.coordinate.latitude, "longitude": $0.coordinate.longitude] } as Any,
       ])
@@ -233,18 +296,232 @@ enum HermesPhotosService {
     return result
   }
 
+  static func albums(limit: Int) throws -> [[String: Any]] {
+    guard authorization() == "authorized" || authorization() == "limited" else {
+      throw HermesNativeActionError.authorizationRequired("photos")
+    }
+    let cappedLimit = min(max(limit, 1), 100)
+    var result: [[String: Any]] = []
+    let collections = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .any, options: nil)
+    collections.enumerateObjects { collection, _, stop in
+      guard result.count < cappedLimit else { stop.pointee = true; return }
+      let assets = PHAsset.fetchAssets(in: collection, options: nil)
+      result.append([
+        "id": collection.localIdentifier,
+        "title": collection.localizedTitle ?? "",
+        "assetCount": assets.count,
+        "kind": "album",
+      ])
+    }
+    return result
+  }
+
+  static func nearby(latitude: Double, longitude: Double, radiusMeters: Double, limit: Int) throws -> [[String: Any]] {
+    guard authorization() == "authorized" || authorization() == "limited" else {
+      throw HermesNativeActionError.authorizationRequired("photos")
+    }
+    guard latitude.isFinite, longitude.isFinite, radiusMeters.isFinite,
+          abs(latitude) <= 90, abs(longitude) <= 180, radiusMeters > 0 else {
+      throw HermesNativeActionError.invalidInput("location")
+    }
+    let assets = PHAsset.fetchAssets(with: .image, options: nil)
+    let cappedLimit = min(max(limit, 1), 100)
+    let origin = CLLocation(latitude: latitude, longitude: longitude)
+    var result: [[String: Any]] = []
+    assets.enumerateObjects { asset, _, stop in
+      guard result.count < cappedLimit else { stop.pointee = true; return }
+      guard let location = asset.location, origin.distance(from: location) <= radiusMeters else { return }
+      let filename = PHAssetResource.assetResources(for: asset).first?.originalFilename ?? ""
+      result.append([
+        "id": asset.localIdentifier,
+        "filename": filename,
+        "createdAt": (asset.creationDate?.timeIntervalSince1970 ?? 0) * 1000,
+        "latitude": location.coordinate.latitude,
+        "longitude": location.coordinate.longitude,
+        "distanceMeters": origin.distance(from: location),
+      ])
+    }
+    return result
+  }
+
+  static func updateFavorite(assetIDs: [String], favorite: Bool) async throws -> [String: Any] {
+    guard authorization() == "authorized" else {
+      throw HermesNativeActionError.authorizationRequired("photos-write")
+    }
+    let ids = Array(Set(assetIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).prefix(100)
+    guard !ids.isEmpty else { throw HermesNativeActionError.invalidInput("assetIDs") }
+    let assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(ids), options: nil)
+    try await performChanges {
+      assets.enumerateObjects { asset, _, _ in
+        PHAssetChangeRequest(for: asset).isFavorite = favorite
+      }
+    }
+    return ["updated": assets.count, "favorite": favorite]
+  }
+
+  static func delete(assetIDs: [String]) async throws -> [String: Any] {
+    guard authorization() == "authorized" else {
+      throw HermesNativeActionError.authorizationRequired("photos-write")
+    }
+    let ids = Array(Set(assetIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).prefix(100)
+    guard !ids.isEmpty else { throw HermesNativeActionError.invalidInput("assetIDs") }
+    let assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(ids), options: nil)
+    try await performChanges { PHAssetChangeRequest.deleteAssets(assets) }
+    return ["deleted": assets.count]
+  }
+
+  static func createAlbum(title: String) async throws -> [String: Any] {
+    guard authorization() == "authorized" else {
+      throw HermesNativeActionError.authorizationRequired("photos-write")
+    }
+    let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty, normalized.count <= 120 else {
+      throw HermesNativeActionError.invalidInput("title")
+    }
+    var identifier: String?
+    try await performChanges {
+      let request = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: normalized)
+      identifier = request.placeholderForCreatedAssetCollection.localIdentifier
+    }
+    return ["id": identifier ?? "", "title": normalized]
+  }
+
+  static func addToAlbum(assetIDs: [String], albumID: String) async throws -> [String: Any] {
+    guard authorization() == "authorized" else {
+      throw HermesNativeActionError.authorizationRequired("photos-write")
+    }
+    let normalizedAlbum = albumID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedAlbum.isEmpty else { throw HermesNativeActionError.invalidInput("albumID") }
+    guard let album = PHAssetCollection.fetchAssetCollections(
+      withLocalIdentifiers: [normalizedAlbum], options: nil
+    ).firstObject else { throw HermesNativeActionError.invalidInput("albumID") }
+    let ids = Array(Set(assetIDs.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).prefix(100)
+    guard !ids.isEmpty else { throw HermesNativeActionError.invalidInput("assetIDs") }
+    let assets = PHAsset.fetchAssets(withLocalIdentifiers: Array(ids), options: nil)
+    try await performChanges {
+      guard let request = PHAssetCollectionChangeRequest(for: album) else { return }
+      request.addAssets(assets)
+    }
+    return ["added": assets.count, "albumID": normalizedAlbum]
+  }
+
+  static func importImage(owner: String, imageURL: String) async throws -> [String: Any] {
+    guard authorization() == "authorized" else {
+      throw HermesNativeActionError.authorizationRequired("photos-write")
+    }
+    try HermesAttachmentVault.shared.requireAllowedImportSource(owner: owner, uri: imageURL)
+    guard let url = URL(string: imageURL), url.isFileURL else {
+      throw HermesNativeActionError.invalidInput("imageURL")
+    }
+    var identifier: String?
+    if let image = UIImage(contentsOfFile: url.path) {
+      try await performChanges {
+        identifier = PHAssetChangeRequest.creationRequestForAsset(from: image).placeholderForCreatedAsset?.localIdentifier
+      }
+    } else {
+      let videoExtensions: Set<String> = ["mov", "mp4", "m4v", "avi", "mkv", "webm"]
+      guard videoExtensions.contains(url.pathExtension.lowercased()) else {
+        throw HermesNativeActionError.invalidInput("imageURL")
+      }
+      try await performChanges {
+        identifier = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)
+          .placeholderForCreatedAsset?.localIdentifier
+      }
+    }
+    return ["imported": true, "id": identifier ?? "", "mediaType": UIImage(contentsOfFile: url.path) == nil ? "video" : "image"]
+  }
+
+  static func export(assetID: String, owner: String, original: Bool) async throws -> [String: Any] {
+    guard authorization() == "authorized" || authorization() == "limited" else {
+      throw HermesNativeActionError.authorizationRequired("photos")
+    }
+    let normalizedID = assetID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [normalizedID], options: nil).firstObject else {
+      throw HermesNativeActionError.invalidInput("assetID")
+    }
+    let account = Data(owner.utf8).map { String(format: "%02x", $0) }.joined().prefix(32)
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("hermes-photo-export-\(account)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let name = PHAssetResource.assetResources(for: asset).first?.originalFilename ?? "photo.jpg"
+    let safeName = name.replacingOccurrences(of: "/", with: "_").prefix(128)
+    let target = root.appendingPathComponent("\(UUID().uuidString.lowercased())-\(safeName)")
+    if asset.mediaType == .video {
+      guard let resource = PHAssetResource.assetResources(for: asset).first else {
+        throw HermesNativeActionError.unavailable("video-asset-data")
+      }
+      let options = PHAssetResourceRequestOptions()
+      options.isNetworkAccessAllowed = false
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        PHAssetResourceManager.default().writeData(for: resource, toFile: target, options: options) { error in
+          if let error { continuation.resume(throwing: error) }
+          else { continuation.resume(returning: ()) }
+        }
+      }
+      let bytes = (try? FileManager.default.attributesOfItem(atPath: target.path)[.size] as? NSNumber)?.intValue ?? 0
+      return ["uri": target.absoluteString, "bytes": bytes, "assetID": normalizedID, "mediaType": "video"]
+    }
+    let options = PHImageRequestOptions()
+    options.isSynchronous = true
+    options.isNetworkAccessAllowed = false
+    options.deliveryMode = original ? .highQualityFormat : .fastFormat
+    var data: Data?
+    PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { imageData, _, _, _ in data = imageData }
+    guard let data else { throw HermesNativeActionError.unavailable("photo-asset-data") }
+    try data.write(to: target, options: .completeFileProtection)
+    return ["uri": target.absoluteString, "bytes": data.count, "assetID": normalizedID, "mediaType": "image"]
+  }
+
+  private static func performChanges(_ changes: @escaping () -> Void) async throws {
+    try await withCheckedThrowingContinuation { continuation in
+      PHPhotoLibrary.shared().performChanges(changes) { success, error in
+        if let error { continuation.resume(throwing: error) }
+        else if success { continuation.resume(returning: ()) }
+        else { continuation.resume(throwing: HermesNativeActionError.unavailable("photos-write")) }
+      }
+    }
+  }
+
   static func recognizeText(
     imageURL: String,
+    owner: String,
     recognitionLevel: String?,
     languages: [String]?
   ) throws -> [String: Any] {
     let normalizedURL = imageURL.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard let url = URL(string: normalizedURL), url.isFileURL,
-          FileManager.default.fileExists(atPath: url.path) else {
-      throw HermesNativeActionError.invalidInput("imageURL")
-    }
-    guard let image = CIImage(contentsOf: url) else {
-      throw HermesNativeActionError.invalidInput("imageURL")
+    let image: CIImage
+    if normalizedURL.lowercased().hasPrefix("ph://") {
+      guard HermesPhotosService.authorization() == "authorized"
+        || HermesPhotosService.authorization() == "limited" else {
+        throw HermesNativeActionError.authorizationRequired("photos")
+      }
+      let assetID = String(normalizedURL.dropFirst("ph://".count))
+      guard !assetID.isEmpty,
+            let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject else {
+        throw HermesNativeActionError.invalidInput("imageURL")
+      }
+      let options = PHImageRequestOptions()
+      options.isSynchronous = true
+      options.isNetworkAccessAllowed = false
+      options.deliveryMode = .highQualityFormat
+      var imageData: Data?
+      PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) {
+        data, _, _, _ in
+        imageData = data
+      }
+      guard let imageData, let loaded = CIImage(data: imageData) else {
+        throw HermesNativeActionError.unavailable("photo-asset-data")
+      }
+      image = loaded
+    } else {
+      guard let url = URL(string: normalizedURL), url.isFileURL,
+            FileManager.default.fileExists(atPath: url.path) else {
+        throw HermesNativeActionError.invalidInput("imageURL")
+      }
+      try HermesAttachmentVault.shared.requireAllowedOCRSource(owner: owner, uri: normalizedURL)
+      guard let loaded = CIImage(contentsOf: url) else {
+        throw HermesNativeActionError.invalidInput("imageURL")
+      }
+      image = loaded
     }
     var recognized: [[String: Any]] = []
     let request = VNRecognizeTextRequest { request, error in
@@ -273,8 +550,42 @@ enum HermesPhotosService {
     return [
       "text": recognized.map { $0["text"] as? String ?? "" }.joined(separator: "\n"),
       "items": recognized,
-      "imageURL": normalizedURL,
+      "source": "owner-scoped-local-image",
     ]
+  }
+}
+
+enum HermesVisionService {
+  static func analyze(image: CIImage) throws -> [String: Any] {
+    var classifications: [[String: Any]] = []
+    let classify = VNClassifyImageRequest { request, _ in
+      classifications = (request.results as? [VNClassificationObservation] ?? []).prefix(20).map {
+        ["identifier": $0.identifier, "confidence": $0.confidence]
+      }
+    }
+    var rectangles: [[String: Any]] = []
+    let rectangle = VNDetectRectanglesRequest { request, _ in
+      rectangles = (request.results as? [VNRectangleObservation] ?? []).prefix(20).map {
+        ["confidence": $0.confidence, "boundingBox": box($0.boundingBox)]
+      }
+    }
+    var faces: [[String: Any]] = []
+    let face = VNDetectFaceRectanglesRequest { request, _ in
+      faces = (request.results as? [VNFaceObservation] ?? []).prefix(50).map {
+        ["confidence": $0.confidence, "boundingBox": box($0.boundingBox)]
+      }
+    }
+    try VNImageRequestHandler(ciImage: image, options: [:]).perform([classify, rectangle, face])
+    return [
+      "classifications": classifications,
+      "rectangles": rectangles,
+      "faces": faces,
+      "model": "Vision-\(VNClassifyImageRequest().revision)",
+    ]
+  }
+
+  private static func box(_ rect: CGRect) -> [String: Any] {
+    ["x": rect.origin.x, "y": rect.origin.y, "width": rect.size.width, "height": rect.size.height]
   }
 }
 
@@ -328,6 +639,47 @@ enum HermesMediaService {
     default: throw HermesNativeActionError.invalidInput("action")
     }
     return snapshot()
+  }
+
+  static func search(query: String, limit: Int) throws -> [[String: Any]] {
+    guard authorization() == "authorized" else { throw HermesNativeActionError.authorizationRequired("media") }
+    let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { throw HermesNativeActionError.invalidInput("query") }
+    return matchingItems(query: normalized, limit: limit).map { item in
+      ["persistentID": NSNumber(value: item.persistentID), "title": item.title ?? "", "artist": item.artist ?? "", "album": item.albumTitle ?? ""]
+    }
+  }
+
+  static func playSearch(query: String, limit: Int) throws -> [String: Any] {
+    guard authorization() == "authorized" else { throw HermesNativeActionError.authorizationRequired("media") }
+    let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty else { throw HermesNativeActionError.invalidInput("query") }
+    let selected = matchingItems(query: normalized, limit: limit)
+    guard !selected.isEmpty else { throw HermesNativeActionError.unavailable("media-search-empty") }
+    let player = MPMusicPlayerController.systemMusicPlayer
+    player.setQueue(with: MPMediaItemCollection(items: selected))
+    player.play()
+    return ["played": true, "matchCount": selected.count, "title": selected.first?.title ?? "", "media": snapshot()]
+  }
+
+  static func setVolume(_ rawValue: Double) throws -> [String: Any] {
+    guard authorization() == "authorized" else { throw HermesNativeActionError.authorizationRequired("media") }
+    guard rawValue.isFinite, rawValue >= 0, rawValue <= 1 else { throw HermesNativeActionError.invalidInput("volume") }
+    let player = MPMusicPlayerController.systemMusicPlayer
+    player.volume = Float(rawValue)
+    return snapshot()
+  }
+
+  private static func matchingItems(query: String, limit: Int) -> [MPMediaItem] {
+    let normalized = query.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+    let cappedLimit = min(max(limit, 1), 100)
+    return (MPMediaQuery.songs().items ?? []).filter { item in
+      [item.title, item.artist, item.albumTitle]
+        .compactMap { $0 }
+        .contains { field in
+          field.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current).contains(normalized)
+        }
+    }.prefix(cappedLimit).map { $0 }
   }
 
   private static func playbackState(_ state: MPMusicPlaybackState) -> String {
@@ -465,6 +817,16 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
   private var scanResults: [[String: Any]] = []
   private var scanTask: Task<Void, Never>?
   private var stateWaiters: [CheckedContinuation<CBCentralManagerState, Never>] = []
+  private var peripherals: [UUID: CBPeripheral] = [:]
+  private var connectContinuation: CheckedContinuation<[String: Any], Error>?
+  private var serviceContinuation: CheckedContinuation<[[String: Any]], Error>?
+  private var readContinuations: [CBUUID: CheckedContinuation<[String: Any], Error>] = [:]
+  private var writeContinuations: [CBUUID: CheckedContinuation<[String: Any], Error>] = [:]
+  private var notifyContinuation: CheckedContinuation<[String: Any], Error>?
+  private var notifySamples: [[String: Any]] = []
+  private var notifyCharacteristic: CBCharacteristic?
+  private var notifyTask: Task<Void, Never>?
+  private var sessionOwner = ""
 
   private override init() {
     super.init()
@@ -521,8 +883,223 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate {
   }
 
   func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+    peripherals[peripheral.identifier] = peripheral
     guard scanResults.first(where: { $0["id"] as? String == peripheral.identifier.uuidString }) == nil else { return }
     scanResults.append(["id": peripheral.identifier.uuidString, "name": peripheral.name ?? "", "rssi": RSSI.intValue])
+  }
+
+  func connect(owner: String, identifier: String) async throws -> [String: Any] {
+    try await ensurePoweredOn()
+    let normalizedOwner = owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard !normalizedOwner.isEmpty else { throw HermesNativeActionError.invalidInput("ownerScope") }
+    guard let uuid = UUID(uuidString: identifier.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+      throw HermesNativeActionError.invalidInput("deviceID")
+    }
+    if sessionOwner != normalizedOwner { disconnect() }
+    sessionOwner = normalizedOwner
+    let peripheral = peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
+    guard let peripheral else { throw HermesNativeActionError.unavailable("bluetooth-device") }
+    peripherals[uuid] = peripheral
+    peripheral.delegate = self
+    if peripheral.state == .connected { return ["connected": true, "id": uuid.uuidString] }
+    return try await withCheckedThrowingContinuation { continuation in
+      connectContinuation = continuation
+      manager.connect(peripheral, options: nil)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak peripheral] in
+        guard let self, let peripheral, self.connectContinuation != nil else { return }
+        self.manager.cancelPeripheralConnection(peripheral)
+        let pending = self.connectContinuation
+        self.connectContinuation = nil
+        pending?.resume(throwing: HermesNativeActionError.unavailable("bluetooth-connect-timeout"))
+      }
+    }
+  }
+
+  func disconnect() {
+    peripherals.values.filter { $0.state == .connected }.forEach { manager.cancelPeripheralConnection($0) }
+    connectContinuation?.resume(throwing: CancellationError())
+    connectContinuation = nil
+    serviceContinuation?.resume(throwing: CancellationError())
+    serviceContinuation = nil
+    readContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
+    readContinuations.removeAll()
+    writeContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
+    writeContinuations.removeAll()
+    notifyTask?.cancel()
+    notifyTask = nil
+    notifyContinuation?.resume(throwing: CancellationError())
+    notifyContinuation = nil
+    notifyCharacteristic = nil
+    sessionOwner = ""
+  }
+
+  func services(owner: String, identifier: String) async throws -> [[String: Any]] {
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+          let peripheral = peripheral(identifier) else {
+      throw HermesNativeActionError.unavailable("bluetooth-session")
+    }
+    if let services = peripheral.services { return serializeServices(services) }
+    return try await withCheckedThrowingContinuation { continuation in
+      serviceContinuation = continuation
+      peripheral.delegate = self
+      peripheral.discoverServices(nil)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+        guard let self, let pending = self.serviceContinuation else { return }
+        self.serviceContinuation = nil
+        pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-services-timeout"))
+      }
+    }
+  }
+
+  func read(owner: String, identifier: String, serviceUUID: String, characteristicUUID: String) async throws -> [String: Any] {
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+          let characteristic = characteristic(identifier, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID) else {
+      throw HermesNativeActionError.unavailable("bluetooth-characteristic")
+    }
+    guard characteristic.properties.contains(.read) else { throw HermesNativeActionError.invalidInput("characteristic") }
+    let uuid = characteristic.uuid
+    return try await withCheckedThrowingContinuation { continuation in
+      readContinuations[uuid] = continuation
+      characteristic.service?.peripheral.readValue(for: characteristic)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+        guard let self, let pending = self.readContinuations.removeValue(forKey: uuid) else { return }
+        pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-read-timeout"))
+      }
+    }
+  }
+
+  func write(owner: String, identifier: String, serviceUUID: String, characteristicUUID: String, data: Data, withResponse: Bool) async throws -> [String: Any] {
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+          let characteristic = characteristic(identifier, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID) else {
+      throw HermesNativeActionError.unavailable("bluetooth-characteristic")
+    }
+    guard characteristic.properties.contains(withResponse ? .write : .writeWithoutResponse) else {
+      throw HermesNativeActionError.invalidInput("characteristic")
+    }
+    if !withResponse {
+      characteristic.service?.peripheral.writeValue(data, for: characteristic, type: .withoutResponse)
+      return ["written": true, "bytes": data.count]
+    }
+    let uuid = characteristic.uuid
+    return try await withCheckedThrowingContinuation { continuation in
+      writeContinuations[uuid] = continuation
+      characteristic.service?.peripheral.writeValue(data, for: characteristic, type: .withResponse)
+      DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+        guard let self, let pending = self.writeContinuations.removeValue(forKey: uuid) else { return }
+        pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-write-timeout"))
+      }
+    }
+  }
+
+  func notify(owner: String, identifier: String, serviceUUID: String, characteristicUUID: String, seconds: Double) async throws -> [String: Any] {
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+          let characteristic = characteristic(identifier, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID) else {
+      throw HermesNativeActionError.unavailable("bluetooth-characteristic")
+    }
+    guard characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) else {
+      throw HermesNativeActionError.invalidInput("characteristic")
+    }
+    notifySamples = []
+    notifyCharacteristic = characteristic
+    characteristic.service?.peripheral.setNotifyValue(true, for: characteristic)
+    return try await withCheckedThrowingContinuation { continuation in
+      notifyContinuation = continuation
+      notifyTask = Task { [weak self] in
+        let nanoseconds = UInt64(max(1, min(seconds, 60)) * 1_000_000_000)
+        try? await Task.sleep(nanoseconds: nanoseconds)
+        guard !Task.isCancelled else { return }
+        await MainActor.run { self?.finishNotify() }
+      }
+    }
+  }
+
+  func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+    connectContinuation?.resume(returning: ["connected": true, "id": peripheral.identifier.uuidString])
+    connectContinuation = nil
+    peripheral.delegate = self
+  }
+
+  func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+    let continuation = connectContinuation
+    connectContinuation = nil
+    continuation?.resume(throwing: error ?? HermesNativeActionError.unavailable("bluetooth-connect"))
+  }
+
+  func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+    let continuation = connectContinuation
+    connectContinuation = nil
+    continuation?.resume(throwing: error ?? HermesNativeActionError.unavailable("bluetooth-disconnected"))
+  }
+
+  func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+    guard let continuation = serviceContinuation else { return }
+    serviceContinuation = nil
+    if let error { continuation.resume(throwing: error) }
+    else { continuation.resume(returning: serializeServices(peripheral.services ?? [])) }
+  }
+
+  func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {}
+
+  func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+    if let continuation = readContinuations.removeValue(forKey: characteristic.uuid) {
+      if let error { continuation.resume(throwing: error) }
+      else { continuation.resume(returning: ["uuid": characteristic.uuid.uuidString, "data": characteristic.value?.base64EncodedString() ?? ""]) }
+    }
+    if notifyCharacteristic?.uuid == characteristic.uuid, let value = characteristic.value {
+      notifySamples.append(["uuid": characteristic.uuid.uuidString, "data": value.base64EncodedString()])
+    }
+  }
+
+  func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+    guard let continuation = writeContinuations.removeValue(forKey: characteristic.uuid) else { return }
+    if let error { continuation.resume(throwing: error) }
+    else { continuation.resume(returning: ["written": true, "uuid": characteristic.uuid.uuidString]) }
+  }
+
+  private func finishNotify() {
+    notifyTask = nil
+    if let characteristic = notifyCharacteristic {
+      characteristic.service?.peripheral.setNotifyValue(false, for: characteristic)
+    }
+    let continuation = notifyContinuation
+    notifyContinuation = nil
+    notifyCharacteristic = nil
+    continuation?.resume(returning: ["samples": notifySamples])
+  }
+
+  private func ensurePoweredOn() async throws {
+    let current = manager.state
+    if current == .poweredOn { return }
+    let resolved = current == .unknown || current == .resetting
+      ? await withCheckedContinuation { continuation in
+        stateWaiters.append(continuation)
+        let state = manager.state
+        if state != .unknown && state != .resetting {
+          let waiters = stateWaiters
+          stateWaiters.removeAll()
+          waiters.forEach { $0.resume(returning: state) }
+        }
+      }
+      : current
+    guard resolved == .poweredOn else { throw HermesNativeActionError.unavailable("bluetooth") }
+  }
+
+  private func peripheral(_ identifier: String) -> CBPeripheral? {
+    guard let uuid = UUID(uuidString: identifier.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+    return peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
+  }
+
+  private func characteristic(_ identifier: String, serviceUUID: String, characteristicUUID: String) -> CBCharacteristic? {
+    guard let peripheral = peripheral(identifier) else { return nil }
+    let serviceUUID = CBUUID(string: serviceUUID)
+    let characteristicUUID = CBUUID(string: characteristicUUID)
+    return peripheral.services?.first(where: { $0.uuid == serviceUUID })?.characteristics?.first(where: { $0.uuid == characteristicUUID })
+  }
+
+  private func serializeServices(_ services: [CBService]) -> [[String: Any]] {
+    services.map { service in
+      ["uuid": service.uuid.uuidString, "primary": service.isPrimary, "characteristics": service.characteristics?.map { ["uuid": $0.uuid.uuidString, "properties": $0.properties.rawValue] } ?? []]
+    }
   }
 
   private func finishScan() {
@@ -589,6 +1166,45 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
     }
   }
 
+  func search(query: String?, limit: Int) -> [[String: Any]] {
+    let normalized = query?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+    let cappedLimit = min(max(limit, 1), 100)
+    var result: [[String: Any]] = []
+    for home in manager.homes {
+      for accessory in home.accessories {
+        let haystack = [accessory.name, accessory.room?.name ?? "", accessory.services.map(\.name).joined(separator: " ")].joined(separator: " ").lowercased()
+        guard normalized.isEmpty || haystack.contains(normalized) else { continue }
+        result.append(["homeID": home.uniqueIdentifier.uuidString, "id": accessory.uniqueIdentifier.uuidString, "name": accessory.name, "room": accessory.room?.name ?? "", "reachable": accessory.isReachable])
+        if result.count >= cappedLimit { return result }
+      }
+    }
+    return result
+  }
+
+  func scenes(limit: Int) -> [[String: Any]] {
+    let cappedLimit = min(max(limit, 1), 100)
+    return manager.homes.flatMap { home in
+      home.actionSets.prefix(cappedLimit).map { actionSet in
+        ["homeID": home.uniqueIdentifier.uuidString, "id": actionSet.uniqueIdentifier.uuidString, "name": actionSet.name, "type": String(describing: actionSet.actionSetType)]
+      }
+    }.prefix(cappedLimit).map { $0 }
+  }
+
+  func triggerScene(id: String) async throws -> [String: Any] {
+    let normalized = id.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let home = manager.homes.first(where: { $0.actionSets.contains(where: { $0.uniqueIdentifier.uuidString == normalized }) }),
+          let actionSet = home.actionSets.first(where: { $0.uniqueIdentifier.uuidString == normalized }) else {
+      throw HermesNativeActionError.invalidInput("sceneID")
+    }
+    try await withCheckedThrowingContinuation { continuation in
+      home.executeActionSet(actionSet) { error in
+        if let error { continuation.resume(throwing: error) }
+        else { continuation.resume(returning: ()) }
+      }
+    }
+    return ["triggered": true, "sceneID": normalized]
+  }
+
   func set(accessoryID: String, characteristicID: String, value: Any) async throws -> [String: Any] {
     guard let characteristic = manager.homes
       .flatMap({ $0.accessories })
@@ -598,11 +1214,26 @@ final class HermesHomeKitService: NSObject, HMHomeManagerDelegate {
       .first(where: { $0.uniqueIdentifier.uuidString == characteristicID }) else {
       throw HermesNativeActionError.invalidInput("HomeKit characteristic")
     }
+    guard characteristic.properties.contains(.write) else {
+      throw HermesNativeActionError.invalidInput("read-only HomeKit characteristic")
+    }
+    let format = characteristic.metadata?.format.lowercased() ?? ""
     let writeValue: Any
-    if let value = value as? Bool { writeValue = value }
-    else if let value = value as? NSNumber { writeValue = value }
-    else if let value = value as? String { writeValue = value }
-    else { throw HermesNativeActionError.invalidInput("value") }
+    if format == HMCharacteristicMetadataFormatBool.lowercased() {
+      if let value = value as? Bool { writeValue = value }
+      else if let value = value as? String, let parsed = Bool(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) { writeValue = parsed }
+      else { throw HermesNativeActionError.invalidInput("value") }
+    } else if format.contains("float") || format.contains("uint") || format.contains("int") || format.contains("double") {
+      if let value = value as? NSNumber { writeValue = value }
+      else if let value = value as? String, let parsed = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)), parsed.isFinite { writeValue = NSNumber(value: parsed) }
+      else { throw HermesNativeActionError.invalidInput("value") }
+    } else if let value = value as? String {
+      writeValue = value
+    } else if let value = value as? NSNumber {
+      writeValue = value
+    } else {
+      throw HermesNativeActionError.invalidInput("value")
+    }
     try await withCheckedThrowingContinuation { continuation in
       characteristic.writeValue(writeValue) { error in
         if let error { continuation.resume(throwing: error) }

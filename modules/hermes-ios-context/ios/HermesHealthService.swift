@@ -363,6 +363,7 @@ final class HermesHealthService {
   }
 
   func writeQuantitySample(
+    commandID: String,
     identifier: String,
     value: Double,
     unit: String,
@@ -371,6 +372,10 @@ final class HermesHealthService {
   ) async throws -> [String: Any] {
     guard HKHealthStore.isHealthDataAvailable() else {
       throw HermesNativeActionError.unavailable("healthkit")
+    }
+    let normalizedCommandID = commandID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedCommandID.isEmpty, normalizedCommandID.count <= 256 else {
+      throw HermesNativeActionError.invalidInput("commandID")
     }
     guard value.isFinite, end > start,
           end.timeIntervalSince(start) <= 31 * 24 * 60 * 60 else {
@@ -383,11 +388,24 @@ final class HermesHealthService {
     guard store.authorizationStatus(for: type) == .sharingAuthorized else {
       throw HermesNativeActionError.authorizationRequired("health-write")
     }
+    if await hasExistingCommandSample(type: type, commandID: normalizedCommandID) {
+      return [
+        "commandID": normalizedCommandID,
+        "identifier": identifier,
+        "value": value,
+        "unit": unit,
+        "start": start.timeIntervalSince1970 * 1000,
+        "end": end.timeIntervalSince1970 * 1000,
+        "saved": true,
+        "deduplicated": true,
+      ]
+    }
     let sample = HKQuantitySample(
       type: type,
       quantity: HKQuantity(unit: hkUnit, doubleValue: value),
       start: start,
-      end: end
+      end: end,
+      metadata: [HKMetadataKeyExternalUUID: normalizedCommandID]
     )
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       store.save(sample) { success, error in
@@ -397,6 +415,7 @@ final class HermesHealthService {
       }
     }
     return [
+      "commandID": normalizedCommandID,
       "identifier": identifier,
       "value": value,
       "unit": unit,
@@ -404,6 +423,108 @@ final class HermesHealthService {
       "end": end.timeIntervalSince1970 * 1000,
       "saved": true,
     ]
+  }
+
+  func writeQuantitySamples(commandID: String, samples: [[String: Any]]) async throws -> [String: Any] {
+    guard HKHealthStore.isHealthDataAvailable() else { throw HermesNativeActionError.unavailable("healthkit") }
+    let normalizedCommandID = commandID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedCommandID.isEmpty, normalizedCommandID.count <= 256,
+          !samples.isEmpty, samples.count <= 100 else { throw HermesNativeActionError.invalidInput("samples") }
+    var pending: [HKQuantitySample] = []
+    var deduplicated = 0
+    for (index, input) in samples.enumerated() {
+      guard let identifier = input["identifier"] as? String,
+            let value = (input["value"] as? NSNumber)?.doubleValue,
+            let unit = input["unit"] as? String,
+            let start = epochDate(input["start"]),
+            let end = epochDate(input["end"]),
+            value.isFinite, end > start,
+            end.timeIntervalSince(start) <= 31 * 24 * 60 * 60,
+            let type = quantityType(identifier: identifier),
+            let hkUnit = quantityUnit(unit),
+            store.authorizationStatus(for: type) == .sharingAuthorized else {
+        throw HermesNativeActionError.invalidInput("health sample")
+      }
+      let sampleCommandID = "\(normalizedCommandID):\(index)"
+      if await hasExistingCommandSample(type: type, commandID: sampleCommandID) {
+        deduplicated += 1
+        continue
+      }
+      pending.append(HKQuantitySample(
+        type: type,
+        quantity: HKQuantity(unit: hkUnit, doubleValue: value),
+        start: start,
+        end: end,
+        metadata: [HKMetadataKeyExternalUUID: sampleCommandID]
+      ))
+    }
+    if !pending.isEmpty {
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        store.save(pending) { success, error in
+          if let error { continuation.resume(throwing: error) }
+          else if success { continuation.resume(returning: ()) }
+          else { continuation.resume(throwing: HermesNativeActionError.unavailable("healthkit-save")) }
+        }
+      }
+    }
+    return ["commandID": normalizedCommandID, "saved": pending.count, "deduplicated": deduplicated]
+  }
+
+  func deleteQuantitySamples(commandID: String, identifier: String) async throws -> [String: Any] {
+    guard HKHealthStore.isHealthDataAvailable(),
+          let type = quantityType(identifier: identifier),
+          store.authorizationStatus(for: type) == .sharingAuthorized else {
+      throw HermesNativeActionError.authorizationRequired("health-write")
+    }
+    let normalizedCommandID = commandID.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalizedCommandID.isEmpty, normalizedCommandID.count <= 256 else {
+      throw HermesNativeActionError.invalidInput("commandID")
+    }
+    let samples: [HKQuantitySample] = try await withCheckedThrowingContinuation { continuation in
+      let query = HKSampleQuery(sampleType: type, predicate: nil, limit: 100, sortDescriptors: nil) { _, objects, error in
+        if let error { continuation.resume(throwing: error); return }
+        let matching = (objects as? [HKQuantitySample] ?? []).filter { sample in
+          guard let value = sample.metadata?[HKMetadataKeyExternalUUID] as? String else { return false }
+          return value == normalizedCommandID || value.hasPrefix("\(normalizedCommandID):")
+        }
+        continuation.resume(returning: matching)
+      }
+      store.execute(query)
+    }
+    guard !samples.isEmpty else { return ["commandID": normalizedCommandID, "deleted": 0] }
+    try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+      store.delete(samples) { success, error in
+        if let error { continuation.resume(throwing: error) }
+        else if success { continuation.resume(returning: ()) }
+        else { continuation.resume(throwing: HermesNativeActionError.unavailable("healthkit-delete")) }
+      }
+    }
+    return ["commandID": normalizedCommandID, "deleted": samples.count]
+  }
+
+  private func hasExistingCommandSample(type: HKQuantityType, commandID: String) async -> Bool {
+    await withCheckedContinuation { continuation in
+      let predicate = HKQuery.predicateForObjects(
+        withMetadataKey: HKMetadataKeyExternalUUID,
+        allowedValues: [commandID]
+      )
+      let query = HKSampleQuery(
+        sampleType: type,
+        predicate: predicate,
+        limit: 1,
+        sortDescriptors: nil
+      ) { _, samples, _ in
+        continuation.resume(returning: !(samples ?? []).isEmpty)
+      }
+      self.store.execute(query)
+    }
+  }
+
+  private func epochDate(_ value: Any?) -> Date? {
+    guard let number = value as? NSNumber else { return nil }
+    let raw = number.doubleValue
+    guard raw.isFinite, raw > 0 else { return nil }
+    return Date(timeIntervalSince1970: raw > 10_000_000_000 ? raw / 1000 : raw)
   }
 
   private func quantityType(identifier: String) -> HKQuantityType? {

@@ -12,6 +12,8 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   public func subscriberDidRegister() {
     Self.purgePlaintextPreviewCache()
+    Self.configureQuickActions()
+    HermesDiagnosticsService.shared.start()
     HermesBackgroundService.shared.register()
     resumePowerMonitoringIfEligible()
     resumeLocationIfEligible()
@@ -20,6 +22,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   public func applicationDidBecomeActive(_ application: UIApplication) {
     Self.recordScreenState("active")
+    Self.configureQuickActions()
     HermesScreenTimeService.shared.consumeExtensionEvents()
     HermesBackgroundService.shared.schedule()
     resumePowerMonitoringIfEligible()
@@ -29,6 +32,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   public func applicationDidEnterBackground(_ application: UIApplication) {
     Self.recordScreenState("background")
+    HermesSessionLockService.shared.applicationDidEnterBackground()
     HermesScreenTimeService.shared.consumeExtensionEvents()
     HermesBackgroundService.shared.schedule()
     resumeLocationIfEligible()
@@ -36,12 +40,32 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
 
   public func applicationWillResignActive(_ application: UIApplication) {
     Self.recordScreenState("inactive")
+    HermesSessionLockService.shared.applicationDidEnterBackground()
   }
 
   public func applicationWillTerminate(_ application: UIApplication) {
     Self.recordScreenState("terminated")
     Self.purgePlaintextPreviewCache()
     HermesDeviceService.shared.stopMonitoringPowerChanges()
+  }
+
+  public func application(
+    _ application: UIApplication,
+    performActionFor shortcutItem: UIApplicationShortcutItem,
+    completionHandler: @escaping (Bool) -> Void
+  ) {
+    let accepted: Bool
+    switch shortcutItem.type {
+    case "app.hermes.quick.new-task":
+      accepted = HermesAgentTriggerStore.shared.enqueue(kind: "quick-task", content: "Start a new Hermes task") != nil
+    case "app.hermes.quick.voice-task":
+      accepted = HermesAgentTriggerStore.shared.enqueue(kind: "voice-start", content: "Start a voice task") != nil
+    case "app.hermes.quick.camera-task":
+      accepted = HermesAgentTriggerStore.shared.enqueue(kind: "camera-task", content: "Take a photo and send it to Hermes for analysis") != nil
+    default:
+      accepted = false
+    }
+    completionHandler(accepted)
   }
 
   public func application(
@@ -188,6 +212,32 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
       isDirectory: true
     )
     try? FileManager.default.removeItem(at: previewDirectory)
+  }
+
+  private static func configureQuickActions() {
+    UIApplication.shared.shortcutItems = [
+      UIApplicationShortcutItem(
+        type: "app.hermes.quick.new-task",
+        localizedTitle: "New Hermes task",
+        localizedSubtitle: "Start a fresh agent task",
+        icon: UIApplicationShortcutIcon(systemImageName: "plus.message"),
+        userInfo: nil
+      ),
+      UIApplicationShortcutItem(
+        type: "app.hermes.quick.voice-task",
+        localizedTitle: "Voice task",
+        localizedSubtitle: "Record and send to Hermes",
+        icon: UIApplicationShortcutIcon(systemImageName: "mic.fill"),
+        userInfo: nil
+      ),
+      UIApplicationShortcutItem(
+        type: "app.hermes.quick.camera-task",
+        localizedTitle: "Camera task",
+        localizedSubtitle: "Capture and analyze a photo",
+        icon: UIApplicationShortcutIcon(systemImageName: "camera.fill"),
+        userInfo: nil
+      ),
+    ]
   }
 
   private static func accountDeletionTombstone(

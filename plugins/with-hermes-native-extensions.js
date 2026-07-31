@@ -36,6 +36,15 @@ const TARGETS = [
     platform: 'ios',
   },
   {
+    name: 'HermesFileProvider',
+    type: 'app_extension',
+    bundleIdentifier: 'app.sunstone1029.fig1171.file-provider',
+    source: 'HermesFileProvider.swift',
+    infoPlist: 'Info.plist',
+    entitlements: 'HermesFileProvider.entitlements',
+    platform: 'ios',
+  },
+  {
     name: 'HermesWatchApp',
     type: 'watch2_app',
     bundleIdentifier: 'app.sunstone1029.fig1171.watchapp',
@@ -266,6 +275,7 @@ module.exports = function withHermesNativeExtensions(config) {
       'HermesDeviceActivityMonitor',
       'HermesDeviceActivityReport',
       'HermesShareExtension',
+      'HermesFileProvider',
       'HermesWatchApp',
     ]) {
       ensureTargetDependency(project, appTarget.uuid, targets.get(name).uuid);

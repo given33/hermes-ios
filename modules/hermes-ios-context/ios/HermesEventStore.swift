@@ -47,6 +47,43 @@ final class HermesEventStore {
     }
   }
 
+  func calendars() -> [[String: Any]] {
+    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return [] }
+    return store.calendars(for: .event).map {
+      ["id": $0.calendarIdentifier, "title": $0.title, "allowsModify": $0.allowsContentModifications]
+    }
+  }
+
+  func freeBusy(start: Date, end: Date) -> [[String: Any]] {
+    guard end > start else { return [] }
+    calendarEvents(start: start, end: end).map { event in
+      ["start": event["start"] ?? 0, "end": event["end"] ?? 0, "title": event["title"] ?? "", "busy": true]
+    }
+  }
+
+  func updateCalendarEvent(id: String, title: String?, start: Date?, end: Date?, location: String?, notes: String?) throws -> [String: Any] {
+    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { throw HermesEventError.calendarPermissionRequired }
+    guard let event = store.event(withIdentifier: id) else { throw HermesEventError.itemNotFound }
+    if let title {
+      guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw HermesEventError.invalidTitle }
+      event.title = title
+    }
+    if let start { event.startDate = start }
+    if let end { event.endDate = end }
+    if let location { event.location = location }
+    if let notes { event.notes = notes }
+    guard event.endDate > event.startDate else { throw HermesEventError.invalidDateRange }
+    try store.save(event, span: .thisEvent, commit: true)
+    return ["updated": true, "id": event.eventIdentifier ?? event.calendarItemIdentifier]
+  }
+
+  func deleteCalendarEvent(id: String) throws -> [String: Any] {
+    guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { throw HermesEventError.calendarPermissionRequired }
+    guard let event = store.event(withIdentifier: id) else { throw HermesEventError.itemNotFound }
+    try store.remove(event, span: .thisEvent, commit: true)
+    return ["deleted": true, "id": id]
+  }
+
   func createCalendarEvent(_ input: HermesCalendarEventInput) throws -> String {
     try createCalendarEvent(input, commandURL: nil)
   }
@@ -80,6 +117,8 @@ final class HermesEventStore {
     }
     let event = EKEvent(eventStore: store)
     event.calendar = store.defaultCalendarForNewEvents
+    guard !input.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+          input.end > input.start else { throw HermesEventError.invalidDateRange }
     event.title = input.title
     event.startDate = Date(timeIntervalSince1970: input.start / 1000)
     event.endDate = Date(timeIntervalSince1970: input.end / 1000)
@@ -126,6 +165,31 @@ final class HermesEventStore {
     }
   }
 
+  func updateReminder(id: String, title: String?, due: Date?, notes: String?, completed: Bool?) async throws -> [String: Any] {
+    guard EKEventStore.authorizationStatus(for: .reminder) == .fullAccess else { throw HermesEventError.reminderPermissionRequired }
+    guard let reminder = await reminder(withID: id) else { throw HermesEventError.itemNotFound }
+    if let title {
+      guard !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw HermesEventError.invalidTitle
+      }
+      reminder.title = title
+    }
+    if let notes { reminder.notes = notes }
+    if let due {
+      reminder.dueDateComponents = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second, .timeZone], from: due)
+    }
+    if let completed { reminder.isCompleted = completed }
+    try store.save(reminder, commit: true)
+    return ["updated": true, "id": id, "completed": reminder.isCompleted]
+  }
+
+  func deleteReminder(id: String) async throws -> [String: Any] {
+    guard EKEventStore.authorizationStatus(for: .reminder) == .fullAccess else { throw HermesEventError.reminderPermissionRequired }
+    guard let reminder = await reminder(withID: id) else { throw HermesEventError.itemNotFound }
+    try store.remove(reminder, commit: true)
+    return ["deleted": true, "id": id]
+  }
+
   func createReminder(_ input: HermesReminderInput) throws -> String {
     try createReminder(input, commandURL: nil)
   }
@@ -152,6 +216,9 @@ final class HermesEventStore {
     }
     let reminder = EKReminder(eventStore: store)
     reminder.calendar = store.defaultCalendarForNewReminders()
+    guard !input.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw HermesEventError.invalidTitle
+    }
     reminder.title = input.title
     reminder.notes = input.notes
     reminder.url = commandURL
@@ -170,6 +237,15 @@ final class HermesEventStore {
     return await withCheckedContinuation { continuation in
       store.fetchReminders(matching: predicate) { reminders in
         continuation.resume(returning: reminders?.first(where: { $0.url == commandURL }))
+      }
+    }
+  }
+
+  private func reminder(withID id: String) async -> EKReminder? {
+    let predicate = store.predicateForReminders(in: nil)
+    return await withCheckedContinuation { continuation in
+      store.fetchReminders(matching: predicate) { reminders in
+        continuation.resume(returning: reminders?.first(where: { $0.calendarItemIdentifier == id }))
       }
     }
   }
@@ -205,12 +281,18 @@ private enum HermesEventError: LocalizedError {
   case calendarPermissionRequired
   case commandIDRequired
   case reminderPermissionRequired
+  case itemNotFound
+  case invalidDateRange
+  case invalidTitle
 
   var errorDescription: String? {
     switch self {
     case .calendarPermissionRequired: return "Calendar full access is required."
     case .commandIDRequired: return "A device command id is required."
     case .reminderPermissionRequired: return "Reminders full access is required."
+    case .itemNotFound: return "The requested calendar or reminder item was not found."
+    case .invalidDateRange: return "The event end must be after its start."
+    case .invalidTitle: return "A calendar or reminder title is required."
     }
   }
 }

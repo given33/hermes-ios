@@ -12,6 +12,6 @@ Pod::Spec.new do |s|
 
   s.dependency 'ExpoModulesCore'
   s.dependency 'AMap3DMap-NO-IDFA', '11.2.000'
-  s.frameworks = 'AVFoundation', 'AppIntents', 'ActivityKit', 'BackgroundTasks', 'Contacts', 'CoreBluetooth', 'CoreLocation', 'CoreMotion', 'CoreNFC', 'CoreImage', 'CryptoKit', 'DeviceActivity', 'EventKit', 'FamilyControls', 'HealthKit', 'HomeKit', 'MapKit', 'MediaPlayer', 'Photos', 'Security', 'Speech', 'UIKit', 'UserNotifications', 'Vision', 'WatchConnectivity'
+  s.frameworks = 'AVFoundation', 'AppIntents', 'ActivityKit', 'BackgroundTasks', 'Contacts', 'CoreBluetooth', 'CoreLocation', 'CoreMotion', 'CoreNFC', 'CoreImage', 'CryptoKit', 'DeviceActivity', 'EventKit', 'FamilyControls', 'HealthKit', 'HomeKit', 'MapKit', 'MediaPlayer', 'MetricKit', 'Photos', 'Security', 'Speech', 'UIKit', 'UserNotifications', 'Vision', 'WatchConnectivity'
   s.source_files = '**/*.{h,m,mm,swift}'
 end

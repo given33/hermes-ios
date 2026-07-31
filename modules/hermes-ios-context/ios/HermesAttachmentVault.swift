@@ -261,6 +261,41 @@ final class HermesAttachmentVault {
     encryptedOutboxRoot.absoluteString
   }
 
+  func requireAllowedOCRSource(owner: String, uri: String) throws {
+    let normalizedOwner = try normalizeOwner(owner)
+    let source = try fileURL(uri)
+    let ownerRoot = plaintextCacheRoot.appendingPathComponent(
+      try keyAccount(owner: normalizedOwner),
+      isDirectory: true
+    )
+    try requireDescendant(source, of: ownerRoot)
+    var values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard values.isRegularFile == true, values.isSymbolicLink != true else {
+      throw HermesAttachmentVaultError.invalidPath
+    }
+  }
+
+  func requireAllowedImportSource(owner: String, uri: String) throws {
+    let normalizedOwner = try normalizeOwner(owner)
+    let source = try fileURL(uri)
+    let ownerRoot = plaintextCacheRoot.appendingPathComponent(
+      try keyAccount(owner: normalizedOwner),
+      isDirectory: true
+    )
+    let allowedRoots = [
+      ownerRoot,
+      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0],
+      URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
+    ]
+    guard allowedRoots.contains(where: { isDescendant(source, of: $0) }) else {
+      throw HermesAttachmentVaultError.invalidPath
+    }
+    let values = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+    guard values.isRegularFile == true, values.isSymbolicLink != true else {
+      throw HermesAttachmentVaultError.invalidPath
+    }
+  }
+
   // Attachment sources may only come from locations the app itself stages:
   // picker caches, the temporary directory, and outbox roots holding files
   // from builds that predate encryption. Encrypt-and-return on arbitrary
@@ -271,8 +306,9 @@ final class HermesAttachmentVault {
       URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
       encryptedOutboxRoot,
       legacyEncryptedOutboxRoot,
+      HermesAgentTriggerStore.shareAttachmentRoot,
     ]
-    guard allowedRoots.contains(where: { isDescendant(source, of: $0) }) else {
+    guard allowedRoots.compactMap({ $0 }).contains(where: { isDescendant(source, of: $0) }) else {
       throw HermesAttachmentVaultError.invalidPath
     }
   }

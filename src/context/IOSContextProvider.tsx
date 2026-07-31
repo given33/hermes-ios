@@ -10,7 +10,7 @@ import {
   type PropsWithChildren,
   type ReactNode,
 } from 'react';
-import { AppState, Platform, StyleSheet } from 'react-native';
+import { AppState, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import NetInfo from '@react-native-community/netinfo';
 import * as ImagePicker from 'expo-image-picker';
 
@@ -407,7 +407,7 @@ export function IOSContextProvider({
       if (agentTriggersRunning || !current()) return;
       agentTriggersRunning = true;
       try {
-        await drainPendingAgentTriggers(runCurrent, cloud, deviceId);
+        await drainPendingAgentTriggers(runCurrent, cloud, ownerScope, deviceId);
       } finally {
         agentTriggersRunning = false;
       }
@@ -568,20 +568,71 @@ export function IOSContextProvider({
 
   return (
     <IOSPermissionContext.Provider value={permissionContext}>
-      {children}
-      {Platform.OS === 'ios'
-        && hasNativeIOSContext
-        && hasNativeScreenTimeReportView
-        && canCollectIOSPermission(permissionSnapshot, 'screenTime') ? (
-        <OptionalNativeViewBoundary>
-          <HermesScreenTimeReportView
-            pointerEvents="none"
-            refreshToken={screenTimeReportRefresh}
-            style={styles.screenTimeReportTrigger}
-          />
-        </OptionalNativeViewBoundary>
-      ) : null}
+      <SessionLockGate ownerScope={ownerScope}>
+        {children}
+        {Platform.OS === 'ios'
+          && hasNativeIOSContext
+          && hasNativeScreenTimeReportView
+          && canCollectIOSPermission(permissionSnapshot, 'screenTime') ? (
+          <OptionalNativeViewBoundary>
+            <HermesScreenTimeReportView
+              pointerEvents="none"
+              refreshToken={screenTimeReportRefresh}
+              style={styles.screenTimeReportTrigger}
+            />
+          </OptionalNativeViewBoundary>
+        ) : null}
+      </SessionLockGate>
     </IOSPermissionContext.Provider>
+  );
+}
+
+function SessionLockGate({ ownerScope, children }: PropsWithChildren<{ ownerScope: string }>) {
+  const [locked, setLocked] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const refresh = useCallback(async () => {
+    if (Platform.OS !== 'ios' || !hasNativeIOSContext) return;
+    try {
+      await HermesIOSContext.configureSessionLock(ownerScope, true, 5);
+      const status = await HermesIOSContext.getSessionLockStatus(ownerScope);
+      setLocked(status.locked === true);
+    } catch {
+      // A missing optional native bridge must not strand the authenticated root.
+      setLocked(false);
+    }
+  }, [ownerScope]);
+
+  useEffect(() => {
+    void refresh();
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refresh();
+      else if (Platform.OS === 'ios' && hasNativeIOSContext) setLocked(true);
+    });
+    return () => subscription.remove();
+  }, [refresh]);
+
+  const unlock = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await HermesIOSContext.unlockSession(ownerScope);
+      setLocked(false);
+    } catch {
+      setLocked(true);
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, ownerScope]);
+
+  if (!locked) return <>{children}</>;
+  return (
+    <View accessibilityRole="alert" style={styles.sessionLockOverlay}>
+      <Text style={styles.sessionLockTitle}>Hermes is locked</Text>
+      <Text style={styles.sessionLockBody}>Unlock with Face ID or your device passcode to continue.</Text>
+      <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void unlock(); }} style={styles.sessionLockButton}>
+        <Text style={styles.sessionLockButtonText}>{busy ? 'Unlocking...' : 'Unlock Hermes'}</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -608,6 +659,37 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
     width: 2,
+  },
+  sessionLockOverlay: {
+    alignItems: 'center',
+    backgroundColor: '#0e0e0e',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 32,
+  },
+  sessionLockTitle: {
+    color: '#ffffff',
+    fontSize: 22,
+    fontWeight: '600',
+    marginBottom: 12,
+  },
+  sessionLockBody: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 15,
+    lineHeight: 22,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  sessionLockButton: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  sessionLockButtonText: {
+    color: '#0e0e0e',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });
 
@@ -878,6 +960,31 @@ async function executeDeviceCommand(
         end,
       });
     }
+    case 'ios-health-write:batch': {
+      if (!Array.isArray(payload.samples) || payload.samples.length < 1 || payload.samples.length > 100) {
+        throw new Error('health samples are invalid');
+      }
+      const samples = payload.samples.map((sample) => {
+        if (!sample || typeof sample !== 'object') throw new Error('health sample is invalid');
+        const item = sample as Record<string, unknown>;
+        const start = requiredTimestamp(item.start);
+        const end = requiredTimestamp(item.end);
+        if (end <= start || end - start > 31 * 24 * 60 * 60_000) throw new Error('health sample range is invalid');
+        return {
+          identifier: requiredString(item.identifier, 'identifier'),
+          value: requiredNumber(item.value, 'value'),
+          unit: requiredString(item.unit, 'unit'),
+          start,
+          end,
+        };
+      });
+      return HermesIOSContext.writeHealthSamplesForCommand(command.id, samples);
+    }
+    case 'ios-health-write:delete':
+      return HermesIOSContext.deleteHealthSamplesForCommand(
+        command.id,
+        requiredString(payload.identifier, 'identifier'),
+      );
     case 'ios-clipboard:read':
     case 'ios-clipboard:get': {
       return HermesIOSContext.readClipboardForCommand(command.id);
@@ -917,10 +1024,38 @@ async function executeDeviceCommand(
       const start = requiredTimestamp(payload.start, Date.now() - 24 * 60 * 60_000);
       return { events: await HermesIOSContext.listCalendarEvents(start, end) };
     }
+    case 'ios-calendar:calendars':
+      return { calendars: await HermesIOSContext.listCalendars() };
+    case 'ios-calendar:freebusy': {
+      const end = requiredTimestamp(payload.end, Date.now() + 7 * 24 * 60 * 60_000);
+      const start = requiredTimestamp(payload.start, Date.now() - 24 * 60 * 60_000);
+      return { busy: await HermesIOSContext.calendarFreeBusy(start, end) };
+    }
+    case 'ios-calendar:update':
+      return HermesIOSContext.updateCalendarEventForCommand(command.id, requiredString(payload.eventID ?? payload.event_id, 'eventID'), {
+        ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
+        ...(payload.start !== undefined ? { start: requiredTimestamp(payload.start) } : {}),
+        ...(payload.end !== undefined ? { end: requiredTimestamp(payload.end) } : {}),
+        ...(typeof payload.location === 'string' ? { location: payload.location } : {}),
+        ...(typeof payload.notes === 'string' ? { notes: payload.notes } : {}),
+      });
+    case 'ios-calendar:delete':
+      return HermesIOSContext.deleteCalendarEventForCommand(command.id, requiredString(payload.eventID ?? payload.event_id, 'eventID'));
     case 'ios-reminders:list': {
       const completed = typeof payload.completed === 'boolean' ? payload.completed : false;
       return { reminders: await HermesIOSContext.listReminders(completed) };
     }
+    case 'ios-reminders:update':
+      return HermesIOSContext.updateReminderForCommand(command.id, requiredString(payload.reminderID ?? payload.reminder_id, 'reminderID'), {
+        ...(typeof payload.title === 'string' ? { title: payload.title } : {}),
+        ...(payload.due !== undefined ? { due: requiredTimestamp(payload.due) } : {}),
+        ...(typeof payload.notes === 'string' ? { notes: payload.notes } : {}),
+        ...(typeof payload.completed === 'boolean' ? { completed: payload.completed } : {}),
+      });
+    case 'ios-reminders:complete':
+      return HermesIOSContext.updateReminderForCommand(command.id, requiredString(payload.reminderID ?? payload.reminder_id, 'reminderID'), { completed: true });
+    case 'ios-reminders:delete':
+      return HermesIOSContext.deleteReminderForCommand(command.id, requiredString(payload.reminderID ?? payload.reminder_id, 'reminderID'));
     case 'ios-contacts:list':
     case 'ios-contacts:search': {
       const authorization = await HermesIOSContext.getContactsAuthorization();
@@ -960,13 +1095,49 @@ async function executeDeviceCommand(
           ...(typeof payload.query === 'string' ? { query: payload.query } : {}),
           ...(typeof payload.start === 'number' ? { start: payload.start } : {}),
           ...(typeof payload.end === 'number' ? { end: payload.end } : {}),
+          ...(payload.mediaType === 'image' || payload.mediaType === 'video' ? { mediaType: payload.mediaType } : {}),
           limit: typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50,
         }),
       };
     }
+    case 'ios-photos:albums': {
+      const authorization = await HermesIOSContext.getPhotosAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') throw new Error('photos permission is not authorized');
+      return { albums: await HermesIOSContext.listPhotoAlbums(typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50) };
+    }
+    case 'ios-photos:near': {
+      const authorization = await HermesIOSContext.getPhotosAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') throw new Error('photos permission is not authorized');
+      return { photos: await HermesIOSContext.searchNearbyPhotos(requiredNumber(payload.latitude, 'latitude'), requiredNumber(payload.longitude, 'longitude'), typeof payload.radiusMeters === 'number' ? payload.radiusMeters : 1_000, typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50) };
+    }
+    case 'ios-photos:favorite':
+      if (await HermesIOSContext.getPhotosAuthorization() !== 'authorized') throw new Error('full photos permission is required');
+      return HermesIOSContext.updatePhotoFavorite(requiredStringArray(payload.assetIDs ?? payload.asset_ids, 'assetIDs'), payload.favorite === true);
+    case 'ios-photos:delete':
+      if (await HermesIOSContext.getPhotosAuthorization() !== 'authorized') throw new Error('full photos permission is required');
+      return HermesIOSContext.deletePhotos(requiredStringArray(payload.assetIDs ?? payload.asset_ids, 'assetIDs'));
+    case 'ios-photos:album-create':
+      if (await HermesIOSContext.getPhotosAuthorization() !== 'authorized') throw new Error('full photos permission is required');
+      return HermesIOSContext.createPhotoAlbum(requiredString(payload.title, 'title'));
+    case 'ios-photos:album-add':
+      if (await HermesIOSContext.getPhotosAuthorization() !== 'authorized') throw new Error('full photos permission is required');
+      return HermesIOSContext.addPhotosToAlbum(requiredStringArray(payload.assetIDs ?? payload.asset_ids, 'assetIDs'), requiredString(payload.albumID ?? payload.album_id, 'albumID'));
+    case 'ios-photos:import':
+      if (await HermesIOSContext.getPhotosAuthorization() !== 'authorized') throw new Error('full photos permission is required');
+      return HermesIOSContext.importPhoto(ownerScope, requiredString(payload.imageURL ?? payload.image_url ?? payload.uri, 'imageURL'));
+    case 'ios-photos:export': {
+      const authorization = await HermesIOSContext.getPhotosAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') throw new Error('photos permission is not authorized');
+      return HermesIOSContext.exportPhoto(ownerScope, requiredString(payload.assetID ?? payload.asset_id, 'assetID'), payload.original === true);
+    }
     case 'ios-photos:ocr': {
+      const authorization = await HermesIOSContext.getPhotosAuthorization();
+      if (authorization !== 'authorized' && authorization !== 'limited') {
+        throw new Error('photos permission is not authorized');
+      }
       return HermesIOSContext.ocrImage({
         imageURL: requiredString(payload.imageURL ?? payload.image_url ?? payload.uri, 'imageURL'),
+        ownerScope,
         ...(payload.recognitionLevel === 'fast' || payload.recognitionLevel === 'accurate'
           ? { recognitionLevel: payload.recognitionLevel }
           : {}),
@@ -975,6 +1146,8 @@ async function executeDeviceCommand(
           : {}),
       });
     }
+    case 'ios-vision:analyze':
+      return HermesIOSContext.analyzeVision(requiredString(payload.imageURL ?? payload.image_url ?? payload.uri, 'imageURL'), ownerScope);
     case 'ios-photos:capture':
     case 'ios-photos:scan': {
       if (AppState.currentState !== 'active') {
@@ -1025,17 +1198,48 @@ async function executeDeviceCommand(
         : command.action;
       return { media: await HermesIOSContext.controlMedia(action) };
     }
+    case 'ios-media:search': {
+      if (await HermesIOSContext.getMediaAuthorization() !== 'authorized') throw new Error('media permission is not authorized');
+      return { items: await HermesIOSContext.searchMedia(requiredString(payload.query, 'query'), typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50) };
+    }
+    case 'ios-media:play-search':
+      if (await HermesIOSContext.getMediaAuthorization() !== 'authorized') throw new Error('media permission is not authorized');
+      return HermesIOSContext.playMediaSearch(requiredString(payload.query, 'query'), typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50);
+    case 'ios-media:volume':
+      if (await HermesIOSContext.getMediaAuthorization() !== 'authorized') throw new Error('media permission is not authorized');
+      return { media: await HermesIOSContext.setMediaVolume(requiredNumber(payload.volume, 'volume')) };
     case 'ios-bluetooth:state':
       return { state: await HermesIOSContext.getBluetoothState() };
     case 'ios-bluetooth:scan':
       return { devices: await HermesIOSContext.scanBluetooth(
         typeof payload.seconds === 'number' ? payload.seconds : 5,
       ) };
+    case 'ios-bluetooth:connect':
+      return HermesIOSContext.connectBluetooth(ownerScope, requiredString(payload.deviceID ?? payload.device_id, 'deviceID'));
+    case 'ios-bluetooth:disconnect':
+      await HermesIOSContext.disconnectBluetooth();
+      return { disconnected: true };
+    case 'ios-bluetooth:services':
+      return HermesIOSContext.bluetoothServices(ownerScope, requiredString(payload.deviceID ?? payload.device_id, 'deviceID'));
+    case 'ios-bluetooth:read':
+      return HermesIOSContext.bluetoothRead(ownerScope, requiredString(payload.deviceID ?? payload.device_id, 'deviceID'), requiredString(payload.serviceUUID ?? payload.service_uuid, 'serviceUUID'), requiredString(payload.characteristicUUID ?? payload.characteristic_uuid, 'characteristicUUID'));
+    case 'ios-bluetooth:write':
+      return HermesIOSContext.bluetoothWrite(ownerScope, requiredString(payload.deviceID ?? payload.device_id, 'deviceID'), requiredString(payload.serviceUUID ?? payload.service_uuid, 'serviceUUID'), requiredString(payload.characteristicUUID ?? payload.characteristic_uuid, 'characteristicUUID'), requiredString(payload.dataBase64 ?? payload.data_base64, 'dataBase64'), payload.withResponse !== false);
+    case 'ios-bluetooth:notify':
+      return HermesIOSContext.bluetoothNotify(ownerScope, requiredString(payload.deviceID ?? payload.device_id, 'deviceID'), requiredString(payload.serviceUUID ?? payload.service_uuid, 'serviceUUID'), requiredString(payload.characteristicUUID ?? payload.characteristic_uuid, 'characteristicUUID'), typeof payload.seconds === 'number' ? payload.seconds : 10);
     case 'ios-nfc:scan':
       return HermesIOSContext.startNFCReader();
+    case 'ios-nfc:write':
+      return HermesIOSContext.writeNFCTag(requiredString(payload.text, 'text'));
     case 'ios-homekit:list':
     case 'ios-homekit:get':
       return { homes: await HermesIOSContext.getHomeKitSnapshot() };
+    case 'ios-homekit:search':
+      return { accessories: await HermesIOSContext.searchHomeKit(typeof payload.query === 'string' ? payload.query : undefined, typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50) };
+    case 'ios-homekit:scenes':
+      return { scenes: await HermesIOSContext.listHomeKitScenes(typeof payload.limit === 'number' ? Math.trunc(payload.limit) : 50) };
+    case 'ios-homekit:trigger':
+      return HermesIOSContext.triggerHomeKitScene(requiredString(payload.sceneID ?? payload.scene_id, 'sceneID'));
     case 'ios-homekit:set': {
       const value = typeof payload.value === 'string'
         ? payload.value
@@ -1150,7 +1354,7 @@ async function executeDeviceCommand(
       return { opened: await HermesIOSContext.openDeviceSettings() };
     }
     case 'ios-device:open-url': {
-      return HermesIOSContext.openURL(requiredString(payload.url, 'url'));
+      return HermesIOSContext.openURLForCommand(command.id, requiredString(payload.url, 'url'));
     }
     case 'ios-device:delete-account-data': {
       return {
@@ -1203,6 +1407,7 @@ async function drainPendingTaskControls(
 async function drainPendingAgentTriggers(
   runCurrent: <T>(operation: () => Promise<T>) => Promise<T>,
   cloud: HermesCloudApi,
+  ownerScope: string,
   deviceId: string,
 ): Promise<void> {
   const pending = await runCurrent(() => HermesIOSContext.readPendingAgentTriggers());
@@ -1210,7 +1415,40 @@ async function drainPendingAgentTriggers(
     const requestID = typeof trigger.requestID === 'string' ? trigger.requestID.trim() : '';
     const kind = typeof trigger.kind === 'string' ? trigger.kind.trim().toLowerCase() : '';
     const rawContent = typeof trigger.content === 'string' ? trigger.content.trim() : '';
-    if (!requestID || !rawContent) continue;
+    const sessionID = typeof trigger.sessionID === 'string' ? trigger.sessionID.trim() : '';
+    const model = typeof trigger.model === 'string' ? trigger.model.trim() : '';
+    const triggerAttachments = Array.isArray(trigger.attachments) ? trigger.attachments : [];
+    if (!requestID) continue;
+    if (kind === 'voice-start') {
+      if (AppState.currentState !== 'active') continue;
+      const authorization = await runCurrent(() => HermesIOSContext.requestVoiceAuthorization());
+      if (authorization.microphone !== 'authorized' || authorization.speech !== 'authorized') {
+        throw new Error('voice permissions are not authorized');
+      }
+      await runCurrent(() => HermesIOSContext.startAgentVoiceCapture());
+      await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
+      continue;
+    }
+    let runtimeAttachments = triggerAttachments;
+    if (kind === 'camera-task') {
+      if (AppState.currentState !== 'active') continue;
+      const permission = await ImagePicker.requestCameraPermissionsAsync();
+      if (!permission.granted) throw new Error('camera permission is not authorized');
+      const capture = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1, exif: true });
+      if (capture.canceled || !capture.assets[0]?.uri) {
+        await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
+        continue;
+      }
+      const asset = capture.assets[0];
+      runtimeAttachments = [{
+        attachmentID: requestID,
+        bytes: asset.fileSize,
+        filename: asset.fileName || `camera-${requestID}.jpg`,
+        mimeType: asset.mimeType || 'image/jpeg',
+        uri: asset.uri,
+      }];
+    }
+    if (!rawContent && runtimeAttachments.length === 0) continue;
     const content = kind === 'clipboard-to-email'
       ? `请把以下剪贴板内容整理成一封可发送的邮件，补全主题、收件人建议和正文：\n\n${rawContent}`
       : kind === 'summarize-meeting'
@@ -1225,22 +1463,34 @@ async function drainPendingAgentTriggers(
         : kind === 'clipboard-to-email'
           ? 'Hermes clipboard email'
           : 'Hermes shared analysis';
+    const messageContent = ['send-prompt', 'ask', 'quick-task', 'follow-up'].includes(kind)
+      ? rawContent
+      : content;
     const createdAt = Date.now();
     const messageID = `ios-trigger-${requestID}`;
-    const response = await runCurrent(() => cloud.createConversation(
-      'default',
-      title,
-      `ios-trigger-${requestID}`,
-    ));
-    const conversation = (response as { conversation?: { id?: string } }).conversation;
-    const conversationID = typeof conversation?.id === 'string' ? conversation.id.trim() : '';
+    let conversationID = sessionID;
+    if (!conversationID) {
+      const response = await runCurrent(() => cloud.createConversation(
+        'default',
+        title,
+        `ios-trigger-${requestID}`,
+      ));
+      const conversation = (response as { conversation?: { id?: string } }).conversation;
+      conversationID = typeof conversation?.id === 'string' ? conversation.id.trim() : '';
+    }
     if (!conversationID) throw new Error('agent trigger conversation was not created');
     const message: CollaborationMessage = {
-      content,
+      content: messageContent,
       created_at: createdAt,
       id: messageID,
       kind: 'message',
-      meta: { source: 'ios-agent-trigger', trigger_kind: kind, trigger_id: requestID },
+      meta: {
+        source: 'ios-agent-trigger',
+        trigger_kind: kind,
+        trigger_id: requestID,
+        ...(sessionID ? { session_id: sessionID } : {}),
+        ...(model ? { model } : {}),
+      },
       name: 'You',
       role: 'user',
       sender_id: 'ios-agent-trigger',
@@ -1248,9 +1498,61 @@ async function drainPendingAgentTriggers(
       status: 'completed',
       updated_at: createdAt,
     };
+    const uploadedAttachments: Array<Record<string, unknown>> = [];
+    const attachmentEntries = Array.isArray(runtimeAttachments)
+      ? runtimeAttachments.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+      : [];
+    const shareRoot = HermesIOSContext.getAgentShareAttachmentRootUri?.();
+    const encryptedRoot = HermesIOSContext.getAttachmentOutboxRootUri?.();
+    const shareAttachmentRoot = shareRoot ?? '';
+    const requiresShareRoot = attachmentEntries.some((attachment) => typeof attachment.uri !== 'string');
+    if (attachmentEntries.length > 0 && (!encryptedRoot || (requiresShareRoot && !shareRoot))) {
+      throw new Error('attachment vault is unavailable');
+    }
+    if (encryptedRoot && (!requiresShareRoot || shareRoot)) {
+      for (const attachment of attachmentEntries.slice(0, 10)) {
+        const filename = typeof attachment.attachmentPath === 'string' ? attachment.attachmentPath : '';
+        const directURI = typeof attachment.uri === 'string' ? attachment.uri : '';
+        if (!directURI && (!filename || filename.includes('/') || filename.includes('\\'))) continue;
+        const attachmentID = typeof attachment.attachmentID === 'string' ? attachment.attachmentID : requestID;
+        const name = typeof attachment.filename === 'string' && attachment.filename.trim()
+          ? attachment.filename.trim().slice(0, 160)
+          : `shared-${attachmentID}.bin`;
+        const sourceURI = directURI || `${shareAttachmentRoot.replace(/\/$/, '')}/${encodeURIComponent(filename)}`;
+        const targetURI = `${encryptedRoot.replace(/\/$/, '')}/agent-share-${encodeURIComponent(attachmentID)}.enc`;
+        let plaintextURI = '';
+        try {
+          await runCurrent(() => HermesIOSContext.encryptAttachment(ownerScope, sourceURI, targetURI));
+          plaintextURI = await runCurrent(() => HermesIOSContext.decryptAttachmentForUpload(ownerScope, targetURI, name));
+          const uploaded = await runCurrent(() => cloud.uploadConversationAttachment(
+            conversationID,
+            { name, uri: plaintextURI, size: typeof attachment.bytes === 'number' ? attachment.bytes : undefined },
+            { messageId: messageID, profile: 'default', turnId: `ios-trigger-turn-${requestID}`, uploadId: attachmentID },
+          ));
+          if (uploaded && typeof uploaded === 'object') {
+            const record = uploaded as Record<string, unknown>;
+            if (record.attachment && typeof record.attachment === 'object') uploadedAttachments.push(record.attachment as Record<string, unknown>);
+          }
+          await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI));
+          if (filename) {
+            await runCurrent(() => HermesIOSContext.deleteAgentShareAttachment?.(filename) ?? Promise.resolve(false));
+          }
+        } catch {
+          if (plaintextURI) {
+            await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI)).catch(() => false);
+          }
+          // Keep the trigger durable when an attachment upload is transient.
+          throw new Error('shared attachment upload failed');
+        }
+      }
+    }
+    const attachmentIds = uploadedAttachments.flatMap((item) => typeof item.id === 'string' ? [item.id] : []);
+    const attachmentContext = uploadedAttachments.length
+      ? JSON.stringify(uploadedAttachments).slice(0, 8_000)
+      : '';
     await runCurrent(() => cloud.enqueueHostedTurn(conversationID, {
-      attachmentIds: [],
-      attachmentContext: '',
+      attachmentIds,
+      attachmentContext,
       deliveryContext: '由 iPhone Siri、分享菜单或 Action Button 触发的 Hermes 任务。',
       message,
       profiles: ['default'],
@@ -1268,6 +1570,7 @@ function permissionForCommand(key: string): IOSPermissionKey | null {
   }
   if (/^ios-map:(today|refresh)$/.test(key)) return 'location';
   if (/^ios-motion:(snapshot|get|start)$/.test(key)) return 'motion';
+  if (/^ios-health-write:/.test(key)) return null;
   if (/^ios-health-/.test(key)) return 'health';
   if (/^ios-calendar:(create|list)$/.test(key)) return 'calendar';
   if (/^ios-reminders:(create|list)$/.test(key)) return 'reminders';
@@ -1279,6 +1582,17 @@ function permissionForCommand(key: string): IOSPermissionKey | null {
 function requiredString(value: unknown, name: string): string {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`${name} is required`);
   return value.trim();
+}
+
+function requiredStringArray(value: unknown, name: string): string[] {
+  if (!Array.isArray(value)) throw new Error(`${name} is required`);
+  const values = value
+    .filter((item): item is string => typeof item === 'string')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 100);
+  if (!values.length) throw new Error(`${name} is required`);
+  return values;
 }
 
 function requiredNumber(value: unknown, name: string): number {

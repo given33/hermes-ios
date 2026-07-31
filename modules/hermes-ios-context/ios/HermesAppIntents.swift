@@ -10,12 +10,22 @@ final class HermesAgentTriggerStore {
 
   private init() {}
 
+  static var shareAttachmentRoot: URL? {
+    FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
+      .appendingPathComponent("agent-share-attachments-v1", isDirectory: true)
+  }
+
   @discardableResult
   func enqueue(kind: String, content: String) -> String? {
+    enqueueRequest(kind: kind, content: content, sessionID: nil, model: nil, attachments: [])
+  }
+
+  @discardableResult
+  func enqueueRequest(kind: String, content: String, sessionID: String?, model: String?, attachments: [[String: Any]]) -> String? {
     let normalizedKind = kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     let normalizedContent = content.trimmingCharacters(in: .whitespacesAndNewlines)
-    let allowed = ["summarize-meeting", "clipboard-to-email", "daily-report", "analyze-text", "voice-capture"]
-    guard allowed.contains(normalizedKind), !normalizedContent.isEmpty, normalizedContent.count <= 12_000 else {
+    let allowed = ["summarize-meeting", "clipboard-to-email", "daily-report", "analyze-text", "voice-capture", "voice-start", "camera-task", "send-prompt", "ask", "quick-task", "follow-up", "get-session-status", "list-sessions", "open-session", "retry-run"]
+    guard allowed.contains(normalizedKind), (!normalizedContent.isEmpty || !attachments.isEmpty), normalizedContent.count <= 20_000 else {
       return nil
     }
     let requestID = UUID().uuidString.lowercased()
@@ -23,12 +33,16 @@ final class HermesAgentTriggerStore {
     defer { lock.unlock() }
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
     var entries = defaults.array(forKey: key) as? [[String: Any]] ?? []
-    entries.append([
+    var entry: [String: Any] = [
       "content": normalizedContent,
       "createdAt": Date().timeIntervalSince1970 * 1000,
       "kind": normalizedKind,
       "requestID": requestID,
-    ])
+    ]
+    if let sessionID, !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { entry["sessionID"] = String(sessionID.prefix(256)) }
+    if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { entry["model"] = String(model.prefix(128)) }
+    if !attachments.isEmpty { entry["attachments"] = Array(attachments.prefix(10)) }
+    entries.append(entry)
     defaults.set(Array(entries.suffix(50)), forKey: key)
     return requestID
   }
@@ -267,6 +281,97 @@ struct HermesVoiceCaptureIntent: AppIntent {
   }
 }
 
+struct HermesSendPromptIntent: AppIntent {
+  static var title: LocalizedStringResource = "Send a prompt to Hermes"
+  static var description = IntentDescription("Start a Hermes task from Siri with an optional session and model.")
+  static var openAppWhenRun = true
+  @Parameter(title: "Prompt") var prompt: String
+  @Parameter(title: "Session ID") var sessionID: String?
+  @Parameter(title: "Model") var model: String?
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "send-prompt", content: prompt, sessionID: sessionID, model: model, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesAskIntent: AppIntent {
+  static var title: LocalizedStringResource = "Ask Hermes"
+  static var description = IntentDescription("Ask Hermes a question and continue the task from the iPhone.")
+  static var openAppWhenRun = true
+  @Parameter(title: "Question") var question: String
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "ask", content: question, sessionID: nil, model: nil, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesQuickTaskIntent: AppIntent {
+  static var title: LocalizedStringResource = "Run a Hermes quick task"
+  static var description = IntentDescription("Run a named Hermes task such as a daily report or meeting summary.")
+  static var openAppWhenRun = true
+  @Parameter(title: "Task") var task: String
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "quick-task", content: task, sessionID: nil, model: nil, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesFollowUpSessionIntent: AppIntent {
+  static var title: LocalizedStringResource = "Follow up in Hermes session"
+  static var description = IntentDescription("Continue a Hermes session with a new prompt.")
+  static var openAppWhenRun = true
+  @Parameter(title: "Session ID") var sessionID: String
+  @Parameter(title: "Prompt") var prompt: String
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "follow-up", content: prompt, sessionID: sessionID, model: nil, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesGetSessionStatusIntent: AppIntent {
+  static var title: LocalizedStringResource = "Get Hermes session status"
+  static var description = IntentDescription("Request the current status of a Hermes session.")
+  static var openAppWhenRun = true
+  @Parameter(title: "Session ID") var sessionID: String
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "get-session-status", content: sessionID, sessionID: sessionID, model: nil, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesListSessionsIntent: AppIntent {
+  static var title: LocalizedStringResource = "List Hermes sessions"
+  static var description = IntentDescription("Request the latest Hermes sessions.")
+  static var openAppWhenRun = true
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "list-sessions", content: "list", sessionID: nil, model: nil, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesOpenSessionIntent: AppIntent {
+  static var title: LocalizedStringResource = "Open Hermes session"
+  static var description = IntentDescription("Open a Hermes session on the iPhone.")
+  static var openAppWhenRun = true
+  @Parameter(title: "Session ID") var sessionID: String
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "open-session", content: sessionID, sessionID: sessionID, model: nil, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
+struct HermesRetryRunIntent: AppIntent {
+  static var title: LocalizedStringResource = "Retry a Hermes run"
+  static var description = IntentDescription("Retry a failed Hermes run in a session.")
+  static var openAppWhenRun = true
+  @Parameter(title: "Session ID") var sessionID: String
+  @Parameter(title: "Message ID") var messageID: String
+  func perform() async throws -> some IntentResult {
+    guard HermesAgentTriggerStore.shared.enqueueRequest(kind: "retry-run", content: messageID, sessionID: sessionID, model: nil, attachments: []) != nil else { throw HermesTaskControlError.invalidTaskID }
+    return .result()
+  }
+}
+
 struct HermesTaskShortcuts: AppShortcutsProvider {
   static var appShortcuts: [AppShortcut] {
     [
@@ -318,6 +423,14 @@ struct HermesTaskShortcuts: AppShortcutsProvider {
         shortTitle: "Voice note",
         systemImageName: "mic"
       ),
+      AppShortcut(intent: HermesSendPromptIntent(), phrases: ["Send a prompt to Hermes"], shortTitle: "Send prompt", systemImageName: "paperplane"),
+      AppShortcut(intent: HermesAskIntent(), phrases: ["Ask Hermes"], shortTitle: "Ask Hermes", systemImageName: "questionmark.bubble"),
+      AppShortcut(intent: HermesQuickTaskIntent(), phrases: ["Run a Hermes quick task"], shortTitle: "Quick task", systemImageName: "bolt"),
+      AppShortcut(intent: HermesFollowUpSessionIntent(), phrases: ["Follow up in a Hermes session"], shortTitle: "Follow up", systemImageName: "arrow.turn.up.right"),
+      AppShortcut(intent: HermesGetSessionStatusIntent(), phrases: ["Get Hermes session status"], shortTitle: "Session status", systemImageName: "info.circle"),
+      AppShortcut(intent: HermesListSessionsIntent(), phrases: ["List Hermes sessions"], shortTitle: "List sessions", systemImageName: "list.bullet"),
+      AppShortcut(intent: HermesOpenSessionIntent(), phrases: ["Open a Hermes session"], shortTitle: "Open session", systemImageName: "rectangle.portrait.and.arrow.right"),
+      AppShortcut(intent: HermesRetryRunIntent(), phrases: ["Retry a Hermes run"], shortTitle: "Retry run", systemImageName: "arrow.clockwise"),
     ]
   }
 }

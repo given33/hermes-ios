@@ -41,12 +41,13 @@ public final class HermesIOSContextModule: Module {
   #endif
   private static let nativeActionCapabilities: [[String: Any]] = [
     ["capability": "ios-contacts", "actions": ["list", "search", "create"], "permission": "contacts", "confirmation": "create"],
-    ["capability": "ios-photos", "actions": ["list", "search", "capture", "scan", "ocr"], "permission": "photos/camera", "confirmation": "capture"],
-    ["capability": "ios-media", "actions": ["get", "control", "play", "pause", "next", "previous", "stop"], "permission": NSNull(), "confirmation": "controls"],
-    ["capability": "ios-bluetooth", "actions": ["state", "scan"], "permission": "bluetooth", "confirmation": "none"],
-    ["capability": "ios-nfc", "actions": ["scan"], "permission": "nfc", "confirmation": "required"],
-    ["capability": "ios-homekit", "actions": ["list", "get", "set"], "permission": "homekit", "confirmation": "set"],
-    ["capability": "ios-health-write", "actions": ["authorize", "write"], "permission": "health", "confirmation": "write"],
+    ["capability": "ios-photos", "actions": ["list", "search", "capture", "scan", "ocr", "albums", "near", "favorite", "delete", "album-create", "album-add", "import", "export"], "permission": "photos/camera", "confirmation": "capture/write"],
+    ["capability": "ios-vision", "actions": ["analyze"], "permission": "photos", "confirmation": "none"],
+    ["capability": "ios-media", "actions": ["get", "control", "play", "pause", "next", "previous", "stop", "search", "play-search", "volume"], "permission": "media", "confirmation": "controls"],
+    ["capability": "ios-bluetooth", "actions": ["state", "scan", "connect", "disconnect", "services", "read", "write", "notify"], "permission": "bluetooth", "confirmation": "connect/write"],
+    ["capability": "ios-nfc", "actions": ["scan", "write"], "permission": "nfc", "confirmation": "write"],
+    ["capability": "ios-homekit", "actions": ["list", "get", "search", "scenes", "trigger", "set"], "permission": "homekit", "confirmation": "set/trigger"],
+    ["capability": "ios-health-write", "actions": ["authorize", "write", "batch", "delete"], "permission": "health", "confirmation": "write/delete"],
     ["capability": "ios-device", "actions": ["open-url", "settings"], "permission": "device", "confirmation": "open-url"],
   ]
   private let location = HermesLocationService.shared
@@ -62,6 +63,15 @@ public final class HermesIOSContextModule: Module {
   private let voice = HermesVoiceService.shared
   private let protectedExport = HermesProtectedExportFile.shared
   private var relayWakeObserver: NSObjectProtocol?
+
+  private static func requireCommandID(_ rawValue: String) throws -> String {
+    let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty, value.count <= 256,
+          value.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" || $0 == "." }) else {
+      throw HermesNativeActionError.invalidInput("commandID")
+    }
+    return value
+  }
 
   public func definition() -> ModuleDefinition {
     Name("HermesIOSContext")
@@ -81,6 +91,7 @@ public final class HermesIOSContextModule: Module {
     watchDefinitions()
     screenTimeDefinitions()
     liveActivityDefinitions()
+    sessionLockDefinitions()
     attachmentVaultDefinitions()
     voiceDefinitions()
     viewDefinitions()
@@ -278,6 +289,12 @@ public final class HermesIOSContextModule: Module {
       }
     }.runOnQueue(.main)
 
+    AsyncFunction("startAgentVoiceCapture") { (locale: String?) throws -> Bool in
+      try MainActor.assumeIsolated {
+        try self.voice.startAgentCapture(localeIdentifier: locale)
+      }
+    }.runOnQueue(.main)
+
     AsyncFunction("stopVoiceRecognition") { () -> String in
       MainActor.assumeIsolated {
         self.voice.stopRecognition()
@@ -470,15 +487,39 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("writeHealthSampleForCommand") {
       (commandID: String, identifier: String, value: Double, unit: String, start: Double, end: Double, promise: Promise) in
       self.resolveAsync(promise) {
-        if let existing = self.eventQueue.commandExecutionResult(id: commandID) { return existing }
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
         let result = try await self.health.writeQuantitySample(
+          commandID: normalizedCommandID,
           identifier: identifier,
           value: value,
           unit: unit,
           start: Date(timeIntervalSince1970: start / 1000),
           end: Date(timeIntervalSince1970: end / 1000)
         )
-        self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+        return result
+      }
+    }
+
+    AsyncFunction("writeHealthSamplesForCommand") {
+      (commandID: String, samples: [[String: Any]], promise: Promise) in
+      self.resolveAsync(promise) {
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+        let result = try await self.health.writeQuantitySamples(commandID: normalizedCommandID, samples: samples)
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+        return result
+      }
+    }
+
+    AsyncFunction("deleteHealthSamplesForCommand") {
+      (commandID: String, identifier: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+        let result = try await self.health.deleteQuantitySamples(commandID: normalizedCommandID, identifier: identifier)
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
         return result
       }
     }
@@ -509,19 +550,46 @@ public final class HermesIOSContextModule: Module {
       )
     }
 
+    AsyncFunction("listCalendars") { () -> [[String: Any]] in
+      self.events.calendars()
+    }
+
+    AsyncFunction("calendarFreeBusy") { (start: Double, end: Double) -> [[String: Any]] in
+      self.events.freeBusy(start: Date(timeIntervalSince1970: start / 1000), end: Date(timeIntervalSince1970: end / 1000))
+    }
+
     AsyncFunction("createCalendarEvent") { (input: HermesCalendarEventInput) throws -> String in
       try self.events.createCalendarEvent(input)
     }
 
     AsyncFunction("createCalendarEventForCommand") {
       (commandID: String, input: HermesCalendarEventInput) throws -> [String: Any] in
-      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+      let normalizedCommandID = try Self.requireCommandID(commandID)
+      if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) {
         return existing
       }
       let result: [String: Any] = [
-        "id": try self.events.createCalendarEventForCommand(input, commandID: commandID)
+        "id": try self.events.createCalendarEventForCommand(input, commandID: normalizedCommandID)
       ]
-      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+      return result
+    }
+
+    AsyncFunction("updateCalendarEventForCommand") {
+      (commandID: String, eventID: String, title: String?, start: Double?, end: Double?, location: String?, notes: String?) throws -> [String: Any] in
+      let normalizedCommandID = try Self.requireCommandID(commandID)
+      if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+      let result = try self.events.updateCalendarEvent(id: eventID, title: title, start: start.map { Date(timeIntervalSince1970: $0 / 1000) }, end: end.map { Date(timeIntervalSince1970: $0 / 1000) }, location: location, notes: notes)
+      self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+      return result
+    }
+
+    AsyncFunction("deleteCalendarEventForCommand") {
+      (commandID: String, eventID: String) throws -> [String: Any] in
+      let normalizedCommandID = try Self.requireCommandID(commandID)
+      if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+      let result = try self.events.deleteCalendarEvent(id: eventID)
+      self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
       return result
     }
 
@@ -536,13 +604,36 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("createReminderForCommand") {
       (commandID: String, input: HermesReminderInput, promise: Promise) in
       self.resolveAsync(promise) {
-        if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) {
           return existing
         }
         let result: [String: Any] = [
-          "id": try await self.events.createReminderForCommand(input, commandID: commandID)
+          "id": try await self.events.createReminderForCommand(input, commandID: normalizedCommandID)
         ]
-        self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+        return result
+      }
+    }
+
+    AsyncFunction("updateReminderForCommand") {
+      (commandID: String, reminderID: String, title: String?, due: Double?, notes: String?, completed: Bool?, promise: Promise) in
+      self.resolveAsync(promise) {
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+        let result = try await self.events.updateReminder(id: reminderID, title: title, due: due.map { Date(timeIntervalSince1970: $0 / 1000) }, notes: notes, completed: completed)
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+        return result
+      }
+    }
+
+    AsyncFunction("deleteReminderForCommand") {
+      (commandID: String, reminderID: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+        let result = try await self.events.deleteReminder(id: reminderID)
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
         return result
       }
     }
@@ -553,12 +644,44 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("shareTextToNotesForCommand") {
       (commandID: String, text: String, title: String?) -> [String: Any] in
-      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+      let normalizedCommandID = try Self.requireCommandID(commandID)
+      if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) {
         return existing
       }
       let result: [String: Any] = ["shown": Self.presentSharedText(text, title: title)]
-      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
       return result
+    }.runOnQueue(.main)
+  }
+
+  @ModuleDefinitionBuilder
+  private func sessionLockDefinitions() -> ModuleDefinition {
+    AsyncFunction("configureSessionLock") { (ownerScope: String, enabled: Bool, timeoutMinutes: Double?) -> [String: Any] in
+      HermesSessionLockService.shared.configure(owner: ownerScope, enabled: enabled, timeoutMinutes: timeoutMinutes)
+    }.runOnQueue(.main)
+
+    AsyncFunction("getSessionLockStatus") { (ownerScope: String) -> [String: Any] in
+      HermesSessionLockService.shared.status(owner: ownerScope)
+    }.runOnQueue(.main)
+
+    AsyncFunction("unlockSession") { (ownerScope: String, promise: Promise) in
+      self.resolveAsync(promise) { try await HermesSessionLockService.shared.unlock(owner: ownerScope) }
+    }.runOnQueue(.main)
+
+    AsyncFunction("lockSession") { (ownerScope: String) -> [String: Any] in
+      HermesSessionLockService.shared.lockSession(owner: ownerScope)
+    }.runOnQueue(.main)
+
+    AsyncFunction("getDiagnosticsStatus") { () -> [String: Any] in
+      HermesDiagnosticsService.shared.status()
+    }.runOnQueue(.main)
+
+    AsyncFunction("startDiagnostics") {
+      HermesDiagnosticsService.shared.start()
+    }.runOnQueue(.main)
+
+    AsyncFunction("stopDiagnostics") {
+      HermesDiagnosticsService.shared.stop()
     }.runOnQueue(.main)
   }
 
@@ -570,13 +693,14 @@ public final class HermesIOSContextModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("readClipboardForCommand") {
-      (commandID: String) -> [String: Any] in
-      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+      (commandID: String) throws -> [String: Any] in
+      let normalizedCommandID = try Self.requireCommandID(commandID)
+      if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) {
         return existing
       }
       let text = UIPasteboard.general.string ?? ""
       let result: [String: Any] = ["text": text, "hasText": !text.isEmpty]
-      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
       return result
     }.runOnQueue(.main)
 
@@ -586,13 +710,14 @@ public final class HermesIOSContextModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("writeClipboardForCommand") {
-      (commandID: String, text: String) -> [String: Any] in
-      if let existing = self.eventQueue.commandExecutionResult(id: commandID) {
+      (commandID: String, text: String) throws -> [String: Any] in
+      let normalizedCommandID = try Self.requireCommandID(commandID)
+      if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) {
         return existing
       }
       UIPasteboard.general.string = text
       let result: [String: Any] = ["written": true, "length": text.count]
-      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
       return result
     }.runOnQueue(.main)
   }
@@ -624,7 +749,8 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("createContactForCommand") {
       (commandID: String, givenName: String, familyName: String?, organization: String?, phone: String?, email: String?) throws -> [String: Any] in
-      if let existing = self.eventQueue.commandExecutionResult(id: commandID) { return existing }
+      let normalizedCommandID = try Self.requireCommandID(commandID)
+      if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
       let result = try HermesContactsService.create(
         givenName: givenName,
         familyName: familyName,
@@ -632,7 +758,7 @@ public final class HermesIOSContextModule: Module {
         phone: phone,
         email: email
       )
-      self.eventQueue.recordCommandExecutionResult(id: commandID, result: result)
+      self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
       return result
     }.runOnQueue(.main)
 
@@ -645,17 +771,61 @@ public final class HermesIOSContextModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("searchPhotos") {
-      (query: String?, start: Double?, end: Double?, limit: Int?) throws -> [[String: Any]] in
-      try HermesPhotosService.search(query: query, start: start, end: end, limit: limit ?? 50)
+      (query: String?, start: Double?, end: Double?, limit: Int?, mediaType: String?) throws -> [[String: Any]] in
+      try HermesPhotosService.search(query: query, start: start, end: end, limit: limit ?? 50, mediaType: mediaType)
     }.runOnQueue(.main)
 
+    AsyncFunction("listPhotoAlbums") { (limit: Int?) throws -> [[String: Any]] in
+      try HermesPhotosService.albums(limit: limit ?? 50)
+    }.runOnQueue(.main)
+
+    AsyncFunction("searchNearbyPhotos") { (latitude: Double, longitude: Double, radiusMeters: Double?, limit: Int?) throws -> [[String: Any]] in
+      try HermesPhotosService.nearby(latitude: latitude, longitude: longitude, radiusMeters: radiusMeters ?? 1_000, limit: limit ?? 50)
+    }.runOnQueue(.main)
+
+    AsyncFunction("updatePhotoFavorite") { (assetIDs: [String], favorite: Bool, promise: Promise) in
+      self.resolveAsync(promise) { try await HermesPhotosService.updateFavorite(assetIDs: assetIDs, favorite: favorite) }
+    }
+
+    AsyncFunction("deletePhotos") { (assetIDs: [String], promise: Promise) in
+      self.resolveAsync(promise) { try await HermesPhotosService.delete(assetIDs: assetIDs) }
+    }
+
+    AsyncFunction("createPhotoAlbum") { (title: String, promise: Promise) in
+      self.resolveAsync(promise) { try await HermesPhotosService.createAlbum(title: title) }
+    }
+
+    AsyncFunction("addPhotosToAlbum") { (assetIDs: [String], albumID: String, promise: Promise) in
+      self.resolveAsync(promise) { try await HermesPhotosService.addToAlbum(assetIDs: assetIDs, albumID: albumID) }
+    }
+
+    AsyncFunction("importPhoto") { (ownerScope: String, imageURL: String, promise: Promise) in
+      self.resolveAsync(promise) { try await HermesPhotosService.importImage(owner: ownerScope, imageURL: imageURL) }
+    }
+
+    AsyncFunction("exportPhoto") { (ownerScope: String, assetID: String, original: Bool?, promise: Promise) in
+      self.resolveAsync(promise) { try await HermesPhotosService.export(assetID: assetID, owner: ownerScope, original: original ?? false) }
+    }
+
     AsyncFunction("ocrImage") {
-      (imageURL: String, recognitionLevel: String?, languages: [String]?) throws -> [String: Any] in
+      (imageURL: String, ownerScope: String, recognitionLevel: String?, languages: [String]?) throws -> [String: Any] in
       try HermesPhotosService.recognizeText(
         imageURL: imageURL,
+        owner: ownerScope,
         recognitionLevel: recognitionLevel,
         languages: languages
       )
+    }
+
+    AsyncFunction("analyzeVision") {
+      (imageURL: String, ownerScope: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        try HermesAttachmentVault.shared.requireAllowedImportSource(owner: ownerScope, uri: imageURL)
+        guard let url = URL(string: imageURL), let image = CIImage(contentsOf: url) else {
+          throw HermesNativeActionError.invalidInput("imageURL")
+        }
+        return try HermesVisionService.analyze(image: image)
+      }
     }
 
     AsyncFunction("getMediaSnapshot") { () -> [String: Any] in
@@ -674,6 +844,18 @@ public final class HermesIOSContextModule: Module {
       try HermesMediaService.control(action)
     }.runOnQueue(.main)
 
+    AsyncFunction("searchMedia") { (query: String, limit: Int?) throws -> [[String: Any]] in
+      try HermesMediaService.search(query: query, limit: limit ?? 50)
+    }.runOnQueue(.main)
+
+    AsyncFunction("playMediaSearch") { (query: String, limit: Int?, promise: Promise) in
+      self.resolveAsync(promise) { try HermesMediaService.playSearch(query: query, limit: limit ?? 50) }
+    }
+
+    AsyncFunction("setMediaVolume") { (volume: Double) throws -> [String: Any] in
+      try HermesMediaService.setVolume(volume)
+    }.runOnQueue(.main)
+
     AsyncFunction("getBluetoothState") { () -> String in
       #if canImport(CoreBluetooth)
       return HermesBluetoothService.shared.state()
@@ -690,6 +872,63 @@ public final class HermesIOSContextModule: Module {
       #endif
     }.runOnQueue(.main)
 
+    AsyncFunction("connectBluetooth") { (ownerScope: String, deviceID: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreBluetooth)
+        return try await HermesBluetoothService.shared.connect(owner: ownerScope, identifier: deviceID)
+        #else
+        throw HermesNativeActionError.unavailable("bluetooth")
+        #endif
+      }
+    }
+
+    AsyncFunction("disconnectBluetooth") {
+      #if canImport(CoreBluetooth)
+      HermesBluetoothService.shared.disconnect()
+      #endif
+    }
+
+    AsyncFunction("bluetoothServices") { (ownerScope: String, deviceID: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreBluetooth)
+        return ["services": try await HermesBluetoothService.shared.services(owner: ownerScope, identifier: deviceID)]
+        #else
+        throw HermesNativeActionError.unavailable("bluetooth")
+        #endif
+      }
+    }
+
+    AsyncFunction("bluetoothRead") { (ownerScope: String, deviceID: String, serviceUUID: String, characteristicUUID: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreBluetooth)
+        return try await HermesBluetoothService.shared.read(owner: ownerScope, identifier: deviceID, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID)
+        #else
+        throw HermesNativeActionError.unavailable("bluetooth")
+        #endif
+      }
+    }
+
+    AsyncFunction("bluetoothWrite") { (ownerScope: String, deviceID: String, serviceUUID: String, characteristicUUID: String, dataBase64: String, withResponse: Bool?, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreBluetooth)
+        guard let data = Data(base64Encoded: dataBase64), data.count <= 64 * 1024 else { throw HermesNativeActionError.invalidInput("data") }
+        return try await HermesBluetoothService.shared.write(owner: ownerScope, identifier: deviceID, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID, data: data, withResponse: withResponse ?? true)
+        #else
+        throw HermesNativeActionError.unavailable("bluetooth")
+        #endif
+      }
+    }
+
+    AsyncFunction("bluetoothNotify") { (ownerScope: String, deviceID: String, serviceUUID: String, characteristicUUID: String, seconds: Double?, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreBluetooth)
+        return try await HermesBluetoothService.shared.notify(owner: ownerScope, identifier: deviceID, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID, seconds: seconds ?? 10)
+        #else
+        throw HermesNativeActionError.unavailable("bluetooth")
+        #endif
+      }
+    }
+
     AsyncFunction("getHomeKitSnapshot") { () -> [[String: Any]] in
       #if canImport(HomeKit)
       return HermesHomeKitService.shared.snapshot()
@@ -697,6 +936,32 @@ public final class HermesIOSContextModule: Module {
       return []
       #endif
     }.runOnQueue(.main)
+
+    AsyncFunction("searchHomeKit") { (query: String?, limit: Int?) async throws -> [[String: Any]] in
+      #if canImport(HomeKit)
+      return HermesHomeKitService.shared.search(query: query, limit: limit ?? 50)
+      #else
+      throw HermesNativeActionError.unavailable("homekit")
+      #endif
+    }
+
+    AsyncFunction("listHomeKitScenes") { (limit: Int?) async throws -> [[String: Any]] in
+      #if canImport(HomeKit)
+      return HermesHomeKitService.shared.scenes(limit: limit ?? 50)
+      #else
+      throw HermesNativeActionError.unavailable("homekit")
+      #endif
+    }
+
+    AsyncFunction("triggerHomeKitScene") { (sceneID: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(HomeKit)
+        return try await HermesHomeKitService.shared.triggerScene(id: sceneID)
+        #else
+        throw HermesNativeActionError.unavailable("homekit")
+        #endif
+      }
+    }
 
     AsyncFunction("setHomeKitValue") {
       (accessoryID: String, characteristicID: String, value: String) async throws -> [String: Any] in
@@ -725,12 +990,33 @@ public final class HermesIOSContextModule: Module {
       #endif
     }.runOnQueue(.main)
 
+    AsyncFunction("writeNFCTag") { (text: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        #if canImport(CoreNFC)
+        return try await HermesNFCService.shared.write(text: text)
+        #else
+        throw HermesNativeActionError.unavailable("nfc-reader-session")
+        #endif
+      }
+    }.runOnQueue(.main)
+
     AsyncFunction("scanQRCode") { () async throws -> [String: Any] in
       try await HermesQRScannerService.shared.scan()
     }
 
     AsyncFunction("openURL") { (url: String) async throws -> [String: Any] in
       try await self.device.openURL(url)
+    }.runOnQueue(.main)
+
+    AsyncFunction("openURLForCommand") {
+      (commandID: String, url: String, promise: Promise) in
+      self.resolveAsync(promise) {
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+        let result = try await self.device.openURL(url)
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+        return result
+      }
     }.runOnQueue(.main)
 
     Function("getNativeActionCapabilities") { () -> [[String: Any]] in
@@ -744,6 +1030,22 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("consumePendingAgentTrigger") { (requestID: String) -> Bool in
       HermesAgentTriggerStore.shared.consume(requestID: requestID)
     }.runOnQueue(.main)
+
+    Function("getAgentShareAttachmentRootUri") { () -> String? in
+      HermesAgentTriggerStore.shareAttachmentRoot?.absoluteString
+    }
+
+    AsyncFunction("deleteAgentShareAttachment") { (filename: String) throws -> Bool in
+      guard filename.count <= 160, !filename.contains("/"), !filename.contains("\\"), filename != ".", filename != "..",
+            let root = HermesAgentTriggerStore.shareAttachmentRoot else { return false }
+      let target = root.appendingPathComponent(filename)
+      guard target.standardizedFileURL.path.hasPrefix(root.standardizedFileURL.path + "/") else {
+        throw HermesNativeActionError.invalidInput("filename")
+      }
+      guard FileManager.default.fileExists(atPath: target.path) else { return false }
+      try FileManager.default.removeItem(at: target)
+      return true
+    }
   }
 
   @ModuleDefinitionBuilder

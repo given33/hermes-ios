@@ -82,6 +82,8 @@ test('native action bridge policies cover contacts, photos, media, Bluetooth, NF
     ['ios-homekit', 'set', 'write', 'required'],
     ['ios-health-write', 'authorize', 'write', 'required'],
     ['ios-health-write', 'write', 'write', 'required'],
+    ['ios-health-write', 'batch', 'write', 'required'],
+    ['ios-health-write', 'delete', 'destructive', 'required'],
     ['ios-photos', 'ocr', 'read', 'none'],
     ['ios-device', 'open-url', 'write', 'required'],
   ] as const;

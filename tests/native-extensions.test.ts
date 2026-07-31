@@ -16,6 +16,7 @@ test('native extension config declares every V4 companion target', () => {
     'HermesDeviceActivityMonitor',
     'HermesDeviceActivityReport',
     'HermesShareExtension',
+    'HermesFileProvider',
   ]) {
   assert.match(plugin, new RegExp(target));
   }
@@ -79,6 +80,7 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
     'native-extensions/HermesDeviceActivityMonitor/Info.plist',
     'native-extensions/HermesDeviceActivityReport/Info.plist',
     'native-extensions/HermesShareExtension/Info.plist',
+    'native-extensions/HermesFileProvider/Info.plist',
     'native-extensions/HermesWatchApp/Info.plist',
     'native-extensions/HermesWatchApp/Extension-Info.plist',
   ]) {
@@ -96,6 +98,9 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.match(widget, /DynamicIsland/);
   assert.match(widget, /AgentTaskLockScreenView/);
   assert.match(widget, /AgentTaskExpandedView/);
+  assert.match(widget, /HermesAgentActivityAttributes/);
+  assert.match(widget, /HermesAgentLiveActivity/);
+  assert.match(widget, /speak-toggle/);
   assert.match(widget, /action: "pause"/);
   assert.match(widget, /action: "cancel"/);
   assert.match(widget, /action: "retry"/);
@@ -104,8 +109,16 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   const share = read('native-extensions/HermesShareExtension/ShareViewController.swift');
   assert.match(share, /NSExtensionItem/);
   assert.match(share, /agent-trigger-inbox-v1/);
+  assert.match(share, /loadFileRepresentation/);
+  assert.equal((share.match(/completeRequest\(returningItems: nil\)/g) || []).length, 1);
   assert.match(read('native-extensions/HermesShareExtension/Info.plist'), /com\.apple\.share-services/);
   assert.match(read('native-extensions/HermesShareExtension/HermesShareExtension.entitlements'), /group\.app\.sunstone1029\.fig1171\.hermes/);
+  assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /NSFileProviderReplicatedExtension/);
+  assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /HermesFiles/);
+  assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /uploads/);
+  assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /workspace/);
+  assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /safeURL/);
+  assert.match(read('.github/workflows/ios-unsigned.yml'), /HermesFileProvider/);
 
   const watch = read('native-extensions/HermesWatchApp/HermesWatchApp.swift');
   assert.match(watch, /WCSession/);

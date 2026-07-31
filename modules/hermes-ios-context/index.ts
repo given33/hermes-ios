@@ -216,10 +216,18 @@ export interface IOSContextNativeModule {
   getVoiceAuthorization(): Promise<Record<'microphone' | 'speech', IOSAuthorizationState>>;
   requestVoiceAuthorization(): Promise<Record<'microphone' | 'speech', IOSAuthorizationState>>;
   startVoiceRecognition(locale?: string | null): Promise<boolean>;
+  startAgentVoiceCapture(locale?: string | null): Promise<boolean>;
   stopVoiceRecognition(): Promise<string>;
   speakText(text: string, locale?: string | null, rate?: number | null): Promise<boolean>;
   stopSpeaking(): Promise<boolean>;
   getVoiceState(): Promise<{ recording: boolean; speaking: boolean }>;
+  configureSessionLock(ownerScope: string, enabled: boolean, timeoutMinutes?: number | null): Promise<Record<string, unknown>>;
+  getSessionLockStatus(ownerScope: string): Promise<Record<string, unknown>>;
+  unlockSession(ownerScope: string): Promise<Record<string, unknown>>;
+  lockSession(ownerScope: string): Promise<Record<string, unknown>>;
+  getDiagnosticsStatus(): Promise<Record<string, unknown>>;
+  startDiagnostics(): Promise<void>;
+  stopDiagnostics(): Promise<void>;
   getInstallationIdentifier(): Promise<string>;
   enqueueContextEvents(events: readonly Record<string, unknown>[]): Promise<number>;
   claimPendingEvents(limit: number, scope: string): Promise<IOSContextEventClaim>;
@@ -260,11 +268,15 @@ export interface IOSContextNativeModule {
     commandId: string,
     input: { end: number; identifier: string; start: number; unit: string; value: number },
   ): Promise<Record<string, unknown>>;
+  writeHealthSamplesForCommand(commandId: string, samples: readonly Record<string, unknown>[]): Promise<Record<string, unknown>>;
+  deleteHealthSamplesForCommand(commandId: string, identifier: string): Promise<Record<string, unknown>>;
   requestCalendarAuthorization(): Promise<IOSAuthorizationState>;
   getCalendarAuthorization(): Promise<IOSAuthorizationState>;
   requestReminderAuthorization(): Promise<IOSAuthorizationState>;
   getReminderAuthorization(): Promise<IOSAuthorizationState>;
   listCalendarEvents(start: number, end: number): Promise<IOSCalendarItem[]>;
+  listCalendars(): Promise<Array<Record<string, unknown>>>;
+  calendarFreeBusy(start: number, end: number): Promise<Array<Record<string, unknown>>>;
   createCalendarEvent(input: {
     end: number;
     location?: string;
@@ -290,6 +302,14 @@ export interface IOSContextNativeModule {
     notes?: string;
     title: string;
   }): Promise<Record<string, unknown>>;
+  updateCalendarEventForCommand(commandId: string, eventID: string, input: {
+    end?: number;
+    location?: string;
+    notes?: string;
+    start?: number;
+    title?: string;
+  }): Promise<Record<string, unknown>>;
+  deleteCalendarEventForCommand(commandId: string, eventID: string): Promise<Record<string, unknown>>;
   readClipboard(): Promise<{ text: string; hasText: boolean }>;
   readClipboardForCommand(commandId: string): Promise<Record<string, unknown>>;
   writeClipboard(text: string): Promise<boolean>;
@@ -313,30 +333,64 @@ export interface IOSContextNativeModule {
   searchPhotos(input?: {
     end?: number;
     limit?: number;
+    mediaType?: 'image' | 'video';
     query?: string;
     start?: number;
   }): Promise<IOSPhotoItem[]>;
+  listPhotoAlbums(limit?: number): Promise<Array<Record<string, unknown>>>;
+  searchNearbyPhotos(latitude: number, longitude: number, radiusMeters?: number, limit?: number): Promise<Array<Record<string, unknown>>>;
+  updatePhotoFavorite(assetIDs: string[], favorite: boolean): Promise<Record<string, unknown>>;
+  deletePhotos(assetIDs: string[]): Promise<Record<string, unknown>>;
+  createPhotoAlbum(title: string): Promise<Record<string, unknown>>;
+  addPhotosToAlbum(assetIDs: string[], albumID: string): Promise<Record<string, unknown>>;
+  importPhoto(ownerScope: string, imageURL: string): Promise<Record<string, unknown>>;
+  exportPhoto(ownerScope: string, assetID: string, original?: boolean): Promise<Record<string, unknown>>;
   ocrImage(input: {
     imageURL: string;
+    ownerScope: string;
     languages?: string[];
     recognitionLevel?: 'accurate' | 'fast';
   }): Promise<Record<string, unknown>>;
+  updateReminderForCommand(commandId: string, reminderID: string, input: {
+    completed?: boolean;
+    due?: number;
+    notes?: string;
+    title?: string;
+  }): Promise<Record<string, unknown>>;
+  deleteReminderForCommand(commandId: string, reminderID: string): Promise<Record<string, unknown>>;
+  analyzeVision(imageURL: string, ownerScope: string): Promise<Record<string, unknown>>;
   getMediaAuthorization(): Promise<IOSAuthorizationState>;
   requestMediaAuthorization(): Promise<IOSAuthorizationState>;
   getMediaSnapshot(): Promise<Record<string, unknown>>;
   controlMedia(action: string): Promise<Record<string, unknown>>;
+  searchMedia(query: string, limit?: number): Promise<Array<Record<string, unknown>>>;
+  playMediaSearch(query: string, limit?: number): Promise<Record<string, unknown>>;
+  setMediaVolume(volume: number): Promise<Record<string, unknown>>;
   getBluetoothState(): Promise<string>;
   scanBluetooth(seconds?: number): Promise<Array<Record<string, unknown>>>;
+  connectBluetooth(ownerScope: string, deviceID: string): Promise<Record<string, unknown>>;
+  disconnectBluetooth(): Promise<void>;
+  bluetoothServices(ownerScope: string, deviceID: string): Promise<Record<string, unknown>>;
+  bluetoothRead(ownerScope: string, deviceID: string, serviceUUID: string, characteristicUUID: string): Promise<Record<string, unknown>>;
+  bluetoothWrite(ownerScope: string, deviceID: string, serviceUUID: string, characteristicUUID: string, dataBase64: string, withResponse?: boolean): Promise<Record<string, unknown>>;
+  bluetoothNotify(ownerScope: string, deviceID: string, serviceUUID: string, characteristicUUID: string, seconds?: number): Promise<Record<string, unknown>>;
   getHomeKitSnapshot(): Promise<Array<Record<string, unknown>>>;
+  searchHomeKit(query?: string, limit?: number): Promise<Array<Record<string, unknown>>>;
+  listHomeKitScenes(limit?: number): Promise<Array<Record<string, unknown>>>;
+  triggerHomeKitScene(sceneID: string): Promise<Record<string, unknown>>;
   setHomeKitValue(
     accessoryId: string,
     characteristicId: string,
     value: string,
   ): Promise<Record<string, unknown>>;
   startNFCReader(): Promise<Record<string, unknown>>;
+  writeNFCTag(text: string): Promise<Record<string, unknown>>;
   scanQRCode(): Promise<Record<string, unknown>>;
+  openURLForCommand(commandId: string, url: string): Promise<Record<string, unknown>>;
   readPendingAgentTriggers(): Promise<Array<Record<string, unknown>>>;
   consumePendingAgentTrigger(requestId: string): Promise<boolean>;
+  getAgentShareAttachmentRootUri?(): string | null;
+  deleteAgentShareAttachment?(filename: string): Promise<boolean>;
   getNativeActionCapabilities?(): Array<Record<string, unknown>>;
   shareTextToNotes(text: string, title?: string): Promise<boolean>;
   shareTextToNotesForCommand(
@@ -454,11 +508,21 @@ export const HermesIOSContext = {
   requestVoiceAuthorization: () => requireContextModule().requestVoiceAuthorization(),
   startVoiceRecognition: (locale?: string | null) =>
     requireContextModule().startVoiceRecognition(locale),
+  startAgentVoiceCapture: (locale?: string | null) =>
+    requireContextModule().startAgentVoiceCapture(locale),
   stopVoiceRecognition: () => requireContextModule().stopVoiceRecognition(),
   speakText: (text: string, locale?: string | null, rate?: number | null) =>
     requireContextModule().speakText(text, locale, rate),
   stopSpeaking: () => requireContextModule().stopSpeaking(),
   getVoiceState: () => requireContextModule().getVoiceState(),
+  configureSessionLock: (ownerScope: string, enabled: boolean, timeoutMinutes?: number | null) =>
+    requireContextModule().configureSessionLock(ownerScope, enabled, timeoutMinutes),
+  getSessionLockStatus: (ownerScope: string) => requireContextModule().getSessionLockStatus(ownerScope),
+  unlockSession: (ownerScope: string) => requireContextModule().unlockSession(ownerScope),
+  lockSession: (ownerScope: string) => requireContextModule().lockSession(ownerScope),
+  getDiagnosticsStatus: () => requireContextModule().getDiagnosticsStatus(),
+  startDiagnostics: () => requireContextModule().startDiagnostics(),
+  stopDiagnostics: () => requireContextModule().stopDiagnostics(),
   getInstallationIdentifier: () => requireContextModule().getInstallationIdentifier(),
   enqueueContextEvents: (events: readonly Record<string, unknown>[]) =>
     requireContextModule().enqueueContextEvents(events),
@@ -514,18 +578,27 @@ export const HermesIOSContext = {
     commandId: string,
     input: Parameters<IOSContextNativeModule['writeHealthSampleForCommand']>[1],
   ) => requireContextModule().writeHealthSampleForCommand(commandId, input),
+  writeHealthSamplesForCommand: (commandId: string, samples: readonly Record<string, unknown>[]) =>
+    requireContextModule().writeHealthSamplesForCommand(commandId, samples),
+  deleteHealthSamplesForCommand: (commandId: string, identifier: string) =>
+    requireContextModule().deleteHealthSamplesForCommand(commandId, identifier),
   requestCalendarAuthorization: () => requireContextModule().requestCalendarAuthorization(),
   getCalendarAuthorization: () => requireContextModule().getCalendarAuthorization(),
   requestReminderAuthorization: () => requireContextModule().requestReminderAuthorization(),
   getReminderAuthorization: () => requireContextModule().getReminderAuthorization(),
   listCalendarEvents: (start: number, end: number) =>
     requireContextModule().listCalendarEvents(start, end),
+  listCalendars: () => requireContextModule().listCalendars(),
+  calendarFreeBusy: (start: number, end: number) => requireContextModule().calendarFreeBusy(start, end),
   createCalendarEvent: (input: Parameters<IOSContextNativeModule['createCalendarEvent']>[0]) =>
     requireContextModule().createCalendarEvent(input),
   createCalendarEventForCommand: (
     commandId: string,
     input: Parameters<IOSContextNativeModule['createCalendarEvent']>[0],
   ) => requireContextModule().createCalendarEventForCommand(commandId, input),
+  updateCalendarEventForCommand: (commandId: string, eventID: string, input: Parameters<IOSContextNativeModule['updateCalendarEventForCommand']>[2]) =>
+    requireContextModule().updateCalendarEventForCommand(commandId, eventID, input),
+  deleteCalendarEventForCommand: (commandId: string, eventID: string) => requireContextModule().deleteCalendarEventForCommand(commandId, eventID),
   listReminders: (completed?: boolean) => requireContextModule().listReminders(completed),
   createReminder: (input: Parameters<IOSContextNativeModule['createReminder']>[0]) =>
     requireContextModule().createReminder(input),
@@ -533,6 +606,9 @@ export const HermesIOSContext = {
     commandId: string,
     input: Parameters<IOSContextNativeModule['createReminder']>[0],
   ) => requireContextModule().createReminderForCommand(commandId, input),
+  updateReminderForCommand: (commandId: string, reminderID: string, input: Parameters<IOSContextNativeModule['updateReminderForCommand']>[2]) =>
+    requireContextModule().updateReminderForCommand(commandId, reminderID, input),
+  deleteReminderForCommand: (commandId: string, reminderID: string) => requireContextModule().deleteReminderForCommand(commandId, reminderID),
   readClipboard: () => requireContextModule().readClipboard(),
   readClipboardForCommand: (commandId: string) =>
     requireContextModule().readClipboardForCommand(commandId),
@@ -553,22 +629,63 @@ export const HermesIOSContext = {
   requestPhotosAuthorization: () => requireContextModule().requestPhotosAuthorization(),
   searchPhotos: (input?: Parameters<IOSContextNativeModule['searchPhotos']>[0]) =>
     requireContextModule().searchPhotos(input),
+  listPhotoAlbums: (limit?: number) => requireContextModule().listPhotoAlbums(limit),
+  searchNearbyPhotos: (latitude: number, longitude: number, radiusMeters?: number, limit?: number) =>
+    requireContextModule().searchNearbyPhotos(latitude, longitude, radiusMeters, limit),
+  updatePhotoFavorite: (assetIDs: string[], favorite: boolean) =>
+    requireContextModule().updatePhotoFavorite(assetIDs, favorite),
+  deletePhotos: (assetIDs: string[]) => requireContextModule().deletePhotos(assetIDs),
+  createPhotoAlbum: (title: string) => requireContextModule().createPhotoAlbum(title),
+  addPhotosToAlbum: (assetIDs: string[], albumID: string) => requireContextModule().addPhotosToAlbum(assetIDs, albumID),
+  importPhoto: (ownerScope: string, imageURL: string) => requireContextModule().importPhoto(ownerScope, imageURL),
+  exportPhoto: (ownerScope: string, assetID: string, original?: boolean) => requireContextModule().exportPhoto(ownerScope, assetID, original),
   ocrImage: (input: Parameters<IOSContextNativeModule['ocrImage']>[0]) =>
     requireContextModule().ocrImage(input),
+  analyzeVision: (imageURL: string, ownerScope: string) => requireContextModule().analyzeVision(imageURL, ownerScope),
+  openURLForCommand: (commandId: string, url: string) =>
+    requireContextModule().openURLForCommand(commandId, url),
   getMediaAuthorization: () => requireContextModule().getMediaAuthorization(),
   requestMediaAuthorization: () => requireContextModule().requestMediaAuthorization(),
   getMediaSnapshot: () => requireContextModule().getMediaSnapshot(),
   controlMedia: (action: string) => requireContextModule().controlMedia(action),
+  searchMedia: (query: string, limit?: number) => requireContextModule().searchMedia(query, limit),
+  playMediaSearch: (query: string, limit?: number) => requireContextModule().playMediaSearch(query, limit),
+  setMediaVolume: (volume: number) => requireContextModule().setMediaVolume(volume),
   getBluetoothState: () => requireContextModule().getBluetoothState(),
   scanBluetooth: (seconds?: number) => requireContextModule().scanBluetooth(seconds),
+  connectBluetooth: (ownerScope: string, deviceID: string) => requireContextModule().connectBluetooth(ownerScope, deviceID),
+  disconnectBluetooth: () => requireContextModule().disconnectBluetooth(),
+  bluetoothServices: (ownerScope: string, deviceID: string) => requireContextModule().bluetoothServices(ownerScope, deviceID),
+  bluetoothRead: (ownerScope: string, deviceID: string, serviceUUID: string, characteristicUUID: string) =>
+    requireContextModule().bluetoothRead(ownerScope, deviceID, serviceUUID, characteristicUUID),
+  bluetoothWrite: (ownerScope: string, deviceID: string, serviceUUID: string, characteristicUUID: string, dataBase64: string, withResponse?: boolean) =>
+    requireContextModule().bluetoothWrite(ownerScope, deviceID, serviceUUID, characteristicUUID, dataBase64, withResponse),
+  bluetoothNotify: (ownerScope: string, deviceID: string, serviceUUID: string, characteristicUUID: string, seconds?: number) =>
+    requireContextModule().bluetoothNotify(ownerScope, deviceID, serviceUUID, characteristicUUID, seconds),
   getHomeKitSnapshot: () => requireContextModule().getHomeKitSnapshot(),
+  searchHomeKit: (query?: string, limit?: number) => requireContextModule().searchHomeKit(query, limit),
+  listHomeKitScenes: (limit?: number) => requireContextModule().listHomeKitScenes(limit),
+  triggerHomeKitScene: (sceneID: string) => requireContextModule().triggerHomeKitScene(sceneID),
   setHomeKitValue: (accessoryId: string, characteristicId: string, value: string) =>
     requireContextModule().setHomeKitValue(accessoryId, characteristicId, value),
   startNFCReader: () => requireContextModule().startNFCReader(),
+  writeNFCTag: (text: string) => requireContextModule().writeNFCTag(text),
   scanQRCode: () => requireContextModule().scanQRCode(),
   readPendingAgentTriggers: () => requireContextModule().readPendingAgentTriggers(),
   consumePendingAgentTrigger: (requestId: string) =>
     requireContextModule().consumePendingAgentTrigger(requestId),
+  getAgentShareAttachmentRootUri: (): string | null => {
+    const module = requireContextModule();
+    return typeof module.getAgentShareAttachmentRootUri === 'function'
+      ? module.getAgentShareAttachmentRootUri()
+      : null;
+  },
+  deleteAgentShareAttachment: (filename: string): Promise<boolean> => {
+    const module = requireContextModule();
+    return typeof module.deleteAgentShareAttachment === 'function'
+      ? module.deleteAgentShareAttachment(filename)
+      : Promise.resolve(false);
+  },
   getNativeActionCapabilities: () => requireContextModule().getNativeActionCapabilities?.() ?? [],
   shareTextToNotes: (text: string, title?: string) =>
     requireContextModule().shareTextToNotes(text, title),

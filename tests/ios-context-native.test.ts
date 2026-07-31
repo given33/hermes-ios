@@ -136,7 +136,7 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
   );
   assert.match(service, /stopSpeaking\(\)[\s\S]*finishSpeaking\(utterance\)/);
   assert.match(service, /catch \{[\s\S]*deactivateAudioSession\(\)[\s\S]*throw error/);
-  assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 4);
+  assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 5);
   assert.match(podspec, /'AVFoundation'/);
   assert.match(podspec, /'Speech'/);
   assert.match(chat, /requestVoiceAuthorization/);
@@ -622,6 +622,7 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(provider, /ios-health-write:write/);
   assert.match(provider, /ios-photos:ocr/);
   assert.match(provider, /ios-device:open-url/);
+  assert.match(provider, /if \(\/\^ios-health-write:\/\.test\(key\)\) return null/);
   assert.match(provider, /createCalendarEventForCommand\(command\.id/);
   assert.match(provider, /createReminderForCommand\(command\.id/);
   assert.match(provider, /_relay_device_id: deviceId/);
@@ -740,7 +741,9 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   for (const operation of [
     'getContactsAuthorization', 'requestContactsAuthorization', 'searchContacts', 'createContact', 'createContactForCommand',
     'getPhotosAuthorization', 'requestPhotosAuthorization', 'searchPhotos', 'ocrImage',
-    'requestHealthWriteAuthorization', 'writeHealthSampleForCommand', 'openURL',
+    'requestHealthWriteAuthorization', 'writeHealthSampleForCommand', 'writeHealthSamplesForCommand', 'deleteHealthSamplesForCommand',
+    'startAgentVoiceCapture', 'configureSessionLock', 'getSessionLockStatus', 'unlockSession', 'lockSession',
+    'getDiagnosticsStatus', 'startDiagnostics', 'stopDiagnostics', 'openURL', 'openURLForCommand',
     'readPendingAgentTriggers', 'consumePendingAgentTrigger',
     'getMediaSnapshot', 'controlMedia', 'getBluetoothState', 'scanBluetooth',
     'getHomeKitSnapshot', 'setHomeKitValue', 'startNFCReader', 'scanQRCode', 'getNativeActionCapabilities',
@@ -756,6 +759,12 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(services, /writeValue/);
   assert.match(services, /AVCaptureMetadataOutput/);
   assert.match(services, /VNRecognizeTextRequest/);
+  assert.match(services, /PHImageManager/);
+  assert.match(services, /creationRequestForAssetFromVideo/);
+  assert.match(services, /PHAssetResourceManager/);
+  assert.match(services, /requireAllowedOCRSource/);
+  assert.doesNotMatch(services, /"imageURL": normalizedURL/);
+  assert.match(read('ios/HermesHealthService.swift'), /HKMetadataKeyExternalUUID/);
   assert.match(read('ios/HermesAppIntents.swift'), /HermesSummarizeMeetingIntent/);
   assert.match(read('ios/HermesAppIntents.swift'), /HermesClipboardToEmailIntent/);
   assert.match(provider, /drainPendingAgentTriggers/);
@@ -764,12 +773,45 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(services, /onCancel/);
   assert.match(services, /stateWaiters/);
   assert.match(services, /characteristics/);
+  assert.match(services, /func write\(text: String\)/);
+  assert.match(services, /VNClassifyImageRequest/);
+  assert.match(services, /VNDetectRectanglesRequest/);
+  assert.match(services, /VNDetectFaceRectanglesRequest/);
+  assert.match(services, /func triggerScene/);
+  assert.match(services, /func playSearch/);
+  assert.match(services, /func notify/);
   assert.match(module, /HermesNFCService\.shared\.scan/);
   for (const capability of [
     'ios-contacts', 'ios-photos', 'ios-media', 'ios-bluetooth', 'ios-nfc', 'ios-homekit',
   ]) assert.match(provider, new RegExp(capability.replace('-', '[-]')));
   assert.match(provider, /launchCameraAsync/);
   assert.match(provider, /camera actions require the Hermes app in the foreground/);
+  const moduleSource = read('ios/HermesIOSContextModule.swift');
+  assert.match(moduleSource, /private static func requireCommandID/);
+  assert.match(moduleSource, /value\.count <= 256/);
+  assert.match(moduleSource, /value\.allSatisfy/);
+  assert.match(moduleSource, /writeHealthSamplesForCommand/);
+  assert.match(moduleSource, /deleteHealthSamplesForCommand/);
+  assert.match(read('ios/HermesSessionLockService.swift'), /LAContext/);
+  assert.match(read('ios/HermesSessionLockService.swift'), /deviceOwnerAuthentication/);
+  assert.match(read('ios/HermesIOSContextAppDelegateSubscriber.swift'), /performActionFor shortcutItem/);
+  assert.match(read('ios/HermesIOSContextAppDelegateSubscriber.swift'), /app\.hermes\.quick\.camera-task/);
+  assert.match(read('ios/HermesDiagnosticsService.swift'), /MXMetricManagerSubscriber/);
+  assert.match(read('ios/HermesDiagnosticsService.swift'), /ios-diagnostics/);
+  assert.match(read('ios/HermesLiveActivityService.swift'), /HermesAgentActivityAttributes/);
+  assert.match(read('ios/HermesLiveActivityService.swift'), /sessionCount/);
+  assert.match(read('ios/HermesLiveActivityService.swift'), /privacyMode/);
+  assert.match(read('ios/HermesLiveActivityService.swift'), /ttsEnabled/);
+  for (const operation of [
+    'writeHealthSampleForCommand', 'createCalendarEventForCommand', 'createReminderForCommand',
+    'shareTextToNotesForCommand', 'readClipboardForCommand', 'writeClipboardForCommand',
+    'createContactForCommand', 'openURLForCommand',
+  ]) {
+    const operationStart = moduleSource.indexOf(`AsyncFunction("${operation}")`);
+    assert.ok(operationStart >= 0, `${operation} exists`);
+    const operationBody = moduleSource.slice(operationStart, operationStart + 1_200);
+    assert.match(operationBody, /requireCommandID\(commandID\)/, `${operation} validates command id`);
+  }
 });
 
 test('HealthKit background delivery advances generation-scoped anchors after durable writes', () => {
