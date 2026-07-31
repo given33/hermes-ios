@@ -18,9 +18,12 @@ final class HermesSessionLockService {
     lock.lock()
     defer { lock.unlock() }
     if ownerScope != normalized {
+      let hadOwner = !ownerScope.isEmpty
       ownerScope = normalized
       lastUnlockAt = nil
-      locked = false
+      // The first authenticated owner can enter normally. A later account
+      // switch must never inherit an unlocked session from the prior owner.
+      locked = requestedEnabled && hadOwner
     }
     enabled = requestedEnabled
     if let timeoutMinutes, timeoutMinutes.isFinite {

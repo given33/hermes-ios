@@ -817,6 +817,8 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(moduleSource, /deleteHealthSamplesForCommand/);
   assert.match(read('ios/HermesSessionLockService.swift'), /LAContext/);
   assert.match(read('ios/HermesSessionLockService.swift'), /deviceOwnerAuthentication/);
+  assert.match(read('ios/HermesSessionLockService.swift'), /let hadOwner = !ownerScope\.isEmpty/);
+  assert.match(read('ios/HermesSessionLockService.swift'), /locked = requestedEnabled && hadOwner/);
   assert.match(read('ios/HermesIOSContextAppDelegateSubscriber.swift'), /performActionFor shortcutItem/);
   assert.match(read('ios/HermesIOSContextAppDelegateSubscriber.swift'), /app\.hermes\.quick\.camera-task/);
   assert.match(read('ios/HermesDiagnosticsService.swift'), /MXMetricManagerSubscriber/);
