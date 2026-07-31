@@ -125,10 +125,66 @@ struct HermesRetryTaskIntent: AppIntent {
   }
 }
 
+struct HermesTaskShortcuts: AppShortcutsProvider {
+  static var appShortcuts: [AppShortcut] {
+    [
+      AppShortcut(
+        intent: HermesResumeTaskIntent(),
+        phrases: ["Resume a Hermes task in \(.applicationName)"],
+        shortTitle: "Resume Hermes task",
+        systemImageName: "play.fill"
+      ),
+      AppShortcut(
+        intent: HermesPauseTaskIntent(),
+        phrases: ["Pause a Hermes task in \(.applicationName)"],
+        shortTitle: "Pause Hermes task",
+        systemImageName: "pause.fill"
+      ),
+      AppShortcut(
+        intent: HermesCancelTaskIntent(),
+        phrases: ["Cancel a Hermes task in \(.applicationName)"],
+        shortTitle: "Cancel Hermes task",
+        systemImageName: "xmark"
+      ),
+      AppShortcut(
+        intent: HermesRetryTaskIntent(),
+        phrases: ["Retry a Hermes task in \(.applicationName)"],
+        shortTitle: "Retry Hermes task",
+        systemImageName: "arrow.clockwise"
+      ),
+    ]
+  }
+}
+
 private enum HermesTaskControlError: LocalizedError {
   case invalidTaskID
 
   var errorDescription: String? {
     "A valid Hermes task id is required."
+  }
+}
+
+struct HermesTaskShortcuts: AppShortcutsProvider {
+  static var appShortcuts: [AppShortcut] {
+    [
+      AppShortcut(
+        intent: HermesRefreshContextIntent(),
+        phrases: ["Refresh Hermes context", "刷新 Hermes 上下文"],
+        shortTitle: "Refresh Hermes",
+        systemImageName: "arrow.clockwise"
+      ),
+      AppShortcut(
+        intent: HermesCurrentLocationIntent(),
+        phrases: ["Get my Hermes location", "获取 Hermes 位置"],
+        shortTitle: "Hermes location",
+        systemImageName: "location.fill"
+      ),
+      AppShortcut(
+        intent: HermesResumeTaskIntent(taskID: ""),
+        phrases: ["Resume my Hermes task", "继续 Hermes 任务"],
+        shortTitle: "Resume Hermes task",
+        systemImageName: "play.fill"
+      ),
+    ]
   }
 }

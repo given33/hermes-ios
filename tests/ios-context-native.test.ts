@@ -159,6 +159,8 @@ test('native context exposes independently callable collectors and event streams
     'createCalendarEvent',
     'listReminders',
     'createReminder',
+    'readClipboard',
+    'writeClipboard',
     'shareTextToNotes',
     'enqueueContextEvents',
     'claimPendingEvents',
@@ -534,6 +536,7 @@ test('native relay covers durable cursors, background services, health, watch, n
   const background = read('ios/HermesBackgroundService.swift');
   const watch = read('ios/HermesWatchService.swift');
   const liveActivity = read('ios/HermesLiveActivityService.swift');
+  const appIntents = read('ios/HermesAppIntents.swift');
   assert.match(watch, /currentCollectorGenerationToken\(\)/);
   assert.match(watch, /matches\(message, token: token\)/);
   assert.match(watch, /enqueueBatch\(events\)/);
@@ -547,6 +550,8 @@ test('native relay covers durable cursors, background services, health, watch, n
     'recordCommandCompletion',
     'createCalendarEventForCommand',
     'createReminderForCommand',
+    'readClipboardForCommand',
+    'writeClipboardForCommand',
     'shareTextToNotesForCommand',
     'storePendingCommand',
     'readPendingCommands',
@@ -580,7 +585,7 @@ test('native relay covers durable cursors, background services, health, watch, n
     'ios-location', 'ios-trajectory', 'ios-places', 'ios-motion', 'ios-behavior',
     'qweather', 'amap-route', 'ios-map', 'ios-power', 'ios-health-sleep',
     'ios-health-heart', 'ios-health-oxygen', 'ios-health-activity', 'ios-calendar',
-    'ios-reminders', 'ios-notes', 'ios-screen-time', 'ios-watch', 'ios-notification',
+    'ios-reminders', 'ios-clipboard', 'ios-notes', 'ios-screen-time', 'ios-watch', 'ios-notification',
     'ios-live-activity', 'ios-device',
   ]) {
     assert.match(provider, new RegExp(capability.replace('-', '[-]')));
@@ -600,6 +605,11 @@ test('native relay covers durable cursors, background services, health, watch, n
     'native execution checkpoints are recovered before command expiry is evaluated',
   );
   assert.match(provider, /_relay_attempts:/);
+  assert.match(provider, /nativeActionMetadata\(command\)/);
+  assert.match(provider, /recordIOSActionAudit/);
+  assert.match(provider, /user confirmation required/);
+  assert.match(provider, /ios-clipboard:read/);
+  assert.match(provider, /ios-clipboard:write/);
   assert.match(provider, /createCalendarEventForCommand\(command\.id/);
   assert.match(provider, /createReminderForCommand\(command\.id/);
   assert.match(provider, /_relay_device_id: deviceId/);
@@ -674,6 +684,21 @@ test('native relay covers durable cursors, background services, health, watch, n
   );
   assert.match(watch, /WCSessionDelegate/);
   assert.match(liveActivity, /ActivityAttributes/);
+  for (const field of [
+    'kind', 'taskID', 'status', 'progress', 'currentTool', 'approvalRequired', 'actionDeepLink',
+  ]) {
+    assert.match(liveActivity, new RegExp(`var ${field}:`));
+  }
+  assert.match(liveActivity, /safeTaskDeepLink/);
+  assert.match(liveActivity, /progressValue/);
+  assert.match(appIntents, /HermesTaskControlStore/);
+  for (const intent of [
+    'HermesResumeTaskIntent', 'HermesPauseTaskIntent', 'HermesCancelTaskIntent', 'HermesRetryTaskIntent',
+  ]) {
+    assert.match(appIntents, new RegExp(`struct ${intent}: AppIntent`));
+  }
+  assert.match(appIntents, /struct HermesTaskShortcuts: AppShortcutsProvider/);
+  assert.match(appIntents, /allowedActions/);
 });
 
 test('HealthKit sleep totals retain generic asleep samples', () => {

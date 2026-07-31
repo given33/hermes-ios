@@ -92,6 +92,12 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   const widget = read('native-extensions/HermesWeatherWidget/HermesWeatherWidget.swift');
   assert.match(widget, /ActivityConfiguration/);
   assert.match(widget, /DynamicIsland/);
+  assert.match(widget, /AgentTaskLockScreenView/);
+  assert.match(widget, /AgentTaskExpandedView/);
+  assert.match(widget, /action: "pause"/);
+  assert.match(widget, /action: "cancel"/);
+  assert.match(widget, /action: "retry"/);
+  assert.match(widget, /action: "approve"/);
   assert.ok(existsSync(resolve(projectRoot, 'native-extensions/HermesWeatherWidget/Info.plist')));
 
   const watch = read('native-extensions/HermesWatchApp/HermesWatchApp.swift');
