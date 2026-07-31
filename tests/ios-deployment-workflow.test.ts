@@ -15,8 +15,8 @@ test('iOS unsigned builds accept only validated backend release events', () => {
   assert.match(workflow, /backend_commit/);
   assert.match(workflow, /backend_version/);
   assert.match(workflow, /trigger/);
-  assert.match(workflow, /run-name: Backend release/);
-  assert.match(workflow, /cancel-in-progress: \$\{\{ github\.event_name == 'repository_dispatch' \}\}/);
+  assert.match(workflow, /run-name: Backend release \$\{\{ github\.event\.client_payload\.commit \|\| github\.sha \}\}/);
+  assert.match(workflow, /cancel-in-progress: false/);
 });
 
 test('production EAS builds fail closed and verify signed artifact output', () => {
@@ -25,21 +25,37 @@ test('production EAS builds fail closed and verify signed artifact output', () =
   assert.match(workflow, /repository_dispatch:/);
   assert.match(workflow, /hermes-backend-release/);
   assert.match(workflow, /EXPO_TOKEN: \$\{\{ secrets\.EXPO_TOKEN \}\}/);
+  assert.match(workflow, /EXPO_PROJECT_ID: \$\{\{ secrets\.EXPO_PROJECT_ID \}\}/);
   assert.match(workflow, /EXPO_TOKEN is required for a signed production EAS build/);
+  assert.match(workflow, /EXPO_PROJECT_ID must be the UUID/);
   assert.match(workflow, /--profile production/);
   assert.match(workflow, /--non-interactive/);
   assert.match(workflow, /--wait/);
   assert.match(workflow, /--json/);
   assert.match(workflow, /EAS JSON did not contain a completed build artifact URL/);
+  assert.match(workflow, /EAS app version mismatch/);
+  assert.match(workflow, /EAS source commit mismatch/);
+  assert.match(workflow, /EAS build number is invalid/);
   assert.match(workflow, /curl --fail --location --retry 3/);
   assert.match(workflow, /unzip -t/);
   assert.match(workflow, /verify-production-app\.mjs/);
   assert.match(workflow, /Hermes-Agent-production\.ipa\.sha256/);
+  assert.match(workflow, /hermes\.ios\.production-build\.v1/);
+  assert.match(workflow, /Hermes-Agent-production-build\.json/);
   assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/);
-  assert.match(workflow, /run-name: Backend release/);
-  assert.match(workflow, /cancel-in-progress: \$\{\{ github\.event_name == 'repository_dispatch' \}\}/);
+  assert.match(workflow, /run-name: Backend release signed/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /name: Deduplicate backend release dispatch/);
+  assert.match(workflow, /actions\/runs\?event=repository_dispatch/);
+  assert.match(workflow, /Backend release signed /);
+  assert.match(workflow, /should_build=false/);
+  assert.match(workflow, /needs: dedupe/);
   assert.match(eas, /"appVersionSource": "local"/);
   assert.match(eas, /"production": \{[\s\S]*"autoIncrement": true/);
+  const appConfig = read('app.config.js');
+  assert.match(appConfig, /EXPO_PROJECT_ID/);
+  assert.match(appConfig, /projectId: expoProjectId/);
+  assert.match(appConfig, /EXPO_PROJECT_ID must be the UUID/);
 });
 
 test('all iOS workflows pin third-party actions to immutable commits', () => {

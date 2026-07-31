@@ -1,6 +1,6 @@
 name: Build signed production iOS IPA
 
-run-name: Backend release ${{ github.event.client_payload.commit || github.sha }}
+run-name: Backend release signed ${{ github.event.client_payload.commit || github.sha }}
 
 on:
   workflow_dispatch:
@@ -13,13 +13,64 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ios-production-${{ github.event.client_payload.commit || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'repository_dispatch' }}
+  cancel-in-progress: false
 
 jobs:
+  dedupe:
+    name: Deduplicate backend release dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_build: ${{ steps.decision_default.outputs.should_build }}
+    steps:
+      - name: Check for an existing successful signed build
+        id: decision
+        if: github.event_name == 'repository_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKEND_COMMIT: ${{ github.event.client_payload.commit || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BACKEND_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo 'repository_dispatch commit must be a 40-character lowercase SHA.' >&2
+            exit 1
+          }
+          runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?event=repository_dispatch&per_page=100")"
+          successful="$(jq -r \
+            --arg commit "$BACKEND_COMMIT" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            '[.workflow_runs[]
+              | select((.id | tostring) != $run_id)
+              | select(.display_title == ("Backend release signed " + $commit))
+              | select(.status == "completed" and .conclusion == "success")]
+              | length' <<<"$runs")"
+          if [ "$successful" -gt 0 ]; then
+            echo "A successful signed build already exists for backend commit $BACKEND_COMMIT; skipping duplicate dispatch."
+            echo 'should_build=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'should_build=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build non-dispatch events
+        id: non_dispatch
+        if: github.event_name != 'repository_dispatch'
+        run: echo 'should_build=true' >> "$GITHUB_OUTPUT"
+      - name: Publish the build decision
+        id: decision_default
+        run: |
+          if [ -n "${{ steps.decision.outputs.should_build }}" ]; then
+            echo "should_build=${{ steps.decision.outputs.should_build }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=${{ steps.non_dispatch.outputs.should_build }}" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: dedupe
+    if: needs.dedupe.outputs.should_build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -27,6 +78,7 @@ jobs:
       HERMES_DISTRIBUTABLE_BUILD: '1'
       HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_PROJECT_ID: ${{ secrets.EXPO_PROJECT_ID }}
       BACKEND_COMMIT: ${{ github.event.client_payload.commit || '' }}
       BACKEND_VERSION: ${{ github.event.client_payload.version || '' }}
     steps:
@@ -50,6 +102,10 @@ jobs:
           set -euo pipefail
           if [ -z "$EXPO_TOKEN" ]; then
             echo 'EXPO_TOKEN is required for a signed production EAS build.' >&2
+            exit 1
+          fi
+          if [[ ! "$EXPO_PROJECT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
+            echo 'EXPO_PROJECT_ID must be the UUID of the already initialized EAS project.' >&2
             exit 1
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -103,6 +159,17 @@ jobs:
           if (status && !['FINISHED', 'SUCCEEDED'].includes(status)) {
             throw new Error(`EAS build finished with unexpected status: ${status}`);
           }
+          const expectedVersion = JSON.parse(readFileSync('app.base.json', 'utf8')).expo?.version;
+          if (typeof expectedVersion !== 'string' || build.appVersion !== expectedVersion) {
+            throw new Error(`EAS app version mismatch: expected ${expectedVersion}, got ${build.appVersion}`);
+          }
+          const sourceCommit = build.gitCommitHash || build.gitCommit;
+          if (sourceCommit !== process.env.GITHUB_SHA) {
+            throw new Error(`EAS source commit mismatch: expected ${process.env.GITHUB_SHA}, got ${sourceCommit}`);
+          }
+          if (!/^[1-9][0-9]*$/.test(String(build.appBuildVersion || ''))) {
+            throw new Error(`EAS build number is invalid: ${build.appBuildVersion}`);
+          }
           const artifactUrl = build.artifacts?.buildUrl || build.artifacts?.applicationArchiveUrl || build.buildUrl;
           if (!/^https:\/\//.test(String(artifactUrl))) {
             throw new Error('EAS build artifact URL is not an HTTPS URL.');
@@ -132,6 +199,36 @@ jobs:
           shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-production.ipa" \
             | awk '{print $1 "  Hermes-Agent-production.ipa"}' \
             > "$RUNNER_TEMP/Hermes-Agent-production.ipa.sha256"
+          node --input-type=module - <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+
+          const raw = readFileSync(process.env.RUNNER_TEMP + '/eas-build.json', 'utf8');
+          const values = [raw.trim(), ...raw.split(/\r?\n/)].flatMap((value) => {
+            try { return [JSON.parse(value)]; } catch { return []; }
+          });
+          const build = values.flatMap((value) => Array.isArray(value) ? value : [value])
+            .find((value) => value && typeof value === 'object' && (
+              value.artifacts?.buildUrl || value.artifacts?.applicationArchiveUrl || value.buildUrl
+            ));
+          if (!build?.id) throw new Error('EAS build metadata is missing the build id.');
+          const ipa = readFileSync(process.env.RUNNER_TEMP + '/Hermes-Agent-production.ipa');
+          const metadata = {
+            schema: 'hermes.ios.production-build.v1',
+            trigger: process.env.GITHUB_EVENT_NAME,
+            ios_commit: process.env.GITHUB_SHA,
+            backend_commit: process.env.BACKEND_COMMIT || null,
+            backend_version: process.env.BACKEND_VERSION || null,
+            eas_build_id: build.id,
+            app_version: build.appVersion,
+            app_build_number: String(build.appBuildVersion),
+            artifact_sha256: createHash('sha256').update(ipa).digest('hex'),
+          };
+          writeFileSync(
+            process.env.RUNNER_TEMP + '/Hermes-Agent-production-build.json',
+            `${JSON.stringify(metadata)}\n`,
+          );
+          NODE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Hermes-Agent-production-eas-${{ github.sha }}
@@ -140,3 +237,4 @@ jobs:
             ${{ runner.temp }}/eas-build.json
             ${{ runner.temp }}/Hermes-Agent-production.ipa
             ${{ runner.temp }}/Hermes-Agent-production.ipa.sha256
+            ${{ runner.temp }}/Hermes-Agent-production-build.json

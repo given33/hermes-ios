@@ -6,7 +6,11 @@ module.exports = () => {
     || ['development', 'preview', 'production'].includes(buildProfile);
   const frontendPreview = String(process.env.EXPO_PUBLIC_FRONTEND_PREVIEW || '').trim();
   const amapIOSAPIKey = String(process.env.HERMES_AMAP_IOS_API_KEY || '').trim();
+  const expoProjectId = String(process.env.EXPO_PROJECT_ID || '').trim();
   const bundleIdentifier = String(base.ios.bundleIdentifier || '').trim();
+  if (expoProjectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(expoProjectId)) {
+    throw new Error('EXPO_PROJECT_ID must be the UUID of the already initialized EAS project.');
+  }
   const localDevelopmentBuild = !distributableBuild && process.env.NODE_ENV !== 'production';
   const apnsEnvironment = buildProfile === 'development' || localDevelopmentBuild
     ? 'development'
@@ -19,6 +23,12 @@ module.exports = () => {
   }
   return {
     ...base,
+    extra: {
+      ...base.extra,
+      ...(expoProjectId
+        ? { eas: { ...base.extra?.eas, projectId: expoProjectId } }
+        : {}),
+    },
     ios: {
       ...base.ios,
       entitlements: {

@@ -18,7 +18,7 @@ permissions:
 
 concurrency:
   group: ios-unsigned-${{ github.event.client_payload.commit || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'repository_dispatch' }}
+  cancel-in-progress: false
 
 jobs:
   build:
