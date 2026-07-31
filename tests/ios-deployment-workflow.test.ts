@@ -35,11 +35,26 @@ test('production EAS builds fail closed and verify signed artifact output', () =
   assert.match(workflow, /unzip -t/);
   assert.match(workflow, /verify-production-app\.mjs/);
   assert.match(workflow, /Hermes-Agent-production\.ipa\.sha256/);
-  assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/);
   assert.match(workflow, /run-name: Backend release/);
   assert.match(workflow, /cancel-in-progress: \$\{\{ github\.event_name == 'repository_dispatch' \}\}/);
   assert.match(eas, /"appVersionSource": "local"/);
   assert.match(eas, /"production": \{[\s\S]*"autoIncrement": true/);
+});
+
+test('all iOS workflows pin third-party actions to immutable commits', () => {
+  const workflows = [
+    read('.github/workflows/ci.yml'),
+    read('.github/workflows/ios-unsigned.yml'),
+    read('.github/workflows/ios-production-eas.yml'),
+  ];
+  for (const workflow of workflows) {
+    for (const line of workflow.split(/\r?\n/)) {
+      if (line.includes('uses:')) {
+        assert.match(line, /uses:\s+[^@]+@[0-9a-f]{40}/, line);
+      }
+    }
+  }
 });
 
 test('the local EAS helper resolves Node portably and pins the CLI version', () => {
