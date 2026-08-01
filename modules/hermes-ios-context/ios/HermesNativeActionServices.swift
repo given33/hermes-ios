@@ -980,7 +980,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
 
   func scan(seconds: Double) async throws -> [[String: Any]] {
     if scanContinuation != nil || scanTask != nil {
-      finishScan()
+      finishScan(error: CancellationError())
     }
     let currentState = manager.state
     let resolvedState: CBManagerState
@@ -1007,7 +1007,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
         // Install the continuation before starting CoreBluetooth so a caller
         // that cancels at the boundary cannot leave an unresumable scan.
         guard !Task.isCancelled else {
-          finishScan()
+          finishScan(error: CancellationError())
           return
         }
         scanResults = []
@@ -1020,7 +1020,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
         }
       }
     } onCancel: { [weak self] in
-      self?.finishScan()
+      self?.finishScan(error: CancellationError())
     }
   }
 
@@ -1119,6 +1119,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     return try await withCheckedThrowingContinuation { continuation in
       readContinuations[uuid] = continuation
       guard let peripheral = characteristic.service?.peripheral else {
+        readContinuations.removeValue(forKey: uuid)
         continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
         return
       }
@@ -1150,6 +1151,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     return try await withCheckedThrowingContinuation { continuation in
       writeContinuations[uuid] = continuation
       guard let peripheral = characteristic.service?.peripheral else {
+        writeContinuations.removeValue(forKey: uuid)
         continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
         return
       }
@@ -1305,13 +1307,17 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     else { continuation?.resume(returning: result ?? []) }
   }
 
-  private func finishScan() {
+  private func finishScan(error: Error? = nil) {
     manager.stopScan()
     scanTask?.cancel()
     scanTask = nil
     let continuation = scanContinuation
     scanContinuation = nil
-    continuation?.resume(returning: scanResults)
+    if let error {
+      continuation?.resume(throwing: error)
+    } else {
+      continuation?.resume(returning: scanResults)
+    }
   }
 
   private func bluetoothState(_ state: CBManagerState) -> String {

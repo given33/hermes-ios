@@ -824,6 +824,9 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(services, /func playSearch/);
   assert.match(services, /func notify/);
   assert.match(services, /scanContinuation = continuation[\s\S]*guard !Task\.isCancelled/);
+  assert.match(services, /onCancel: \{ \[weak self\] in\s+self\?\.finishScan\(error: CancellationError\(\)\)/);
+  assert.match(services, /readContinuations\.removeValue\(forKey: uuid\)[\s\S]*bluetooth-peripheral/);
+  assert.match(services, /writeContinuations\.removeValue\(forKey: uuid\)[\s\S]*bluetooth-peripheral/);
   assert.match(services, /\.state == \.connected \|\| \$0\.state == \.connecting/);
   assert.match(services, /bluetooth-connect-busy/);
   assert.match(services, /bluetooth-read-busy/);
