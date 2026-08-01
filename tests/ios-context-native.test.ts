@@ -288,6 +288,7 @@ test('native browser bridge exposes bounded OpenMinis-compatible actions', () =>
   assert.match(service, /maxFetchBytes = 10 \* 1024 \* 1024/);
   assert.match(service, /scheme == "http" \|\| scheme == "https"/);
   assert.match(service, /websiteDataStore = \.nonPersistent\(\)/);
+  assert.match(service, /let domain = \(item\["domain"\].*webView\.url\?\.host/s);
   assert.match(service, /ownerKey: String/);
   assert.match(service, /tab\.ownerKey == ownerKey/);
   assert.ok(service.includes('document.querySelector(\\(Self.jsString(selector))'));

@@ -395,9 +395,14 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     var written = 0
     for item in raw {
       guard let name = item["name"] as? String, !name.isEmpty,
-            let value = item["value"] as? String,
-            let url = webView.url else { throw HermesBrowserServiceError.invalidInput("cookies") }
-      let properties = Self.cookieProperties(item, name: name, value: value, url: url)
+            let value = item["value"] as? String else { throw HermesBrowserServiceError.invalidInput("cookies") }
+      // A caller may seed a fresh tab before its first navigation. In that
+      // case there is no webView URL yet, so use the cookie's explicit domain
+      // and only fall back to the current page when the domain is omitted.
+      let domain = (item["domain"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        ?? webView.url?.host
+      guard let domain, !domain.isEmpty else { throw HermesBrowserServiceError.invalidInput("cookies") }
+      let properties = Self.cookieProperties(item, name: name, value: value, domain: domain)
       guard let cookie = HTTPCookie(properties: properties) else { throw HermesBrowserServiceError.invalidInput("cookies") }
       try await withCheckedThrowingContinuation { continuation in
         store.setCookie(cookie) { continuation.resume() }
@@ -407,8 +412,8 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     return written
   }
 
-  private static func cookieProperties(_ item: [String: Any], name: String, value: String, url: URL) -> [HTTPCookiePropertyKey: Any] {
-    var result: [HTTPCookiePropertyKey: Any] = [.name: name, .value: value, .path: (item["path"] as? String) ?? "/", .domain: (item["domain"] as? String) ?? (url.host ?? "")]
+  private static func cookieProperties(_ item: [String: Any], name: String, value: String, domain: String) -> [HTTPCookiePropertyKey: Any] {
+    var result: [HTTPCookiePropertyKey: Any] = [.name: name, .value: value, .path: (item["path"] as? String) ?? "/", .domain: domain]
     if let secure = item["secure"] as? Bool, secure { result[.secure] = "TRUE" }
     if let expires = item["expires"] as? NSNumber { result[.expires] = Date(timeIntervalSince1970: expires.doubleValue) }
     return result
