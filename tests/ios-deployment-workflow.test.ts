@@ -20,6 +20,8 @@ test('iOS unsigned builds accept only validated backend release events', () => {
   assert.match(workflow, /permissions:\s+contents: read/);
   assert.match(workflow, /find "\$RUNNER_TEMP\/ipa\/Payload" -name _CodeSignature/);
   assert.match(workflow, /-name embedded\.mobileprovision -o -name CodeResources/);
+  assert.match(workflow, /CFBundleExecutable/);
+  assert.match(workflow, /chmod u\+x,go\+x/);
   assert.match(workflow, /verify-resignable-ipa\.mjs/);
   assert.match(workflow, /--bundle-id \"\$APP_BUNDLE_IDENTIFIER\"/);
   assert.doesNotMatch(workflow, /Publish the tagged release/);

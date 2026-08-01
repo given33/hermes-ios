@@ -349,6 +349,19 @@ jobs:
           find "$RUNNER_TEMP/ipa/Payload" \
             \( -name embedded.mobileprovision -o -name CodeResources \) \
             -type f -delete
+          # Xcode can emit prebuilt static/dynamic framework executables as 0644.
+          # Restore the executable bit from each bundle's declared executable so
+          # a third-party signer does not produce an install-invalid IPA.
+          while IFS= read -r -d '' plist; do
+            executable_name="$(plutil -extract CFBundleExecutable raw "$plist" 2>/dev/null || true)"
+            if [ -z "$executable_name" ]; then
+              continue
+            fi
+            executable_path="$(dirname "$plist")/$executable_name"
+            if [ -f "$executable_path" ]; then
+              chmod u+x,go+x "$executable_path"
+            fi
+          done < <(find "$RUNNER_TEMP/ipa/Payload" -type f -name Info.plist -print0)
           cd "$RUNNER_TEMP/ipa"
           ditto -c -k --sequesterRsrc --keepParent Payload "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
           unzip -t "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
