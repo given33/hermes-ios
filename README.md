@@ -40,3 +40,32 @@ GitHub 的 `Build unsigned iOS IPA` 工作流不需要 Apple 证书。手动运�
 - 最低系统版本：iOS 18.0。
 
 应用不内置或持久化 Hermes 密码、SSH 私钥或 GitHub token。本机只持久化 Base URL、用户名、Keychain 中的短期访问令牌、受 Face ID 保护的刷新令牌、主题/字体偏好，以及后续有明确边界的本地日志；会话、消息、附件、任务结果、配置和 Profile 由服务器保存。
+
+### Re-signing the unsigned IPA
+The unsigned artifact is intentionally not installable until it is signed by
+your Apple signing tool. The signer must preserve every bundle identifier and
+build version, then sign recursively in this order: embedded frameworks,
+embedded app extensions, the Watch app and Watch extension, and finally the
+main application. Each code bundle needs the matching provisioning profile,
+entitlements, and application identifier for the same Team ID. Do not remove
+or rename `Payload`, `PlugIns`, `Frameworks`, or `Watch` entries.
+
+Before installing, verify the signed result with:
+
+```text
+unzip -t Hermes-Agent-signed.ipa
+codesign --verify --deep --strict --verbose=2 Payload/*.app
+codesign -d --entitlements :- Payload/*.app
+```
+
+The CI package step runs `scripts/verify-resignable-ipa.mjs` before publishing
+the artifact. It rejects path traversal, symbolic links, missing executable
+metadata, duplicate bundle identifiers, missing Hermes extensions, and stale
+signing output. If a signing tool only signs the top-level `.app`, the IPA will
+still fail installation because iOS validates every nested code signature; use
+the tool's recursive or "sign embedded frameworks/extensions" mode.
+
+Signed EAS builds use the GitHub run ID as a unique iOS build number. The
+dynamic Expo config evaluates this before the remote build starts, so the
+production workflow does not depend on a pre-initialized EAS version record or
+modify tracked source files.

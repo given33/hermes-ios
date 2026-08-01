@@ -26,7 +26,7 @@
       }
     },
     "production": {
-      "autoIncrement": true,
+      "autoIncrement": false,
       "env": {
         "EXPO_PUBLIC_FRONTEND_PREVIEW": "0",
         "HERMES_DISTRIBUTABLE_BUILD": "1"

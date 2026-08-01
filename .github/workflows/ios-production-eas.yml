@@ -8,11 +8,13 @@ on:
     types:
       - hermes-backend-release
   push:
+    branches:
+      - main
     tags:
       - 'v*.*.*'
 
 permissions:
-  contents: read
+  contents: write
   actions: read
 
 concurrency:
@@ -71,7 +73,7 @@ jobs:
   build:
     needs: dedupe
     if: needs.dedupe.outputs.should_build == 'true'
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
@@ -79,6 +81,7 @@ jobs:
       HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
       EXPO_PROJECT_ID: ${{ secrets.EXPO_PROJECT_ID }}
+      HERMES_CI_BUILD_NUMBER: ${{ github.run_id }}
       BACKEND_COMMIT: ${{ github.event.client_payload.commit || '' }}
       BACKEND_VERSION: ${{ github.event.client_payload.version || '' }}
     steps:
@@ -106,6 +109,10 @@ jobs:
           fi
           if [[ ! "$EXPO_PROJECT_ID" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$ ]]; then
             echo 'EXPO_PROJECT_ID must be the UUID of the already initialized EAS project.' >&2
+            exit 1
+          fi
+          if [[ ! "$HERMES_CI_BUILD_NUMBER" =~ ^[1-9][0-9]{0,17}$ ]]; then
+            echo 'HERMES_CI_BUILD_NUMBER must be a positive iOS build number with at most 18 digits.' >&2
             exit 1
           fi
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -181,6 +188,11 @@ jobs:
           if (!/^[1-9][0-9]*$/.test(String(build.appBuildVersion || ''))) {
             throw new Error(`EAS build number is invalid: ${build.appBuildVersion}`);
           }
+          if (String(build.appBuildVersion) !== process.env.HERMES_CI_BUILD_NUMBER) {
+            throw new Error(
+              `EAS build number mismatch: expected ${process.env.HERMES_CI_BUILD_NUMBER}, got ${build.appBuildVersion}`,
+            );
+          }
           const artifactUrl = build.artifacts?.buildUrl || build.artifacts?.applicationArchiveUrl || build.buildUrl;
           if (!/^https:\/\//.test(String(artifactUrl))) {
             throw new Error('EAS build artifact URL is not an HTTPS URL.');
@@ -206,6 +218,35 @@ jobs:
           unzip -q "$RUNNER_TEMP/Hermes-Agent-production.ipa" -d "$RUNNER_TEMP/production-ipa"
           APP_PATH="$(find "$RUNNER_TEMP/production-ipa/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
           test -n "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          verify_signed_bundle() {
+            local bundle="$1"
+            local relative_bundle="${bundle#$APP_PATH/}"
+            local bundle_identifier
+            local team_identifier
+            local profile_plist
+            local profile_application_identifier
+            local profile_team_identifier
+            test -s "$bundle/embedded.mobileprovision"
+            codesign --verify --strict --verbose=2 "$bundle"
+            bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$bundle/Info.plist")"
+            test -n "$bundle_identifier"
+            team_identifier="$(codesign -d --verbose=4 "$bundle" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
+            test -n "$team_identifier"
+            profile_plist="$RUNNER_TEMP/profile-$(printf '%s' "$relative_bundle" | shasum -a 256 | awk '{print $1}').plist"
+            security cms -D -i "$bundle/embedded.mobileprovision" -o "$profile_plist"
+            profile_application_identifier="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")"
+            test "$profile_application_identifier" = "$team_identifier.$bundle_identifier"
+            profile_team_identifier="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.developer.team-identifier' "$profile_plist")"
+            test "$profile_team_identifier" = "$team_identifier"
+            echo "Verified signed bundle $relative_bundle ($bundle_identifier, team $team_identifier)."
+          }
+          while IFS= read -r signed_bundle; do
+            verify_signed_bundle "$signed_bundle"
+          done < <(find "$APP_PATH" -type d \( -name '*.app' -o -name '*.appex' \) -print | sort)
+          APP_BUNDLE_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")"
+          EXPECTED_BUNDLE_IDENTIFIER="$(node -p "require('./app.base.json').expo.ios.bundleIdentifier")"
+          test "$APP_BUNDLE_IDENTIFIER" = "$EXPECTED_BUNDLE_IDENTIFIER"
           node scripts/verify-production-app.mjs "$APP_PATH"
           shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-production.ipa" \
             | awk '{print $1 "  Hermes-Agent-production.ipa"}' \
@@ -249,3 +290,27 @@ jobs:
             ${{ runner.temp }}/Hermes-Agent-production.ipa
             ${{ runner.temp }}/Hermes-Agent-production.ipa.sha256
             ${{ runner.temp }}/Hermes-Agent-production-build.json
+      - name: Publish the signed production release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for asset in Hermes-Agent-unsigned.ipa Hermes-Agent-unsigned.ipa.sha256 Hermes-Agent-build.json; do
+            gh release delete-asset "$GITHUB_REF_NAME" "$asset" --yes >/dev/null 2>&1 || true
+          done
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              "$RUNNER_TEMP/Hermes-Agent-production.ipa" \
+              "$RUNNER_TEMP/Hermes-Agent-production.ipa.sha256" \
+              "$RUNNER_TEMP/Hermes-Agent-production-build.json" \
+              --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              "$RUNNER_TEMP/Hermes-Agent-production.ipa" \
+              "$RUNNER_TEMP/Hermes-Agent-production.ipa.sha256" \
+              "$RUNNER_TEMP/Hermes-Agent-production-build.json" \
+              --generate-notes \
+              --title "Hermes Agent $GITHUB_REF_NAME"
+          fi

@@ -17,6 +17,13 @@ test('iOS unsigned builds accept only validated backend release events', () => {
   assert.match(workflow, /trigger/);
   assert.match(workflow, /run-name: Backend release \$\{\{ github\.event\.client_payload\.commit \|\| github\.sha \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /permissions:\s+contents: read/);
+  assert.match(workflow, /find "\$RUNNER_TEMP\/ipa\/Payload" -name _CodeSignature/);
+  assert.match(workflow, /-name embedded\.mobileprovision -o -name CodeResources/);
+  assert.match(workflow, /verify-resignable-ipa\.mjs/);
+  assert.match(workflow, /--bundle-id \"\$APP_BUNDLE_IDENTIFIER\"/);
+  assert.doesNotMatch(workflow, /Publish the tagged release/);
+  assert.doesNotMatch(workflow, /gh release (?:create|upload)/);
   assert.match(workflow, /Install locked dependencies with network retry/);
   assert.match(workflow, /pnpm install attempt \$\{attempt\}\/3 failed/);
   assert.match(workflow, /sleep \$\(\(attempt \* 10\)\)/);
@@ -27,6 +34,11 @@ test('production EAS builds fail closed and verify signed artifact output', () =
   const eas = read('eas.json');
   assert.match(workflow, /repository_dispatch:/);
   assert.match(workflow, /hermes-backend-release/);
+  assert.match(workflow, /push:\s+branches:\s+- main/);
+  assert.match(workflow, /runs-on: macos-15/);
+  assert.match(workflow, /permissions:\s+contents: write/);
+  assert.match(workflow, /HERMES_CI_BUILD_NUMBER: \$\{\{ github\.run_id \}\}/);
+  assert.match(workflow, /HERMES_CI_BUILD_NUMBER must be a positive iOS build number/);
   assert.match(workflow, /EXPO_TOKEN: \$\{\{ secrets\.EXPO_TOKEN \}\}/);
   assert.match(workflow, /EXPO_PROJECT_ID: \$\{\{ secrets\.EXPO_PROJECT_ID \}\}/);
   assert.match(workflow, /EXPO_TOKEN is required for a signed production EAS build/);
@@ -39,9 +51,19 @@ test('production EAS builds fail closed and verify signed artifact output', () =
   assert.match(workflow, /EAS app version mismatch/);
   assert.match(workflow, /EAS source commit mismatch/);
   assert.match(workflow, /EAS build number is invalid/);
+  assert.match(workflow, /EAS build number mismatch/);
   assert.match(workflow, /curl --fail --location --retry 3/);
   assert.match(workflow, /unzip -t/);
   assert.match(workflow, /verify-production-app\.mjs/);
+  assert.match(workflow, /codesign --verify --deep --strict --verbose=2/);
+  assert.match(workflow, /verify_signed_bundle\(\)/);
+  assert.match(workflow, /codesign --verify --strict --verbose=2/);
+  assert.match(workflow, /find "\$APP_PATH" -type d \\\( -name '\*\.app' -o -name '\*\.appex' \\\)/);
+  assert.match(workflow, /profile-\$\(printf '%s' "\$relative_bundle" \| shasum -a 256/);
+  assert.match(workflow, /embedded\.mobileprovision/);
+  assert.match(workflow, /security cms -D/);
+  assert.match(workflow, /application-identifier/);
+  assert.match(workflow, /com\.apple\.developer\.team-identifier/);
   assert.match(workflow, /Hermes-Agent-production\.ipa\.sha256/);
   assert.match(workflow, /hermes\.ios\.production-build\.v1/);
   assert.match(workflow, /Hermes-Agent-production-build\.json/);
@@ -56,12 +78,36 @@ test('production EAS builds fail closed and verify signed artifact output', () =
   assert.match(workflow, /Backend release signed /);
   assert.match(workflow, /should_build=false/);
   assert.match(workflow, /needs: dedupe/);
+  assert.match(workflow, /Publish the signed production release/);
+  assert.match(workflow, /gh release upload/);
+  assert.match(workflow, /Hermes-Agent-production\.ipa/);
   assert.match(eas, /"appVersionSource": "local"/);
-  assert.match(eas, /"production": \{[\s\S]*"autoIncrement": true/);
+  assert.match(eas, /"production": \{[\s\S]*"autoIncrement": false/);
+  assert.doesNotMatch(eas, /"autoIncrement": true/);
   const appConfig = read('app.config.js');
+  assert.match(appConfig, /HERMES_CI_BUILD_NUMBER/);
+  assert.match(appConfig, /buildNumber: ciBuildNumber/);
+  assert.match(appConfig, /at most 18 digits/);
   assert.match(appConfig, /EXPO_PROJECT_ID/);
   assert.match(appConfig, /projectId: expoProjectId/);
   assert.match(appConfig, /EXPO_PROJECT_ID must be the UUID/);
+});
+
+test('unsigned IPA verifier protects third-party signing inputs', () => {
+  const verifier = read('scripts/verify-resignable-ipa.mjs');
+  assert.match(verifier, /unzip/);
+  assert.match(verifier, /plutil/);
+  assert.match(verifier, /Payload/);
+  assert.match(verifier, /_CodeSignature/);
+  assert.match(verifier, /embedded\.mobileprovision/);
+  assert.match(verifier, /CodeResources/);
+  assert.match(verifier, /symbolic link/);
+  assert.match(verifier, /\.framework/);
+  assert.match(verifier, /\.appex/);
+  assert.match(verifier, /isStaticFrameworkArchive/);
+  assert.match(verifier, /!<arch>/);
+  assert.match(verifier, /watchapp\.watchkitextension/);
+  assert.match(verifier, /nested app build version mismatch/);
 });
 
 test('all iOS workflows pin third-party actions to immutable commits', () => {

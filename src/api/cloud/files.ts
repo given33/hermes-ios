@@ -63,8 +63,8 @@ export class HermesFilesCloudApi {
       query: {
         date_from: query.dateFrom,
         date_to: query.dateTo,
-        limit: query.limit ?? 200,
-        offset: query.offset ?? 0,
+        limit: normalizePageLimit(query.limit),
+        offset: normalizePageOffset(query.offset),
         q: query.keyword,
         source: query.source,
         status: query.status,
@@ -105,7 +105,13 @@ export class HermesFilesCloudApi {
     const filters = toolOutputServerFilters(query);
     return this.transport.request<ToolOutputArtifactsResponse>(
       `${COLLABORATION}/tool-output-artifacts`,
-      { query: { limit, offset, ...filters } },
+      {
+        query: {
+          limit: normalizePageLimit(limit),
+          offset: normalizePageOffset(offset),
+          ...filters,
+        },
+      },
     );
   }
 
@@ -147,9 +153,9 @@ export class HermesFilesCloudApi {
   }
 
   async getAllAccountFiles(query: AccountFilesQuery = {}) {
-    const limit = Math.max(1, Math.min(200, Math.trunc(query.limit || 200)));
-    const startOffset = Math.max(0, Math.trunc(query.offset || 0));
-    const wanted = startOffset + limit;
+    const limit = normalizePageLimit(query.limit);
+    const startOffset = normalizePageOffset(query.offset);
+    const wanted = Math.min(Number.MAX_SAFE_INTEGER, startOffset + limit);
     const [stored, artifacts] = await Promise.all([
       this.accountFilePrefix({ ...query, limit: undefined, offset: undefined }, wanted),
       this.toolOutputArtifactPrefix(query, wanted),
@@ -236,6 +242,20 @@ export class HermesFilesCloudApi {
 
 function isToolOutputArtifactId(id: string) {
   return id.startsWith(TOOL_OUTPUT_PREFIX);
+}
+
+function normalizePageLimit(value: number | undefined): number {
+  if (value === undefined) return 200;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 200;
+  return Math.max(1, Math.min(200, Math.trunc(numeric)));
+}
+
+function normalizePageOffset(value: number | undefined): number {
+  if (value === undefined) return 0;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.trunc(numeric)));
 }
 
 function toolOutputArtifactFile(artifact: ToolOutputArtifactEntry): AccountFileEntry {

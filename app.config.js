@@ -7,6 +7,7 @@ module.exports = () => {
   const frontendPreview = String(process.env.EXPO_PUBLIC_FRONTEND_PREVIEW || '').trim();
   const amapIOSAPIKey = String(process.env.HERMES_AMAP_IOS_API_KEY || '').trim();
   const expoProjectId = String(process.env.EXPO_PROJECT_ID || '').trim();
+  const ciBuildNumber = String(process.env.HERMES_CI_BUILD_NUMBER || '').trim();
   const bundleIdentifier = String(base.ios.bundleIdentifier || '').trim();
   if (expoProjectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(expoProjectId)) {
     throw new Error('EXPO_PROJECT_ID must be the UUID of the already initialized EAS project.');
@@ -21,6 +22,11 @@ module.exports = () => {
       'Distributable iOS builds require EXPO_PUBLIC_FRONTEND_PREVIEW=0.',
     );
   }
+  if (ciBuildNumber && !/^[1-9][0-9]{0,17}$/.test(ciBuildNumber)) {
+    throw new Error(
+      'HERMES_CI_BUILD_NUMBER must be a positive iOS build number with at most 18 digits.',
+    );
+  }
   return {
     ...base,
     extra: {
@@ -31,6 +37,7 @@ module.exports = () => {
     },
     ios: {
       ...base.ios,
+      ...(ciBuildNumber ? { buildNumber: ciBuildNumber } : {}),
       entitlements: {
         ...base.ios.entitlements,
         'aps-environment': apnsEnvironment,

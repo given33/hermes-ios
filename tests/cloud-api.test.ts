@@ -333,6 +333,32 @@ test('account file pagination applies limit and offset after merging both source
   assert.equal(result.offset, 2);
 });
 
+test('account file pagination normalizes non-finite page bounds', async () => {
+  const queries: Array<Record<string, unknown> | undefined> = [];
+  const client = {
+    request<T>(_path: string, options: HermesRequestOptions = {}): Promise<T> {
+      queries.push(options.query);
+      return Promise.resolve({
+        artifacts: [],
+        files: [],
+        filter_contract: 'account-files-v1',
+        limit: options.query?.limit,
+        offset: options.query?.offset,
+        total: 0,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getAllAccountFiles({
+    limit: Number.NaN,
+    offset: Number.POSITIVE_INFINITY,
+  });
+
+  assert.equal(result.limit, 200);
+  assert.equal(result.offset, 0);
+  assert.ok(queries.every((query) => query?.limit === 200 && query?.offset === 0));
+});
+
 test('account file pagination keeps id-ascending ties from both source prefixes', async () => {
   const client = {
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
