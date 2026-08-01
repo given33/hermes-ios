@@ -41,7 +41,8 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
   private var nextTabID = 0
   private var navigationWaiters: [ObjectIdentifier: CheckedContinuation<Void, Error>] = [:]
   private var navigationTimeouts: [ObjectIdentifier: Task<Void, Never>] = [:]
-  private let maxTabs = 4
+  private let maxTabsPerOwner = 4
+  private let maxTotalTabs = 16
   private let maxTextBytes = 200_000
   private let maxScriptBytes = 200_000
   private let maxFetchBytes = 10 * 1024 * 1024
@@ -61,6 +62,7 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
         "scroll_and_collect", "wait_for_dom_stable",
       ],
       "maxTabs": 4,
+      "maxTotalTabs": 16,
       "maxScriptBytes": 200_000,
       "maxFetchBytes": 10 * 1024 * 1024,
     ]
@@ -207,7 +209,10 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
   ]
 
   private func createTab(ownerKey: String) throws -> Tab {
-    guard tabs.count < maxTabs else { throw HermesBrowserServiceError.unavailable("max-tabs") }
+    guard tabs.count < maxTotalTabs else { throw HermesBrowserServiceError.unavailable("max-total-tabs") }
+    guard tabs.values.filter({ $0.ownerKey == ownerKey }).count < maxTabsPerOwner else {
+      throw HermesBrowserServiceError.unavailable("max-tabs")
+    }
     let configuration = WKWebViewConfiguration()
     configuration.processPool = processPool
     // Keep cookies and website data isolated from the user's normal Safari
@@ -352,8 +357,20 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     var request = URLRequest(url: url, timeoutInterval: 30)
     request.httpMethod = (payload["method"] as? String)?.uppercased() ?? "GET"
     guard ["GET", "HEAD"].contains(request.httpMethod ?? "GET") else { throw HermesBrowserServiceError.invalidInput("method") }
-    let (data, response) = try await URLSession.shared.data(for: request)
-    guard data.count <= maxFetchBytes else { throw HermesBrowserServiceError.unavailable("fetch-size-limit") }
+    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+    if response.expectedContentLength > Int64(maxFetchBytes) {
+      throw HermesBrowserServiceError.unavailable("fetch-size-limit")
+    }
+    var data = Data()
+    if response.expectedContentLength > 0 {
+      data.reserveCapacity(min(maxFetchBytes, Int(response.expectedContentLength)))
+    }
+    for try await byte in bytes {
+      data.append(byte)
+      if data.count > maxFetchBytes {
+        throw HermesBrowserServiceError.unavailable("fetch-size-limit")
+      }
+    }
     let digest = SHA256.hash(data: Data(ownerScope.utf8)).map { String(format: "%02x", $0) }.joined()
     let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
       .appendingPathComponent("HermesBrowser", isDirectory: true).appendingPathComponent(digest, isDirectory: true)
@@ -404,7 +421,12 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
   private func scrollAndCollect(tab: Tab, payload: [String: Any]) async throws -> [String: Any] {
     let count = min(max(Self.intValue(payload["scroll_count"]) ?? 3, 1), 20)
     let amount = min(max(Self.intValue(payload["amount"]) ?? 700, 1), 10_000)
-    let selector = payload["item_selector"] as? String
+    let selector: String?
+    if payload["item_selector"] == nil {
+      selector = nil
+    } else {
+      selector = try requiredString(payload["item_selector"], field: "item_selector", max: 2_000)
+    }
     var values: [String] = []
     for _ in 0..<count {
       let script = selector.map { value in "Array.from(document.querySelectorAll(\(Self.jsString(value)))).map(e => (e.innerText||e.textContent||'').trim()).filter(Boolean).slice(0,100)" } ?? "[(document.body?document.body.innerText:'').slice(0,\(maxTextBytes))]"
