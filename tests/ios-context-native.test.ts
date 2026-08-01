@@ -291,6 +291,7 @@ test('native browser bridge exposes bounded OpenMinis-compatible actions', () =>
   assert.match(service, /let domain = \(item\["domain"\].*webView\.url\?\.host/s);
   assert.match(service, /ownerKey: String/);
   assert.match(service, /tab\.ownerKey == ownerKey/);
+  assert.match(service, /case "close_tab"[\s\S]*?stopLoading\(\)[\s\S]*?navigationWaiters\.removeValue/);
   assert.ok(service.includes('document.querySelector(\\(Self.jsString(selector))'));
   assert.match(provider, /case 'ios-browser:navigate'/);
   assert.match(provider, /payload\.withBase64 === true/);

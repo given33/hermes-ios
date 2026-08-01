@@ -180,6 +180,12 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
       let id = try requiredInt(payload["tab_id"] ?? payload["tabID"], field: "tab_id")
       guard let tab = tabs[id], tab.ownerKey == ownerKey(owner) else { throw HermesBrowserServiceError.unavailable("tab") }
       tabs.removeValue(forKey: id)
+      let webViewKey = ObjectIdentifier(tab.webView)
+      tab.webView.stopLoading()
+      navigationTimeouts.removeValue(forKey: webViewKey)?.cancel()
+      if let waiter = navigationWaiters.removeValue(forKey: webViewKey) {
+        waiter.resume(throwing: HermesBrowserServiceError.navigationFailed("tab closed"))
+      }
       return ["closed": true, "tabID": id, "tabs": tabSummaries(ownerKey: ownerKey(owner))]
     case "list_tabs":
       return ["tabs": tabSummaries(ownerKey: ownerKey(owner))]
