@@ -1030,7 +1030,7 @@ public final class HermesIOSContextModule: Module {
     }.runOnQueue(.main)
 
     AsyncFunction("getBrowserCapabilities") { () -> [String: Any] in
-      HermesBrowserService.shared.capabilities()
+      HermesBrowserService.capabilities()
     }.runOnQueue(.main)
 
     AsyncFunction("executeBrowserForCommand") {

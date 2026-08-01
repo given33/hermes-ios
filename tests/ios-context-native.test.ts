@@ -287,6 +287,10 @@ test('native browser bridge exposes bounded OpenMinis-compatible actions', () =>
   assert.match(service, /case "set_cookies"/);
   assert.match(service, /maxFetchBytes = 10 \* 1024 \* 1024/);
   assert.match(service, /scheme == "http" \|\| scheme == "https"/);
+  assert.match(service, /websiteDataStore = \.nonPersistent\(\)/);
+  assert.match(service, /ownerKey: String/);
+  assert.match(service, /tab\.ownerKey == ownerKey/);
+  assert.ok(service.includes('document.querySelector(\\(Self.jsString(selector))'));
   assert.match(provider, /case 'ios-browser:navigate'/);
   assert.match(provider, /payload\.withBase64 === true/);
   assert.match(contract, /'ios-browser:execute_js': \{ risk: 'destructive', confirmation: 'required'/);

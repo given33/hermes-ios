@@ -10,10 +10,10 @@ enum HermesBrowserServiceError: LocalizedError {
 
   var errorDescription: String? {
     switch self {
-    case .invalidInput(let field): return "(field) is invalid."
-    case .unavailable(let capability): return "(capability) is unavailable."
-    case .navigationFailed(let reason): return "Browser navigation failed: (reason)"
-    case .javascriptFailed(let reason): return "Browser JavaScript failed: (reason)"
+    case .invalidInput(let field): return "\(field) is invalid."
+    case .unavailable(let capability): return "\(capability) is unavailable."
+    case .navigationFailed(let reason): return "Browser navigation failed: \(reason)"
+    case .javascriptFailed(let reason): return "Browser JavaScript failed: \(reason)"
     }
   }
 }
@@ -31,6 +31,7 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
   private struct Tab {
     let id: Int
     let webView: WKWebView
+    let ownerKey: String
     var createdAt: Date
     var lastUsedAt: Date
   }
@@ -49,7 +50,7 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     super.init()
   }
 
-  func capabilities() -> [String: Any] {
+  nonisolated static func capabilities() -> [String: Any] {
     [
       "available": true,
       "actions": [
@@ -59,9 +60,9 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
         "close_tab", "list_tabs", "get_cookies", "set_cookies",
         "scroll_and_collect", "wait_for_dom_stable",
       ],
-      "maxTabs": maxTabs,
-      "maxScriptBytes": maxScriptBytes,
-      "maxFetchBytes": maxFetchBytes,
+      "maxTabs": 4,
+      "maxScriptBytes": 200_000,
+      "maxFetchBytes": 10 * 1024 * 1024,
     ]
   }
 
@@ -82,87 +83,87 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     switch normalizedAction {
     case "navigate":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let url = try validatedURL(payload["url"])
       try await load(url: url, in: tab.webView)
       touch(tabID: tab.id)
       return try await pageInfo(tab: tab)
     case "screenshot":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let image = try await snapshot(tab: tab)
       return try persistScreenshot(image, ownerScope: owner, includeBase64: includeBase64, tabID: tab.id)
     case "get_text":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       return ["text": try await boundedText(evaluate(tab.webView, script: "document.body ? document.body.innerText : (document.documentElement ? document.documentElement.innerText : '')")), "url": tab.webView.url?.absoluteString ?? "", "tabID": tab.id]
     case "get_readable":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let script = """
       (() => { const root = document.body || document.documentElement; if (!root) return ''; const clone = root.cloneNode(true); clone.querySelectorAll('script,style,noscript,template,svg').forEach(e => e.remove()); return clone.innerText || clone.textContent || ''; })()
       """
       return ["text": try await boundedText(evaluate(tab.webView, script: script)), "url": tab.webView.url?.absoluteString ?? "", "tabID": tab.id]
     case "get_page_info":
-      return try await pageInfo(tab: tab(for: payload))
+      return try await pageInfo(tab: tab(for: payload, ownerKey: ownerKey(owner)))
     case "execute_js":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let script = try requiredString(payload["script"], field: "script", max: maxScriptBytes)
       let value = try await evaluate(tab.webView, script: script)
       return ["value": Self.serializable(value), "url": tab.webView.url?.absoluteString ?? "", "tabID": tab.id]
     case "click":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let selector = try requiredString(payload["selector"], field: "selector", max: 2_000)
       let script = """
-      (() => { const el = document.querySelector((Self.jsString(selector))); if (!el) return false; el.scrollIntoView({block:'center',inline:'center'}); el.click(); return true; })()
+      (() => { const el = document.querySelector(\(Self.jsString(selector))); if (!el) return false; el.scrollIntoView({block:'center',inline:'center'}); el.click(); return true; })()
       """
       guard try await boolResult(evaluate(tab.webView, script: script)) else { throw HermesBrowserServiceError.unavailable("selector") }
       return ["clicked": true, "selector": selector, "tabID": tab.id]
     case "type":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let selector = try requiredString(payload["selector"], field: "selector", max: 2_000)
       let text = try requiredString(payload["text"], field: "text", max: 20_000)
       let script = """
-      (() => { const el = document.querySelector((Self.jsString(selector))); if (!el) return false; el.focus(); const setter = Object.getOwnPropertyDescriptor(el.__proto__, 'value')?.set; if (setter) setter.call(el, (Self.jsString(text))); else el.value = (Self.jsString(text)); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true; })()
+      (() => { const el = document.querySelector(\(Self.jsString(selector))); if (!el) return false; el.focus(); const setter = Object.getOwnPropertyDescriptor(el.__proto__, 'value')?.set; if (setter) setter.call(el, \(Self.jsString(text))); else el.value = \(Self.jsString(text)); el.dispatchEvent(new Event('input',{bubbles:true})); el.dispatchEvent(new Event('change',{bubbles:true})); return true; })()
       """
       guard try await boolResult(evaluate(tab.webView, script: script)) else { throw HermesBrowserServiceError.unavailable("selector") }
       return ["typed": true, "selector": selector, "length": text.count, "tabID": tab.id]
     case "hover":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let selector = try requiredString(payload["selector"], field: "selector", max: 2_000)
       let script = """
-      (() => { const el = document.querySelector((Self.jsString(selector))); if (!el) return false; ['pointerover','mouseover','mouseenter'].forEach(t => el.dispatchEvent(new MouseEvent(t,{bubbles:true,view:window}))); return true; })()
+      (() => { const el = document.querySelector(\(Self.jsString(selector))); if (!el) return false; ['pointerover','mouseover','mouseenter'].forEach(t => el.dispatchEvent(new MouseEvent(t,{bubbles:true,view:window}))); return true; })()
       """
       guard try await boolResult(evaluate(tab.webView, script: script)) else { throw HermesBrowserServiceError.unavailable("selector") }
       return ["hovered": true, "selector": selector, "tabID": tab.id]
     case "find_elements":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let selector = try requiredString(payload["selector"], field: "selector", max: 2_000)
       let limit = min(max(Self.intValue(payload["limit"]) ?? 50, 1), 100)
       let script = """
-      (() => Array.from(document.querySelectorAll((Self.jsString(selector))).slice(0,(limit)).map((el,i) => ({index:i,tag:el.tagName.toLowerCase(),text:(el.innerText||el.textContent||'').trim().slice(0,500),aria:el.getAttribute('aria-label'),href:el.href||null})))()
+      (() => Array.from(document.querySelectorAll(\(Self.jsString(selector))).slice(0,\(limit)).map((el,i) => ({index:i,tag:el.tagName.toLowerCase(),text:(el.innerText||el.textContent||'').trim().slice(0,500),aria:el.getAttribute('aria-label'),href:el.href||null})))()
       """
       return ["elements": Self.serializableArray(try await evaluate(tab.webView, script: script)), "selector": selector, "tabID": tab.id]
     case "scroll":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let direction = (payload["direction"] as? String)?.lowercased() == "up" ? -1 : 1
       let amount = min(max(Self.intValue(payload["amount"]) ?? 600, 1), 10_000)
-      _ = try await evaluate(tab.webView, script: "window.scrollBy({top:(direction * amount),left:0,behavior:'instant'}); true")
+      _ = try await evaluate(tab.webView, script: "window.scrollBy({top:\(direction * amount),left:0,behavior:'instant'}); true")
       return ["scrolled": true, "direction": direction < 0 ? "up" : "down", "amount": amount, "tabID": tab.id]
     case "scroll_and_collect":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       return try await scrollAndCollect(tab: tab, payload: payload)
     case "get_backbone":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let depth = min(max(Self.intValue(payload["max_depth"]) ?? 3, 1), 8)
       let script = """
-      (() => { const out=[]; const walk=(el,d) => { if (!el || d>(depth) || out.length>=200) return; const r=el.getBoundingClientRect(); const text=(el.innerText||el.textContent||'').trim().replace(/\\s+/g,' ').slice(0,160); if (text || el.tagName==='A' || el.tagName==='BUTTON' || el.tagName==='INPUT') out.push({depth:d,tag:el.tagName.toLowerCase(),text,role:el.getAttribute('role'),href:el.href||null,rect:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)}}); Array.from(el.children).slice(0,80).forEach(c=>walk(c,d+1)); }; walk(document.body,0); return out; })()
+      (() => { const out=[]; const walk=(el,d) => { if (!el || d>\(depth) || out.length>=200) return; const r=el.getBoundingClientRect(); const text=(el.innerText||el.textContent||'').trim().replace(/\\s+/g,' ').slice(0,160); if (text || el.tagName==='A' || el.tagName==='BUTTON' || el.tagName==='INPUT') out.push({depth:d,tag:el.tagName.toLowerCase(),text,role:el.getAttribute('role'),href:el.href||null,rect:{x:Math.round(r.x),y:Math.round(r.y),width:Math.round(r.width),height:Math.round(r.height)}}); Array.from(el.children).slice(0,80).forEach(c=>walk(c,d+1)); }; walk(document.body,0); return out; })()
       """
       return ["nodes": Self.serializableArray(try await evaluate(tab.webView, script: script)), "tabID": tab.id]
     case "set_user_agent":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let ua = try requiredString(payload["user_agent"] ?? payload["userAgent"], field: "user_agent", max: 1_000)
       tab.webView.customUserAgent = ua
       return ["userAgent": ua, "tabID": tab.id]
     case "set_viewport":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let width = min(max(Self.intValue(payload["width"] ?? payload["viewport_width"]) ?? 390, 100), 2_000)
       let height = min(max(Self.intValue(payload["height"] ?? payload["viewport_height"]) ?? 844, 100), 2_000)
       tab.webView.frame = CGRect(x: 0, y: 0, width: width, height: height)
@@ -170,25 +171,26 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     case "fetch":
       return try await fetch(ownerScope: owner, payload: payload)
     case "new_tab":
-      let tab = try createTab()
+      let tab = try createTab(ownerKey: ownerKey(owner))
       if payload["url"] != nil { try await load(url: validatedURL(payload["url"]), in: tab.webView) }
-      return ["tabID": tab.id, "url": tab.webView.url?.absoluteString ?? "", "tabs": tabSummaries()]
+      return ["tabID": tab.id, "url": tab.webView.url?.absoluteString ?? "", "tabs": tabSummaries(ownerKey: ownerKey(owner))]
     case "close_tab":
       let id = try requiredInt(payload["tab_id"] ?? payload["tabID"], field: "tab_id")
-      guard tabs.removeValue(forKey: id) != nil else { throw HermesBrowserServiceError.unavailable("tab") }
-      return ["closed": true, "tabID": id, "tabs": tabSummaries()]
+      guard let tab = tabs[id], tab.ownerKey == ownerKey(owner) else { throw HermesBrowserServiceError.unavailable("tab") }
+      tabs.removeValue(forKey: id)
+      return ["closed": true, "tabID": id, "tabs": tabSummaries(ownerKey: ownerKey(owner))]
     case "list_tabs":
-      return ["tabs": tabSummaries()]
+      return ["tabs": tabSummaries(ownerKey: ownerKey(owner))]
     case "get_cookies":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       return ["cookies": try await cookies(for: tab.webView), "tabID": tab.id]
     case "set_cookies":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       guard let raw = payload["cookies"] as? [[String: Any]], !raw.isEmpty, raw.count <= 100 else { throw HermesBrowserServiceError.invalidInput("cookies") }
       let count = try await setCookies(raw, for: tab.webView)
       return ["written": count, "tabID": tab.id]
     case "wait_for_dom_stable":
-      let tab = try tab(for: payload)
+      let tab = try tab(for: payload, ownerKey: ownerKey(owner))
       let timeout = min(max(Self.intValue(payload["timeout"]) ?? 5, 1), 10)
       let stable = try await waitForStableDOM(tab: tab, timeout: timeout)
       return ["stable": stable, "tabID": tab.id]
@@ -204,32 +206,39 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     "scroll_and_collect", "wait_for_dom_stable",
   ]
 
-  private func createTab() throws -> Tab {
+  private func createTab(ownerKey: String) throws -> Tab {
     guard tabs.count < maxTabs else { throw HermesBrowserServiceError.unavailable("max-tabs") }
     let configuration = WKWebViewConfiguration()
     configuration.processPool = processPool
-    configuration.websiteDataStore = .default()
+    // Keep cookies and website data isolated from the user's normal Safari
+    // store. Tabs are additionally checked against their owner scope below.
+    configuration.websiteDataStore = .nonPersistent()
     let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: configuration)
     webView.navigationDelegate = self
     webView.uiDelegate = self
     webView.isHidden = true
     let now = Date()
-    let tab = Tab(id: nextTabID, webView: webView, createdAt: now, lastUsedAt: now)
+    let tab = Tab(id: nextTabID, webView: webView, ownerKey: ownerKey, createdAt: now, lastUsedAt: now)
     nextTabID += 1
     tabs[tab.id] = tab
     return tab
   }
 
-  private func tab(for payload: [String: Any]) throws -> Tab {
+  private func tab(for payload: [String: Any], ownerKey: String) throws -> Tab {
     if let raw = payload["tab_id"] ?? payload["tabID"], let id = Self.intValue(raw), let tab = tabs[id] {
+      guard tab.ownerKey == ownerKey else { throw HermesBrowserServiceError.unavailable("tab") }
       touch(tabID: id)
       return tab
     }
-    if let existing = tabs.values.sorted(by: { $0.lastUsedAt > $1.lastUsedAt }).first {
+    if let existing = tabs.values.filter({ $0.ownerKey == ownerKey }).sorted(by: { $0.lastUsedAt > $1.lastUsedAt }).first {
       touch(tabID: existing.id)
       return existing
     }
-    return try createTab()
+    return try createTab(ownerKey: ownerKey)
+  }
+
+  private func ownerKey(_ ownerScope: String) -> String {
+    SHA256.hash(data: Data(ownerScope.utf8)).map { String(format: "%02x", $0) }.joined()
   }
 
   private func touch(tabID: Int) {
@@ -330,7 +339,7 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
       .appendingPathComponent("HermesBrowser", isDirectory: true)
       .appendingPathComponent(digest, isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    let name = "screenshot-(Int(Date().timeIntervalSince1970 * 1000))-(tabID).jpg"
+    let name = "screenshot-\(Int(Date().timeIntervalSince1970 * 1000))-\(tabID).jpg"
     let destination = root.appendingPathComponent(name)
     try data.write(to: destination, options: .atomic)
     var result: [String: Any] = ["saved": true, "path": destination.path, "bytes": data.count, "tabID": tabID]
@@ -370,9 +379,9 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     for item in raw {
       guard let name = item["name"] as? String, !name.isEmpty,
             let value = item["value"] as? String,
-            let url = webView.url,
-            let properties = Self.cookieProperties(item, name: name, value: value, url: url),
-            let cookie = HTTPCookie(properties: properties) else { throw HermesBrowserServiceError.invalidInput("cookies") }
+            let url = webView.url else { throw HermesBrowserServiceError.invalidInput("cookies") }
+      let properties = Self.cookieProperties(item, name: name, value: value, url: url)
+      guard let cookie = HTTPCookie(properties: properties) else { throw HermesBrowserServiceError.invalidInput("cookies") }
       try await withCheckedThrowingContinuation { continuation in
         store.setCookie(cookie) { continuation.resume() }
       }
@@ -398,9 +407,9 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     let selector = payload["item_selector"] as? String
     var values: [String] = []
     for _ in 0..<count {
-      let script = selector.map { "Array.from(document.querySelectorAll((Self.jsString($0)))).map(e => (e.innerText||e.textContent||'').trim()).filter(Boolean).slice(0,100)" } ?? "[(document.body?document.body.innerText:'').slice(0,(maxTextBytes))]"
+      let script = selector.map { value in "Array.from(document.querySelectorAll(\(Self.jsString(value)))).map(e => (e.innerText||e.textContent||'').trim()).filter(Boolean).slice(0,100)" } ?? "[(document.body?document.body.innerText:'').slice(0,\(maxTextBytes))]"
       values.append(contentsOf: Self.serializableArray(try await evaluate(tab.webView, script: script)).compactMap { $0 as? String })
-      _ = try await evaluate(tab.webView, script: "window.scrollBy({top:(amount),behavior:'instant'}); true")
+      _ = try await evaluate(tab.webView, script: "window.scrollBy({top:\(amount),behavior:'instant'}); true")
       try await Task.sleep(nanoseconds: 120_000_000)
     }
     var seen = Set<String>()
@@ -413,7 +422,7 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     var stable = 0
     let deadline = Date().addingTimeInterval(TimeInterval(timeout))
     while Date() < deadline {
-      let value = try await evaluate(tab.webView, script: "(document.body ? document.body.innerText : '').slice(0,(maxTextBytes))")
+      let value = try await evaluate(tab.webView, script: "(document.body ? document.body.innerText : '').slice(0,\(maxTextBytes))")
       let current = String(describing: value ?? "")
       if current == previous { stable += 1 } else { stable = 0; previous = current }
       if stable >= 2 { return true }
@@ -422,8 +431,8 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     return false
   }
 
-  private func tabSummaries() -> [[String: Any]] {
-    tabs.values.sorted { $0.id < $1.id }.map { tab in
+  private func tabSummaries(ownerKey: String) -> [[String: Any]] {
+    tabs.values.filter { $0.ownerKey == ownerKey }.sorted { $0.id < $1.id }.map { tab in
       ["tabID": tab.id, "url": tab.webView.url?.absoluteString ?? "", "title": tab.webView.title ?? "", "createdAt": tab.createdAt.timeIntervalSince1970 * 1000]
     }
   }
@@ -445,12 +454,17 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
   }
 
   nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-    webView(webView, didFail: navigation, withError: error)
+    Task { @MainActor in
+      let key = ObjectIdentifier(webView)
+      self.navigationTimeouts.removeValue(forKey: key)?.cancel()
+      if let waiter = self.navigationWaiters.removeValue(forKey: key) { waiter.resume(throwing: HermesBrowserServiceError.navigationFailed(error.localizedDescription)) }
+    }
   }
 
   nonisolated func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
     Task { @MainActor in
-      guard let tab = try? self.createTab() else { return }
+      let sourceOwner = self.tabs.values.first(where: { $0.webView === navigationAction.sourceFrame.webView })?.ownerKey ?? "popup"
+      guard let tab = try? self.createTab(ownerKey: sourceOwner) else { return }
       tab.webView.load(navigationAction.request)
     }
     return nil
