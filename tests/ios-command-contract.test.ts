@@ -86,6 +86,11 @@ test('native action bridge policies cover contacts, photos, media, Bluetooth, NF
     ['ios-health-write', 'delete', 'destructive', 'required'],
     ['ios-photos', 'ocr', 'read', 'none'],
     ['ios-device', 'open-url', 'write', 'required'],
+    ['ios-browser', 'navigate', 'read', 'none'],
+    ['ios-browser', 'get_text', 'read', 'none'],
+    ['ios-browser', 'execute_js', 'destructive', 'required'],
+    ['ios-browser', 'click', 'write', 'required'],
+    ['ios-browser', 'set_cookies', 'write', 'required'],
   ] as const;
   for (const [capability, action, risk, confirmation] of cases) {
     const metadata = nativeActionMetadata({ capability, action });

@@ -271,6 +271,27 @@ test('native callbacks persist before JS delivery and launch resumes Always loca
   ]);
 });
 
+test('native browser bridge exposes bounded OpenMinis-compatible actions', () => {
+  const bridge = read('index.ts');
+  const module = read('ios/HermesIOSContextModule.swift');
+  const service = read('ios/HermesBrowserService.swift');
+  const provider = readFileSync(resolve(root, 'src/context/IOSContextProvider.tsx'), 'utf8');
+  const contract = readFileSync(resolve(root, 'src/context/ios-command-contract.ts'), 'utf8');
+
+  assert.match(bridge, /executeBrowserForCommand/);
+  assert.match(module, /AsyncFunction\("executeBrowserForCommand"\)/);
+  assert.match(module, /"capability": "ios-browser"/);
+  assert.match(service, /WKWebView/);
+  assert.match(service, /case "navigate"/);
+  assert.match(service, /case "execute_js"/);
+  assert.match(service, /case "set_cookies"/);
+  assert.match(service, /maxFetchBytes = 10 \* 1024 \* 1024/);
+  assert.match(service, /scheme == "http" \|\| scheme == "https"/);
+  assert.match(provider, /case 'ios-browser:navigate'/);
+  assert.match(provider, /payload\.withBase64 === true/);
+  assert.match(contract, /'ios-browser:execute_js': \{ risk: 'destructive', confirmation: 'required'/);
+});
+
 test('account exports use a protected native ciphertext file and delete it after sharing', () => {
   const bridge = read('index.ts');
   const module = read('ios/HermesIOSContextModule.swift');

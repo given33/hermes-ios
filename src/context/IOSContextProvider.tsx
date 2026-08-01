@@ -1385,6 +1385,36 @@ async function executeDeviceCommand(
       await HermesIOSContext.cancelLocalNotification(requiredString(payload.id, 'id'));
       return { cancelled: true };
     }
+    case 'ios-browser:navigate':
+    case 'ios-browser:screenshot':
+    case 'ios-browser:click':
+    case 'ios-browser:type':
+    case 'ios-browser:get_text':
+    case 'ios-browser:scroll':
+    case 'ios-browser:get_page_info':
+    case 'ios-browser:execute_js':
+    case 'ios-browser:find_elements':
+    case 'ios-browser:hover':
+    case 'ios-browser:get_readable':
+    case 'ios-browser:set_user_agent':
+    case 'ios-browser:set_viewport':
+    case 'ios-browser:get_backbone':
+    case 'ios-browser:fetch':
+    case 'ios-browser:new_tab':
+    case 'ios-browser:close_tab':
+    case 'ios-browser:list_tabs':
+    case 'ios-browser:get_cookies':
+    case 'ios-browser:set_cookies':
+    case 'ios-browser:scroll_and_collect':
+    case 'ios-browser:wait_for_dom_stable': {
+      return HermesIOSContext.executeBrowserForCommand(
+        command.id,
+        ownerScope,
+        command.action,
+        payload,
+        payload.withBase64 === true || payload.with_base64 === true,
+      );
+    }
     case 'ios-live-activity:update':
     case 'ios-live-activity:start':
     case 'ios-live-activity:end': {

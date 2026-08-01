@@ -51,6 +51,7 @@ public final class HermesIOSContextModule: Module {
     ["capability": "ios-nfc", "actions": ["scan", "write"], "permission": "nfc", "confirmation": "write"],
     ["capability": "ios-homekit", "actions": ["list", "get", "search", "scenes", "trigger", "set"], "permission": "homekit", "confirmation": "set/trigger"],
     ["capability": "ios-health-write", "actions": ["authorize", "write", "batch", "delete"], "permission": "health", "confirmation": "write/delete"],
+    ["capability": "ios-browser", "actions": ["navigate", "screenshot", "click", "type", "get_text", "scroll", "get_page_info", "execute_js", "find_elements", "hover", "get_readable", "set_user_agent", "set_viewport", "get_backbone", "fetch", "new_tab", "close_tab", "list_tabs", "get_cookies", "set_cookies", "scroll_and_collect", "wait_for_dom_stable"], "permission": "network/web", "confirmation": "execute_js/write/cookies"],
     ["capability": "ios-device", "actions": ["open-url", "settings"], "permission": "device", "confirmation": "open-url"],
   ]
   private let location = HermesLocationService.shared
@@ -244,6 +245,7 @@ public final class HermesIOSContextModule: Module {
         "bluetooth": Self.nativeBluetoothAvailable,
         "nfc": Self.nativeNFCAvailable,
         "homekit": Self.nativeHomeKitAvailable,
+        "browser": true,
         "voiceInput": true,
         "voiceOutput": true,
       ]
@@ -1026,6 +1028,26 @@ public final class HermesIOSContextModule: Module {
         #endif
       }
     }.runOnQueue(.main)
+
+    AsyncFunction("getBrowserCapabilities") { () -> [String: Any] in
+      HermesBrowserService.shared.capabilities()
+    }.runOnQueue(.main)
+
+    AsyncFunction("executeBrowserForCommand") {
+      (commandID: String, ownerScope: String, action: String, payload: [String: Any]?, includeBase64: Bool?, promise: Promise) in
+      self.resolveAsync(promise) {
+        let normalizedCommandID = try Self.requireCommandID(commandID)
+        if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
+        let result = try await HermesBrowserService.shared.execute(
+          ownerScope: ownerScope,
+          action: action,
+          payload: payload ?? [:],
+          includeBase64: includeBase64 ?? false
+        )
+        self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
+        return result
+      }
+    }
 
     AsyncFunction("scanQRCode") { (promise: Promise) in
       self.resolveAsync(promise) {

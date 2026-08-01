@@ -38,6 +38,7 @@ export interface IOSContextCapabilities {
   bluetooth?: boolean;
   nfc?: boolean;
   homekit?: boolean;
+  browser?: boolean;
   voiceInput?: boolean;
   voiceOutput?: boolean;
 }
@@ -387,6 +388,14 @@ export interface IOSContextNativeModule {
   startNFCReader(): Promise<Record<string, unknown>>;
   writeNFCTag(text: string): Promise<Record<string, unknown>>;
   scanQRCode(): Promise<Record<string, unknown>>;
+  getBrowserCapabilities?(): Promise<Record<string, unknown>>;
+  executeBrowserForCommand(
+    commandId: string,
+    ownerScope: string,
+    action: string,
+    payload?: Record<string, unknown>,
+    includeBase64?: boolean,
+  ): Promise<Record<string, unknown>>;
   openURLForCommand(commandId: string, url: string): Promise<Record<string, unknown>>;
   readPendingAgentTriggers(): Promise<Array<Record<string, unknown>>>;
   consumePendingAgentTrigger(requestId: string): Promise<boolean>;
@@ -673,6 +682,14 @@ export const HermesIOSContext = {
   startNFCReader: () => requireContextModule().startNFCReader(),
   writeNFCTag: (text: string) => requireContextModule().writeNFCTag(text),
   scanQRCode: () => requireContextModule().scanQRCode(),
+  getBrowserCapabilities: () => requireContextModule().getBrowserCapabilities?.() ?? Promise.resolve({ available: false }),
+  executeBrowserForCommand: (
+    commandId: string,
+    ownerScope: string,
+    action: string,
+    payload?: Record<string, unknown>,
+    includeBase64?: boolean,
+  ) => requireContextModule().executeBrowserForCommand(commandId, ownerScope, action, payload, includeBase64),
   readPendingAgentTriggers: () => requireContextModule().readPendingAgentTriggers(),
   consumePendingAgentTrigger: (requestId: string) =>
     requireContextModule().consumePendingAgentTrigger(requestId),
