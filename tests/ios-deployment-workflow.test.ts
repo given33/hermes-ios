@@ -24,6 +24,8 @@ test('iOS unsigned builds accept only validated backend release events', () => {
   assert.match(workflow, /chmod u\+x,go\+x/);
   assert.match(workflow, /verify-resignable-ipa\.mjs/);
   assert.match(workflow, /--bundle-id \"\$APP_BUNDLE_IDENTIFIER\"/);
+  assert.match(workflow, /HERMES_CI_BUILD_NUMBER: \$\{\{ github\.run_id \}\}/);
+  assert.match(workflow, /test \"\$APP_BUILD_NUMBER\" = \"\$HERMES_CI_BUILD_NUMBER\"/);
   assert.doesNotMatch(workflow, /Publish the tagged release/);
   assert.doesNotMatch(workflow, /gh release (?:create|upload)/);
   assert.match(workflow, /Install locked dependencies with network retry/);
