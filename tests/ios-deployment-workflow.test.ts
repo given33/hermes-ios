@@ -36,7 +36,9 @@ test('production EAS builds fail closed and verify signed artifact output', () =
   const eas = read('eas.json');
   assert.match(workflow, /repository_dispatch:/);
   assert.match(workflow, /hermes-backend-release/);
-  assert.match(workflow, /push:\s+branches:\s+- main/);
+  assert.doesNotMatch(workflow, /push:\s+branches:/);
+  assert.doesNotMatch(workflow, /tags:\s+\n\s+- 'v\*\.\*\.\*'/);
+  assert.match(workflow, /Signed EAS is intentionally opt-in/);
   assert.match(workflow, /runs-on: macos-15/);
   assert.match(workflow, /permissions:\s+contents: write/);
   assert.match(workflow, /HERMES_CI_BUILD_NUMBER: \$\{\{ github\.run_id \}\}/);

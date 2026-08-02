@@ -3,15 +3,13 @@ name: Build signed production iOS IPA
 run-name: Backend release signed ${{ github.event.client_payload.commit || github.sha }}
 
 on:
+  # Signed EAS is intentionally opt-in. Unsigned IPA builds run on source
+  # pushes; signed builds require explicit credentials and are started by a
+  # backend release dispatch or a manual operator run.
   workflow_dispatch:
   repository_dispatch:
     types:
       - hermes-backend-release
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*.*.*'
 
 permissions:
   contents: write
