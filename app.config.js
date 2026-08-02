@@ -46,6 +46,7 @@ module.exports = () => {
     plugins,
     extra: {
       ...base.extra,
+      hermesResignCompatible: resignCompatibleBuild,
       ...(expoProjectId
         ? { eas: { ...base.extra?.eas, projectId: expoProjectId } }
         : {}),

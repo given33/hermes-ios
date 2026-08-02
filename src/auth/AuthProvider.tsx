@@ -103,6 +103,7 @@ const APNS_LOGOUT_DEADLINE_MS = 2_500;
 const NOTIFICATION_CLEANUP_DEADLINE_MS = 2_500;
 const REMOTE_LOGOUT_DEADLINE_MS = 8_000;
 const SAVED_SESSION_RETRY_DELAY_MS = 5_000;
+const RESIGN_COMPATIBLE_BUILD = Constants.expoConfig?.extra?.hermesResignCompatible === true;
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
 const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
@@ -123,6 +124,22 @@ function currentMobileAppVersion(): string {
   const version = Constants.expoConfig?.version?.trim() || 'unknown';
   const build = Constants.expoConfig?.ios?.buildNumber?.trim();
   return build ? `${version} (${build})` : version;
+}
+
+async function activateNativeOwnerScope(
+  ownerScope: string,
+  accountGeneration: string,
+): Promise<void> {
+  if (!hasNativeIOSContext) return;
+  const activation = () => HermesIOSContext.activateOwnerScope(ownerScope, accountGeneration);
+  // The resign-compatible artifact intentionally has no extension-owned
+  // App Group/keychain capabilities. Native collection is therefore best
+  // effort; it must not turn a valid server login into a connection error.
+  if (RESIGN_COMPATIBLE_BUILD) {
+    await runOptionalAuthEffect(activation);
+    return;
+  }
+  await activation();
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
@@ -327,12 +344,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (!authLifecycle.current.isCurrent(operationGeneration)) {
       throw new Error('Stale Hermes authentication operation');
     }
-    if (hasNativeIOSContext) {
-      await HermesIOSContext.activateOwnerScope(
-        accountOwnerScope(connection),
-        connection.accountGeneration,
-      );
-    }
+    await activateNativeOwnerScope(
+      accountOwnerScope(connection),
+      connection.accountGeneration,
+    );
     if (!authLifecycle.current.isCurrent(operationGeneration)) {
       throw new Error('Stale Hermes authentication operation');
     }
@@ -948,12 +963,10 @@ async function adoptSavedSession(
     },
   );
   if (!isCurrent()) return { outcome: 'stale' };
-  if (hasNativeIOSContext) {
-    await HermesIOSContext.activateOwnerScope(
-      accountOwnerScope(verifiedConnection),
-      verifiedConnection.accountGeneration,
-    );
-  }
+  await activateNativeOwnerScope(
+    accountOwnerScope(verifiedConnection),
+    verifiedConnection.accountGeneration,
+  );
   return { outcome: 'authenticated', connection: verifiedConnection };
 }
 
