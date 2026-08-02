@@ -353,8 +353,9 @@ jobs:
             \( -name embedded.mobileprovision -o -name CodeResources \) \
             -type f -delete
           # Xcode can emit prebuilt static/dynamic framework executables as 0644.
-          # Restore the executable bit from each bundle's declared executable so
-          # a third-party signer does not produce an install-invalid IPA.
+          # WatchKit also supplies an Apple-signed stub inside the generated app.
+          # Remove every embedded Mach-O signature before handing the archive to
+          # a third-party signer, then restore executable bits for every bundle.
           while IFS= read -r -d '' plist; do
             executable_name="$(plutil -extract CFBundleExecutable raw "$plist" 2>/dev/null || true)"
             if [ -z "$executable_name" ]; then
@@ -362,6 +363,13 @@ jobs:
             fi
             executable_path="$(dirname "$plist")/$executable_name"
             if [ -f "$executable_path" ]; then
+              if otool -l "$executable_path" 2>/dev/null | grep -q 'cmd LC_CODE_SIGNATURE'; then
+                codesign --remove-signature "$executable_path"
+              fi
+              if otool -l "$executable_path" 2>/dev/null | grep -q 'cmd LC_CODE_SIGNATURE'; then
+                echo "Embedded Mach-O signature remains after cleanup: $executable_path" >&2
+                exit 1
+              fi
               chmod u+x,go+x "$executable_path"
             fi
           done < <(find "$RUNNER_TEMP/ipa/Payload" -type f -name Info.plist -print0)

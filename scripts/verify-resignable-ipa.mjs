@@ -47,6 +47,7 @@ try {
   rejectSigningArtifacts(payloadRoot);
   const codeBundles = findCodeBundles(appRoots[0]);
   const bundleRecords = codeBundles.map((bundlePath) => readBundleRecord(bundlePath, appRoots[0]));
+  rejectEmbeddedCodeSignatures(bundleRecords, appRoots[0]);
   assertUniqueBundleIds(bundleRecords);
   assertExpectedBundles(bundleRecords, expectedBundleId);
   assertApplicationVersions(bundleRecords, expectedBundleId);
@@ -180,12 +181,22 @@ function readBundleRecord(bundlePath, rootApp) {
   }
   return {
     path: bundlePath,
+    executablePath,
     bundleId,
     packageType,
     executable,
     shortVersion: String(plist.CFBundleShortVersionString || ''),
     buildVersion: String(plist.CFBundleVersion || ''),
   };
+}
+
+function rejectEmbeddedCodeSignatures(records, rootApp) {
+  for (const record of records) {
+    const result = runCommand('otool', ['-l', record.executablePath], { allowFailure: true });
+    if (result.status === 0 && /\bcmd LC_CODE_SIGNATURE\b/.test(result.stdout)) {
+      fail(`code bundle executable still contains an embedded signature: ${relative(rootApp, record.executablePath)}`);
+    }
+  }
 }
 
 function isStaticFrameworkArchive(packageType, executablePath) {
@@ -235,7 +246,7 @@ function assertApplicationVersions(records, mainBundleId) {
   }
 }
 
-function runCommand(command, args) {
+function runCommand(command, args, { allowFailure = false } = {}) {
   let result;
   try {
     result = spawnSync(command, args, { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
@@ -245,7 +256,7 @@ function runCommand(command, args) {
   if (result.error) {
     fail(`required command ${command} is unavailable; run this verifier on macOS with Xcode command-line tools`);
   }
-  if (result.status !== 0) {
+  if (result.status !== 0 && !allowFailure) {
     const details = String(result.stderr || result.stdout || '').trim().replace(/\s+/g, ' ');
     fail(`${command} failed${details ? `: ${details}` : ''}`);
   }

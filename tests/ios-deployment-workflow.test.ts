@@ -21,6 +21,9 @@ test('iOS unsigned builds accept only validated backend release events', () => {
   assert.match(workflow, /find "\$RUNNER_TEMP\/ipa\/Payload" -name _CodeSignature/);
   assert.match(workflow, /-name embedded\.mobileprovision -o -name CodeResources/);
   assert.match(workflow, /CFBundleExecutable/);
+  assert.match(workflow, /codesign --remove-signature/);
+  assert.match(workflow, /otool -l "\$executable_path"/);
+  assert.match(workflow, /Embedded Mach-O signature remains after cleanup/);
   assert.match(workflow, /chmod u\+x,go\+x/);
   assert.match(workflow, /verify-resignable-ipa\.mjs/);
   assert.match(workflow, /--bundle-id \"\$APP_BUNDLE_IDENTIFIER\"/);
@@ -107,6 +110,8 @@ test('unsigned IPA verifier protects third-party signing inputs', () => {
   assert.match(verifier, /_CodeSignature/);
   assert.match(verifier, /embedded\.mobileprovision/);
   assert.match(verifier, /CodeResources/);
+  assert.match(verifier, /rejectEmbeddedCodeSignatures/);
+  assert.match(verifier, /LC_CODE_SIGNATURE/);
   assert.match(verifier, /symbolic link/);
   assert.match(verifier, /\.framework/);
   assert.match(verifier, /\.appex/);
