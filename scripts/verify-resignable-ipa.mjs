@@ -13,7 +13,12 @@ import { basename, extname, join, relative, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const [ipaArgument, ...arguments_] = process.argv.slice(2);
-if (!ipaArgument) fail('usage: verify-resignable-ipa.mjs <ipa-path> [--bundle-id <main-bundle-id>]');
+if (!ipaArgument) {
+  fail(
+    'usage: verify-resignable-ipa.mjs <ipa-path> '
+    + '[--bundle-id <main-bundle-id>] [--root-app-only]',
+  );
+}
 
 const ipaPath = resolve(ipaArgument);
 if (!existsSync(ipaPath) || !lstatSync(ipaPath).isFile()) {
@@ -21,6 +26,7 @@ if (!existsSync(ipaPath) || !lstatSync(ipaPath).isFile()) {
 }
 
 const expectedBundleId = optionValue(arguments_, '--bundle-id') || readDefaultBundleId();
+const rootAppOnly = arguments_.includes('--root-app-only');
 if (!expectedBundleId) {
   fail('main bundle identifier is required; pass --bundle-id or run from the iOS repository');
 }
@@ -49,7 +55,7 @@ try {
   const bundleRecords = codeBundles.map((bundlePath) => readBundleRecord(bundlePath, appRoots[0]));
   rejectEmbeddedCodeSignatures(bundleRecords, appRoots[0]);
   assertUniqueBundleIds(bundleRecords);
-  assertExpectedBundles(bundleRecords, expectedBundleId);
+  assertExpectedBundles(bundleRecords, expectedBundleId, appRoots[0], rootAppOnly);
   assertApplicationVersions(bundleRecords, expectedBundleId);
 
   const rootRecord = bundleRecords.find((record) => record.path === appRoots[0]);
@@ -216,7 +222,20 @@ function assertUniqueBundleIds(records) {
   }
 }
 
-function assertExpectedBundles(records, mainBundleId) {
+function assertExpectedBundles(records, mainBundleId, rootApp, rootAppOnly) {
+  if (rootAppOnly) {
+    const nestedApplications = records.filter((record) => (
+      record.path !== rootApp
+      && ['.app', '.appex', '.xpc'].includes(extname(record.path).toLowerCase())
+    ));
+    if (nestedApplications.length) {
+      fail(
+        'root-app-only IPA contains nested applications: '
+        + nestedApplications.map((record) => record.bundleId).join(', '),
+      );
+    }
+    return;
+  }
   const expected = [
     mainBundleId,
     `${mainBundleId}.weather-widget`,

@@ -28,6 +28,7 @@ jobs:
     env:
       EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
       HERMES_DISTRIBUTABLE_BUILD: '1'
+      HERMES_RESIGN_COMPAT_BUILD: '1'
       HERMES_CI_BUILD_NUMBER: ${{ github.run_id }}
       HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
       BACKEND_COMMIT: ${{ github.event.client_payload.commit || '' }}
@@ -114,7 +115,7 @@ jobs:
             echo 'Generated AMap Bundle Identifier does not match CFBundleIdentifier.' >&2
             exit 1
           fi
-      - name: Verify native extension targets
+      - name: Verify the resign-compatible target graph
         shell: bash
         run: |
           PROJECT_FILE="$(find ios -maxdepth 2 -name project.pbxproj -print -quit)"
@@ -122,68 +123,19 @@ jobs:
             echo 'Generated Xcode project file was not found.' >&2
             exit 1
           fi
-          verify_contains() {
-            local pattern="$1"
-            local description="$2"
-            if ! grep -q "$pattern" "$PROJECT_FILE"; then
-              echo "Generated Xcode project is missing $description ($pattern)." >&2
+          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension HermesFileProvider; do
+            if grep -q "$target" "$PROJECT_FILE"; then
+              echo "Resign-compatible build unexpectedly contains nested target $target." >&2
               exit 1
             fi
-          }
-          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension HermesFileProvider; do
-            verify_contains "$target" "native target"
           done
-          DEPENDENCY_COUNT="$(grep -c 'isa = PBXTargetDependency;' "$PROJECT_FILE")"
-          if [ "$DEPENDENCY_COUNT" -lt 6 ]; then
-            echo "Generated Xcode project has $DEPENDENCY_COUNT target dependencies; expected at least 6." >&2
-            exit 1
-          fi
-          SPOOL_BUILD_FILE_COUNT="$(grep -c 'HermesScreenTimeSpool.swift in Sources.*isa = PBXBuildFile' "$PROJECT_FILE")"
-          if [ "$SPOOL_BUILD_FILE_COUNT" -ne 2 ]; then
-            echo "Generated Xcode project has $SPOOL_BUILD_FILE_COUNT shared spool build files; expected 2 isolated records." >&2
-            exit 1
-          fi
-          SHARED_KEYCHAIN_GROUP='$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared'
-          for target in HermesDeviceActivityMonitor HermesDeviceActivityReport; do
-            ENTITLEMENTS="ios/native-extensions/$target/$target.entitlements"
-            INFO="ios/native-extensions/$target/Info.plist"
-            python3 - "$ENTITLEMENTS" "$INFO" "$target" "$SHARED_KEYCHAIN_GROUP" <<'PY'
-          import plistlib
-          import sys
-
-          entitlements_path, info_path, target, shared_keychain_group = sys.argv[1:]
-          with open(entitlements_path, "rb") as handle:
-              entitlements = plistlib.load(handle)
-          with open(info_path, "rb") as handle:
-              info = plistlib.load(handle)
-          expected = {
-              "keychain-access-groups": [shared_keychain_group],
-              "com.apple.security.application-groups": [
-                  "group.app.sunstone1029.fig1171.hermes"
-              ],
-          }
-          for key, value in expected.items():
-              if entitlements.get(key) != value:
-                  raise SystemExit(
-                      f"{target} entitlement {key} mismatch: {entitlements.get(key)!r}"
-                  )
-          if info.get("HermesSharedKeychainAccessGroup") != shared_keychain_group:
-              raise SystemExit(
-                  f"{target} Info.plist keychain group mismatch: "
-                  f"{info.get('HermesSharedKeychainAccessGroup')!r}"
-              )
-          PY
-          done
-          verify_contains 'HermesScreenTimeSpool.swift' 'shared Screen Time spool source'
       - name: Install CocoaPods
         run: pod install --project-directory=ios
       - name: Verify Release entitlement build settings
         shell: bash
         run: |
-          PROJECT="$(find ios -maxdepth 1 -type d -name '*.xcodeproj' -print -quit)"
           WORKSPACE="$(find ios -maxdepth 1 -type d -name '*.xcworkspace' -print -quit)"
           SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
-          test -n "$PROJECT"
           test -n "$WORKSPACE"
           test -n "$SCHEME"
           resolve_entitlements() {
@@ -213,31 +165,25 @@ jobs:
               entitlements = plistlib.load(handle)
           expected = {
               "aps-environment": "production",
-              "com.apple.developer.family-controls": True,
-              "com.apple.security.application-groups": [
-                  "group.app.sunstone1029.fig1171.hermes"
-              ],
+              "com.apple.developer.healthkit": True,
+              "com.apple.developer.healthkit.background-delivery": True,
           }
           for key, value in expected.items():
               if entitlements.get(key) != value:
                   raise SystemExit(
                       f"Main Release entitlement {key} mismatch: {entitlements.get(key)!r}"
                   )
+          forbidden = {
+              "com.apple.developer.family-controls",
+              "com.apple.security.application-groups",
+              "keychain-access-groups",
+          }
+          present = sorted(forbidden.intersection(entitlements))
+          if present:
+              raise SystemExit(
+                  f"Resign-compatible build contains unsupported entitlements: {present!r}"
+              )
           PY
-          for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension HermesFileProvider; do
-            directory="$target"
-            entitlement_file="$target.entitlements"
-            if [ "$target" = HermesWatchExtension ]; then
-              directory=HermesWatchApp
-              entitlement_file=HermesWatchApp.entitlements
-            fi
-            SETTING="$(xcodebuild -project "$PROJECT" -target "$target" \
-              -configuration Release -showBuildSettings | entitlement_setting)"
-            ACTUAL="$(resolve_entitlements "$SETTING")"
-            EXPECTED="$PWD/ios/native-extensions/$directory/$entitlement_file"
-            test "$ACTUAL" = "$EXPECTED"
-            plutil -lint "$ACTUAL"
-          done
       - name: Verify native context autolinking
         run: node scripts/verify-ios-native-context.mjs --ios ios
       - name: Compile without code signing
@@ -305,8 +251,6 @@ jobs:
           BUNDLED_AMAP_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$APP_PATH/Info.plist")"
           BUNDLED_AMAP_BUNDLE="$(plutil -extract HermesAmapIOSBundleIdentifier raw "$APP_PATH/Info.plist")"
           APP_BUNDLE_IDENTIFIER="$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")"
-          SHARED_KEYCHAIN_GROUP="$(plutil -extract HermesSharedKeychainAccessGroup raw "$APP_PATH/Info.plist")"
-          test -n "$SHARED_KEYCHAIN_GROUP"
           if [ "$BUNDLED_AMAP_KEY" != "${HERMES_AMAP_IOS_API_KEY:-}" ]; then
             echo 'Compiled app map configuration does not match the build environment.' >&2
             exit 1
@@ -317,35 +261,8 @@ jobs:
           fi
           APP_BUILD_NUMBER="$(plutil -extract CFBundleVersion raw "$APP_PATH/Info.plist")"
           test "$APP_BUILD_NUMBER" = "$HERMES_CI_BUILD_NUMBER"
-          verify_bundle_version() {
-            local bundle="$1"
-            local actual
-            actual="$(plutil -extract CFBundleVersion raw "$bundle/Info.plist")"
-            if [ "$actual" != "$APP_BUILD_NUMBER" ]; then
-              echo "Bundle version mismatch: $bundle has $actual, app has $APP_BUILD_NUMBER" >&2
-              exit 1
-            fi
-          }
-          for extension in HermesWeatherWidget HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension HermesFileProvider; do
-            EXTENSION_PATH="$APP_PATH/PlugIns/$extension.appex"
-            test -d "$EXTENSION_PATH"
-            plutil -extract CFBundleIdentifier raw "$EXTENSION_PATH/Info.plist" >/dev/null
-            if [ "$extension" = 'HermesDeviceActivityMonitor' ] || [ "$extension" = 'HermesDeviceActivityReport' ]; then
-              test "$(plutil -extract HermesSharedKeychainAccessGroup raw "$EXTENSION_PATH/Info.plist")" = "$SHARED_KEYCHAIN_GROUP"
-            fi
-            if [ "$extension" = 'HermesShareExtension' ]; then
-              plutil -extract NSExtension.NSExtensionPointIdentifier raw "$EXTENSION_PATH/Info.plist" | grep -qx 'com.apple.share-services'
-            fi
-            verify_bundle_version "$EXTENSION_PATH"
-          done
-          WATCH_APP="$APP_PATH/Watch/HermesWatchApp.app"
-          WATCH_EXTENSION="$WATCH_APP/PlugIns/HermesWatchExtension.appex"
-          test -d "$WATCH_APP"
-          test -d "$WATCH_EXTENSION"
-          plutil -extract CFBundleIdentifier raw "$WATCH_APP/Info.plist" >/dev/null
-          plutil -extract CFBundleIdentifier raw "$WATCH_EXTENSION/Info.plist" >/dev/null
-          verify_bundle_version "$WATCH_APP"
-          verify_bundle_version "$WATCH_EXTENSION"
+          test ! -e "$APP_PATH/PlugIns"
+          test ! -e "$APP_PATH/Watch"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
           find "$RUNNER_TEMP/ipa/Payload" -name _CodeSignature -type d -prune -exec rm -rf {} +
@@ -353,7 +270,6 @@ jobs:
             \( -name embedded.mobileprovision -o -name CodeResources \) \
             -type f -delete
           # Xcode can emit prebuilt static/dynamic framework executables as 0644.
-          # WatchKit also supplies an Apple-signed stub inside the generated app.
           # Remove every embedded Mach-O signature before handing the archive to
           # a third-party signer, then restore executable bits for every bundle.
           while IFS= read -r -d '' plist; do
@@ -378,16 +294,17 @@ jobs:
           unzip -t "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
           node "$GITHUB_WORKSPACE/scripts/verify-resignable-ipa.mjs" \
             "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" \
-            --bundle-id "$APP_BUNDLE_IDENTIFIER"
+            --bundle-id "$APP_BUNDLE_IDENTIFIER" \
+            --root-app-only
           IPA_SHA256="$(shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" | awk '{print $1}')"
           printf '%s  %s\n' "$IPA_SHA256" 'Hermes-Agent-unsigned.ipa' \
             > "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256"
           cd "$RUNNER_TEMP"
           shasum -a 256 -c Hermes-Agent-unsigned.ipa.sha256
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          ARTIFACT_NAME="Hermes-Agent-build-${APP_BUILD_NUMBER}-${SHORT_SHA}"
+          ARTIFACT_NAME="Hermes-Agent-resign-compatible-${APP_BUILD_NUMBER}-${SHORT_SHA}"
           APP_MANIFEST_SHA256="$(shasum -a 256 "$GITHUB_WORKSPACE/app.base.json" | awk '{print $1}')"
-          printf '{"build":"%s","commit":"%s","backend_commit":"%s","backend_version":"%s","trigger":"%s","frontend_preview":%s,"manifest_sha256":"%s","sha256":"%s"}\n' \
+          printf '{"build":"%s","commit":"%s","backend_commit":"%s","backend_version":"%s","trigger":"%s","frontend_preview":%s,"resign_compatible":true,"manifest_sha256":"%s","sha256":"%s"}\n' \
             "$APP_BUILD_NUMBER" \
             "$GITHUB_SHA" \
             "${BACKEND_COMMIT:-}" \

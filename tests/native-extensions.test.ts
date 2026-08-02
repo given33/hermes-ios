@@ -37,29 +37,29 @@ test('native extension config declares every V4 companion target', () => {
   assert.match(plugin, /settings\.MARKETING_VERSION = version/);
   assert.doesNotMatch(plugin, /const BUILD_NUMBER/);
   const workflow = read('.github/workflows/ios-unsigned.yml');
-  assert.match(workflow, /Verify native extension targets/);
-  assert.match(workflow, /isa = PBXTargetDependency/);
-  assert.match(workflow, /EXTENSION_PATH="\$APP_PATH\/PlugIns\/\$extension\.appex"/);
-  assert.match(workflow, /Watch\/HermesWatchApp\.app/);
-  assert.match(workflow, /PlugIns\/HermesWatchExtension\.appex/);
+  assert.match(workflow, /Verify the resign-compatible target graph/);
+  assert.match(workflow, /Resign-compatible build unexpectedly contains nested target/);
+  assert.match(workflow, /HERMES_RESIGN_COMPAT_BUILD: '1'/);
+  assert.match(workflow, /test ! -e "\$APP_PATH\/PlugIns"/);
+  assert.match(workflow, /test ! -e "\$APP_PATH\/Watch"/);
   assert.match(workflow, /-destination 'generic\/platform=iOS'/);
   assert.match(workflow, /-destination 'generic\/platform=iOS Simulator'/);
   assert.doesNotMatch(workflow, /-sdk iphoneos/);
   assert.match(workflow, /Verify Release entitlement build settings/);
   assert.match(workflow, /CODE_SIGN_ENTITLEMENTS = /);
   assert.match(workflow, /com\.apple\.developer\.family-controls/);
+  assert.match(workflow, /Resign-compatible build contains unsupported entitlements/);
   assert.match(workflow, /expo export --platform ios --output-dir/);
   assert.match(workflow, /verify-native-font-export\.mjs/);
   assert.match(workflow, /verify-production-bundle\.mjs/);
   assert.match(workflow, /APP_BUILD_NUMBER=/);
-  assert.match(workflow, /ARTIFACT_NAME="Hermes-Agent-build-\$\{APP_BUILD_NUMBER\}-\$\{SHORT_SHA\}"/);
+  assert.match(workflow, /ARTIFACT_NAME="Hermes-Agent-resign-compatible-\$\{APP_BUILD_NUMBER\}-\$\{SHORT_SHA\}"/);
   assert.match(workflow, /Hermes-Agent-build\.json/);
   assert.match(workflow, /"frontend_preview":%s/);
+  assert.match(workflow, /"resign_compatible":true/);
   assert.match(workflow, /"manifest_sha256":"%s"/);
   assert.match(workflow, /name: \$\{\{ steps\.package\.outputs\.artifact_name \}\}/);
-  assert.match(workflow, /verify_bundle_version "\$EXTENSION_PATH"/);
-  assert.match(workflow, /verify_bundle_version "\$WATCH_APP"/);
-  assert.match(workflow, /verify_bundle_version "\$WATCH_EXTENSION"/);
+  assert.match(workflow, /--root-app-only/);
 });
 
 test('signed native controls exclude legacy fixture-only Swift pages', () => {
@@ -202,15 +202,17 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
     assert.match(entitlements, /<key>com\.apple\.security\.application-groups<\/key>[\s\S]*group\.app\.sunstone1029\.fig1171\.hermes/);
     assert.match(info, /<key>HermesSharedKeychainAccessGroup<\/key>[\s\S]*\$\(AppIdentifierPrefix\)app\.sunstone1029\.fig1171\.hermes\.shared/);
   }
+  const appConfig = read('app.config.js');
+  assert.match(appConfig, /HERMES_RESIGN_COMPAT_BUILD/);
+  assert.match(appConfig, /with-hermes-native-extensions\.js/);
+  assert.match(appConfig, /resignCompatibleEntitlements/);
+  assert.match(appConfig, /HermesSharedKeychainAccessGroup/);
   const workflow = read('.github/workflows/ios-unsigned.yml');
   assert.match(workflow, /import plistlib/);
-  assert.match(workflow, /"keychain-access-groups": \[shared_keychain_group\]/);
-  assert.match(workflow, /"com\.apple\.developer\.family-controls": True/);
-  assert.match(workflow, /SPOOL_BUILD_FILE_COUNT/);
-  assert.match(
-    workflow,
-    /verify_contains 'HermesScreenTimeSpool\.swift' 'shared Screen Time spool source'/,
-  );
+  assert.match(workflow, /"com\.apple\.developer\.healthkit": True/);
+  assert.match(workflow, /"com\.apple\.developer\.healthkit\.background-delivery": True/);
+  assert.match(workflow, /forbidden = \{/);
+  assert.match(workflow, /"keychain-access-groups"/);
 });
 
 test('native context absorbs DeviceActivity extension events', () => {

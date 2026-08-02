@@ -27,6 +27,12 @@ test('iOS unsigned builds accept only validated backend release events', () => {
   assert.match(workflow, /chmod u\+x,go\+x/);
   assert.match(workflow, /verify-resignable-ipa\.mjs/);
   assert.match(workflow, /--bundle-id \"\$APP_BUNDLE_IDENTIFIER\"/);
+  assert.match(workflow, /HERMES_RESIGN_COMPAT_BUILD: '1'/);
+  assert.match(workflow, /--root-app-only/);
+  assert.match(workflow, /test ! -e \"\$APP_PATH\/PlugIns\"/);
+  assert.match(workflow, /test ! -e \"\$APP_PATH\/Watch\"/);
+  assert.match(workflow, /Hermes-Agent-resign-compatible-/);
+  assert.match(workflow, /\"resign_compatible\":true/);
   assert.match(workflow, /HERMES_CI_BUILD_NUMBER: \$\{\{ github\.run_id \}\}/);
   assert.match(workflow, /test \"\$APP_BUILD_NUMBER\" = \"\$HERMES_CI_BUILD_NUMBER\"/);
   assert.doesNotMatch(workflow, /Publish the tagged release/);
@@ -119,6 +125,8 @@ test('unsigned IPA verifier protects third-party signing inputs', () => {
   assert.match(verifier, /!<arch>/);
   assert.match(verifier, /watchapp\.watchkitextension/);
   assert.match(verifier, /nested app build version mismatch/);
+  assert.match(verifier, /--root-app-only/);
+  assert.match(verifier, /root-app-only IPA contains nested applications/);
 });
 
 test('all iOS workflows pin third-party actions to immutable commits', () => {

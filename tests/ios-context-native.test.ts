@@ -22,12 +22,14 @@ test('APNs entitlement follows local Debug and EAS signing environments', () => 
     EAS_BUILD_PROFILE: process.env.EAS_BUILD_PROFILE,
     EXPO_PUBLIC_FRONTEND_PREVIEW: process.env.EXPO_PUBLIC_FRONTEND_PREVIEW,
     HERMES_DISTRIBUTABLE_BUILD: process.env.HERMES_DISTRIBUTABLE_BUILD,
+    HERMES_RESIGN_COMPAT_BUILD: process.env.HERMES_RESIGN_COMPAT_BUILD,
     NODE_ENV: process.env.NODE_ENV,
   };
   const configure = (profile: string | undefined, nodeEnv: string) => {
     if (profile === undefined) delete process.env.EAS_BUILD_PROFILE;
     else process.env.EAS_BUILD_PROFILE = profile;
     delete process.env.HERMES_DISTRIBUTABLE_BUILD;
+    delete process.env.HERMES_RESIGN_COMPAT_BUILD;
     process.env.EXPO_PUBLIC_FRONTEND_PREVIEW = '0';
     process.env.NODE_ENV = nodeEnv;
     return configFactory().ios.entitlements['aps-environment'];
@@ -37,6 +39,61 @@ test('APNs entitlement follows local Debug and EAS signing environments', () => 
     assert.equal(configure('development', 'production'), 'development');
     assert.equal(configure('preview', 'production'), 'production');
     assert.equal(configure('production', 'production'), 'production');
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('external re-signing builds use one app bundle and profile-compatible entitlements', () => {
+  const require = createRequire(import.meta.url);
+  const configFactory = require(resolve(root, 'app.config.js')) as () => {
+    plugins: Array<string | unknown[]>;
+    ios: {
+      buildNumber: string;
+      entitlements: Record<string, unknown>;
+      infoPlist: Record<string, unknown>;
+    };
+  };
+  const saved = {
+    EAS_BUILD_PROFILE: process.env.EAS_BUILD_PROFILE,
+    EXPO_PUBLIC_FRONTEND_PREVIEW: process.env.EXPO_PUBLIC_FRONTEND_PREVIEW,
+    HERMES_CI_BUILD_NUMBER: process.env.HERMES_CI_BUILD_NUMBER,
+    HERMES_DISTRIBUTABLE_BUILD: process.env.HERMES_DISTRIBUTABLE_BUILD,
+    HERMES_RESIGN_COMPAT_BUILD: process.env.HERMES_RESIGN_COMPAT_BUILD,
+    NODE_ENV: process.env.NODE_ENV,
+  };
+  try {
+    delete process.env.EAS_BUILD_PROFILE;
+    process.env.EXPO_PUBLIC_FRONTEND_PREVIEW = '0';
+    process.env.HERMES_CI_BUILD_NUMBER = '30750000000';
+    process.env.HERMES_DISTRIBUTABLE_BUILD = '1';
+    process.env.HERMES_RESIGN_COMPAT_BUILD = '1';
+    process.env.NODE_ENV = 'production';
+
+    const config = configFactory();
+    assert.equal(config.ios.buildNumber, '30750000000');
+    assert.equal(
+      config.plugins.includes('./plugins/with-hermes-native-extensions.js'),
+      false,
+    );
+    assert.equal(config.plugins.includes('expo-notifications'), true);
+    assert.equal(config.ios.entitlements['aps-environment'], 'production');
+    assert.equal(config.ios.entitlements['com.apple.developer.healthkit'], true);
+    assert.equal(
+      config.ios.entitlements['com.apple.developer.healthkit.background-delivery'],
+      true,
+    );
+    for (const key of [
+      'com.apple.developer.family-controls',
+      'com.apple.security.application-groups',
+      'keychain-access-groups',
+    ]) {
+      assert.equal(key in config.ios.entitlements, false, key);
+    }
+    assert.equal('HermesSharedKeychainAccessGroup' in config.ios.infoPlist, false);
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];

@@ -43,12 +43,19 @@ GitHub 的 `Build unsigned iOS IPA` 工作流不需要 Apple 证书。手动运�
 
 ### Re-signing the unsigned IPA
 The unsigned artifact is intentionally not installable until it is signed by
-your Apple signing tool. The signer must preserve every bundle identifier and
-build version, then sign recursively in this order: embedded frameworks,
-embedded app extensions, the Watch app and Watch extension, and finally the
-main application. Each code bundle needs the matching provisioning profile,
-entitlements, and application identifier for the same Team ID. Do not remove
-or rename `Payload`, `PlugIns`, `Frameworks`, or `Watch` entries.
+your Apple signing tool. The GitHub unsigned workflow produces a re-signing
+compatible package with one top-level application bundle plus its embedded
+frameworks. It intentionally omits the Widget, Watch app, Share extension,
+File Provider, and Device Activity extensions because signers that apply one
+explicit provisioning profile to every nested bundle create invalid
+application identifiers and iOS rejects the installation. The full signed EAS
+production build still includes those companion targets.
+
+The signing tool must preserve the main bundle identifier and build version,
+sign embedded frameworks first, and sign the main application last. The
+profile's `application-identifier` must end in
+`app.sunstone1029.fig1171`; a profile for a different explicit App ID or a
+different device cannot install this package.
 
 Before installing, verify the signed result with:
 
@@ -60,10 +67,10 @@ codesign -d --entitlements :- Payload/*.app
 
 The CI package step runs `scripts/verify-resignable-ipa.mjs` before publishing
 the artifact. It rejects path traversal, symbolic links, missing executable
-metadata, duplicate bundle identifiers, missing Hermes extensions, and stale
-signing output. If a signing tool only signs the top-level `.app`, the IPA will
-still fail installation because iOS validates every nested code signature; use
-the tool's recursive or "sign embedded frameworks/extensions" mode.
+metadata, nested applications, stale signing output, and embedded Mach-O
+signatures. The re-signing build also removes Family Controls, App Group, and
+shared Keychain entitlements that require separately provisioned companion
+targets; HealthKit and production APNs entitlements remain enabled.
 
 Signed EAS builds use the GitHub run ID as a unique iOS build number. The
 dynamic Expo config evaluates this before the remote build starts, so the
