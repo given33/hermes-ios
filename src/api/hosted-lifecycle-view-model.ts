@@ -10,9 +10,11 @@ export interface HostedLifecycleApplication {
   failed: boolean;
   firstTokenAt?: number;
   messages: HermesChatViewMessage[];
+  notices: string[];
   phase?: 'executing' | 'reconnecting' | 'responding' | 'thinking';
   phaseStartedAt?: number;
   reconnectAttempt?: number;
+  turnActive: boolean;
 }
 
 /** Reduce canonical Hermes hosted events directly into one stable chat turn. */
@@ -28,6 +30,8 @@ export function applyHostedLifecycleEvents(
   let phaseStartedAt: number | undefined;
   let reconnectAttempt: number | undefined;
   let firstTokenAt: number | undefined;
+  let turnActive = false;
+  const notices: string[] = [];
 
   for (const event of events) {
     if (event.role_stage.split(/[.:/]/, 1)[0] !== 'chat') continue;
@@ -45,7 +49,20 @@ export function applyHostedLifecycleEvents(
       || message.modelStartedAt
       || occurredAt;
 
+    const notice = officialFrontendNotice(eventType, payload, chinese);
+    if (notice) {
+      notices.push(notice);
+      continue;
+    }
+    if (
+      eventType === 'notification.clear'
+      || eventType === 'voice.status'
+      || eventType === 'voice.transcript'
+      || eventType === 'wake.detected'
+    ) continue;
+
     if (eventType === 'agent.started') {
+      turnActive = true;
       message = {
         ...message,
         model: modelLabel(payload) || message.model,
@@ -59,6 +76,7 @@ export function applyHostedLifecycleEvents(
       eventType === 'connection.retry_scheduled'
       || eventType === 'connection.retry_started'
     ) {
+      turnActive = true;
       const attempt = Math.max(1, numericValue(payload.attempt) || 1);
       const maxAttempts = Math.max(attempt, numericValue(payload.max_attempts) || 5);
       phase = 'reconnecting';
@@ -103,6 +121,7 @@ export function applyHostedLifecycleEvents(
       if (!text && !existing?.output?.trim()) {
         continue;
       }
+      turnActive = true;
       const output = appendDelta(existing?.output || '', text);
       const status = eventType === 'thinking.completed' ? 'completed' : 'running';
       const activity: HermesChatActivity = {
@@ -138,12 +157,24 @@ export function applyHostedLifecycleEvents(
       eventType.startsWith('tool.')
       || eventType.startsWith('subagent.')
       || eventType.startsWith('command.')
+      || eventType === 'browser.progress'
+      || eventType.startsWith('moa.')
+      || eventType === 'approval.request'
+      || eventType === 'clarify.request'
+      || eventType === 'secret.request'
+      || eventType === 'sudo.request'
+      || eventType === 'secret.expire'
+      || eventType === 'sudo.expire'
+      || eventType === 'background.complete'
+      || eventType === 'review.summary'
     ) {
       if (eventType === 'command.output' && sourceEventType === 'status.update') {
         continue;
       }
       const activity = streamEventToActivity(eventType, payload, occurredAt);
       if (activity) {
+        turnActive = !['background.complete', 'review.summary'].includes(eventType)
+          || turnActive;
         const existing = message.activities?.find(({ id }) => id === activity.id);
         const mergedActivity = existing
           ? {
@@ -151,17 +182,29 @@ export function applyHostedLifecycleEvents(
               input: activity.input || existing.input,
               name: activity.name === '命令' ? existing.name : activity.name,
               output: eventType === 'command.output'
+                || eventType === 'browser.progress'
+                || eventType === 'moa.reference'
                 ? appendDelta(existing.output || '', activity.output || '')
                 : activity.output || existing.output,
               startedAt: existing.startedAt || activity.startedAt,
               toolName: activity.toolName === '命令' ? existing.toolName : activity.toolName,
             }
           : activity;
-        const firstOutput = !message.firstTokenAt;
+        const countsAsModelOutput = ![
+          'approval.request',
+          'clarify.request',
+          'secret.request',
+          'sudo.request',
+          'secret.expire',
+          'sudo.expire',
+          'background.complete',
+          'review.summary',
+        ].includes(eventType);
+        const firstOutput = countsAsModelOutput && !message.firstTokenAt;
         message = {
           ...message,
           activities: upsertActivity(message.activities, mergedActivity),
-          firstTokenAt: message.firstTokenAt || occurredAt,
+          firstTokenAt: message.firstTokenAt || (countsAsModelOutput ? occurredAt : undefined),
           modelStartedAt,
           startedAt: message.startedAt || occurredAt,
           status: 'running',
@@ -170,9 +213,16 @@ export function applyHostedLifecycleEvents(
         };
         if (firstOutput) firstTokenAt = occurredAt;
       }
-      phase = 'executing';
-      phaseStartedAt = message.startedAt || occurredAt;
-    } else if (eventType === 'message.delta' || eventType === 'message.completed') {
+      if (!['background.complete', 'review.summary'].includes(eventType)) {
+        phase = 'executing';
+        phaseStartedAt = message.startedAt || occurredAt;
+      }
+    } else if (
+      eventType === 'message.delta'
+      || eventType === 'message.interim'
+      || eventType === 'message.completed'
+    ) {
+      turnActive = true;
       const text = structuredText(
         payload.text ?? payload.delta ?? payload.content ?? payload.message,
       );
@@ -200,6 +250,7 @@ export function applyHostedLifecycleEvents(
       phaseStartedAt = message.startedAt || occurredAt;
       if (eventType === 'message.completed') completed = true;
     } else if (eventType === 'turn.cancel_requested') {
+      turnActive = true;
       message = {
         ...message,
         activities: finishActivities(message.activities, 'cancelled', occurredAt),
@@ -209,6 +260,7 @@ export function applyHostedLifecycleEvents(
         updatedAt: occurredAt,
       };
     } else if (eventType === 'turn.completed' || eventType === 'turn.cancelled' || eventType === 'turn.failed') {
+      turnActive = true;
       completed = eventType === 'turn.completed';
       failed = eventType === 'turn.failed';
       const status = eventType === 'turn.completed'
@@ -235,10 +287,43 @@ export function applyHostedLifecycleEvents(
     failed,
     firstTokenAt,
     messages: nextMessages,
+    notices,
     phase,
     phaseStartedAt,
     reconnectAttempt,
+    turnActive,
   };
+}
+
+function officialFrontendNotice(
+  eventType: string,
+  payload: Record<string, unknown>,
+  chinese: boolean,
+): string {
+  if (eventType === 'notification.show') return structuredText(payload.text);
+  if (eventType === 'billing.step_up.verification') {
+    const url = stringValue(payload.verification_url);
+    const code = stringValue(payload.user_code);
+    if (!url) return '';
+    return chinese
+      ? `请在浏览器完成验证：${url}${code ? `（验证码 ${code}）` : ''}`
+      : `Complete verification in your browser: ${url}${code ? ` (code ${code})` : ''}`;
+  }
+  if (eventType === 'dashboard.new_session_requested') {
+    return structuredText(payload.reason)
+      || (chinese ? 'Hermes 请求创建新会话' : 'Hermes requested a new session');
+  }
+  if (eventType === 'gateway.stderr') return structuredText(payload.line);
+  if (eventType === 'gateway.start_timeout') {
+    return chinese ? 'Hermes 网关启动超时' : 'Hermes gateway startup timed out';
+  }
+  if (eventType === 'gateway.protocol_error') {
+    const preview = structuredText(payload.preview);
+    return chinese
+      ? `Hermes 网关协议错误${preview ? `：${preview}` : ''}`
+      : `Hermes gateway protocol error${preview ? `: ${preview}` : ''}`;
+  }
+  return '';
 }
 
 function liveMessageFor(

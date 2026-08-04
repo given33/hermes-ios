@@ -965,17 +965,48 @@ export function streamEventToActivity(
   const isTool = eventType.startsWith('tool.');
   const isSubagent = eventType.startsWith('subagent.');
   const isCommand = eventType.startsWith('command.');
-  if (!isTool && !isSubagent && !isCommand) return null;
+  const isBrowser = eventType === 'browser.progress';
+  const isMoa = eventType.startsWith('moa.');
+  const isInteraction = [
+    'approval.request',
+    'clarify.request',
+    'secret.request',
+    'sudo.request',
+    'secret.expire',
+    'sudo.expire',
+  ].includes(eventType);
+  const isBackground = eventType === 'background.complete' || eventType === 'review.summary';
+  if (
+    !isTool
+    && !isSubagent
+    && !isCommand
+    && !isBrowser
+    && !isMoa
+    && !isInteraction
+    && !isBackground
+  ) return null;
   const toolName = stringValue(payload.tool_name)
     || stringValue(payload.tool)
     || stringValue(payload.name)
-    || (isCommand ? stringValue(payload.command) : '');
+    || (isCommand ? stringValue(payload.command) : '')
+    || (isBrowser ? 'browser' : '')
+    || (isMoa ? 'moa' : '');
   const name = isSubagent
     ? stringValue(payload.profile)
       || stringValue(payload.agent_name)
       || stringValue(payload.name)
       || '子 Agent'
-    : isCommand ? stringValue(payload.name) || '命令' : toolName || '工具调用';
+    : isCommand
+      ? stringValue(payload.name) || '命令'
+      : isBrowser
+        ? '网页浏览'
+        : isMoa
+          ? '多模型协作'
+          : isInteraction
+            ? interactionActivityName(eventType)
+            : isBackground
+              ? eventType === 'review.summary' ? '审查摘要' : '后台任务'
+              : toolName || '工具调用';
   const status = eventType === 'tool.error' || eventType === 'tool.failed'
       || eventType === 'subagent.failed'
       || eventType === 'command.failed'
@@ -985,6 +1016,10 @@ export function streamEventToActivity(
         || eventType === 'tool.completed'
         || eventType === 'subagent.completed'
         || eventType === 'command.completed'
+        || eventType === 'background.complete'
+        || eventType === 'review.summary'
+        || eventType === 'secret.expire'
+        || eventType === 'sudo.expire'
       ? 'completed'
       : 'running';
   const durationMs = numberValue(payload.duration_ms)
@@ -992,8 +1027,12 @@ export function streamEventToActivity(
   const startedAt = timestampValue(payload.started_at);
   const completedAt = timestampValue(payload.completed_at ?? payload.ended_at);
   return {
-    category: isSubagent
+    category: isSubagent || isMoa
       ? 'subagent'
+      : isBrowser
+        ? 'browser'
+        : isInteraction || isBackground
+          ? 'status'
       : isCommand
         ? 'command'
         : normalizedActivityCategory(
@@ -1010,15 +1049,32 @@ export function streamEventToActivity(
       || stringValue(payload.child_session_id)
       || stringValue(payload.subagent_id)
       || stringValue(payload.task_id)
+      || stringValue(payload.request_id)
+      || (isBrowser ? 'browser-progress' : '')
+      || (isMoa ? 'moa-progress' : '')
+      || (isBackground ? eventType : '')
       || stringValue(payload.entity_id)
       || `tool-${now}`,
     input: structuredText(
-      payload.command ?? payload.args_text ?? payload.args ?? payload.input ?? payload.context,
+      payload.command
+        ?? payload.question
+        ?? payload.prompt
+        ?? payload.args_text
+        ?? payload.args
+        ?? payload.input
+        ?? payload.context,
     ) || undefined,
     model: stringValue(payload.model) || undefined,
     name,
     output: structuredText(
-      payload.output ?? payload.result_text ?? payload.result ?? payload.summary ?? payload.text,
+      payload.output
+        ?? payload.result_text
+        ?? payload.result
+        ?? payload.summary
+        ?? payload.text
+        ?? payload.message
+        ?? payload.description
+        ?? moaProgressText(payload),
     ) || undefined,
     preview: structuredText(payload.preview ?? payload.summary) || name,
     provider: stringValue(payload.provider) || undefined,
@@ -1026,6 +1082,27 @@ export function streamEventToActivity(
     status,
     toolName: toolName || name,
   };
+}
+
+function interactionActivityName(eventType: string): string {
+  return {
+    'approval.request': '需要审批',
+    'clarify.request': '需要补充信息',
+    'secret.expire': '密钥请求已过期',
+    'secret.request': '需要密钥',
+    'sudo.expire': '授权请求已过期',
+    'sudo.request': '需要管理员授权',
+  }[eventType] || '需要用户操作';
+}
+
+function moaProgressText(payload: Record<string, unknown>): string {
+  const completed = numberValue(payload.refs_done);
+  const total = numberValue(payload.refs_total);
+  const phase = stringValue(payload.phase);
+  const label = stringValue(payload.label) || stringValue(payload.aggregator);
+  if (completed || total) return `MoA ${completed}/${total}${label ? ` · ${label}` : ''}`;
+  if (phase) return `MoA · ${phase}`;
+  return label;
 }
 
 export function activityDisplayContent(activity: HermesChatActivity): string {

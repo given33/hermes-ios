@@ -573,6 +573,7 @@ export function ChatPreviewPage({
   const applyLiveHostedEvents = useCallback((events: Parameters<typeof applyHostedLifecycleEvents>[1]) => {
     const result = applyHostedLifecycleEvents(messagesRef.current, events, isChinese);
     setMessages(result.messages);
+    for (const notice of result.notices) notify(notice);
     if (result.firstTokenAt && !firstTokenAtRef.current) {
       firstTokenAtRef.current = result.firstTokenAt;
     }
@@ -588,7 +589,7 @@ export function ChatPreviewPage({
       pendingTurnActiveRef.current = false;
       setHostedRunning(false);
       setSending(false);
-    } else if (events.length) {
+    } else if (result.turnActive) {
       pendingTurnActiveRef.current = true;
       setHostedRunning(true);
     }
@@ -596,6 +597,7 @@ export function ChatPreviewPage({
     firstTokenAtRef,
     isChinese,
     messagesRef,
+    notify,
     pendingTurnActiveRef,
     setHostedRunning,
     setMessages,
