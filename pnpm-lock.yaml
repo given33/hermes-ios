@@ -5,7 +5,9 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  react-native-drawer-layout@4.2.7: 3546eda428fa4b587c5a11dcecfd0e8ad285782eabac408e41f7c8d102ee363c
+  react-native-drawer-layout@4.2.7:
+    hash: 3546eda428fa4b587c5a11dcecfd0e8ad285782eabac408e41f7c8d102ee363c
+    path: patches/react-native-drawer-layout@4.2.7.patch
 
 importers:
 
