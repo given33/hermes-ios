@@ -8,7 +8,7 @@ import {
   isComposerVoiceControlDisabled,
 } from '../src/studio/chat/chat-composer-voice-policy';
 
-test('sending keeps the voice control available only to turn off spoken replies', () => {
+test('voice conversation remains interruptible while a reply is generating', () => {
   const state = {
     readRepliesAloud: true,
     sending: true,
@@ -16,8 +16,8 @@ test('sending keeps the voice control available only to turn off spoken replies'
   };
 
   assert.equal(isComposerVoiceControlDisabled(state), false);
-  assert.equal(canActivateComposerVoiceInput(state), false);
-  assert.equal(composerVoicePrimaryAction(state), 'toggleReadRepliesAloud');
+  assert.equal(canActivateComposerVoiceInput(state), true);
+  assert.equal(composerVoicePrimaryAction(state), 'startVoiceInput');
 });
 
 test('sending disables an idle voice control when spoken replies are already off', () => {
@@ -64,4 +64,16 @@ test('an idle composer starts voice input and formats its recording clock', () =
   }), 'startVoiceInput');
   assert.equal(formatVoiceDuration(0), '0:00');
   assert.equal(formatVoiceDuration(65_900), '1:05');
+});
+
+test('streaming speech can be interrupted directly into a new voice turn', () => {
+  const state = {
+    readRepliesAloud: true,
+    sending: true,
+    voiceState: 'speaking',
+  };
+
+  assert.equal(canActivateComposerVoiceInput(state), true);
+  assert.equal(isComposerVoiceControlDisabled(state), false);
+  assert.equal(composerVoicePrimaryAction(state), 'startVoiceInput');
 });

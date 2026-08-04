@@ -27,6 +27,7 @@ interface VoiceMessage {
 export type HermesVoiceState = IOSVoiceState['state'] | 'transcribing';
 
 interface UseHermesVoiceOptions {
+  agentTurnActive: boolean;
   applyTranscript(value: string): void;
   cloudApi: HermesCloudApi | null;
   describeError(error: unknown): string;
@@ -35,6 +36,7 @@ interface UseHermesVoiceOptions {
   isChinese: boolean;
   messages: readonly VoiceMessage[];
   notify(message: string): void;
+  onInterruptAgent?(): Promise<void> | void;
 }
 
 function recordingMimeType(uri: string): string {
@@ -63,6 +65,7 @@ function deleteTemporaryRecording(uri: string): void {
 }
 
 export function useHermesVoice({
+  agentTurnActive,
   applyTranscript,
   cloudApi,
   describeError,
@@ -71,6 +74,7 @@ export function useHermesVoice({
   isChinese,
   messages,
   notify,
+  onInterruptAgent,
 }: UseHermesVoiceOptions) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 250);
@@ -88,6 +92,13 @@ export function useHermesVoice({
   const acceptNativeTranscriptRef = useRef(false);
   const voiceOperationRef = useRef(0);
   const transcriptionAbortRef = useRef<AbortController | null>(null);
+  const streamingSpeechCursorRef = useRef({
+    finishing: false,
+    messageId: '',
+    sourceLength: 0,
+  });
+  const streamingSpeechGenerationRef = useRef(0);
+  const streamingSpeechQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   const restoreVoiceDraft = useCallback(() => {
     applyTranscript(voiceDraftBeforeRef.current);
@@ -103,9 +114,16 @@ export function useHermesVoice({
     setVoicePreview(normalized);
   }, [applyTranscript, isChinese]);
 
-  const stopCurrentSpeech = useCallback(async () => {
+  const stopCurrentSpeech = useCallback(async (interrupted = false) => {
+    streamingSpeechGenerationRef.current += 1;
+    streamingSpeechCursorRef.current = {
+      finishing: false,
+      messageId: '',
+      sourceLength: 0,
+    };
     if (hasNativeIOSContext) {
-      await HermesIOSContext.stopSpeaking();
+      if (interrupted) await HermesIOSContext.interruptSpeaking();
+      else await HermesIOSContext.stopSpeaking();
     } else {
       await Speech.stop();
     }
@@ -254,6 +272,14 @@ export function useHermesVoice({
     if (voiceState === 'listening' || voiceState === 'transcribing') return;
     const operation = ++voiceOperationRef.current;
     try {
+      if (agentTurnActive) {
+        void Promise.resolve()
+          .then(() => onInterruptAgent?.())
+          .catch((error) => {
+            notify(describeError(error));
+          });
+      }
+      await stopCurrentSpeech(agentTurnActive || voiceState === 'speaking');
       setVoiceError('');
       setVoicePreview('');
       const currentDraft = getDraft();
@@ -311,14 +337,17 @@ export function useHermesVoice({
       notify(message);
     }
   }, [
+    agentTurnActive,
     cloudApi,
     describeError,
     focusComposer,
     getDraft,
     isChinese,
     notify,
+    onInterruptAgent,
     recorder,
     restoreVoiceDraft,
+    stopCurrentSpeech,
     voiceState,
   ]);
 
@@ -355,15 +384,80 @@ export function useHermesVoice({
     ) return;
     const latest = [...messages]
       .reverse()
-      .find((message) => (
-        message.role === 'assistant'
-        && message.status === 'completed'
-        && Boolean(message.content.trim())
-      ));
-    if (!latest || autoSpokenMessageIdRef.current === latest.id) return;
-    autoSpokenMessageIdRef.current = latest.id;
-    void speakText(latest.content, latest.id).catch((error) => notify(describeError(error)));
-  }, [describeError, messages, notify, readRepliesAloud, speakText, voiceState]);
+      .find((message) => message.role === 'assistant' && Boolean(message.content.trim()));
+    if (!latest) return;
+
+    if (!hasNativeIOSContext) {
+      if (latest.status !== 'completed' || autoSpokenMessageIdRef.current === latest.id) return;
+      autoSpokenMessageIdRef.current = latest.id;
+      void speakText(latest.content, latest.id).catch((error) => notify(describeError(error)));
+      return;
+    }
+
+    if (
+      autoSpokenMessageIdRef.current === latest.id
+      && streamingSpeechCursorRef.current.messageId !== latest.id
+    ) return;
+
+    const generation = streamingSpeechGenerationRef.current;
+    streamingSpeechQueueRef.current = streamingSpeechQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (generation !== streamingSpeechGenerationRef.current) return;
+        const status = (latest.status || '').toLowerCase();
+        const failed = status === 'failed' || status === 'cancelled' || status === 'canceled';
+        const pending = status === 'queued' || status === 'running';
+        const cursor = streamingSpeechCursorRef.current;
+
+        if (failed) {
+          if (cursor.messageId === latest.id) await HermesIOSContext.interruptSpeaking();
+          streamingSpeechCursorRef.current = {
+            finishing: false,
+            messageId: '',
+            sourceLength: 0,
+          };
+          setSpeakingMessageId('');
+          return;
+        }
+
+        if (
+          cursor.messageId !== latest.id
+          || latest.content.length < cursor.sourceLength
+        ) {
+          await HermesIOSContext.stopSpeaking();
+          if (generation !== streamingSpeechGenerationRef.current) return;
+          const started = await HermesIOSContext.startStreamingSpeech(
+            isChinese ? 'zh-CN' : 'en-US',
+            0.5,
+          );
+          if (!started || generation !== streamingSpeechGenerationRef.current) return;
+          streamingSpeechCursorRef.current = {
+            finishing: false,
+            messageId: latest.id,
+            sourceLength: 0,
+          };
+          setSpeakingMessageId(latest.id);
+        }
+
+        const active = streamingSpeechCursorRef.current;
+        if (active.messageId !== latest.id) return;
+        const delta = latest.content.slice(active.sourceLength);
+        if (delta) {
+          await HermesIOSContext.appendStreamingSpeech(delta);
+          active.sourceLength = latest.content.length;
+        }
+        if (!pending && !active.finishing) {
+          active.finishing = true;
+          await HermesIOSContext.finishStreamingSpeech();
+          autoSpokenMessageIdRef.current = latest.id;
+        }
+      })
+      .catch((error) => {
+        if (generation !== streamingSpeechGenerationRef.current) return;
+        setSpeakingMessageId('');
+        notify(describeError(error));
+      });
+  }, [describeError, isChinese, messages, notify, readRepliesAloud, speakText, voiceState]);
 
   useEffect(() => {
     if (voiceState !== 'listening' || !hasNativeIOSContext) {

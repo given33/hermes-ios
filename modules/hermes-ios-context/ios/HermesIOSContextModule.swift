@@ -326,6 +326,30 @@ public final class HermesIOSContextModule: Module {
       }
     }.runOnQueue(.main)
 
+    AsyncFunction("startStreamingSpeech") { (locale: String?, rate: Double?) throws -> Bool in
+      try MainActor.assumeIsolated {
+        try self.voice.startStreamingSpeech(localeIdentifier: locale, rate: rate)
+      }
+    }.runOnQueue(.main)
+
+    AsyncFunction("appendStreamingSpeech") { (text: String) -> Bool in
+      MainActor.assumeIsolated {
+        self.voice.appendStreamingSpeech(text)
+      }
+    }.runOnQueue(.main)
+
+    AsyncFunction("finishStreamingSpeech") { () -> Bool in
+      MainActor.assumeIsolated {
+        self.voice.finishStreamingSpeech()
+      }
+    }.runOnQueue(.main)
+
+    AsyncFunction("interruptSpeaking") { () -> Bool in
+      MainActor.assumeIsolated {
+        self.voice.stopSpeaking(interrupted: true)
+      }
+    }.runOnQueue(.main)
+
     AsyncFunction("stopSpeaking") { () -> Bool in
       MainActor.assumeIsolated {
         self.voice.stopSpeaking()

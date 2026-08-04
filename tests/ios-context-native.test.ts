@@ -166,6 +166,10 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
     'startVoiceRecognition',
     'stopVoiceRecognition',
     'speakText',
+    'startStreamingSpeech',
+    'appendStreamingSpeech',
+    'finishStreamingSpeech',
+    'interruptSpeaking',
     'stopSpeaking',
   ]) {
     assert.match(bridge, new RegExp(operation));
@@ -191,15 +195,22 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
     service,
     /guard format\.sampleRate > 0, format\.channelCount > 0 else \{\s*deactivateAudioSession\(\)/,
   );
-  assert.match(service, /stopSpeaking\(\)[\s\S]*finishSpeaking\(utterance\)/);
+  assert.match(service, /appendStreamingSpeech[\s\S]*enqueueStreamingClauses/);
+  assert.match(service, /takeSpeakableClauses/);
+  assert.match(service, /scheduleStreamingSpeechIdleFlush[\s\S]*\.now\(\) \+ 2/);
+  assert.match(service, /stopSpeaking\(interrupted: true\)/);
   assert.match(service, /catch \{[\s\S]*deactivateAudioSession\(\)[\s\S]*throw error/);
-  assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 5);
+  assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 9);
   assert.match(podspec, /'AVFoundation'/);
   assert.match(podspec, /'Speech'/);
   assert.match(chat, /requestVoiceAuthorization/);
   assert.match(chat, /startVoiceRecognition/);
   assert.match(chat, /stopVoiceRecognition/);
   assert.match(chat, /speakText/);
+  assert.match(chat, /startStreamingSpeech/);
+  assert.match(chat, /appendStreamingSpeech/);
+  assert.match(chat, /finishStreamingSpeech/);
+  assert.match(chat, /interruptSpeaking/);
   assert.match(chat, /requestMediaLibraryPermissionsAsync/);
   assert.match(chat, /requestCameraPermissionsAsync/);
 });

@@ -11,10 +11,13 @@ export type ComposerVoicePrimaryAction =
   | 'none';
 
 export function canActivateComposerVoiceInput(
-  state: Pick<ComposerVoiceControlState, 'sending' | 'voiceState'>,
+  state: ComposerVoiceControlState,
 ): boolean {
   if (state.voiceState === 'transcribing') return false;
-  return !state.sending || state.voiceState === 'listening';
+  return !state.sending
+    || state.readRepliesAloud
+    || state.voiceState === 'listening'
+    || state.voiceState === 'speaking';
 }
 
 export function isComposerVoiceControlDisabled(state: ComposerVoiceControlState): boolean {

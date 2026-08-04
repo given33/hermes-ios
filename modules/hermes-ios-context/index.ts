@@ -221,6 +221,10 @@ export interface IOSContextNativeModule {
   startAgentVoiceCapture(locale?: string | null): Promise<boolean>;
   stopVoiceRecognition(): Promise<string>;
   speakText(text: string, locale?: string | null, rate?: number | null): Promise<boolean>;
+  startStreamingSpeech(locale?: string | null, rate?: number | null): Promise<boolean>;
+  appendStreamingSpeech(text: string): Promise<boolean>;
+  finishStreamingSpeech(): Promise<boolean>;
+  interruptSpeaking(): Promise<boolean>;
   stopSpeaking(): Promise<boolean>;
   getVoiceState(): Promise<{ recording: boolean; speaking: boolean }>;
   configureSessionLock(ownerScope: string, enabled: boolean, timeoutMinutes?: number | null): Promise<Record<string, unknown>>;
@@ -528,6 +532,11 @@ export const HermesIOSContext = {
   stopVoiceRecognition: () => requireContextModule().stopVoiceRecognition(),
   speakText: (text: string, locale?: string | null, rate?: number | null) =>
     requireContextModule().speakText(text, locale, rate),
+  startStreamingSpeech: (locale?: string | null, rate?: number | null) =>
+    requireContextModule().startStreamingSpeech(locale, rate),
+  appendStreamingSpeech: (text: string) => requireContextModule().appendStreamingSpeech(text),
+  finishStreamingSpeech: () => requireContextModule().finishStreamingSpeech(),
+  interruptSpeaking: () => requireContextModule().interruptSpeaking(),
   stopSpeaking: () => requireContextModule().stopSpeaking(),
   getVoiceState: () => requireContextModule().getVoiceState(),
   configureSessionLock: (ownerScope: string, enabled: boolean, timeoutMinutes?: number | null) =>

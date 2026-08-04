@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
 } from 'react';
 import {
   Keyboard,
@@ -132,6 +133,7 @@ export function ChatPreviewPage({
   const firstTokenAtRef = pendingTurn.firstTokenAtRef;
   const pendingTurnActiveRef = pendingTurn.activeRef;
   const isChinese = locale === 'zh';
+  const voiceInterruptAgentRef = useRef<(() => Promise<void> | void) | null>(null);
   const {
     beginOptimisticHostedTurn,
     clearOptimisticHostedTurn,
@@ -511,6 +513,7 @@ export function ChatPreviewPage({
     voicePreview,
     voiceState,
   } = useHermesVoice({
+    agentTurnActive: hostedRunning || sending,
     applyTranscript: useCallback((next: string) => {
       contentRef.current = next;
       setContent(next);
@@ -525,6 +528,10 @@ export function ChatPreviewPage({
     isChinese,
     messages,
     notify,
+    onInterruptAgent: useCallback(
+      () => voiceInterruptAgentRef.current?.(),
+      [],
+    ),
   });
 
   const checkApiRelay = useRelayCheckAction({ cloudApi, isChinese, notify });
@@ -635,6 +642,18 @@ export function ChatPreviewPage({
     setSlashMenuOpen,
     updatePendingPhase,
   });
+
+  useEffect(() => {
+    const interrupt = async () => {
+      if (canCancelHostedTurn) await cancelActiveHostedTurn();
+    };
+    voiceInterruptAgentRef.current = interrupt;
+    return () => {
+      if (voiceInterruptAgentRef.current === interrupt) {
+        voiceInterruptAgentRef.current = null;
+      }
+    };
+  }, [canCancelHostedTurn, cancelActiveHostedTurn]);
 
   const requestSend = useChatSendAction({
     attachmentsRef,

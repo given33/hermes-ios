@@ -20,6 +20,14 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   private var interruptionObserver: NSObjectProtocol?
   private var recognitionGeneration = 0
   private var activeUtterance: AVSpeechUtterance?
+  private var streamingSpeechActive = false
+  private var streamingSpeechBuffer = ""
+  private var streamingSpeechFinishRequested = false
+  private var streamingSpeechGeneration = 0
+  private var streamingSpeechLocaleIdentifier: String?
+  private var streamingSpeechRate: Float?
+  private var streamingSpeechIdleFlush: DispatchWorkItem?
+  private var streamingUtterances: [ObjectIdentifier: Int] = [:]
 
   private override init() {
     super.init()
@@ -65,6 +73,9 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   @MainActor
   func startRecognition(localeIdentifier: String?) throws -> Bool {
     guard !recording else { return true }
+    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive {
+      _ = stopSpeaking(interrupted: true)
+    }
     guard Self.microphoneAuthorization() == "authorized" else {
       throw NSError(
         domain: "HermesVoice",
@@ -231,7 +242,9 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return false }
     if recording { _ = stopRecognition() }
-    if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive {
+      _ = stopSpeaking()
+    }
     let session = AVAudioSession.sharedInstance()
     do {
       try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
@@ -251,13 +264,70 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   }
 
   @MainActor
-  func stopSpeaking() -> Bool {
-    let wasSpeaking = synthesizer.isSpeaking || synthesizer.isPaused
+  func startStreamingSpeech(localeIdentifier: String?, rate: Double?) throws -> Bool {
+    if recording { _ = stopRecognition() }
+    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive {
+      _ = stopSpeaking()
+    }
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+      try session.setActive(true)
+    } catch {
+      deactivateAudioSession()
+      throw error
+    }
+    streamingSpeechGeneration += 1
+    streamingSpeechActive = true
+    streamingSpeechBuffer = ""
+    streamingSpeechFinishRequested = false
+    streamingSpeechLocaleIdentifier = localeIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+    streamingSpeechRate = rate.map { Float(min(max($0, 0.35), 0.62)) }
+    streamingSpeechIdleFlush?.cancel()
+    streamingSpeechIdleFlush = nil
+    streamingUtterances.removeAll()
+    return true
+  }
+
+  @MainActor
+  func appendStreamingSpeech(_ delta: String) -> Bool {
+    guard streamingSpeechActive, !streamingSpeechFinishRequested, !delta.isEmpty else {
+      return false
+    }
+    streamingSpeechBuffer.append(delta)
+    enqueueStreamingClauses(force: false)
+    scheduleStreamingSpeechIdleFlush()
+    return true
+  }
+
+  @MainActor
+  func finishStreamingSpeech() -> Bool {
+    guard streamingSpeechActive else { return false }
+    streamingSpeechFinishRequested = true
+    streamingSpeechIdleFlush?.cancel()
+    streamingSpeechIdleFlush = nil
+    enqueueStreamingClauses(force: true)
+    finishStreamingSpeechIfDrained()
+    return true
+  }
+
+  @MainActor
+  func stopSpeaking(interrupted: Bool = false) -> Bool {
+    let wasSpeaking = synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive
+    streamingSpeechGeneration += 1
+    streamingSpeechActive = false
+    streamingSpeechBuffer = ""
+    streamingSpeechFinishRequested = false
+    streamingSpeechLocaleIdentifier = nil
+    streamingSpeechRate = nil
+    streamingSpeechIdleFlush?.cancel()
+    streamingSpeechIdleFlush = nil
+    streamingUtterances.removeAll()
     if wasSpeaking {
-      let utterance = activeUtterance
+      activeUtterance = nil
       synthesizer.stopSpeaking(at: .immediate)
-      if let utterance { finishSpeaking(utterance) }
-      else { deactivateAudioSession() }
+      deactivateAudioSession()
+      emitState(interrupted ? "interrupted" : "idle")
     }
     return wasSpeaking
   }
@@ -269,22 +339,23 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     _ synthesizer: AVSpeechSynthesizer,
     didStart utterance: AVSpeechUtterance
   ) {
-    guard activeUtterance === utterance else { return }
-    emitState("speaking")
+    if activeUtterance === utterance || streamingUtterances[ObjectIdentifier(utterance)] != nil {
+      emitState("speaking")
+    }
   }
 
   func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer,
     didFinish utterance: AVSpeechUtterance
   ) {
-    finishSpeaking(utterance)
+    finishUtterance(utterance)
   }
 
   func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer,
     didCancel utterance: AVSpeechUtterance
   ) {
-    finishSpeaking(utterance)
+    finishUtterance(utterance)
   }
 
   private static func microphoneAuthorization() -> String {
@@ -341,11 +412,92 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     }
   }
 
-  private func finishSpeaking(_ utterance: AVSpeechUtterance) {
-    guard activeUtterance === utterance else { return }
-    activeUtterance = nil
+  private func enqueueStreamingClauses(force: Bool) {
+    guard streamingSpeechActive else { return }
+    for clause in Self.takeSpeakableClauses(from: &streamingSpeechBuffer, force: force) {
+      let utterance = AVSpeechUtterance(string: clause)
+      if let locale = streamingSpeechLocaleIdentifier, !locale.isEmpty {
+        utterance.voice = AVSpeechSynthesisVoice(language: locale)
+      }
+      if let rate = streamingSpeechRate { utterance.rate = rate }
+      streamingUtterances[ObjectIdentifier(utterance)] = streamingSpeechGeneration
+      synthesizer.speak(utterance)
+    }
+  }
+
+  private func scheduleStreamingSpeechIdleFlush() {
+    streamingSpeechIdleFlush?.cancel()
+    guard streamingSpeechActive, !streamingSpeechBuffer.trimmingCharacters(
+      in: .whitespacesAndNewlines
+    ).isEmpty else {
+      streamingSpeechIdleFlush = nil
+      return
+    }
+    let generation = streamingSpeechGeneration
+    let flush = DispatchWorkItem { [weak self] in
+      guard let self,
+            self.streamingSpeechActive,
+            self.streamingSpeechGeneration == generation else { return }
+      self.streamingSpeechIdleFlush = nil
+      self.enqueueStreamingClauses(force: true)
+    }
+    streamingSpeechIdleFlush = flush
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: flush)
+  }
+
+  private func finishUtterance(_ utterance: AVSpeechUtterance) {
+    if activeUtterance === utterance {
+      activeUtterance = nil
+      deactivateAudioSession()
+      emitState("idle")
+      return
+    }
+    guard let generation = streamingUtterances.removeValue(
+      forKey: ObjectIdentifier(utterance)
+    ), generation == streamingSpeechGeneration else { return }
+    finishStreamingSpeechIfDrained()
+  }
+
+  private func finishStreamingSpeechIfDrained() {
+    guard streamingSpeechActive,
+          streamingSpeechFinishRequested,
+          streamingSpeechBuffer.isEmpty,
+          !streamingUtterances.values.contains(streamingSpeechGeneration) else { return }
+    streamingSpeechActive = false
+    streamingSpeechLocaleIdentifier = nil
+    streamingSpeechRate = nil
+    streamingSpeechIdleFlush?.cancel()
+    streamingSpeechIdleFlush = nil
     deactivateAudioSession()
     emitState("idle")
+  }
+
+  private static func takeSpeakableClauses(from buffer: inout String, force: Bool) -> [String] {
+    var clauses: [String] = []
+    var start = buffer.startIndex
+    var index = start
+    let boundaries = CharacterSet(charactersIn: ".!?;:\n\u{3002}\u{FF01}\u{FF1F}\u{FF1B}\u{FF1A}")
+
+    while index < buffer.endIndex {
+      let scalarBoundary = buffer[index].unicodeScalars.contains {
+        boundaries.contains($0)
+      }
+      if scalarBoundary {
+        let end = buffer.index(after: index)
+        let clause = buffer[start..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+        if !clause.isEmpty { clauses.append(clause) }
+        start = end
+      }
+      index = buffer.index(after: index)
+    }
+
+    buffer = String(buffer[start...])
+    if force {
+      let remainder = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !remainder.isEmpty { clauses.append(remainder) }
+      buffer = ""
+    }
+    return clauses
   }
 
   private func deactivateAudioSession() {
