@@ -80,6 +80,12 @@ export function ChatMessageStream({
   const followVersion = [
     messages.length,
     latestMessage?.id || '',
+    latestMessage?.content.length || 0,
+    latestMessage?.status || '',
+    latestMessage?.activities?.length || 0,
+    latestMessage?.activities?.reduce((total, activity) => (
+      total + (activity.output?.length || 0) + (activity.preview?.length || 0)
+    ), 0) || 0,
   ].join(':');
 
   useEffect(() => {
@@ -120,7 +126,7 @@ export function ChatMessageStream({
             </Text>
           </Reanimated.View>
         ) : messages.map((message, index) => (
-          <Fragment key={message.id}>
+          <Fragment key={messageReactKey(message)}>
             {collaborationState === 'active' && collaborationStartIndex === index ? (
               <>
                 <CollaborationLiftNotice
@@ -187,4 +193,11 @@ export function ChatMessageStream({
       ) : null}
     </>
   );
+}
+
+function messageReactKey(message: ChatMessage): string {
+  if (message.runtimeTurnId) {
+    return `${message.role}:${message.runtimeTurnId}:${message.roleStage || 'chat'}`;
+  }
+  return message.id;
 }

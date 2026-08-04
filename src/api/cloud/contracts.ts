@@ -340,6 +340,9 @@ export interface HostedTurnEnqueueInput {
   attachmentIds?: string[];
   attachmentContext?: string;
   deliveryContext?: string;
+  createConversationIfMissing?: boolean;
+  conversationProfile?: string;
+  conversationTitle?: string;
 }
 
 export interface HostedTurnEnqueueResponse {

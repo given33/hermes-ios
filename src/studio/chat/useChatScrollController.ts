@@ -55,7 +55,7 @@ export function useChatScrollController(safeAreaBottom: number) {
     paddingBottom: interpolate(
       keyboard.height.value * keyboardAvoidanceEnabled.value,
       [0, Math.max(1, safeAreaBottom)],
-      [Math.max(8, safeAreaBottom - 16), 3],
+      [Math.max(10, safeAreaBottom - 12), 6],
       Extrapolation.CLAMP,
     ),
   }));

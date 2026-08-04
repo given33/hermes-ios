@@ -21,6 +21,7 @@ export interface HostedLifecycleEvent {
   turn_id: string;
   role_stage: string;
   event_type: string;
+  entity_id?: string;
   sequence: number;
   occurred_at: number;
   idempotency_key: string;
@@ -273,6 +274,7 @@ function parseLifecycleEvents(value: unknown): HostedLifecycleEvent[] {
       turn_id: stringValue(event.turn_id),
       role_stage: stringValue(event.role_stage),
       event_type: stringValue(event.event_type),
+      entity_id: stringValue(event.entity_id) || undefined,
       sequence,
       occurred_at: occurredAt,
       idempotency_key: stringValue(event.idempotency_key),

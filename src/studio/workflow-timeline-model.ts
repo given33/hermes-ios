@@ -280,10 +280,10 @@ export function turnPhaseChip(
 }
 
 export function firstTokenLabel(
-  message: Pick<HermesChatViewMessage, 'createdAt' | 'firstTokenAt' | 'startedAt'>,
+  message: Pick<HermesChatViewMessage, 'createdAt' | 'firstTokenAt' | 'modelStartedAt' | 'startedAt'>,
   chinese: boolean,
 ): string {
-  const baseline = message.startedAt || message.createdAt || 0;
+  const baseline = message.modelStartedAt || message.startedAt || message.createdAt || 0;
   const firstTokenAt = message.firstTokenAt || 0;
   if (!baseline || firstTokenAt <= baseline) return '';
   const elapsed = formatDurationLabel(firstTokenAt - baseline);
@@ -299,7 +299,7 @@ export function firstTokenLabel(
 export function turnTimingLine(
   message: Pick<
     HermesChatViewMessage,
-    'activities' | 'completedAt' | 'createdAt' | 'durationMs' | 'firstTokenAt'
+    'activities' | 'completedAt' | 'createdAt' | 'durationMs' | 'firstTokenAt' | 'modelStartedAt'
     | 'startedAt' | 'status' | 'updatedAt'
   >,
   chinese: boolean,

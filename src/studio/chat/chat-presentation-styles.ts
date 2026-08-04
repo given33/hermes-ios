@@ -89,7 +89,7 @@ export const styles = StyleSheet.create({
   pendingElapsed: { fontFamily: MONO_REGULAR, fontSize: 10, lineHeight: 14 },
   activityGroup: { gap: 4, maxWidth: 520, width: '100%' },
   activitySummary: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 24, paddingHorizontal: 3, paddingVertical: 2 },
-  activityTitle: { flex: 1, fontFamily: BODY_MEDIUM, fontSize: 11, lineHeight: 15 },
+  activityTitle: { flexShrink: 1, fontFamily: BODY_MEDIUM, fontSize: 11, lineHeight: 15 },
   activityCount: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13 },
   activityTimeline: { gap: 4, paddingBottom: 4 },
   turnPhaseChip: { alignItems: 'center', borderRadius: 5, flexDirection: 'row', flexShrink: 0, gap: 4, maxWidth: 168, paddingHorizontal: 6, paddingVertical: 2 },

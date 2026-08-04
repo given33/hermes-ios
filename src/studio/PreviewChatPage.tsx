@@ -9,7 +9,6 @@ import {
   useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
 import type { HermesApiClient } from '../api/HermesApiClient';
 import type { SidebarGatewayStatus } from '../app/NativeShell';
 import {
@@ -23,6 +22,7 @@ import {
   type HermesChatViewMessage as ChatMessage,
   type ConversationCollaborationState,
 } from '../api/chat-view-model';
+import { applyHostedLifecycleEvents } from '../api/hosted-lifecycle-view-model';
 import { useTheme } from '../design/ThemeProvider';
 import type { HermesNotificationTarget } from '../notifications/notification-target';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
@@ -60,12 +60,10 @@ import {
   useRelayCheckAction,
 } from './chat/useChatPageActions';
 import { useChatAttachmentLifecycle } from './chat/useChatAttachmentLifecycle';
-
 const HOSTED_TURN_VISIBILITY_GRACE_MS = 20_000;
 const RECONNECT_MAX_ATTEMPTS = 5;
 const HOSTED_TURN_REQUEST_TIMEOUT_MS = 20_000;
 const HOSTED_TURN_CANCEL_TIMEOUT_MS = 5_000;
-
 interface ChatPreviewPageProps {
   cacheOwner?: string;
   client?: HermesApiClient;
@@ -79,7 +77,6 @@ interface ChatPreviewPageProps {
   preferredConversationId?: string;
   profile?: string;
 }
-
 export function ChatPreviewPage({
   cacheOwner = '',
   client,
@@ -240,16 +237,13 @@ export function ChatPreviewPage({
     setContent,
     updateAttachments,
   });
-
   const updatePendingPhase = pendingTurn.updatePhase;
   const resetPendingStateMachine = pendingTurn.reset;
-
   const updateConversationCollaborationState = useCollaborationStateUpdater({
     activeConversationIdRef,
     collaborationStateByConversationRef,
     setCollaborationState,
   });
-
   const {
     applyConversation,
     commitConversationIndex,
@@ -533,9 +527,7 @@ export function ChatPreviewPage({
       [],
     ),
   });
-
   const checkApiRelay = useRelayCheckAction({ cloudApi, isChinese, notify });
-
   useEffect(() => {
     conversationSyncGenerationRef.current.invalidateAll();
     resetHydration();
@@ -580,11 +572,46 @@ export function ChatPreviewPage({
     replayDurableOutboxes,
   });
 
+  const applyLiveHostedEvents = useCallback((events: Parameters<typeof applyHostedLifecycleEvents>[1]) => {
+    const result = applyHostedLifecycleEvents(messagesRef.current, events, isChinese);
+    setMessages(result.messages);
+    if (result.firstTokenAt && !firstTokenAtRef.current) {
+      firstTokenAtRef.current = result.firstTokenAt;
+    }
+    if (result.reconnectAttempt !== undefined) {
+      setReconnectAttempt(result.reconnectAttempt);
+    } else if (result.phase && result.phase !== 'reconnecting') {
+      setReconnectAttempt(0);
+    }
+    if (result.phase) {
+      updatePendingPhase(result.phase, result.phaseStartedAt || Date.now());
+    }
+    if (result.completed || result.failed) {
+      pendingTurnActiveRef.current = false;
+      setHostedRunning(false);
+      setSending(false);
+    } else if (events.length) {
+      pendingTurnActiveRef.current = true;
+      setHostedRunning(true);
+    }
+  }, [
+    firstTokenAtRef,
+    isChinese,
+    messagesRef,
+    pendingTurnActiveRef,
+    setHostedRunning,
+    setMessages,
+    setReconnectAttempt,
+    setSending,
+    updatePendingPhase,
+  ]);
+
   useHostedConversationStream({
     accountGenerationRef: hostedAccountGenerationRef,
     activeConversationId,
     activeConversationIdRef,
     applyConversation,
+    applyLifecycleEvents: applyLiveHostedEvents,
     cacheOwner,
     cloudApi,
     cursorRef: hostedEventCursorRef,
@@ -730,7 +757,8 @@ export function ChatPreviewPage({
           },
           onFocus: () => {
             keyboardAvoidanceEnabled.value = 1;
-            keepLatestVisible(false);
+            autoFollowStreamRef.current = true;
+            keepLatestVisible(true, true);
           },
           onOpenAttachmentPicker: openAttachmentPicker,
           onPreviewAttachment: (attachment) => { void previewAttachment(attachment); },

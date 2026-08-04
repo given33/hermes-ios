@@ -300,7 +300,14 @@ export function useConversationSnapshotController({
             ))
           ));
           setReconnectAttempt(0);
-          const nextPhase = executing ? 'executing' : 'thinking';
+          const reasoning = trackedMessages.some((message) => (
+            !message.content
+            && (message.activities || []).some((activity) => (
+              activity.category === 'reasoning'
+              && Boolean(activity.output?.trim() || activity.preview?.trim())
+            ))
+          ));
+          const nextPhase = executing ? 'executing' : reasoning ? 'thinking' : 'responding';
           updatePendingPhase(nextPhase, firstTokenAt);
         } else {
           if (runtimeState?.phase === 'reconnecting') {
@@ -309,9 +316,6 @@ export function useConversationSnapshotController({
               setReconnectAttempt(attempt);
               updatePendingPhase('reconnecting', runtimeState.startedAt || Date.now());
             }
-          } else if (runtimeState?.phase === 'thinking') {
-            setReconnectAttempt(0);
-            updatePendingPhase('thinking', 0);
           }
         }
       }

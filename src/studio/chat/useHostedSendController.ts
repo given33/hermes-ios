@@ -417,7 +417,7 @@ export function useHostedSendController({
         }, ...conversationIndexRef.current], sendingConversationId, ownerEpoch);
       }
       setMessages((current) => upsertChatMessage(current, userMessage));
-      keepLatestVisible(false, true);
+      keepLatestVisible(true, true);
       setSending(true);
       firstTokenAtRef.current = 0;
       setReconnectAttempt(0);

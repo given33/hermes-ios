@@ -6,6 +6,7 @@ import { withAbortableDeadline } from '../../api/async-deadline';
 import { reconnectDelay } from '../../api/reconnect-backoff';
 import {
   consumeHostedConversationEvents,
+  type HostedLifecycleEvent,
 } from '../../api/hosted-conversation-events';
 import { accountGenerationFromOwnerScope } from '../../auth/account-identity';
 import type { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
@@ -26,6 +27,7 @@ interface HostedConversationStreamOptions {
     expectedOwnerEpoch?: number,
     resetCursor?: boolean,
   ): void | Promise<void>;
+  applyLifecycleEvents(events: readonly HostedLifecycleEvent[]): void | Promise<void>;
   cacheOwner: string;
   cloudApi: HermesCloudApi | null;
   accountGenerationRef: MutableRefObject<Map<string, string>>;
@@ -46,6 +48,7 @@ export function useHostedConversationStream({
   activeConversationId,
   activeConversationIdRef,
   applyConversation,
+  applyLifecycleEvents,
   cacheOwner,
   cloudApi,
   cursorRef,
@@ -153,11 +156,7 @@ export function useHostedConversationStream({
             } else if (hasGap) {
               throw new Error('Hermes hosted event gap could not be recovered');
             } else if (events.length) {
-              await withAbortableDeadline(
-                (signal) => loadConversation(activeConversationId, activeGeneration, signal),
-                requestTimeoutMs,
-                'Hermes hosted event reconciliation timed out',
-              );
+              await applyLifecycleEvents(events);
             }
             if (!lifecycleCurrent() || !generation.isActiveCurrent(activeGeneration)) return;
             cursorRef.current.set(activeConversationId, cursor);
@@ -169,6 +168,8 @@ export function useHostedConversationStream({
         if (!streamController?.signal.aborted) {
           streamHealthy = false;
           reportRefreshFailure('stream', error);
+          if (pollTimer) clearTimeout(pollTimer);
+          pollTimer = setTimeout(() => void poll(), 0);
         }
       }).finally(() => {
         streamActive = false;
@@ -179,7 +180,7 @@ export function useHostedConversationStream({
 
     const poll = async () => {
       if (disposed || !lifecycleCurrent()) return;
-      if (AppState.currentState === 'active') {
+      if (AppState.currentState === 'active' && !streamHealthy) {
         await reconcileInOrder(() => withAbortableDeadline(
           (signal) => loadConversation(activeConversationId, activeGeneration, signal),
           requestTimeoutMs,
@@ -206,7 +207,7 @@ export function useHostedConversationStream({
     });
 
     startStream();
-    void poll();
+    pollTimer = setTimeout(() => void poll(), DISCONNECTED_POLL_MS);
     return () => {
       disposed = true;
       streamController?.abort();
@@ -219,6 +220,7 @@ export function useHostedConversationStream({
     activeConversationIdRef,
     accountGenerationRef,
     applyConversation,
+    applyLifecycleEvents,
     cacheOwner,
     cloudApi,
     cursorRef,

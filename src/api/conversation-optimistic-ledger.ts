@@ -377,7 +377,8 @@ export function normalizeOptimisticPendingTurn(
     || (
         phase !== 'connecting'
         && phase !== 'thinking'
-      && phase !== 'reconnecting'
+        && phase !== 'responding'
+        && phase !== 'reconnecting'
       && phase !== 'executing'
       && phase !== 'cancel_requested'
     )

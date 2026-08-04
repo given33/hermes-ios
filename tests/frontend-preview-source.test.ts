@@ -310,11 +310,11 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.doesNotMatch(chat, /onContentSizeChange=\{\(\) => keepLatestVisible/);
   assert.doesNotMatch(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
   assert.match(chat, /cancelAnimationFrame\(pendingScrollFrame\.current\)/);
-  assert.match(chat, /keepLatestVisible\(false, true\)/);
+  assert.match(chat, /keepLatestVisible\(true, true\)/);
   assert.match(chat, /onFocus=\{actions\.onFocus\}/);
   assert.match(
     chat,
-    /onFocus: \(\) => \{[\s\S]{0,140}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,80}keepLatestVisible\(false\);/,
+    /onFocus: \(\) => \{[\s\S]{0,180}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,100}keepLatestVisible\(true, true\);/,
   );
   assert.match(chat, /Hermes Agent/);
   assert.doesNotMatch(chat, /当前窗口持续使用同一个会话|This window keeps using the same conversation/);
@@ -388,7 +388,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /runOnJS\(setMounted\)\(false\)/);
   assert.match(chat, /styles\.drawerBackdrop, backdropStyle/);
   assert.match(chat, /safeAreaBottom/);
-  assert.match(chat, /\[Math\.max\(8, safeAreaBottom - 16\), 3\]/);
+  assert.match(chat, /\[Math\.max\(10, safeAreaBottom - 12\), 6\]/);
   assert.match(chat, /ActionSheetIOS\.showActionSheetWithOptions/);
   assert.match(chat, /launchImageLibraryAsync/);
   assert.match(chat, /launchCameraAsync/);

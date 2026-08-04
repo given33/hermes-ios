@@ -166,8 +166,9 @@ test('workflow activity sits above the role row and uses the Hermes Studio colla
   assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
   assert.match(source, /activitySummary: \{ alignItems: 'center', flexDirection: 'row', gap: 6,/);
   assert.doesNotMatch(source, /activitySummary: \{[^\n]*justifyContent: 'space-between'/);
-  assert.match(source, /activityTitle: \{ flex: 1,/);
+  assert.match(source, /activityTitle: \{ flexShrink: 1,/);
   assert.match(source, /activityCount: \{ fontFamily: MONO_REGULAR/);
+  assert.match(source, /`\$\{stepActivities\.length\} 项`/);
   assert.doesNotMatch(source.slice(source.indexOf('function RoleActivityGroup'), source.indexOf('function shouldShowMessageTiming')), /<Cpu/);
   assert.doesNotMatch(source, /activityDivider:/);
   assert.match(source, /shouldShowMessageTiming\(message\)/);
@@ -244,7 +245,8 @@ test('sending is one durable idempotent enqueue with foreground outbox compensat
   assert.match(source, /upsertPendingEnqueue\(cacheOwner,/);
   assert.match(source, /persistPendingAttachments\(/);
   assert.match(source, /deliverPendingEnqueue\(/);
-  assert.match(source, /enqueueHostedTurn\(item\.conversationId, item\.input, signal\)/);
+  assert.match(source, /enqueueHostedTurn\(item\.conversationId, \{/);
+  assert.match(source, /createConversationIfMissing: createOnEnqueue/);
   assert.match(source, /uploadId: attachment\.id/);
   assert.match(source, /globalThis\.crypto\?\.randomUUID/);
   assert.doesNotMatch(source, /const userMessageId = `user-\$\{userMessageCreatedAt\}`/);

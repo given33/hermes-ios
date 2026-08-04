@@ -256,6 +256,11 @@ export class HermesConversationsCloudApi {
         attachment_ids: input.attachmentIds || [],
         attachment_context: input.attachmentContext || '',
         delivery_context: input.deliveryContext || '',
+        ...(input.createConversationIfMissing === true ? {
+          create_conversation_if_missing: true,
+          conversation_profile: input.conversationProfile || '',
+          conversation_title: input.conversationTitle || '',
+        } : {}),
       },
       { signal },
     );

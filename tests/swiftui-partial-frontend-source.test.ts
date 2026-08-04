@@ -135,7 +135,8 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
     read('src/studio/chat/useChatComposerNavigationController.ts'),
   ].join('\n');
   assert.match(chat, /createConversation\(\s*profile,/);
-  assert.match(chat, /enqueueHostedTurn\(item\.conversationId, item\.input, signal\)/);
+  assert.match(chat, /enqueueHostedTurn\(item\.conversationId, \{/);
+  assert.match(chat, /createConversationIfMissing: createOnEnqueue/);
   assert.match(chat, /persistPendingAttachments\(/);
   assert.match(chat, /upsertPendingEnqueue\(cacheOwner,/);
   assert.match(chat, /cancelHostedTurn\(/);

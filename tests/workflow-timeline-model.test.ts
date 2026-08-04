@@ -247,6 +247,26 @@ test('the timing line exposes the first-token boundary and terminal elapsed time
   );
   assert.equal(
     turnTimingLine({
+      firstTokenAt: 4_000,
+      modelStartedAt: 1_000,
+      startedAt: 4_000,
+      status: 'running',
+    }, true, 4_500),
+    '首字 3 s · 500 ms',
+  );
+  assert.equal(
+    turnTimingLine({
+      completedAt: 5_000,
+      durationMs: 500,
+      firstTokenAt: 4_000,
+      modelStartedAt: 1_000,
+      startedAt: 4_000,
+      status: 'completed',
+    }, true, 9_000),
+    '首字 3 s · 全程 4 s',
+  );
+  assert.equal(
+    turnTimingLine({
       durationMs: 21_000,
       firstTokenAt: 27_000,
       startedAt: 1_000,

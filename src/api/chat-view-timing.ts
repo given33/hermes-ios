@@ -51,7 +51,7 @@ export function formatActivitySummary(
 export function messageHasExecutionTiming(
   message: Pick<
     HermesChatViewMessage,
-    'completedAt' | 'durationMs' | 'firstTokenAt' | 'roleStage' | 'startedAt' | 'status' | 'updatedAt'
+    'completedAt' | 'durationMs' | 'firstTokenAt' | 'modelStartedAt' | 'roleStage' | 'startedAt' | 'status' | 'updatedAt'
   >,
 ): boolean {
   if (message.roleStage === 'chat' && message.status === 'failed' && !message.firstTokenAt) {
@@ -69,17 +69,24 @@ export function messageHasExecutionTiming(
 export function messageDurationMs(
   message: Pick<
     HermesChatViewMessage,
-    'activities' | 'completedAt' | 'durationMs' | 'firstTokenAt' | 'startedAt'
+    'activities' | 'completedAt' | 'durationMs' | 'firstTokenAt' | 'modelStartedAt' | 'startedAt'
     | 'status' | 'updatedAt'
   >,
   now = Date.now(),
 ): number {
   const running = messageIsRunning(message);
-  const firstTokenLowerBound = message.startedAt && message.firstTokenAt
-    ? Math.max(0, message.firstTokenAt - message.startedAt)
+  const modelBoundary = message.modelStartedAt || message.startedAt;
+  const firstTokenLowerBound = modelBoundary && message.firstTokenAt
+    ? Math.max(0, message.firstTokenAt - modelBoundary)
     : 0;
   if (running && message.startedAt) {
-    return Math.max(firstTokenLowerBound, now - message.startedAt);
+    return Math.max(0, now - message.startedAt);
+  }
+  if (!running && message.modelStartedAt) {
+    return Math.max(
+      firstTokenLowerBound,
+      (message.completedAt || message.updatedAt || now) - message.modelStartedAt,
+    );
   }
   if ((message.durationMs || 0) > 0) {
     return Math.max(firstTokenLowerBound, message.durationMs || 0);

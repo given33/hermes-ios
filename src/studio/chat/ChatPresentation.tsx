@@ -142,6 +142,7 @@ export function UnifiedMessage({
       {metadata}
     </Text>
   ) : null;
+  const hasBubble = Boolean(isUser || message.content.trim() || message.attachments?.length);
   const messageBody = (
     <View
       style={[
@@ -153,7 +154,7 @@ export function UnifiedMessage({
         },
       ]}
     >
-      <Markdown style={markdownStyles}>{message.content || ' '}</Markdown>
+      {message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
       {message.attachments?.length ? (
         <View style={styles.storedAttachments}>
           {message.attachments.map((attachment) => (
@@ -236,7 +237,7 @@ export function UnifiedMessage({
         isUser ? styles.userMessageEnvelope : styles.agentMessageEnvelope,
       ]}
     >
-      {isUser || message.content.trim() || message.attachments?.length ? (
+      {hasBubble || (!isUser && shouldShowMessageTiming(message)) ? (
         <View style={[styles.messageRow, isUser && styles.userMessageRow]}>
         <MessageAvatar
           isUser={isUser}
@@ -260,13 +261,13 @@ export function UnifiedMessage({
               ) : null}
             </View>
           </View>
-          <IOSContextMenu
+          {hasBubble ? <IOSContextMenu
             accessibilityLabel={isChinese ? '会话消息操作' : 'Conversation message actions'}
             actions={messageActions}
           >
             {messageBody}
-          </IOSContextMenu>
-          <View style={[styles.messageFooter, isUser && styles.userMessageFooter]}>
+          </IOSContextMenu> : null}
+          {hasBubble ? <View style={[styles.messageFooter, isUser && styles.userMessageFooter]}>
             <View style={[styles.messageActions, isUser && styles.userMessageActions]}>
             <IOSPressable
               accessibilityLabel={isChinese ? '复制消息' : 'Copy message'}
@@ -312,7 +313,7 @@ export function UnifiedMessage({
               </IOSPressable>
             ) : null}
             </View>
-          </View>
+          </View> : null}
         </View>
         </View>
       ) : null}
@@ -372,10 +373,12 @@ export function PendingMessage({
 }) {
   const { tokens } = useTheme();
   const motion = useMotion();
-  const executionStartedAt = (phase === 'thinking' || phase === 'executing') && startedAt > 0
+  const executionStartedAt = (
+    phase === 'thinking' || phase === 'responding' || phase === 'executing'
+  ) && startedAt > 0
     ? startedAt
     : undefined;
-  const statusText = phase === 'cancel_requested'
+  const pendingStatusText = phase === 'cancel_requested'
     ? (isChinese ? '正在取消' : 'Cancelling')
     : phase === 'reconnecting'
     ? (isChinese
@@ -383,9 +386,12 @@ export function PendingMessage({
         : `Reconnecting (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`)
     : phase === 'executing'
       ? (isChinese ? '正在执行' : 'The model is running')
+      : phase === 'responding'
+        ? (isChinese ? '正在回复' : 'Responding')
       : phase === 'thinking'
         ? (isChinese ? '正在思考' : 'Thinking')
-        : '';
+        : (isChinese ? '正在连接模型' : 'Connecting to model');
+  const statusText = phase === 'connecting' ? '' : pendingStatusText;
   const statusColor = phase === 'cancel_requested'
     ? tokens.colors.textTertiary
     : phase === 'connecting'
@@ -539,9 +545,9 @@ function RoleActivityGroup({
       <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.textSecondary }]}>
         {turnTimingLine(message, isChinese, now)}
       </Text>
-      {activities.length ? (
+      {stepActivities.length ? (
         <Text style={[styles.activityCount, { color: tokens.colors.textTertiary }]}>
-          {isChinese ? `${activities.length} 项` : `${activities.length} items`}
+          {isChinese ? `${stepActivities.length} 项` : `${stepActivities.length} steps`}
         </Text>
       ) : null}
       {activities.length ? (
@@ -610,6 +616,19 @@ function RoleActivityGroup({
 }
 
 function shouldShowMessageTiming(message: ChatMessage): boolean {
+  if (
+    message.roleStage === 'chat'
+    && messageIsRunning(message)
+    && !message.firstTokenAt
+    && !(message.activities || []).some((activity) => (
+      activity.id === 'model-connection-retry'
+      || (
+        activity.category !== 'reasoning'
+        && activity.id !== 'model-runtime-status'
+        && (activity.status === 'queued' || activity.status === 'running')
+      )
+    ))
+  ) return false;
   return messageHasExecutionTiming(message);
 }
 

@@ -73,7 +73,11 @@ const attachments: HostedTurnAttachmentPort = {
 test('a deleted conversation is re-homed once without changing request identity', async () => {
   const state = ports();
   const created: string[] = [];
-  const enqueued: Array<{ conversationId: string; requestId: string }> = [];
+  const enqueued: Array<{
+    conversationId: string;
+    createConversationIfMissing?: boolean;
+    requestId: string;
+  }> = [];
   let attempts = 0;
   const cloud: HostedTurnCloudPort = {
     async createConversation(_profile, _title, conversationId) {
@@ -81,7 +85,11 @@ test('a deleted conversation is re-homed once without changing request identity'
     },
     async enqueueHostedTurn(conversationId, input) {
       attempts += 1;
-      enqueued.push({ conversationId, requestId: input.requestId });
+      enqueued.push({
+        conversationId,
+        createConversationIfMissing: input.createConversationIfMissing,
+        requestId: input.requestId,
+      });
       if (attempts === 1) throw { status: 404 };
       return { accepted: true } as never;
     },
@@ -106,8 +114,9 @@ test('a deleted conversation is re-homed once without changing request identity'
 
   assert.equal(attempts, 2);
   assert.equal(result.item.conversationId, 'chat_request-1');
-  assert.deepEqual(created, ['chat_request-1']);
+  assert.deepEqual(created, []);
   assert.deepEqual(enqueued.map(({ requestId }) => requestId), ['request-1', 'request-1']);
+  assert.equal(enqueued.at(-1)?.createConversationIfMissing, true);
   assert.ok(state.persisted.some(({ conversationPending }) => conversationPending));
   assert.equal(state.persisted.at(-1)?.conversationPending, false);
 });
@@ -193,16 +202,17 @@ test('an old delivery cannot persist after same-owner purge and reactivation', a
   const owner = 'delivery-owner-epoch-interleaving';
   const expectedOwnerEpoch = captureConversationStorageEpoch(owner);
   const state = ports();
-  let releaseCreate!: () => void;
-  let createStarted!: () => void;
-  const createGate = new Promise<void>((resolve) => { releaseCreate = resolve; });
-  const started = new Promise<void>((resolve) => { createStarted = resolve; });
+  let releaseEnqueue!: () => void;
+  let enqueueStarted!: () => void;
+  const enqueueGate = new Promise<void>((resolve) => { releaseEnqueue = resolve; });
+  const started = new Promise<void>((resolve) => { enqueueStarted = resolve; });
   const cloud: HostedTurnCloudPort = {
-    async createConversation() {
-      createStarted();
-      await createGate;
+    async createConversation() {},
+    async enqueueHostedTurn() {
+      enqueueStarted();
+      await enqueueGate;
+      return { accepted: true } as never;
     },
-    async enqueueHostedTurn() { return { accepted: true } as never; },
     async interveneHostedTurn() { return { accepted: true }; },
     async uploadConversationAttachment() { return {}; },
   };
@@ -224,7 +234,7 @@ test('an old delivery cannot persist after same-owner purge and reactivation', a
   beginConversationStorageOwnerPurge(owner);
   const newEpoch = beginConversationStorageOwnerActivation(owner);
   completeConversationStorageOwnerActivation(owner, newEpoch);
-  releaseCreate();
+  releaseEnqueue();
 
   await assert.rejects(delivery, /lifecycle changed/i);
   assert.equal(

@@ -181,7 +181,10 @@ export function createHostedTurnDeliveryService({
       }, expectedOwnerEpoch);
     }
 
-    if (item.conversationPending) {
+    const createOnEnqueue = Boolean(
+      item.conversationPending && !(item.pendingAttachments?.length),
+    );
+    if (item.conversationPending && !createOnEnqueue) {
       await withAbortableDeadline(
         (signal) => cloud.createConversation(
           item.conversationProfile || profile,
@@ -224,11 +227,22 @@ export function createHostedTurnDeliveryService({
       expectedOwnerEpoch,
     );
     const response = await withAbortableDeadline(
-      (signal) => cloud.enqueueHostedTurn(item.conversationId, item.input, signal),
+      (signal) => cloud.enqueueHostedTurn(item.conversationId, {
+        ...item.input,
+        createConversationIfMissing: createOnEnqueue,
+        conversationProfile: item.conversationProfile || profile,
+        conversationTitle: item.conversationTitle || (isChinese ? '新对话' : 'New conversation'),
+      }, signal),
       requestTimeoutMs,
       'Hermes hosted-turn enqueue timed out',
     );
     assertCurrent(expectedOwnerEpoch);
+    if (createOnEnqueue) {
+      item = await persistIfActive(
+        { ...item, conversationPending: false },
+        expectedOwnerEpoch,
+      );
+    }
     return { item, response };
   };
 

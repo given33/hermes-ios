@@ -308,8 +308,9 @@ export function shouldRenderPendingMessage(
   if (!sending) return false;
   const latest = messages[messages.length - 1];
   if (latest?.role !== 'assistant') return true;
+  if (latest.activities?.length || latest.timingLabel) return false;
   return latest.roleStage === 'chat'
-    && messageIsRunning(latest)
+    && (!latest.status || messageIsRunning(latest))
     && !latest.content.trim()
     && !latest.attachments?.length;
 }
@@ -492,6 +493,7 @@ export function collaborationMessageToView(
   const createdAt = timestampValue(message.created_at)
     || timestampValue(message.timestamp)
     || timestampValue(meta.created_at);
+  const modelStartedAt = timestampValue(meta.model_started_at);
   let startedAt = timestampValue(message.started_at)
     || timestampValue(meta.started_at)
     || createdAt
@@ -541,9 +543,15 @@ export function collaborationMessageToView(
         && !isChatRuntimeStatusActivity(activity)
         && (activity.status === 'queued' || activity.status === 'running')
       ));
+      const reasoning = !message.content && (activities || []).some((activity) => (
+        activity.category === 'reasoning'
+        && Boolean(activity.output?.trim() || activity.preview?.trim())
+      ));
       timingLabel = executing
         ? (chinese ? '正在执行' : 'Executing')
-        : (chinese ? '正在回复' : 'Responding');
+        : reasoning
+          ? (chinese ? '正在思考' : 'Thinking')
+          : (chinese ? '正在回复' : 'Responding');
       startedAt = firstTokenAt || startedAt;
     } else {
       const runtimeState = latestChatRuntimeWaitingState(activities || []);
@@ -553,7 +561,7 @@ export function collaborationMessageToView(
           : `Reconnecting (${runtimeState.attempt}/${runtimeState.maxAttempts})`;
         startedAt = runtimeState.startedAt || startedAt;
       } else if (runtimeState?.phase === 'thinking') {
-        timingLabel = chinese ? '正在思考' : 'Thinking';
+        timingLabel = '';
         startedAt = 0;
       } else {
         timingLabel = '';
@@ -599,6 +607,7 @@ export function collaborationMessageToView(
     memberId: stringValue(message.member_id)
       || stringValue(meta.member_id)
       || undefined,
+    modelStartedAt: modelStartedAt || undefined,
     model: [provider, model].filter(Boolean).join(' · ') || undefined,
     name,
     optimisticConfirmedAt: timestampValue(meta.optimistic_confirmed_at) || undefined,
@@ -925,27 +934,53 @@ export function streamEventToActivity(
   payload: Record<string, unknown>,
   now = Date.now(),
 ): HermesChatActivity | null {
-  if (eventType === 'reasoning.delta' || eventType === 'reasoning.available') {
+  if (
+    eventType === 'reasoning.delta'
+    || eventType === 'reasoning.available'
+    || eventType === 'thinking.started'
+    || eventType === 'thinking.delta'
+    || eventType === 'thinking.completed'
+  ) {
     const text = structuredText(payload.text);
     if (!text) return null;
     return {
       category: 'reasoning',
-      completedAt: eventType === 'reasoning.available' ? now : undefined,
+      completedAt: ['reasoning.available', 'thinking.completed'].includes(eventType)
+        ? now
+        : undefined,
       duration: '',
       durationMs: 0,
-      id: stringValue(payload.id) || `reasoning-${now}`,
+      id: stringValue(payload.id)
+        || stringValue(payload.entity_id)
+        || `reasoning-${now}`,
       name: '模型思考',
       output: text,
       preview: text.slice(0, 80),
       startedAt: timestampValue(payload.started_at) || now,
-      status: eventType === 'reasoning.available' ? 'completed' : 'running',
+      status: ['reasoning.available', 'thinking.completed'].includes(eventType)
+        ? 'completed'
+        : 'running',
     };
   }
-  if (!eventType.startsWith('tool.')) return null;
-  const name = stringValue(payload.name) || '工具调用';
-  const status = eventType === 'tool.error'
+  const isTool = eventType.startsWith('tool.');
+  const isSubagent = eventType.startsWith('subagent.');
+  if (!isTool && !isSubagent) return null;
+  const toolName = stringValue(payload.tool_name)
+    || stringValue(payload.tool)
+    || stringValue(payload.name);
+  const name = isSubagent
+    ? stringValue(payload.profile)
+      || stringValue(payload.agent_name)
+      || stringValue(payload.name)
+      || '子 Agent'
+    : toolName || '工具调用';
+  const status = eventType === 'tool.error' || eventType === 'tool.failed'
+      || eventType === 'subagent.failed'
     ? 'failed'
-    : eventType === 'tool.end' || eventType === 'tool.complete'
+    : eventType === 'tool.end'
+        || eventType === 'tool.complete'
+        || eventType === 'tool.completed'
+        || eventType === 'subagent.completed'
       ? 'completed'
       : 'running';
   const durationMs = numberValue(payload.duration_ms)
@@ -953,26 +988,36 @@ export function streamEventToActivity(
   const startedAt = timestampValue(payload.started_at);
   const completedAt = timestampValue(payload.completed_at ?? payload.ended_at);
   return {
-    category: activityCategory(name),
+    category: isSubagent
+      ? 'subagent'
+      : normalizedActivityCategory(
+          stringValue(payload.category) || stringValue(payload.kind),
+          toolName || name,
+        ),
     completedAt: completedAt || undefined,
     detail: structuredText(payload.detail) || undefined,
     duration: formatDuration(durationMs),
     durationMs,
     error: structuredText(payload.error) || undefined,
-    id: stringValue(payload.tool_id) || `tool-${now}`,
+    id: stringValue(payload.tool_id)
+      || stringValue(payload.child_session_id)
+      || stringValue(payload.subagent_id)
+      || stringValue(payload.task_id)
+      || stringValue(payload.entity_id)
+      || `tool-${now}`,
     input: structuredText(
       payload.args_text ?? payload.args ?? payload.input ?? payload.context,
     ) || undefined,
     model: stringValue(payload.model) || undefined,
     name,
     output: structuredText(
-      payload.output ?? payload.result_text ?? payload.result,
+      payload.output ?? payload.result_text ?? payload.result ?? payload.summary ?? payload.text,
     ) || undefined,
     preview: structuredText(payload.preview ?? payload.summary) || name,
     provider: stringValue(payload.provider) || undefined,
     startedAt: startedAt || undefined,
     status,
-    toolName: stringValue(payload.tool_name) || name,
+    toolName: toolName || name,
   };
 }
 

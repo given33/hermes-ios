@@ -228,13 +228,39 @@ test('ordinary chat waiting phases only start elapsed time after the first token
   assert.equal(reconnecting.timingLabel, '正在重新连接 (2/5)');
 
   const thinkingWithoutToken = statusMessage('正在思考');
-  assert.equal(thinkingWithoutToken.timingLabel, '正在思考');
+  assert.equal(thinkingWithoutToken.timingLabel, undefined);
   assert.equal(thinkingWithoutToken.startedAt, undefined);
 
   const firstTokenAt = now - 1_250;
   const thinkingWithToken = statusMessage('正在思考', firstTokenAt);
   assert.equal(thinkingWithToken.timingLabel, '正在回复');
   assert.equal(thinkingWithToken.startedAt, firstTokenAt);
+
+  const [reasoningWithToken] = conversationMessagesToView(conversation({
+    messages: [{
+      content: '',
+      created_at: now - 4_000,
+      id: 'chat-reasoning-token',
+      meta: {
+        activities: [{
+          category: 'reasoning',
+          id: 'reasoning-1',
+          name: '模型思考',
+          output: '正在核对日期来源。',
+          started_at: firstTokenAt,
+          status: 'running',
+        }],
+        first_token_at: firstTokenAt,
+        role_stage: 'chat',
+      },
+      name: 'default',
+      role: 'assistant',
+      status: 'running',
+      updated_at: now,
+    }],
+  }), true, now);
+  assert.equal(reasoningWithToken.timingLabel, '正在思考');
+  assert.equal(reasoningWithToken.startedAt, firstTokenAt);
 });
 
 test('server user echoes from one runtime turn collapse to one bubble', () => {

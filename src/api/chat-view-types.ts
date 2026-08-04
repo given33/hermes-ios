@@ -59,6 +59,8 @@ export interface HermesChatViewMessage {
   id: string;
   /** Canonical hosted-team member id (participants[].id) that produced this event. */
   memberId?: string;
+  /** Provider request boundary used for first-token and terminal model timing. */
+  modelStartedAt?: number;
   model?: string;
   name: string;
   optimisticConfirmedAt?: number;
