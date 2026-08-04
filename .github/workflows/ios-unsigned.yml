@@ -1,4 +1,4 @@
-name: Build unsigned iOS IPA
+name: Build full unsigned iOS IPA
 
 run-name: Backend release ${{ github.event.client_payload.commit || github.sha }}
 
@@ -28,7 +28,7 @@ jobs:
     env:
       EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
       HERMES_DISTRIBUTABLE_BUILD: '1'
-      HERMES_RESIGN_COMPAT_BUILD: '1'
+      HERMES_RESIGN_COMPAT_BUILD: '0'
       HERMES_CI_BUILD_NUMBER: ${{ github.run_id }}
       HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
       BACKEND_COMMIT: ${{ github.event.client_payload.commit || '' }}
@@ -115,7 +115,7 @@ jobs:
             echo 'Generated AMap Bundle Identifier does not match CFBundleIdentifier.' >&2
             exit 1
           fi
-      - name: Verify the resign-compatible target graph
+      - name: Verify the complete extension target graph
         shell: bash
         run: |
           PROJECT_FILE="$(find ios -maxdepth 2 -name project.pbxproj -print -quit)"
@@ -124,8 +124,8 @@ jobs:
             exit 1
           fi
           for target in HermesWeatherWidget HermesWatchApp HermesWatchExtension HermesDeviceActivityMonitor HermesDeviceActivityReport HermesShareExtension HermesFileProvider; do
-            if grep -q "$target" "$PROJECT_FILE"; then
-              echo "Resign-compatible build unexpectedly contains nested target $target." >&2
+            if ! grep -q "$target" "$PROJECT_FILE"; then
+              echo "Full build is missing required nested target $target." >&2
               exit 1
             fi
           done
@@ -165,24 +165,21 @@ jobs:
               entitlements = plistlib.load(handle)
           expected = {
               "aps-environment": "production",
+              "com.apple.developer.family-controls": True,
               "com.apple.developer.healthkit": True,
               "com.apple.developer.healthkit.background-delivery": True,
+              "com.apple.security.application-groups": [
+                  "group.app.sunstone1029.fig1171.hermes",
+              ],
+              "keychain-access-groups": [
+                  "$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared",
+              ],
           }
           for key, value in expected.items():
               if entitlements.get(key) != value:
                   raise SystemExit(
                       f"Main Release entitlement {key} mismatch: {entitlements.get(key)!r}"
                   )
-          forbidden = {
-              "com.apple.developer.family-controls",
-              "com.apple.security.application-groups",
-              "keychain-access-groups",
-          }
-          present = sorted(forbidden.intersection(entitlements))
-          if present:
-              raise SystemExit(
-                  f"Resign-compatible build contains unsupported entitlements: {present!r}"
-              )
           PY
       - name: Verify native context autolinking
         run: node scripts/verify-ios-native-context.mjs --ios ios
@@ -261,8 +258,8 @@ jobs:
           fi
           APP_BUILD_NUMBER="$(plutil -extract CFBundleVersion raw "$APP_PATH/Info.plist")"
           test "$APP_BUILD_NUMBER" = "$HERMES_CI_BUILD_NUMBER"
-          test ! -e "$APP_PATH/PlugIns"
-          test ! -e "$APP_PATH/Watch"
+          test -d "$APP_PATH/PlugIns"
+          test -d "$APP_PATH/Watch"
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
           find "$RUNNER_TEMP/ipa/Payload" -name _CodeSignature -type d -prune -exec rm -rf {} +
@@ -294,17 +291,16 @@ jobs:
           unzip -t "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa"
           node "$GITHUB_WORKSPACE/scripts/verify-resignable-ipa.mjs" \
             "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" \
-            --bundle-id "$APP_BUNDLE_IDENTIFIER" \
-            --root-app-only
+            --bundle-id "$APP_BUNDLE_IDENTIFIER"
           IPA_SHA256="$(shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa" | awk '{print $1}')"
           printf '%s  %s\n' "$IPA_SHA256" 'Hermes-Agent-unsigned.ipa' \
             > "$RUNNER_TEMP/Hermes-Agent-unsigned.ipa.sha256"
           cd "$RUNNER_TEMP"
           shasum -a 256 -c Hermes-Agent-unsigned.ipa.sha256
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          ARTIFACT_NAME="Hermes-Agent-resign-compatible-${APP_BUILD_NUMBER}-${SHORT_SHA}"
+          ARTIFACT_NAME="Hermes-Agent-full-${APP_BUILD_NUMBER}-${SHORT_SHA}"
           APP_MANIFEST_SHA256="$(shasum -a 256 "$GITHUB_WORKSPACE/app.base.json" | awk '{print $1}')"
-          printf '{"build":"%s","commit":"%s","backend_commit":"%s","backend_version":"%s","trigger":"%s","frontend_preview":%s,"resign_compatible":true,"manifest_sha256":"%s","sha256":"%s"}\n' \
+          printf '{"build":"%s","commit":"%s","backend_commit":"%s","backend_version":"%s","trigger":"%s","frontend_preview":%s,"resign_compatible":false,"extensions":true,"manifest_sha256":"%s","sha256":"%s"}\n' \
             "$APP_BUILD_NUMBER" \
             "$GITHUB_SHA" \
             "${BACKEND_COMMIT:-}" \

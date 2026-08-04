@@ -60,6 +60,7 @@ module.exports = () => {
       },
       infoPlist: {
         ...(resignCompatibleBuild ? resignCompatibleInfoPlist : base.ios.infoPlist),
+        HermesResignCompatible: resignCompatibleBuild,
         // AMap's iOS SDK uses an app-bound key. Keep it outside Git. Builds
         // without the optional key retain the native MapKit fallback.
         HermesAmapIOSAPIKey: amapIOSAPIKey,

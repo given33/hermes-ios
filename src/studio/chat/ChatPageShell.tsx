@@ -8,7 +8,9 @@ import { PreviewModal } from '../PreviewPrimitives';
 import { ChatComposer } from './ChatComposer';
 import { ChatHeader } from './ChatHeader';
 import { ChatMessageStream } from './ChatMessageStream';
+import { ChatPlanDrawer } from './ChatPlanDrawer';
 import { ConversationHistory, styles } from './ChatPresentation';
+import type { ChatPlan } from './chat-plan-model';
 
 type HistoryProps = ComponentProps<typeof ConversationHistory>;
 
@@ -27,9 +29,9 @@ interface ChatPageShellProps {
   modalHistoryProps: HistoryProps;
   onCloseAttachments(): void;
   onCloseHistory(): void;
-  onComposerLayout(): void;
   onPickFile(): void;
   onPickPhoto(camera: boolean): void;
+  plan: ChatPlan | null;
   safeAreaLeft: number;
   safeAreaRight: number;
   showHistory: boolean;
@@ -52,9 +54,9 @@ export function ChatPageShell({
   modalHistoryProps,
   onCloseAttachments,
   onCloseHistory,
-  onComposerLayout,
   onPickFile,
   onPickPhoto,
+  plan,
   safeAreaLeft,
   safeAreaRight,
   showHistory,
@@ -75,21 +77,22 @@ export function ChatPageShell({
 
         <View style={styles.main}>
           <ChatHeader {...headerProps} />
-          <ChatMessageStream {...streamProps} />
-          <Reanimated.View
-            onLayout={onComposerLayout}
-            style={[
-              styles.composer,
-              {
-                backgroundColor: 'transparent',
-                paddingLeft: (compact ? 4 : 8) + safeAreaLeft,
-                paddingRight: (compact ? 4 : 8) + safeAreaRight,
-              },
-              composerKeyboardStyle,
-            ]}
-          >
-            <ChatComposer {...composerProps} />
-          </Reanimated.View>
+          <ChatPlanDrawer isChinese={isChinese} plan={plan}>
+            <ChatMessageStream {...streamProps} />
+            <Reanimated.View
+              style={[
+                styles.composer,
+                {
+                  backgroundColor: 'transparent',
+                  paddingLeft: (compact ? 4 : 8) + safeAreaLeft,
+                  paddingRight: (compact ? 4 : 8) + safeAreaRight,
+                },
+                composerKeyboardStyle,
+              ]}
+            >
+              <ChatComposer {...composerProps} />
+            </Reanimated.View>
+          </ChatPlanDrawer>
         </View>
       </View>
 

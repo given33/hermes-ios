@@ -106,6 +106,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   cronToggle: 'cron.toggle',
   cronRun: 'cron.run',
   cronDelete: 'cron.delete',
+  skillCreate: 'skill.create',
   skillToggle: 'skill.toggle',
   skillSelect: 'skill.select',
   skillView: 'skill.view',

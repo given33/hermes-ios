@@ -50,6 +50,14 @@ export function sameOptimisticMessages(
   });
 }
 
+export function sameChatMessages(
+  left: readonly ChatMessage[],
+  right: readonly ChatMessage[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export function optimisticConversationTitle(
   messages: readonly CollaborationMessage[],
   chinese: boolean,

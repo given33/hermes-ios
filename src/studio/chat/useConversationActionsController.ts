@@ -206,9 +206,18 @@ export function useConversationActionsController({
       && !hostedRunning
       && !activeHostedTurnIdRef.current
     ) {
+      cancelHostedTurnInFlightRef.current = true;
+      setCancellingHostedTurn(true);
+      try {
       await cancellation.cancelPendingSend();
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       notify(isChinese ? '正在取消任务' : 'Cancelling task');
+      } finally {
+        cancelHostedTurnInFlightRef.current = false;
+        if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          setCancellingHostedTurn(false);
+        }
+      }
       return;
     }
     if (!cloudApi || !conversationId) return;

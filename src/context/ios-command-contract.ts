@@ -89,6 +89,22 @@ const NATIVE_ACTION_POLICIES: Record<string, Partial<IOSNativeActionMetadata>> =
     confirmation: 'required',
     permission: 'notification',
   },
+  'ios-alarm:schedule': {
+    risk: 'write',
+    confirmation: 'required',
+    permission: 'reminders',
+  },
+  'ios-alarm:list': {
+    risk: 'read',
+    confirmation: 'none',
+    permission: 'reminders',
+  },
+  'ios-alarm:cancel': {
+    risk: 'destructive',
+    confirmation: 'required',
+    permission: 'reminders',
+  },
+  'ios-nlp:analyze': { risk: 'read', confirmation: 'none' },
   'ios-device:delete-account-data': {
     risk: 'destructive',
     confirmation: 'required',

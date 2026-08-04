@@ -68,6 +68,7 @@ ACTIONS: Final = {
     "cronToggle": "cron.toggle",
     "cronRun": "cron.run",
     "cronDelete": "cron.delete",
+    "skillCreate": "skill.create",
     "skillToggle": "skill.toggle",
     "skillSelect": "skill.select",
     "skillView": "skill.view",

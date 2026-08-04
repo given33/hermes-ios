@@ -1,5 +1,5 @@
 import { ChevronDown } from 'lucide-react-native';
-import { Fragment, type RefObject } from 'react';
+import { Fragment, type RefObject, useEffect } from 'react';
 import { ScrollView, type ScrollViewProps, Text } from 'react-native';
 import Reanimated, { Easing, FadeIn } from 'react-native-reanimated';
 
@@ -76,6 +76,15 @@ export function ChatMessageStream({
   streamRef,
 }: ChatMessageStreamProps) {
   const { tokens } = useTheme();
+  const latestMessage = messages[messages.length - 1];
+  const followVersion = [
+    messages.length,
+    latestMessage?.id || '',
+  ].join(':');
+
+  useEffect(() => {
+    keepLatestVisible(false);
+  }, [followVersion, keepLatestVisible]);
 
   return (
     <>
@@ -91,8 +100,6 @@ export function ChatMessageStream({
         decelerationRate="normal"
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => keepLatestVisible(true)}
-        onLayout={() => keepLatestVisible(false)}
         onScroll={onScroll}
         ref={streamRef}
         scrollEventThrottle={8}
@@ -151,7 +158,6 @@ export function ChatMessageStream({
           <PendingMessage
             index={messages.length}
             isChinese={isChinese}
-            onInspectActivity={onInspectActivity}
             phase={pendingPhase}
             reconnectAttempt={reconnectAttempt}
             startedAt={pendingStartedAt}

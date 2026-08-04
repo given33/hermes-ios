@@ -375,17 +375,21 @@ export function normalizeOptimisticPendingTurn(
   if (
     !userMessageId
     || (
-      phase !== 'thinking'
+        phase !== 'connecting'
+        && phase !== 'thinking'
       && phase !== 'reconnecting'
       && phase !== 'executing'
       && phase !== 'cancel_requested'
     )
   ) return undefined;
+  const phaseStartedAt = numberValue(value.phaseStartedAt);
   return {
     attempt: Math.max(0, Math.min(5, Math.floor(numberValue(value.attempt)))),
     ...(stringValue(value.lastError) ? { lastError: stringValue(value.lastError) } : {}),
     phase,
-    phaseStartedAt: numberValue(value.phaseStartedAt) || Date.now(),
+    phaseStartedAt: phaseStartedAt > 0 || phase === 'thinking'
+      ? phaseStartedAt
+      : Date.now(),
     ...(stringValue(value.turnId) ? { turnId: stringValue(value.turnId) } : {}),
     updatedAt: numberValue(value.updatedAt) || Date.now(),
     userMessageId,

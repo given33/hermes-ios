@@ -14,7 +14,7 @@ export type PendingTurnAction =
   | { now: number; type: 'reset' };
 
 export function createPendingTurnState(now = Date.now()): PendingTurnState {
-  return { phase: 'thinking', phaseStartedAt: now, reconnectAttempt: 0 };
+  return { phase: 'connecting', phaseStartedAt: now, reconnectAttempt: 0 };
 }
 
 export function pendingTurnReducer(
@@ -40,7 +40,7 @@ export function usePendingTurnState() {
     initialNowRef.current,
     createPendingTurnState,
   );
-  const phaseRef = useRef<PendingPhase>('thinking');
+  const phaseRef = useRef<PendingPhase>('connecting');
   const phaseStartedAtRef = useRef(initialNowRef.current);
   const firstTokenAtRef = useRef(0);
   const activeRef = useRef(false);
@@ -58,7 +58,7 @@ export function usePendingTurnState() {
   const reset = useCallback((now = Date.now()) => {
     activeRef.current = false;
     firstTokenAtRef.current = 0;
-    phaseRef.current = 'thinking';
+    phaseRef.current = 'connecting';
     phaseStartedAtRef.current = now;
     dispatch({ now, type: 'reset' });
   }, []);

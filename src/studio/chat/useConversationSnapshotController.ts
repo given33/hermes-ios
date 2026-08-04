@@ -35,8 +35,12 @@ import {
   type HermesChatViewMessage as ChatMessage,
   type HostedTurnVisibilityFailure,
 } from '../../api/chat-view-model';
+import {
+  isChatRuntimeStatusActivity,
+  latestChatRuntimeWaitingState,
+} from '../../api/chat-runtime-state';
 import type { PendingPhase } from './chat-types';
-import { sameOptimisticMessages } from './chat-domain';
+import { sameChatMessages, sameOptimisticMessages } from './chat-domain';
 
 interface ConversationSnapshotControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
@@ -268,46 +272,13 @@ export function useConversationSnapshotController({
       if (trackedTurnState === 'terminal') {
         pendingTurnActiveRef.current = false;
         void clearOptimisticPendingTurn(conversation.id);
-        const tokenStartedAt = firstTokenAtRef.current;
-        if (tokenStartedAt > 0) {
-          nextMessages = nextMessages.map((message) => {
-            if (
-              message.runtimeTurnId !== trackedTurnId
-              || message.role !== 'assistant'
-              || !['completed', 'failed'].includes(message.status || '')
-            ) return message;
-            const completedAt = message.completedAt || message.updatedAt || Date.now();
-            return {
-              ...message,
-              durationMs: Math.max(0, completedAt - tokenStartedAt),
-              startedAt: tokenStartedAt,
-            };
-          });
-        }
       } else if (
         pendingPhaseRef.current !== 'executing'
         && pendingPhaseRef.current !== 'cancel_requested'
       ) {
-        const latestRuntimeStatus = trackedMessages
-          .flatMap((message) => message.activities || [])
-          .filter((activity) => {
-            const text = `${activity.output || ''} ${activity.preview || ''}`;
-            return activity.name === '运行状态'
-              || activity.name === 'Runtime status'
-              || /(?:正在重连|reconnecting)\s*[（(]\d+\s*\/\s*5[）)]/i.test(text);
-          })
-          .sort((left, right) => (right.startedAt || 0) - (left.startedAt || 0))[0];
-        const runtimeStatus = latestRuntimeStatus?.output || latestRuntimeStatus?.preview || '';
-        const reconnectMatch = runtimeStatus.match(/(?:正在重连|reconnecting)\s*[（(](\d+)\s*\/\s*5[）)]/i);
-        if (reconnectMatch) {
-          const attempt = Number(reconnectMatch[1]);
-          if (pendingPhaseRef.current !== 'reconnecting' || reconnectAttemptRef.current !== attempt) {
-            setReconnectAttempt(attempt);
-            updatePendingPhase('reconnecting', latestRuntimeStatus?.startedAt || Date.now());
-          }
-        } else if (/正在思考|thinking/i.test(runtimeStatus) && pendingPhaseRef.current !== 'thinking') {
-          updatePendingPhase('thinking', latestRuntimeStatus?.startedAt || Date.now());
-        }
+        const runtimeState = latestChatRuntimeWaitingState(
+          trackedMessages.flatMap((message) => message.activities || []),
+        );
         const hasAssistantContent = trackedMessages.some(
           (message) => message.role === 'assistant'
             && Boolean(message.content)
@@ -321,7 +292,27 @@ export function useConversationSnapshotController({
         if (persistedFirstTokenAt > 0 || hasAssistantContent) {
           const firstTokenAt = firstTokenAtRef.current || persistedFirstTokenAt || Date.now();
           firstTokenAtRef.current = firstTokenAt;
-          updatePendingPhase('executing', firstTokenAt);
+          const executing = trackedMessages.some((message) => (
+            (message.activities || []).some((activity) => (
+              activity.category !== 'reasoning'
+              && !isChatRuntimeStatusActivity(activity)
+              && (activity.status === 'queued' || activity.status === 'running')
+            ))
+          ));
+          setReconnectAttempt(0);
+          const nextPhase = executing ? 'executing' : 'thinking';
+          updatePendingPhase(nextPhase, firstTokenAt);
+        } else {
+          if (runtimeState?.phase === 'reconnecting') {
+            const attempt = runtimeState.attempt;
+            if (pendingPhaseRef.current !== 'reconnecting' || reconnectAttemptRef.current !== attempt) {
+              setReconnectAttempt(attempt);
+              updatePendingPhase('reconnecting', runtimeState.startedAt || Date.now());
+            }
+          } else if (runtimeState?.phase === 'thinking') {
+            setReconnectAttempt(0);
+            updatePendingPhase('thinking', 0);
+          }
         }
       }
     }
@@ -342,7 +333,9 @@ export function useConversationSnapshotController({
       optimisticMessagesRef.current = reconciledOptimistic.pending;
     }
     nextMessages = reconciledOptimistic.messages;
-    setMessages(nextMessages);
+    setMessages((current) => (
+      sameChatMessages(current, nextMessages) ? current : nextMessages
+    ));
     activeHostedTurnIdRef.current = runningHostedTurnId;
     setActiveHostedTurnId(runningHostedTurnId);
     setHostedRunning(running);

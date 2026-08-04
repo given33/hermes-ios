@@ -1,9 +1,7 @@
 import { SymbolView } from 'expo-symbols';
-import { Camera, Keyboard as KeyboardIcon, Mic, Plus } from 'lucide-react-native';
+import { Camera, Mic, Plus, Square, X } from 'lucide-react-native';
 import type { RefObject } from 'react';
 import {
-  DynamicColorIOS,
-  Platform,
   ScrollView,
   Text,
   TextInput,
@@ -11,10 +9,10 @@ import {
 } from 'react-native';
 import Reanimated, { Easing, FadeIn, FadeInUp, FadeOut } from 'react-native-reanimated';
 
-import { hasNativeIOSContext, type IOSVoiceState } from '../../../modules/hermes-ios-context';
 import type { ConversationCollaborationState } from '../../api/chat-view-model';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
+import { resolveNativeFontStack } from '../../design/native-font-faces';
 import { useTheme } from '../../design/ThemeProvider';
 import { IOS_MOTION } from '../../design/ios-motion';
 import { MOTION, useMotion } from '../../design/motion';
@@ -26,11 +24,13 @@ import {
 } from './ChatPresentation';
 import {
   composerVoicePrimaryAction,
+  formatVoiceDuration,
   isComposerVoiceControlDisabled,
 } from './chat-composer-voice-policy';
 import { styles } from './chat-presentation-styles';
 import type { ChatAttachment, PendingPhase } from './chat-types';
 import type { SlashCommandDescriptor } from './useChatComposerNavigationController';
+import type { HermesVoiceState } from './useHermesVoice';
 
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
@@ -53,7 +53,9 @@ interface ChatComposerModel {
   sending: boolean;
   slashMenuOpen: boolean;
   voiceError: string;
-  voiceState: IOSVoiceState['state'];
+  voiceDurationMs: number;
+  voicePreview: string;
+  voiceState: HermesVoiceState;
 }
 
 interface ChatComposerActions {
@@ -67,8 +69,10 @@ interface ChatComposerActions {
   onSend(): void;
   onShareAttachment(attachment: ChatAttachment): void;
   onTakePhoto(): void;
+  onCancelVoiceInput(): void;
+  onStartVoiceInput(): void;
+  onStopVoiceInput(): void;
   onToggleReadRepliesAloud(): void;
-  onToggleVoiceInput(): void;
 }
 
 export interface ChatComposerProps {
@@ -81,8 +85,9 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
   const { tokens } = useTheme();
   const motion = useMotion();
   const attachmentCount = model.attachments.length;
-  const voiceControlDisabled = !hasNativeIOSContext || isComposerVoiceControlDisabled(model);
-  const voicePrimaryAction = hasNativeIOSContext ? composerVoicePrimaryAction(model) : 'none';
+  const voiceControlDisabled = isComposerVoiceControlDisabled(model);
+  const voicePrimaryAction = composerVoicePrimaryAction(model);
+  const voiceInputActive = model.voiceState === 'listening' || model.voiceState === 'transcribing';
   const readRepliesAccessibilityValue = model.readRepliesAloud
     ? model.isChinese ? '自动朗读回复已开启' : 'Spoken replies on'
     : model.isChinese ? '自动朗读回复已关闭' : 'Spoken replies off';
@@ -115,9 +120,7 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
           style={[
             styles.openMinisSlashPopup,
             {
-              backgroundColor: Platform.OS === 'ios'
-                ? DynamicColorIOS({ dark: '#262626', light: '#ffffff' })
-                : tokens.colors.card,
+              backgroundColor: tokens.colors.card,
               borderColor: tokens.colors.border,
               shadowColor: tokens.colors.foreground,
             },
@@ -180,11 +183,35 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
           </ScrollView>
         ) : null}
 
-        {model.voiceState === 'listening' ? (
+        {voiceInputActive ? (
           <View style={styles.openMinisVoiceInput}>
-            <OpenMinisVoiceWaveform color={tokens.colors.textSecondary} />
+            <View style={styles.openMinisVoiceTopRow}>
+              <Text style={[styles.openMinisVoiceStatus, { color: tokens.colors.textSecondary }]}>
+                {model.voiceState === 'transcribing'
+                  ? (model.isChinese ? '正在转写' : 'Transcribing')
+                  : formatVoiceDuration(model.voiceDurationMs)}
+              </Text>
+              <IOSPressable
+                accessibilityLabel={model.isChinese ? '取消语音输入' : 'Cancel voice input'}
+                haptic="light"
+                hitSlop={10}
+                onPress={actions.onCancelVoiceInput}
+                style={styles.openMinisVoiceCancel}
+              >
+                <X color={tokens.colors.textSecondary} size={17} strokeWidth={2} />
+              </IOSPressable>
+            </View>
+            {model.voiceState === 'listening' ? (
+              <OpenMinisVoiceWaveform color={tokens.colors.textSecondary} />
+            ) : (
+              <View style={styles.pendingDots}>
+                {[0, 1, 2].map((dot) => <PendingDot delay={dot * 120} key={dot} />)}
+              </View>
+            )}
             <Text numberOfLines={4} style={[styles.openMinisTranscript, { color: tokens.colors.textSecondary }]}>
-              {model.content || (model.isChinese ? '正在聆听…' : 'Listening…')}
+              {model.voicePreview || (model.voiceState === 'transcribing'
+                ? (model.isChinese ? '正在识别录音内容…' : 'Recognizing the recording…')
+                : (model.isChinese ? '正在聆听…' : 'Listening…'))}
             </Text>
           </View>
         ) : (
@@ -203,6 +230,7 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
               styles.openMinisInput,
               {
                 color: tokens.colors.foreground,
+                fontFamily: resolveNativeFontStack(tokens.typography.fontSans, 400),
                 fontSize: model.inputFontSize,
               },
             ]}
@@ -224,7 +252,6 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
         <View style={styles.openMinisToolbar}>
           <IOSPressable
             accessibilityLabel={model.isChinese ? '上传图片或文件' : 'Upload image or file'}
-            disabled={model.sending}
             haptic="light"
             hitSlop={8}
             onPress={actions.onOpenAttachmentPicker}
@@ -237,9 +264,9 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
             ]}
           >
             <SymbolView
-              fallback={<Plus color={tokens.colors.textSecondary} size={24} />}
+              fallback={<Plus color={tokens.colors.textSecondary} size={22} />}
               name="plus"
-              size={24}
+              size={22}
               tintColor={tokens.colors.textSecondary}
               weight="medium"
             />
@@ -247,7 +274,6 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
 
           <IOSPressable
             accessibilityLabel={model.isChinese ? '拍照' : 'Take photo'}
-            disabled={model.sending}
             haptic="light"
             hitSlop={8}
             onPress={actions.onTakePhoto}
@@ -270,26 +296,22 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
           <View style={styles.openMinisToolbarSpacer} />
 
           <IOSPressable
-            accessibilityActions={hasNativeIOSContext ? [{
+            accessibilityActions={[{
               label: model.readRepliesAloud
                 ? model.isChinese ? '关闭自动朗读回复' : 'Turn off spoken replies'
                 : model.isChinese ? '开启自动朗读回复' : 'Turn on spoken replies',
               name: 'toggleReadRepliesAloud',
-            }] : []}
-            accessibilityLabel={!hasNativeIOSContext
-              ? model.isChinese ? '语音输入不可用' : 'Voice input unavailable'
+            }]}
+            accessibilityLabel={model.voiceState === 'transcribing'
+              ? model.isChinese ? '正在转写语音' : 'Transcribing voice'
               : voicePrimaryAction === 'toggleReadRepliesAloud'
               ? model.isChinese ? '关闭自动朗读回复' : 'Turn off spoken replies'
               : model.voiceState === 'listening'
-                ? model.isChinese ? '切换到文字输入' : 'Switch to text input'
+                ? model.isChinese ? '停止录音并转写' : 'Stop and transcribe'
                 : model.isChinese ? '语音输入' : 'Voice input'}
-            accessibilityHint={!hasNativeIOSContext
-              ? model.isChinese
-                ? '语音功能需要原生 iPhone 版本'
-                : 'Voice features require the native iPhone build'
-              : model.isChinese
-                ? '长按可切换自动朗读回复'
-                : 'Long press to toggle spoken replies'}
+            accessibilityHint={model.isChinese
+              ? '长按可切换自动朗读回复'
+              : 'Long press to toggle spoken replies'}
             accessibilityRole="button"
             accessibilityState={{
               disabled: voiceControlDisabled,
@@ -305,9 +327,11 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
                 actions.onToggleReadRepliesAloud();
               }
             }}
-            onLongPress={hasNativeIOSContext ? actions.onToggleReadRepliesAloud : undefined}
-            onPress={voicePrimaryAction === 'toggleVoiceInput'
-              ? actions.onToggleVoiceInput
+            onLongPress={voiceInputActive ? undefined : actions.onToggleReadRepliesAloud}
+            onPress={voicePrimaryAction === 'startVoiceInput'
+              ? actions.onStartVoiceInput
+              : voicePrimaryAction === 'stopVoiceInput'
+                ? actions.onStopVoiceInput
               : voicePrimaryAction === 'toggleReadRepliesAloud'
                 ? actions.onToggleReadRepliesAloud
                 : undefined}
@@ -318,17 +342,21 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
               {
                 backgroundColor: model.readRepliesAloud
                   ? multiplyAlpha(tokens.colors.accent, 0.18)
-                  : 'transparent',
+                  : model.voiceState === 'listening'
+                    ? tokens.colors.destructive
+                    : 'transparent',
               },
             ]}
           >
             <SymbolView
               fallback={model.voiceState === 'listening'
-                ? <KeyboardIcon color={tokens.colors.textSecondary} size={15} />
-                : <Mic color={tokens.colors.textSecondary} size={18} />}
-              name={model.voiceState === 'listening' ? 'keyboard' : 'mic'}
-              size={model.voiceState === 'listening' ? 15 : 18}
-              tintColor={tokens.colors.textSecondary}
+                ? <Square color={tokens.colors.destructiveForeground} fill={tokens.colors.destructiveForeground} size={16} />
+                : <Mic color={tokens.colors.textSecondary} size={22} />}
+              name={model.voiceState === 'listening' ? 'stop.fill' : 'mic'}
+              size={model.voiceState === 'listening' ? 16 : 22}
+              tintColor={model.voiceState === 'listening'
+                ? tokens.colors.destructiveForeground
+                : tokens.colors.textSecondary}
               weight="medium"
             />
           </IOSPressable>
@@ -383,7 +411,7 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
                 </View>
               )}
               name={model.canCancelHostedTurn ? 'stop.fill' : 'arrow.up'}
-              size={model.canCancelHostedTurn ? 18 : 22}
+              size={model.canCancelHostedTurn ? 16 : 20}
               tintColor={model.canCancelHostedTurn
                 ? tokens.colors.destructiveForeground
                 : tokens.colors.background}

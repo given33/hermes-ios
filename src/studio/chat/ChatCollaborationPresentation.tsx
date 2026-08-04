@@ -82,7 +82,7 @@ export function CollaborationMemberStack({
       {members.map((member, index) => (
         <IOSPressable
           accessibilityLabel={isChinese ? `长按 @${member.name}` : `Long press to mention ${member.name}`}
-          delayLongPress={350}
+          delayLongPress={220}
           haptic="selection"
           key={member.roleStage}
           onLongPress={() => onMentionMember(member)}

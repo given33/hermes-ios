@@ -376,7 +376,7 @@ export function useHostedCancellationController({
           (signal) => cloudApi.cancelHostedTurn(
             item.conversationId,
             item.input.turnId,
-            'Cancelled before hosted-turn delivery completed',
+            isChinese ? '用户取消' : 'Cancelled by user',
             item.input.requestId,
             signal,
           ),
@@ -631,7 +631,7 @@ export function useHostedCancellationController({
             && activeConversationIdRef.current === deliveryItem.conversationId
             && cancellationStillCurrent()
           ) {
-            updatePendingPhase('executing', Date.now());
+            updatePendingPhase('thinking', 0);
             setHostedRunning(true);
             setSending(true);
           }

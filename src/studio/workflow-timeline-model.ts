@@ -283,7 +283,7 @@ export function firstTokenLabel(
   message: Pick<HermesChatViewMessage, 'createdAt' | 'firstTokenAt' | 'startedAt'>,
   chinese: boolean,
 ): string {
-  const baseline = message.createdAt || message.startedAt || 0;
+  const baseline = message.startedAt || message.createdAt || 0;
   const firstTokenAt = message.firstTokenAt || 0;
   if (!baseline || firstTokenAt <= baseline) return '';
   const elapsed = formatDurationLabel(firstTokenAt - baseline);
@@ -347,7 +347,7 @@ export function reasoningElapsedLabel(
 export function formatDurationLabel(milliseconds: number): string {
   if (milliseconds <= 0) return '';
   if (milliseconds < 1_000) return `${Math.round(milliseconds)} ms`;
-  if (milliseconds < 60_000) return `${(milliseconds / 1_000).toFixed(1)} s`;
+  if (milliseconds < 60_000) return `${Math.floor(milliseconds / 1_000)} s`;
   const seconds = Math.floor(milliseconds / 1_000);
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }

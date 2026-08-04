@@ -118,7 +118,7 @@ export interface OptimisticConversationLedgerItem {
 export interface OptimisticPendingTurn {
   attempt: number;
   lastError?: string;
-  phase: 'cancel_requested' | 'executing' | 'reconnecting' | 'thinking';
+  phase: 'cancel_requested' | 'connecting' | 'executing' | 'reconnecting' | 'thinking';
   phaseStartedAt: number;
   turnId?: string;
   updatedAt: number;

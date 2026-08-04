@@ -156,6 +156,20 @@ export class HermesExtensionsCloudApi {
     });
   }
 
+  createSkill(
+    name: string,
+    content: string,
+    category = '',
+    profile = 'default',
+  ) {
+    return this.transport.json<JsonRecord>('/api/skills', 'POST', {
+      name,
+      content,
+      category: category || undefined,
+      profile,
+    });
+  }
+
   getSkillContent(name: string, profile = 'default') {
     return this.transport.request<JsonRecord>('/api/skills/content', {
       query: { name, profile },

@@ -20,6 +20,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
   case files
   case analytics
   case smartWeather = "smart-weather"
+  case browser
   case models
   case logs
   case cron
@@ -54,6 +55,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .files: return "folder"
     case .analytics: return "chart.bar.xaxis"
     case .smartWeather: return "cloud.rain"
+    case .browser: return "safari"
     case .models: return "cpu"
     case .logs: return "doc.text.magnifyingglass"
     case .cron: return "clock.arrow.circlepath"
@@ -87,6 +89,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .files: return "文件"
     case .analytics: return "分析"
     case .smartWeather: return "智能天气"
+    case .browser: return "浏览器"
     case .models: return "模型"
     case .logs: return "日志"
     case .cron: return "定时任务"
@@ -113,7 +116,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
 
   var group: Int {
     switch self {
-    case .chat, .sessions, .memory, .files, .analytics, .smartWeather, .models, .logs: return 0
+    case .chat, .sessions, .memory, .files, .analytics, .smartWeather, .browser, .models, .logs: return 0
     case .cron, .skills, .plugins, .mcp, .pairing, .channels, .webhooks: return 1
     case .achievements, .collaboration, .kanban, .workflows: return 2
     case .approvals, .runtimeCenter: return 3

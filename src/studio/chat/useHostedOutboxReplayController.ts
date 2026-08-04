@@ -178,7 +178,7 @@ export function useHostedOutboxReplayController({
     const acceptedAt = item.deliveryAcceptedAt || Date.now();
     const pendingTurn: OptimisticPendingTurn = {
       attempt: 0,
-      phase: 'thinking',
+      phase: 'connecting',
       phaseStartedAt: acceptedAt,
       turnId: item.input.turnId,
       updatedAt: acceptedAt,
@@ -206,7 +206,7 @@ export function useHostedOutboxReplayController({
       optimisticMessagesRef.current = optimistic;
       setMessages((current) => current.filter(({ id }) => !failureIds.has(id)));
       pendingTurnActiveRef.current = true;
-      updatePendingPhase('thinking', acceptedAt);
+      updatePendingPhase('connecting', acceptedAt);
       setReconnectAttempt(0);
     }
     return transition;
@@ -403,9 +403,6 @@ export function useHostedOutboxReplayController({
               if (!lifecycleCurrent()) return;
               if (outcome === 'retry' || outcome === 'retry-background') continue;
               continue;
-            }
-            if (response.route.mode === 'work') {
-              updateConversationCollaborationState(item.conversationId, 'lifting');
             }
             const acceptedItem = {
               ...item,

@@ -2,7 +2,6 @@ import { SymbolView } from 'expo-symbols';
 import { File, X } from 'lucide-react-native';
 import { useEffect, type ReactNode } from 'react';
 import {
-  DynamicColorIOS,
   Image,
   Platform,
   PlatformColor,
@@ -97,12 +96,8 @@ export function ComposerSurface({ children }: { children: ReactNode }) {
   const surfaceStyle = [
     styles.inputShell,
     {
-      backgroundColor: Platform.OS === 'ios'
-        ? DynamicColorIOS({ dark: '#3a3a3a', light: '#f2f2f2' })
-        : tokens.colors.card,
-      borderColor: Platform.OS === 'ios'
-        ? DynamicColorIOS({ dark: '#565656', light: '#d0d0d0' })
-        : tokens.colors.border,
+      backgroundColor: tokens.colors.card,
+      borderColor: tokens.colors.border,
     },
   ];
 

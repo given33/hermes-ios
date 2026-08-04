@@ -318,6 +318,15 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       await api.deleteCronJob(payload.id, profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.skillCreate:
+      if (!payload.name || !payload.detail) return 'none';
+      await api.createSkill(
+        payload.name,
+        payload.detail,
+        payload.value || '',
+        profile,
+      );
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.skillToggle:
       if (!payload.id || payload.enabled === undefined) return 'none';
       await api.toggleSkill(payload.id, payload.enabled, profile);

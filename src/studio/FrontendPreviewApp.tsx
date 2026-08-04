@@ -80,6 +80,8 @@ import {
 } from '../preview/PreviewCorePages';
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
+import { BuiltinBrowserPage } from '../browser/BuiltinBrowserPage';
+import { SkillsManagementPage } from '../skills/SkillsManagementPage';
 import { MemoryPreviewPage } from './PreviewMemoryPage';
 import { HermesStudioSettingsPage } from '../preview/HermesStudioSettingsPage';
 import { AccountPage } from '../auth/AccountPage';
@@ -456,6 +458,7 @@ function PreviewRoute({
     Platform.OS === 'ios'
     && hasNativeSwiftUIRoute
     && route.routeId !== 'smart-weather'
+    && route.routeId !== 'browser'
     && route.routeId !== 'memory'
     && route.routeId !== 'account'
     && route.routeId !== 'chat';
@@ -521,7 +524,9 @@ function PreviewRoute({
     !allowFixturePages
     && route.routeId !== 'chat'
     && route.routeId !== 'account'
+    && route.routeId !== 'browser'
     && !(route.routeId === 'models' && client)
+    && !(route.routeId === 'skills' && client)
     && route.routeId !== 'memory'
   ) {
     const message = locale === 'zh'
@@ -539,6 +544,13 @@ function PreviewRoute({
     if (route.pluginName === 'collaboration') return <CollaborationPreviewPage {...props} />;
   }
   switch (route.routeId) {
+    case 'browser': return (
+      <BuiltinBrowserPage
+        locale={locale ?? 'zh'}
+        notify={notify}
+        ownerScope={cacheOwner}
+      />
+    );
     case 'chat': return (
       <ChatPreviewPage
         {...props}
@@ -570,7 +582,16 @@ function PreviewRoute({
       : <ModelsPreviewPage {...props} />;
     case 'logs': return <LogsPreviewPage {...props} />;
     case 'cron': return <CronPreviewPage {...props} />;
-    case 'skills': return <SkillsPreviewPage {...props} />;
+    case 'skills': return client
+      ? (
+        <SkillsManagementPage
+          api={hermesCloudApiFor(client)}
+          locale={locale ?? 'zh'}
+          notify={notify}
+          profile={profile}
+        />
+      )
+      : <SkillsPreviewPage {...props} />;
     case 'plugins': return <PluginsPreviewPage {...props} />;
     case 'mcp': return <McpPreviewPage {...props} />;
     case 'pairing': return <PairingPreviewPage {...props} />;

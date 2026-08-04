@@ -43,6 +43,8 @@ struct HermesRouteContent: View {
       )
     case .smartWeather:
       EmptyView()
+    case .browser:
+      EmptyView()
     case .models:
       HermesModelsPage(
         chinese: chinese,
@@ -598,6 +600,7 @@ private struct HermesRemoteRoutePage: View {
         HermesRemoteEditorSheet(
           kind: kind,
           chinese: chinese,
+          isCreating: editorID.isEmpty,
           name: $editorName,
           value: $editorValue,
           detail: $editorDetail,
@@ -1182,6 +1185,7 @@ private struct HermesRemoteRoutePage: View {
     case .kanban: return .kanban
     case .collaboration: return .collaboration
     case .config: return .config
+    case .skills: return .skill
     default: return nil
     }
   }
@@ -1196,6 +1200,19 @@ private struct HermesRemoteRoutePage: View {
         : ""
     editorDetail = ""
     if kind == .config { editorDetail = data.config.exportText }
+    if kind == .skill {
+      editorValue = "custom"
+      editorDetail = """
+      ---
+      name: {{name}}
+      description: Describe when Hermes should use this skill.
+      ---
+
+      # Instructions
+
+      Describe the workflow, constraints, and expected result.
+      """
+    }
     editor = kind
   }
 
@@ -1230,8 +1247,13 @@ private struct HermesRemoteRoutePage: View {
       guard !name.isEmpty else { return }
       onAction(.profileUpdate, HermesRouteActionPayload(route: "profiles", id: name, detail: editorDetail))
     case .skill:
-      guard !editorID.isEmpty else { return }
-      onAction(.skillUpdate, HermesRouteActionPayload(route: "skills", id: editorID, detail: editorDetail))
+      if editorID.isEmpty {
+        guard !name.isEmpty, !detail.isEmpty else { return }
+        let content = detail.replacingOccurrences(of: "{{name}}", with: name)
+        onAction(.skillCreate, HermesRouteActionPayload(route: "skills", name: name, value: value, detail: content))
+      } else {
+        onAction(.skillUpdate, HermesRouteActionPayload(route: "skills", id: editorID, detail: editorDetail))
+      }
     case .kanban:
       guard !name.isEmpty else { return }
       if editorID.isEmpty {
@@ -1263,6 +1285,7 @@ private struct HermesRemoteEditorSheet: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let kind: HermesRemoteEditor
   let chinese: Bool
+  let isCreating: Bool
   @Binding var name: String
   @Binding var value: String
   @Binding var detail: String
@@ -1273,7 +1296,23 @@ private struct HermesRemoteEditorSheet: View {
   var body: some View {
     NavigationStack {
       Form {
-        if kind == .config || kind == .soul || kind == .skill || kind == .channel {
+        if kind == .skill {
+          if isCreating {
+            TextField(nameLabel, text: $name)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+            TextField(valueLabel, text: $value)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+          }
+          Section("SKILL.md") {
+            TextEditor(text: $detail)
+              .font(HermesFonts.mono(12))
+              .frame(minHeight: 320)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+          }
+        } else if kind == .config || kind == .soul || kind == .channel {
           Section(kind == .soul ? "SOUL.md" : kind == .skill ? "SKILL.md" : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : "config.json") {
             TextEditor(text: $detail)
               .font(HermesFonts.mono(12))
@@ -1333,7 +1372,7 @@ private struct HermesRemoteEditorSheet: View {
     if !chinese {
       if kind == .config { return "Edit Configuration" }
       if kind == .soul { return "Edit SOUL.md" }
-      if kind == .skill { return "Edit SKILL.md" }
+      if kind == .skill { return isCreating ? "New Skill" : "Edit SKILL.md" }
       if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
       if kind == .channel { return "Edit Channel Configuration" }
       return "Add \(kind.rawValue.capitalized)"
@@ -1346,7 +1385,7 @@ private struct HermesRemoteEditorSheet: View {
     case .pairing: return "批准配对用户"
     case .profiles: return "新建 Profile"
     case .soul: return "编辑 SOUL.md"
-    case .skill: return "编辑 SKILL.md"
+    case .skill: return isCreating ? "新建 Skill" : "编辑 SKILL.md"
     case .kanban: return name.isEmpty ? "新建任务" : "编辑任务"
     case .channel: return "编辑渠道配置"
     case .config: return "编辑配置"
@@ -1360,6 +1399,7 @@ private struct HermesRemoteEditorSheet: View {
     return chinese ? "名称" : "Name"
   }
   private var valueLabel: String {
+    if kind == .skill { return chinese ? "分类（可选）" : "Category (optional)" }
     if !chinese { return kind == .collaboration ? "Profiles, separated by commas" : kind == .cron ? "Schedule" : kind == .mcp ? "Server URL" : kind == .pairing ? "Pairing code" : kind == .profiles ? "Model" : "Secret value" }
     switch kind {
     case .collaboration: return "Profile（用逗号分隔）"

@@ -94,6 +94,7 @@ enum HermesRouteAction: String, CaseIterable {
   case cronToggle = "cron.toggle"
   case cronRun = "cron.run"
   case cronDelete = "cron.delete"
+  case skillCreate = "skill.create"
   case skillToggle = "skill.toggle"
   case skillSelect = "skill.select"
   case skillView = "skill.view"

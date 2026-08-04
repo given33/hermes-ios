@@ -48,6 +48,7 @@ import { useChatAttachmentController } from './chat/useChatAttachmentController'
 import { isLargePaste } from './chat/composer-draft-policy';
 import { useHostedInterventionController } from './chat/useHostedInterventionController';
 import { useHostedSendController } from './chat/useHostedSendController';
+import { latestChatPlan } from './chat/chat-plan-model';
 import { useConversationActionsController } from './chat/useConversationActionsController';
 import { useChatComposerNavigationController } from './chat/useChatComposerNavigationController';
 import { useMobileConsoleController } from './chat/useMobileConsoleController';
@@ -201,9 +202,13 @@ export function ChatPreviewPage({
   const composingIntervention = hostedRunning
     && attachmentCount === 0
     && content.trim().startsWith('@');
-  const canCancelHostedTurn = (hostedRunning || sending) && !composingIntervention;
+  const canCancelHostedTurn = (hostedRunning || sending)
+    && !composingIntervention
+    && !cancellingHostedTurn
+    && pendingPhase !== 'cancel_requested';
   const pendingStartedAt = pendingPhaseStartedAt;
   const displayMessages = messages;
+  const chatPlan = useMemo(() => latestChatPlan(displayMessages), [displayMessages]);
   const collaborationStartIndex = collaborationState === 'active'
     ? displayMessages.findIndex((message) => (
         message.role !== 'user' && message.roleStage && message.roleStage !== 'chat'
@@ -405,6 +410,7 @@ export function ChatPreviewPage({
     hostedTurnVisibilityFailuresRef,
     intervention: { sendIntervention },
     isChinese,
+    keepLatestVisible,
     loadConversation,
     localStore,
     messagesRef,
@@ -493,12 +499,16 @@ export function ChatPreviewPage({
   });
 
   const {
+    cancelVoiceInput,
     readRepliesAloud,
     speakingMessageId,
+    startVoiceInput,
+    stopVoiceInput,
     toggleMessageSpeech,
     toggleReadRepliesAloud,
-    toggleVoiceInput,
+    voiceDurationMs,
     voiceError,
+    voicePreview,
     voiceState,
   } = useHermesVoice({
     applyTranscript: useCallback((next: string) => {
@@ -509,6 +519,7 @@ export function ChatPreviewPage({
       (error: unknown) => serverFailure(error, isChinese),
       [isChinese],
     ),
+    cloudApi,
     focusComposer: useCallback(() => composerInputRef.current?.focus(), []),
     getDraft: useCallback(() => contentRef.current, []),
     isChinese,
@@ -709,8 +720,10 @@ export function ChatPreviewPage({
           onSend: requestSend,
           onShareAttachment: (attachment) => { void shareAttachment(attachment); },
           onTakePhoto: () => { void pickPhoto(true); },
+          onCancelVoiceInput: () => { void cancelVoiceInput(); },
+          onStartVoiceInput: () => { void startVoiceInput(); },
+          onStopVoiceInput: () => { void stopVoiceInput(); },
           onToggleReadRepliesAloud: toggleReadRepliesAloud,
-          onToggleVoiceInput: () => { void toggleVoiceInput(); },
         },
         inputRef: composerInputRef,
         model: {
@@ -729,7 +742,9 @@ export function ChatPreviewPage({
           reconnectAttempt,
           sending,
           slashMenuOpen,
+          voiceDurationMs,
           voiceError,
+          voicePreview,
           voiceState,
         },
       }}
@@ -785,9 +800,9 @@ export function ChatPreviewPage({
       }}
       onCloseAttachments={() => setAttachmentsOpen(false)}
       onCloseHistory={() => setHistoryModalOpen(false)}
-      onComposerLayout={() => keepLatestVisible(false)}
       onPickFile={() => { void pickFile(); }}
       onPickPhoto={(camera) => { void pickPhoto(camera); }}
+      plan={chatPlan}
       safeAreaLeft={safeAreaLeft}
       safeAreaRight={safeAreaRight}
       showHistory={showHistory}

@@ -255,7 +255,13 @@ export function useChatAttachmentController({
         let result: ImagePicker.ImagePickerResult;
         try {
           result = await (camera
-            ? ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1 })
+            ? ImagePicker.launchCameraAsync({
+                allowsEditing: false,
+                cameraType: ImagePicker.CameraType.back,
+                mediaTypes: ['images'],
+                presentationStyle: ImagePicker.UIImagePickerPresentationStyle.FULL_SCREEN,
+                quality: 1,
+              })
             : ImagePicker.launchImageLibraryAsync({
                 allowsMultipleSelection: true,
                 mediaTypes: ['images'],

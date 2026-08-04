@@ -1,4 +1,8 @@
 import type { HermesApiClient, HermesRequestOptions } from './HermesApiClient';
+import {
+  HermesAudioCloudApi,
+  type AudioTranscriptionResult,
+} from './cloud/audio';
 import { HermesConversationsCloudApi } from './cloud/conversations';
 import {
   HermesConsoleCloudApi,
@@ -109,6 +113,7 @@ export type {
 } from './cloud/contracts';
 
 export type { StudioMemoryContent } from './cloud/memory';
+export type { AudioTranscriptionResult } from './cloud/audio';
 export type {
   MobileConsoleCatalog,
   MobileConsoleCommand,
@@ -156,6 +161,7 @@ export class HermesCloudApi {
   // method names, so no call site changes. The modules receive only the
   // private transport closure below — they cannot be reached except through
   // this facade, and hermes-api-registry.ts stays the sole composition root.
+  private readonly audio: HermesAudioCloudApi;
   private readonly cron: HermesCronCloudApi;
   private readonly collaboration: HermesCollaborationCloudApi;
   private readonly conversations: HermesConversationsCloudApi;
@@ -190,6 +196,7 @@ export class HermesCloudApi {
       request: <T>(path: string, options?: HermesRequestOptions) =>
         this.request<T>(path, options),
     };
+    this.audio = new HermesAudioCloudApi(transport);
     this.cron = new HermesCronCloudApi(transport);
     this.collaboration = new HermesCollaborationCloudApi(transport);
     this.conversations = new HermesConversationsCloudApi(transport);
@@ -234,6 +241,14 @@ export class HermesCloudApi {
 
   getStatus() {
     return this.sessions.getStatus();
+  }
+
+  transcribeAudio(
+    dataUrl: string,
+    mimeType: string,
+    signal?: AbortSignal,
+  ): Promise<AudioTranscriptionResult> {
+    return this.audio.transcribe(dataUrl, mimeType, signal);
   }
 
   getMobileConsoleCommands(profile = 'default', signal?: AbortSignal): Promise<MobileConsoleCatalog> {
@@ -406,6 +421,10 @@ export class HermesCloudApi {
 
   toggleSkill(name: string, enabled: boolean, profile = 'default') {
     return this.extensions.toggleSkill(name, enabled, profile);
+  }
+
+  createSkill(name: string, content: string, category = '', profile = 'default') {
+    return this.extensions.createSkill(name, content, category, profile);
   }
 
   getSkillContent(name: string, profile = 'default') {

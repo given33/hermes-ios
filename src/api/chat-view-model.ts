@@ -32,9 +32,14 @@ import {
   formatDuration,
   isTerminalStatus,
   lastActivityTimestamp,
+  messageIsRunning,
   normalizeMessageStatus,
   normalizeStatus,
 } from './chat-view-timing';
+import {
+  isChatRuntimeStatusActivity,
+  latestChatRuntimeWaitingState,
+} from './chat-runtime-state';
 
 export type {
   ConversationCollaborationState,
@@ -123,7 +128,30 @@ export function conversationMessagesToView(
       updatedAt: terminal.completedAt || converted.updatedAt,
     }];
   });
-  return deduplicateMessages(converted);
+  const messages = deduplicateMessages(converted);
+  if (conversationCollaborationState(conversation) !== 'single') return messages;
+  return messages.map((message) => {
+    const ordinaryMessage = message.role === 'assistant'
+      && message.status === 'failed'
+      && /^服务端托管任务失败[：:]/.test(message.content)
+      ? {
+          ...message,
+          content: message.content.replace(/^服务端托管任务失败[：:]/, '对话运行失败：'),
+        }
+      : message;
+    return ordinaryMessage.role === 'assistant'
+      && ordinaryMessage.status === 'failed'
+      && ordinaryMessage.roleStage
+      && ordinaryMessage.roleStage !== 'chat'
+      ? {
+          ...ordinaryMessage,
+          avatarRole: 'hermes' as const,
+          name: 'Hermes Agent',
+          roleLabel: chinese ? '运行失败' : 'Run failed',
+          roleStage: 'chat' as const,
+        }
+      : ordinaryMessage;
+  });
 }
 
 function cancelledHostedTurnIds(conversation: SingleConversation): Set<string> {
@@ -277,7 +305,13 @@ export function shouldRenderPendingMessage(
   messages: HermesChatViewMessage[],
   sending: boolean,
 ): boolean {
-  return sending && messages[messages.length - 1]?.role !== 'assistant';
+  if (!sending) return false;
+  const latest = messages[messages.length - 1];
+  if (latest?.role !== 'assistant') return true;
+  return latest.roleStage === 'chat'
+    && messageIsRunning(latest)
+    && !latest.content.trim()
+    && !latest.attachments?.length;
 }
 
 export function upsertChatMessage(
@@ -297,6 +331,8 @@ export function reconcileOptimisticMessages(
   now = Date.now(),
   protectedMessageIds: ReadonlySet<string> = new Set(),
 ): { messages: HermesChatViewMessage[]; pending: HermesChatViewMessage[] } {
+  const consumedServerMessageIds = new Set<string>();
+  const hiddenServerMessageIds = new Set<string>();
   const pending = optimisticMessages.flatMap((optimistic) => {
     const supersededLocalFailure = optimistic.role === 'assistant'
       && optimistic.status === 'failed'
@@ -305,10 +341,11 @@ export function reconcileOptimisticMessages(
         serverMessage.role === 'assistant'
         && serverMessage.runtimeTurnId === optimistic.runtimeTurnId
         && ['completed', 'failed', 'cancelled'].includes(serverMessage.status || '')
-      ));
+    ));
     if (supersededLocalFailure) return [];
-    const confirmed = serverMessages.some((serverMessage) => (
-      serverMessage.id === optimistic.id
+    const exactConfirmation = serverMessages.find((serverMessage) => (
+      !consumedServerMessageIds.has(serverMessage.id)
+      && serverMessage.id === optimistic.id
       && serverMessage.role === optimistic.role
       && (
         optimistic.role !== 'user'
@@ -322,8 +359,40 @@ export function reconcileOptimisticMessages(
         )
       )
     ));
-    if (!confirmed) return [optimistic];
+    const turnConfirmation = exactConfirmation || (
+      optimistic.role === 'user' && optimistic.runtimeTurnId
+        ? serverMessages.find((serverMessage) => (
+            !consumedServerMessageIds.has(serverMessage.id)
+            && serverMessage.role === 'user'
+            && serverMessage.runtimeTurnId === optimistic.runtimeTurnId
+            && serverMessage.content === optimistic.content
+          ))
+        : undefined
+    );
+    const optimisticCreatedAt = optimistic.createdAt || optimistic.updatedAt || 0;
+    const contentConfirmation = turnConfirmation || (
+      optimistic.role === 'user'
+        ? serverMessages
+          .filter((serverMessage) => {
+            const serverCreatedAt = serverMessage.createdAt || serverMessage.updatedAt || 0;
+            return !consumedServerMessageIds.has(serverMessage.id)
+              && serverMessage.role === 'user'
+              && serverMessage.content === optimistic.content
+              && optimisticCreatedAt > 0
+              && serverCreatedAt > 0
+              && Math.abs(serverCreatedAt - optimisticCreatedAt)
+                <= OPTIMISTIC_USER_CONFIRMATION_WINDOW_MS;
+          })
+          .sort((left, right) => (
+            Math.abs((left.createdAt || left.updatedAt || 0) - optimisticCreatedAt)
+            - Math.abs((right.createdAt || right.updatedAt || 0) - optimisticCreatedAt)
+          ))[0]
+        : undefined
+    );
+    if (!contentConfirmation) return [optimistic];
+    consumedServerMessageIds.add(contentConfirmation.id);
     if (protectedMessageIds.has(optimistic.id)) {
+      hiddenServerMessageIds.add(contentConfirmation.id);
       return [{
         ...optimistic,
         optimisticConfirmedAt: optimistic.optimisticConfirmedAt || now,
@@ -333,6 +402,7 @@ export function reconcileOptimisticMessages(
       optimistic.optimisticConfirmedAt
       && now - optimistic.optimisticConfirmedAt >= OPTIMISTIC_CONFIRMATION_GRACE_MS
     ) return [];
+    hiddenServerMessageIds.add(contentConfirmation.id);
     return [{
       ...optimistic,
       optimisticConfirmedAt: optimistic.optimisticConfirmedAt || now,
@@ -341,7 +411,9 @@ export function reconcileOptimisticMessages(
   const pendingIds = new Set(pending.map(({ id }) => id));
   return {
     messages: [
-      ...serverMessages.filter(({ id }) => !pendingIds.has(id)),
+      ...serverMessages.filter(({ id }) => (
+        !pendingIds.has(id) && !hiddenServerMessageIds.has(id)
+      )),
       ...pending,
     ].sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0)),
     // A server replica can confirm a message and then briefly return an older
@@ -352,6 +424,7 @@ export function reconcileOptimisticMessages(
 }
 
 const OPTIMISTIC_CONFIRMATION_GRACE_MS = 2 * 60 * 1_000;
+const OPTIMISTIC_USER_CONFIRMATION_WINDOW_MS = 15_000;
 
 export function collaborationMessageToView(
   message: CollaborationMessage,
@@ -463,24 +536,28 @@ export function collaborationMessageToView(
   if (!terminal && roleStage === 'chat') {
     const firstTokenAt = timestampValue(meta.first_token_at);
     if (firstTokenAt || message.content) {
-      timingLabel = chinese ? '正在执行' : 'Executing';
+      const executing = (activities || []).some((activity) => (
+        activity.category !== 'reasoning'
+        && !isChatRuntimeStatusActivity(activity)
+        && (activity.status === 'queued' || activity.status === 'running')
+      ));
+      timingLabel = executing
+        ? (chinese ? '正在执行' : 'Executing')
+        : (chinese ? '正在回复' : 'Responding');
       startedAt = firstTokenAt || startedAt;
     } else {
-      const runtimeStatusActivity = [...(activities || [])].reverse().find(
-        (activity) => activity.name === '运行状态' || activity.name === 'Runtime status',
-      );
-      const runtimeStatus = runtimeStatusActivity?.output || runtimeStatusActivity?.preview || '';
-      const reconnect = runtimeStatus.match(/(?:正在重连|reconnecting)\s*[（(](\d+)\s*\/\s*5[）)]/i);
-      if (reconnect) {
+      const runtimeState = latestChatRuntimeWaitingState(activities || []);
+      if (runtimeState?.phase === 'reconnecting') {
         timingLabel = chinese
-          ? `正在重连 (${reconnect[1]}/5)`
-          : `Reconnecting (${reconnect[1]}/5)`;
-        startedAt = runtimeStatusActivity?.startedAt || startedAt;
-      } else if (/正在思考|thinking/i.test(runtimeStatus)) {
+          ? `正在重新连接 (${runtimeState.attempt}/${runtimeState.maxAttempts})`
+          : `Reconnecting (${runtimeState.attempt}/${runtimeState.maxAttempts})`;
+        startedAt = runtimeState.startedAt || startedAt;
+      } else if (runtimeState?.phase === 'thinking') {
         timingLabel = chinese ? '正在思考' : 'Thinking';
-        startedAt = runtimeStatusActivity?.startedAt || startedAt;
+        startedAt = 0;
       } else {
-        timingLabel = chinese ? '正在思考' : 'Thinking';
+        timingLabel = '';
+        startedAt = 0;
       }
     }
   }
@@ -584,10 +661,7 @@ export function conversationHasRunningWork(
 
 const ACTIVE_COLLABORATION_STAGES = new Set([
   'cancel_requested',
-  'cancelled',
-  'completed',
   'dispatching',
-  'failed',
   'manager_handoff',
   'manager_planning',
   'reporting',
@@ -598,6 +672,14 @@ const ACTIVE_COLLABORATION_STAGES = new Set([
 ]);
 
 const COLLABORATION_ROLE_PATTERN = /(?:^|[.:/_-])(dispatch|manager|reporter|reviewer|supervisor|worker)(?:$|[.:/_-])/i;
+const ACTIVE_COLLABORATION_MESSAGE_STATUSES = new Set([
+  'accepted',
+  'pending',
+  'queued',
+  'running',
+  'starting',
+  'streaming',
+]);
 
 /**
  * Resolves the collaboration surface from the authoritative conversation.
@@ -613,23 +695,24 @@ export function conversationCollaborationState(
     const routeMetadata = isRecord(record.route_metadata) ? record.route_metadata : {};
     const mode = (stringValue(record.mode) || stringValue(routeMetadata.mode)).toLowerCase();
     if (mode !== 'work') continue;
-    routedWorkFound = true;
     const stage = stringValue(record.stage).toLowerCase();
     const status = stringValue(record.status).toLowerCase();
-    if (ACTIVE_COLLABORATION_STAGES.has(stage) || TERMINAL_TURN_STATES.has(status)) {
+    if (TERMINAL_TURN_STATES.has(status)) continue;
+    routedWorkFound = true;
+    if (ACTIVE_COLLABORATION_STAGES.has(stage)) {
       return 'active';
     }
   }
   for (const message of conversation.messages || []) {
     const meta = messageMetadata(message);
-    if (message.kind === 'route' && stringValue(meta.mode).toLowerCase() === 'work') {
-      routedWorkFound = true;
-    }
     const role = stringValue(meta.base_role_stage)
       || stringValue(meta.role_stage)
       || stringValue(message.sender_role)
       || stringValue(message.collaboration_role);
-    if (COLLABORATION_ROLE_PATTERN.test(role)) return 'active';
+    const match = role.match(COLLABORATION_ROLE_PATTERN);
+    if (!match) continue;
+    const status = stringValue(message.status || meta.status).toLowerCase();
+    if (ACTIVE_COLLABORATION_MESSAGE_STATUSES.has(status)) return 'active';
   }
   return routedWorkFound ? 'lifting' : 'single';
 }
@@ -1088,18 +1171,31 @@ const CONTENT_DEDUP_WINDOW_MS = 60_000;
 function deduplicateByContent(messages: HermesChatViewMessage[]): HermesChatViewMessage[] {
   const result: HermesChatViewMessage[] = [];
   for (const message of messages) {
-    if (message.role === 'assistant' && message.content) {
+    if (message.content) {
       const duplicateIndex = result.findIndex(
-        (existing) => existing.role === 'assistant'
-          && Boolean(existing.runtimeTurnId)
-          && existing.runtimeTurnId === message.runtimeTurnId
-          && existing.content === message.content
+        (existing) => {
+          if (existing.role !== message.role || existing.content !== message.content) return false;
+          const sameRuntimeTurn = Boolean(existing.runtimeTurnId)
+            && existing.runtimeTurnId === message.runtimeTurnId;
+          if (sameRuntimeTurn) return true;
+          if (message.role !== 'user' || existing.runtimeTurnId || message.runtimeTurnId) return false;
+          const existingTimestamp = existing.createdAt || existing.updatedAt || 0;
+          const messageTimestamp = message.createdAt || message.updatedAt || 0;
+          return existingTimestamp > 0 && existingTimestamp === messageTimestamp;
+        },
+      );
+      if (duplicateIndex >= 0) {
+        const existing = result[duplicateIndex];
+        if (
+          message.role === 'assistant'
           && Math.abs(
             (existing.completedAt || existing.updatedAt || existing.createdAt || 0)
             - (message.completedAt || message.updatedAt || message.createdAt || 0),
-          ) < CONTENT_DEDUP_WINDOW_MS,
-      );
-      if (duplicateIndex >= 0) {
+          ) >= CONTENT_DEDUP_WINDOW_MS
+        ) {
+          result.push(message);
+          continue;
+        }
         result[duplicateIndex] = message;
         continue;
       }

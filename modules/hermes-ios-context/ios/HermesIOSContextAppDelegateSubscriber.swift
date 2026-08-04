@@ -11,6 +11,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
   private static let activeLifecycleEpochKey = "app.hermes.screen-time.active-lifecycle-epoch"
 
   public func subscriberDidRegister() {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else { return }
     Self.purgePlaintextPreviewCache()
     Self.configureQuickActions()
     HermesDiagnosticsService.shared.start()
@@ -21,6 +22,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
   }
 
   public func applicationDidBecomeActive(_ application: UIApplication) {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else { return }
     Self.recordScreenState("active")
     Self.configureQuickActions()
     HermesScreenTimeService.shared.consumeExtensionEvents()
@@ -31,6 +33,7 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
   }
 
   public func applicationDidEnterBackground(_ application: UIApplication) {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else { return }
     Self.recordScreenState("background")
     HermesSessionLockService.shared.applicationDidEnterBackground()
     HermesScreenTimeService.shared.consumeExtensionEvents()
@@ -39,11 +42,13 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
   }
 
   public func applicationWillResignActive(_ application: UIApplication) {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else { return }
     Self.recordScreenState("inactive")
     HermesSessionLockService.shared.applicationDidEnterBackground()
   }
 
   public func applicationWillTerminate(_ application: UIApplication) {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else { return }
     Self.recordScreenState("terminated")
     Self.purgePlaintextPreviewCache()
     HermesDeviceService.shared.stopMonitoringPowerChanges()
@@ -54,6 +59,10 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     performActionFor shortcutItem: UIApplicationShortcutItem,
     completionHandler: @escaping (Bool) -> Void
   ) {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else {
+      completionHandler(false)
+      return
+    }
     let accepted: Bool
     switch shortcutItem.type {
     case "app.hermes.quick.new-task":
@@ -73,6 +82,10 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else {
+      completionHandler(.noData)
+      return
+    }
     if let tombstone = Self.accountDeletionTombstone(userInfo) {
       let deletion = HermesAccountLifecycle.deleteOwnerScope(
         tombstone.ownerScope,
@@ -125,6 +138,10 @@ public final class HermesIOSContextAppDelegateSubscriber: ExpoAppDelegateSubscri
     _ application: UIApplication,
     performFetchWithCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
+    guard HermesRuntimeConfiguration.nativeContextEnabled else {
+      completionHandler(.noData)
+      return
+    }
     guard !HermesContextEventQueue.shared.isCollectionSuspended else {
       completionHandler(.noData)
       return

@@ -186,6 +186,12 @@ const BUILTIN_NAV_REST = [
     icon: 'Globe',
   },
   {
+    routeId: 'browser',
+    path: '/browser',
+    labels: { en: 'Browser', zh: '\u6d4f\u89c8\u5668' },
+    icon: 'Globe',
+  },
+  {
     routeId: 'models',
     path: '/models',
     labels: { en: 'Models', zh: '\u6a21\u578b' },

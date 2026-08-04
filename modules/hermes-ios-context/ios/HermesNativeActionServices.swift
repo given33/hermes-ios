@@ -4,6 +4,7 @@ import Contacts
 import CoreImage
 import CoreLocation
 import MediaPlayer
+import NaturalLanguage
 import Photos
 import UIKit
 import Vision
@@ -11,6 +12,44 @@ import Vision
 #if canImport(CoreBluetooth)
 import CoreBluetooth
 #endif
+
+enum HermesNaturalLanguageService {
+  private static let maxTextLength = 100_000
+
+  static func analyze(text: String) throws -> [String: Any] {
+    let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !normalized.isEmpty, normalized.count <= maxTextLength else {
+      throw HermesNativeActionError.invalidInput("text")
+    }
+
+    let recognizer = NLLanguageRecognizer()
+    recognizer.processString(normalized)
+    let hypotheses = recognizer.languageHypotheses(withMaximum: 5)
+    let tokenizer = NLTokenizer(unit: .word)
+    tokenizer.string = normalized
+    var tokenCount = 0
+    tokenizer.enumerateTokens(in: normalized.startIndex..<normalized.endIndex) { _, _ in
+      tokenCount += 1
+      return true
+    }
+
+    let tagger = NLTagger(tagSchemes: [.sentimentScore])
+    tagger.string = normalized
+    let sentiment = tagger.tag(
+      at: normalized.startIndex,
+      unit: .paragraph,
+      scheme: .sentimentScore
+    ).0?.rawValue
+
+    return [
+      "language": recognizer.dominantLanguage?.rawValue ?? "und",
+      "languages": Dictionary(uniqueKeysWithValues: hypotheses.map { ($0.key.rawValue, $0.value) }),
+      "sentiment": sentiment.flatMap { Double($0) } ?? 0,
+      "tokenCount": tokenCount,
+      "characterCount": normalized.count,
+    ]
+  }
+}
 
 #if canImport(CoreNFC)
 import CoreNFC

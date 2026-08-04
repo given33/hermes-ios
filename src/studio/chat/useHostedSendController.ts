@@ -98,6 +98,7 @@ interface HostedSendControllerOptions {
   hostedTurnVisibilityFailuresRef: MutableRefObject<Map<string, HostedTurnVisibilityFailure[]>>;
   intervention: HostedInterventionController;
   isChinese: boolean;
+  keepLatestVisible(animated?: boolean, force?: boolean): void;
   loadConversation(
     conversationId: string,
     expectedGeneration?: number,
@@ -177,6 +178,7 @@ export function useHostedSendController({
   hostedTurnVisibilityFailuresRef,
   intervention,
   isChinese,
+  keepLatestVisible,
   loadConversation,
   localStore,
   messagesRef,
@@ -253,6 +255,7 @@ export function useHostedSendController({
       id: userMessageId,
       name: isChinese ? '你' : 'You',
       role: 'user',
+      runtimeTurnId: hostedTurnId,
       status: 'completed',
       updatedAt: userMessageCreatedAt,
     };
@@ -328,7 +331,10 @@ export function useHostedSendController({
       created_at: userMessageCreatedAt,
       id: userMessageId,
       kind: 'message',
-      meta: { attachments: [] },
+      meta: {
+        attachments: [],
+        runtime_turn_id: hostedTurnId,
+      },
       name: isChinese ? '你' : 'You',
       role: 'user',
       sender_id: 'account-owner',
@@ -377,7 +383,7 @@ export function useHostedSendController({
       }
       // The outbox intent is the first awaited write. A process kill at any
       // later point can reconstruct the message and attachment paths.
-      const initialPendingTurn = pendingTurnState('thinking', 0, userMessageCreatedAt);
+      const initialPendingTurn = pendingTurnState('connecting', 0, userMessageCreatedAt);
       const initialization = await localStore.initializePendingEnqueue(
         cacheOwner,
         queuedItem,
@@ -411,10 +417,11 @@ export function useHostedSendController({
         }, ...conversationIndexRef.current], sendingConversationId, ownerEpoch);
       }
       setMessages((current) => upsertChatMessage(current, userMessage));
+      keepLatestVisible(false, true);
       setSending(true);
       firstTokenAtRef.current = 0;
       setReconnectAttempt(0);
-      updatePendingPhase('thinking', userMessageCreatedAt);
+      updatePendingPhase('connecting', userMessageCreatedAt);
       clearQueuedComposer();
       // The request claim makes this idempotent across a kill between the
       // outbox commit and draft cleanup. A newer, non-matching draft survives.
@@ -439,7 +446,7 @@ export function useHostedSendController({
         }
         const executionStartedAt = Date.now();
         firstTokenAtRef.current = executionStartedAt;
-        updatePendingPhase('executing', executionStartedAt);
+        updatePendingPhase('thinking', executionStartedAt);
         const previewReplies = previewTurnMessages({
           collaborative,
           isChinese,
@@ -515,6 +522,9 @@ export function useHostedSendController({
         }, ownerEpoch);
         return;
       }
+      // The official Hermes gateway owns model readiness, retries, and
+      // provider errors. A client-side /api/model preflight adds a cold-start
+      // round trip and can disagree with the session that will actually run.
       let conversationId = sendingConversationId;
       const durableAttachments = await persistPendingAttachments(
         cacheOwner,
@@ -557,9 +567,6 @@ export function useHostedSendController({
         deliveryRetryScheduled = outcome === 'retry';
         if (deliveryRetryScheduled) setSending(true);
         return;
-      }
-      if (delivery.response.route.mode === 'work') {
-        updateConversationCollaborationState(conversationId, 'lifting');
       }
       clearQueuedComposer();
       queuedItem = {

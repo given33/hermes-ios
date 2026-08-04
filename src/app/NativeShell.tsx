@@ -200,6 +200,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     items: [
       { path: '/pairing', labels: { en: 'Devices', zh: '设备' }, symbol: 'desktopcomputer', fallback: 'ShieldCheck' },
       { path: '/files', labels: { en: 'Files', zh: '文件' }, symbol: 'folder', fallback: 'FolderOpen' },
+      { path: '/browser', labels: { en: 'Browser', zh: '浏览器' }, symbol: 'safari', fallback: 'Globe' },
       { path: '/smart-weather', labels: { en: 'Smart Weather', zh: '智能天气' }, symbol: 'cloud.rain', fallback: 'Globe' },
     ],
   },

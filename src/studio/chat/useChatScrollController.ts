@@ -7,9 +7,7 @@ import {
 import {
   Extrapolation,
   interpolate,
-  runOnJS,
   useAnimatedKeyboard,
-  useAnimatedReaction,
   useAnimatedStyle,
   useSharedValue,
 } from 'react-native-reanimated';
@@ -25,7 +23,9 @@ export function useChatScrollController(safeAreaBottom: number) {
 
   const keepLatestVisible = useCallback((animated = false, force = false) => {
     if (!force && !autoFollowStreamRef.current) return;
-    if (pendingScrollFrame.current !== null) return;
+    if (pendingScrollFrame.current !== null) {
+      cancelAnimationFrame(pendingScrollFrame.current);
+    }
     setShowScrollToBottom(false);
     pendingScrollFrame.current = requestAnimationFrame(() => {
       pendingScrollFrame.current = null;
@@ -55,20 +55,10 @@ export function useChatScrollController(safeAreaBottom: number) {
     paddingBottom: interpolate(
       keyboard.height.value * keyboardAvoidanceEnabled.value,
       [0, Math.max(1, safeAreaBottom)],
-      [7 + safeAreaBottom, 3],
+      [Math.max(8, safeAreaBottom - 16), 3],
       Extrapolation.CLAMP,
     ),
   }));
-
-  useAnimatedReaction(
-    () => keyboard.height.value * keyboardAvoidanceEnabled.value,
-    (height, previousHeight) => {
-      if (previousHeight === null || Math.abs(height - previousHeight) >= 0.5) {
-        runOnJS(keepLatestVisible)(false);
-      }
-    },
-    [keepLatestVisible],
-  );
 
   useEffect(() => () => {
     if (pendingScrollFrame.current !== null) {

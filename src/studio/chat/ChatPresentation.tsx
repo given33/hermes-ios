@@ -43,6 +43,7 @@ import { StudioRoleAvatar } from '../../components/studio/StudioRoleAvatar';
 import { IOSContextMenu } from '../../components/ios/IOSContextMenu';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
+import { resolveNativeFontStack } from '../../design/native-font-faces';
 import { IOS_MOTION } from '../../design/ios-motion';
 import { MOTION, useMotion } from '../../design/motion';
 import { useTheme } from '../../design/ThemeProvider';
@@ -131,6 +132,10 @@ export function UnifiedMessage({
     tokens.colors.primary,
     multiplyAlpha(tokens.colors.foreground, 0.055),
     tokens.colors.border,
+    resolveNativeFontStack(tokens.typography.fontSans, 400) || BODY_REGULAR,
+    resolveNativeFontStack(tokens.typography.fontSans, 600) || BODY_SEMIBOLD,
+    resolveNativeFontStack(tokens.typography.fontSans, 700) || BODY_BOLD,
+    resolveNativeFontStack(tokens.typography.fontMono, 400) || MONO_REGULAR,
   );
   const metadataNode = metadata ? (
     <Text numberOfLines={1} style={[styles.messageTime, { color: tokens.colors.textTertiary }]}>
@@ -225,11 +230,6 @@ export function UnifiedMessage({
           .duration(IOS_MOTION.duration.content)
           .easing(IOS_DECELERATE_EASING),
         FadeIn.duration(MOTION.fade.reduced),
-      )}
-      layout={motion.animate(
-        LinearTransition
-          .duration(IOS_MOTION.duration.control)
-          .easing(IOS_STANDARD_EASING),
       )}
       style={[
         styles.messageEnvelope,
@@ -339,7 +339,7 @@ function MessageAvatar({
   return (
     <IOSPressable
       accessibilityLabel={onLongPress ? `Long press to mention ${message.name}` : undefined}
-      delayLongPress={350}
+      delayLongPress={220}
       haptic={onLongPress ? 'selection' : 'none'}
       onLongPress={onLongPress}
       style={[
@@ -360,50 +360,37 @@ function MessageAvatar({
 export function PendingMessage({
   index,
   isChinese,
-  onInspectActivity,
   phase,
   reconnectAttempt,
   startedAt,
 }: {
   index: number;
   isChinese: boolean;
-  onInspectActivity(): void;
   phase: PendingPhase;
   reconnectAttempt: number;
   startedAt: number;
 }) {
   const { tokens } = useTheme();
   const motion = useMotion();
+  const executionStartedAt = (phase === 'thinking' || phase === 'executing') && startedAt > 0
+    ? startedAt
+    : undefined;
   const statusText = phase === 'cancel_requested'
     ? (isChinese ? '正在取消' : 'Cancelling')
     : phase === 'reconnecting'
     ? (isChinese
-        ? `正在重连 (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`
+        ? `正在重新连接 (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`
         : `Reconnecting (${reconnectAttempt}/${RECONNECT_MAX_ATTEMPTS})`)
     : phase === 'executing'
       ? (isChinese ? '正在执行' : 'The model is running')
-      : (isChinese ? '正在思考' : 'Thinking');
-  const pendingMessage: ChatMessage = {
-    activities: [{
-      category: 'other',
-      duration: '',
-      id: 'pending-status',
-      name: isChinese ? '运行状态' : 'Runtime status',
-      output: statusText,
-      preview: statusText,
-      startedAt,
-      status: 'running',
-    }],
-    avatarRole: 'hermes',
-    content: '',
-    id: 'pending-turn-status',
-    name: 'Hermes Agent',
-    role: 'assistant',
-    roleStage: 'chat',
-    startedAt,
-    status: 'running',
-    timingLabel: statusText,
-  };
+      : phase === 'thinking'
+        ? (isChinese ? '正在思考' : 'Thinking')
+        : '';
+  const statusColor = phase === 'cancel_requested'
+    ? tokens.colors.textTertiary
+    : phase === 'connecting'
+      ? tokens.colors.primary
+      : '#D28B22';
   return (
     <Reanimated.View
       entering={motion.fade(
@@ -420,11 +407,19 @@ export function PendingMessage({
           <StudioOfficialAvatar size={30} />
         </View>
         <View style={styles.messageStack}>
-          <RoleActivityGroup
-            isChinese={isChinese}
-            message={pendingMessage}
-            onInspectActivity={onInspectActivity}
-          />
+          {statusText ? (
+            <View style={styles.activitySummary}>
+              <View style={[styles.turnPhaseChip, { backgroundColor: multiplyAlpha(statusColor, 0.12) }]}>
+                <View style={[styles.turnPhaseDot, { backgroundColor: statusColor }]} />
+                <Text numberOfLines={1} style={[styles.turnPhaseLabel, { color: statusColor }]}>
+                  {statusText}
+                </Text>
+              </View>
+              {executionStartedAt ? (
+                <PendingElapsedTime color={tokens.colors.textSecondary} startedAt={executionStartedAt} />
+              ) : null}
+            </View>
+          ) : null}
           <View style={styles.messageMeta}>
             <Text style={[styles.messageName, { color: tokens.colors.textSecondary }]}>Hermes Agent</Text>
           </View>
@@ -436,6 +431,25 @@ export function PendingMessage({
         </View>
       </View>
     </Reanimated.View>
+  );
+}
+
+export function formatPendingElapsedTime(startedAt: number, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function PendingElapsedTime({ color, startedAt }: { color: string; startedAt: number }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(interval);
+  }, []);
+  return (
+    <Text style={[styles.pendingElapsed, { color }]}>
+      {formatPendingElapsedTime(startedAt, now)}
+    </Text>
   );
 }
 
@@ -485,7 +499,6 @@ function RoleActivityGroup({
   const { tokens } = useTheme();
   const motion = useMotion();
   const [open, setOpen] = useState(false);
-  const [openPinnedByUser, setOpenPinnedByUser] = useState(false);
   const [now, setNow] = useState(Date.now());
   const activities = message.activities || [];
   const reasoningActivities = activities.filter(
@@ -507,13 +520,6 @@ function RoleActivityGroup({
     const interval = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(interval);
   }, [running]);
-  // A running turn opens its activity fold automatically so the in-flight
-  // step stays visible, then closes it on completion. A manual toggle pins
-  // the fold and stops both automatic transitions.
-  useEffect(() => {
-    if (openPinnedByUser) return;
-    setOpen(running && activities.length > 0);
-  }, [activities.length, openPinnedByUser, running]);
   const phase = turnPhaseChip(message, isChinese);
   const phaseColor = phase.tone === 'failed'
     ? tokens.colors.destructive
@@ -555,7 +561,6 @@ function RoleActivityGroup({
           haptic="selection"
           onPress={() => {
             onInspectActivity();
-            setOpenPinnedByUser(true);
             setOpen((current) => !current);
           }}
           style={styles.activitySummary}
@@ -613,11 +618,15 @@ function createMessageMarkdownStyles(
   accent: string,
   codeBackground: string,
   border: string,
+  bodyFont: string,
+  semiboldFont: string,
+  boldFont: string,
+  monoFont: string,
 ): Record<string, object> {
   return {
     body: {
       color: foreground,
-      fontFamily: BODY_REGULAR,
+      fontFamily: bodyFont,
       fontSize: 14,
       letterSpacing: 0,
       lineHeight: 22,
@@ -638,7 +647,7 @@ function createMessageMarkdownStyles(
       borderRadius: 6,
       borderWidth: StyleSheet.hairlineWidth,
       color: foreground,
-      fontFamily: MONO_REGULAR,
+      fontFamily: monoFont,
       fontSize: 11.5,
       lineHeight: 17,
       marginBottom: 9,
@@ -648,7 +657,7 @@ function createMessageMarkdownStyles(
       backgroundColor: codeBackground,
       borderRadius: 4,
       color: foreground,
-      fontFamily: MONO_REGULAR,
+      fontFamily: monoFont,
       fontSize: 12,
       paddingHorizontal: 4,
       paddingVertical: 1,
@@ -659,22 +668,22 @@ function createMessageMarkdownStyles(
       borderRadius: 6,
       borderWidth: StyleSheet.hairlineWidth,
       color: foreground,
-      fontFamily: MONO_REGULAR,
+      fontFamily: monoFont,
       fontSize: 11.5,
       lineHeight: 17,
       marginBottom: 9,
       padding: 9,
     },
-    heading1: { color: foreground, fontFamily: BODY_BOLD, fontSize: 18, lineHeight: 25, marginBottom: 6, marginTop: 2 },
-    heading2: { color: foreground, fontFamily: BODY_BOLD, fontSize: 16, lineHeight: 23, marginBottom: 5, marginTop: 5 },
-    heading3: { color: foreground, fontFamily: BODY_SEMIBOLD, fontSize: 14.5, lineHeight: 21, marginBottom: 4, marginTop: 4 },
+    heading1: { color: foreground, fontFamily: boldFont, fontSize: 18, lineHeight: 25, marginBottom: 6, marginTop: 2 },
+    heading2: { color: foreground, fontFamily: boldFont, fontSize: 16, lineHeight: 23, marginBottom: 5, marginTop: 5 },
+    heading3: { color: foreground, fontFamily: semiboldFont, fontSize: 14.5, lineHeight: 21, marginBottom: 4, marginTop: 4 },
     link: { color: accent, textDecorationLine: 'none' },
     list_item: { marginBottom: 2 },
     ordered_list: { marginBottom: 7, marginTop: 1 },
     paragraph: { marginBottom: 8, marginTop: 0 },
     table: { borderColor: border, borderWidth: StyleSheet.hairlineWidth, marginBottom: 9 },
     td: { borderColor: border, borderWidth: StyleSheet.hairlineWidth, padding: 6 },
-    th: { borderColor: border, borderWidth: StyleSheet.hairlineWidth, fontFamily: BODY_SEMIBOLD, padding: 6 },
+    th: { borderColor: border, borderWidth: StyleSheet.hairlineWidth, fontFamily: semiboldFont, padding: 6 },
   };
 }
 

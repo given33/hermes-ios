@@ -2,7 +2,7 @@ import type { HostedTurnOutboxItem } from '../../api/conversation-local-store';
 import type { HostedTurnEnqueueResponse } from '../../api/HermesCloudApi';
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
 
-export type PendingPhase = 'thinking' | 'reconnecting' | 'executing' | 'cancel_requested';
+export type PendingPhase = 'connecting' | 'thinking' | 'reconnecting' | 'executing' | 'cancel_requested';
 
 export interface ChatAttachment {
   draftPersistent?: boolean;

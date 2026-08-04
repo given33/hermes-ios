@@ -143,6 +143,7 @@
           "faceIDPermission": "用于解锁 Hermes 连接并读取受保护的登录凭据。"
         }
       ],
+      "expo-audio",
       "expo-notifications",
       [
         "expo-image-picker",

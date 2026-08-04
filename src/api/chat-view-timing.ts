@@ -69,17 +69,28 @@ export function messageHasExecutionTiming(
 export function messageDurationMs(
   message: Pick<
     HermesChatViewMessage,
-    'activities' | 'completedAt' | 'durationMs' | 'startedAt' | 'status' | 'updatedAt'
+    'activities' | 'completedAt' | 'durationMs' | 'firstTokenAt' | 'startedAt'
+    | 'status' | 'updatedAt'
   >,
   now = Date.now(),
 ): number {
   const running = messageIsRunning(message);
-  if (running && message.startedAt) return Math.max(0, now - message.startedAt);
-  if ((message.durationMs || 0) > 0) return message.durationMs || 0;
-  if (message.startedAt) {
-    return Math.max(0, (message.completedAt || message.updatedAt || now) - message.startedAt);
+  const firstTokenLowerBound = message.startedAt && message.firstTokenAt
+    ? Math.max(0, message.firstTokenAt - message.startedAt)
+    : 0;
+  if (running && message.startedAt) {
+    return Math.max(firstTokenLowerBound, now - message.startedAt);
   }
-  return 0;
+  if ((message.durationMs || 0) > 0) {
+    return Math.max(firstTokenLowerBound, message.durationMs || 0);
+  }
+  if (message.startedAt) {
+    return Math.max(
+      firstTokenLowerBound,
+      (message.completedAt || message.updatedAt || now) - message.startedAt,
+    );
+  }
+  return firstTokenLowerBound;
 }
 
 export function messageIsRunning(

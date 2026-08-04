@@ -1068,6 +1068,47 @@ async function executeDeviceCommand(
       return HermesIOSContext.updateReminderForCommand(command.id, requiredString(payload.reminderID ?? payload.reminder_id, 'reminderID'), { completed: true });
     case 'ios-reminders:delete':
       return HermesIOSContext.deleteReminderForCommand(command.id, requiredString(payload.reminderID ?? payload.reminder_id, 'reminderID'));
+    case 'ios-alarm:schedule': {
+      const fireAt = requiredTimestamp(payload.fireAt ?? payload.fire_at ?? payload.due);
+      const title = requiredString(payload.title, 'title');
+      const body = typeof payload.body === 'string' && payload.body.trim()
+        ? payload.body.trim()
+        : title;
+      const notificationAuthorization = await runCurrent(
+        () => HermesIOSContext.getNotificationAuthorization(),
+      );
+      if (notificationAuthorization !== 'authorized' && notificationAuthorization !== 'limited') {
+        throw new Error('notification permission is required');
+      }
+      const reminderID = await HermesIOSContext.createReminder({
+        title,
+        due: fireAt,
+        ...(typeof payload.notes === 'string' ? { notes: payload.notes } : {}),
+      });
+      const notificationID = await runCurrent(() => HermesIOSContext.scheduleLocalNotification(
+        title,
+        body,
+        fireAt,
+        { capability: 'ios-alarm', reminderID },
+      ));
+      return { fireAt, notificationID, reminderID };
+    }
+    case 'ios-alarm:list':
+      return { alarms: await HermesIOSContext.listReminders(false) };
+    case 'ios-alarm:cancel': {
+      const reminderID = typeof payload.reminderID === 'string'
+        ? payload.reminderID
+        : typeof payload.reminder_id === 'string' ? payload.reminder_id : '';
+      const notificationID = typeof payload.notificationID === 'string'
+        ? payload.notificationID
+        : typeof payload.notification_id === 'string'
+          ? payload.notification_id
+          : typeof payload.id === 'string' ? payload.id : '';
+      if (!reminderID && !notificationID) throw new Error('reminderID or notificationID is required');
+      if (reminderID) await HermesIOSContext.deleteReminderForCommand(command.id, reminderID);
+      if (notificationID) await HermesIOSContext.cancelLocalNotification(notificationID);
+      return { cancelled: true, notificationID, reminderID };
+    }
     case 'ios-contacts:list':
     case 'ios-contacts:search': {
       const authorization = await HermesIOSContext.getContactsAuthorization();
@@ -1385,6 +1426,8 @@ async function executeDeviceCommand(
       await HermesIOSContext.cancelLocalNotification(requiredString(payload.id, 'id'));
       return { cancelled: true };
     }
+    case 'ios-nlp:analyze':
+      return HermesIOSContext.analyzeNaturalLanguage(requiredString(payload.text, 'text'));
     case 'ios-browser:navigate':
     case 'ios-browser:screenshot':
     case 'ios-browser:click':
@@ -1651,6 +1694,7 @@ function permissionForCommand(key: string): IOSPermissionKey | null {
   if (/^ios-health-/.test(key)) return 'health';
   if (/^ios-calendar:(create|list|calendars|freebusy|update|delete)$/.test(key)) return 'calendar';
   if (/^ios-reminders:(create|list|update|complete|delete)$/.test(key)) return 'reminders';
+  if (/^ios-alarm:(schedule|list|cancel)$/.test(key)) return 'reminders';
   if (/^ios-screen-time:(get|start)$/.test(key)) return 'screenTime';
   if (/^ios-notification:(send|schedule)$/.test(key)) return 'notification';
   return null;

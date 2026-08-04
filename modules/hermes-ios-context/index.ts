@@ -1,4 +1,5 @@
 import { requireNativeView, requireOptionalNativeModule } from 'expo';
+import Constants from 'expo-constants';
 import { createElement, forwardRef, type ComponentType } from 'react';
 import {
   Platform,
@@ -361,6 +362,7 @@ export interface IOSContextNativeModule {
   }): Promise<Record<string, unknown>>;
   deleteReminderForCommand(commandId: string, reminderID: string): Promise<Record<string, unknown>>;
   analyzeVision(imageURL: string, ownerScope: string, mode?: 'analyze' | 'classify' | 'detect' | 'faces'): Promise<Record<string, unknown>>;
+  analyzeNaturalLanguage(text: string): Promise<Record<string, unknown>>;
   getMediaAuthorization(): Promise<IOSAuthorizationState>;
   requestMediaAuthorization(): Promise<IOSAuthorizationState>;
   getMediaSnapshot(): Promise<Record<string, unknown>>;
@@ -457,6 +459,7 @@ export interface IOSContextNativeModule {
 }
 
 const nativeModule = requireOptionalNativeModule<IOSContextNativeModule>('HermesIOSContext');
+const resignCompatibleBuild = Constants.expoConfig?.extra?.hermesResignCompatible === true;
 export interface HermesNativeMapProviderStatus {
   activeProvider: 'amap' | 'mapkit';
   amapConfigured: boolean;
@@ -491,7 +494,9 @@ function requireContextModule(): IOSContextNativeModule {
   return nativeModule;
 }
 
-export const hasNativeIOSContext = Platform.OS === 'ios' && nativeModule !== null;
+export const hasNativeIOSContext = Platform.OS === 'ios'
+  && nativeModule !== null
+  && !resignCompatibleBuild;
 
 export const HermesIOSContext = {
   getCapabilities: () => requireContextModule().getCapabilities(),
@@ -653,6 +658,7 @@ export const HermesIOSContext = {
   ocrImage: (input: Parameters<IOSContextNativeModule['ocrImage']>[0]) =>
     requireContextModule().ocrImage(input),
   analyzeVision: (imageURL: string, ownerScope: string, mode?: 'analyze' | 'classify' | 'detect' | 'faces') => requireContextModule().analyzeVision(imageURL, ownerScope, mode),
+  analyzeNaturalLanguage: (text: string) => requireContextModule().analyzeNaturalLanguage(text),
   openURLForCommand: (commandId: string, url: string) =>
     requireContextModule().openURLForCommand(commandId, url),
   getMediaAuthorization: () => requireContextModule().getMediaAuthorization(),

@@ -78,7 +78,10 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     guard !owner.isEmpty, owner.count <= 256 else {
       throw HermesBrowserServiceError.invalidInput("ownerScope")
     }
-    let normalizedAction = action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let rawAction = action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let normalizedAction = rawAction.hasPrefix("ios-browser:")
+      ? String(rawAction.dropFirst("ios-browser:".count))
+      : rawAction
     guard Self.actions.contains(normalizedAction) else {
       throw HermesBrowserServiceError.invalidInput("action")
     }

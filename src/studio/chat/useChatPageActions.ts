@@ -50,9 +50,7 @@ export function useCollaborationStateUpdater({
     const current = collaborationStateByConversationRef.current.get(conversationId) || 'single';
     const resolved = current === 'active' || nextState === 'active'
       ? 'active'
-      : current === 'lifting' && nextState === 'single'
-        ? 'lifting'
-        : nextState;
+      : nextState;
     collaborationStateByConversationRef.current.set(conversationId, resolved);
     if (activeConversationIdRef.current === conversationId) {
       setCollaborationState(resolved);

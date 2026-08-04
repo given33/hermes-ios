@@ -116,15 +116,6 @@ export function LoginScreen() {
     setRememberLogin(rememberedLogin.enabled);
   }, [rememberedLogin, state.status]);
 
-  // Fire the Face ID prompt once as soon as the lock screen appears; later
-  // attempts stay behind the explicit unlock button.
-  const autoUnlockRequested = useRef(false);
-  useEffect(() => {
-    if (!locked || autoUnlockRequested.current) return;
-    autoUnlockRequested.current = true;
-    void unlock();
-  }, [locked, unlock]);
-
   useEffect(() => {
     const animation = Animated.parallel([
       Animated.timing(entranceOpacity, {

@@ -122,7 +122,7 @@ function TeamMemberCard({
       accessibilityLabel={isChinese
         ? `长按复制 ${entry.displayName} 的成员信息`
         : `Long press to copy ${entry.displayName} participant info`}
-      delayLongPress={350}
+      delayLongPress={220}
       haptic="selection"
       onLongPress={onLongPress}
       style={[

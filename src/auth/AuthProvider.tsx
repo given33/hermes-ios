@@ -103,7 +103,6 @@ const APNS_LOGOUT_DEADLINE_MS = 2_500;
 const NOTIFICATION_CLEANUP_DEADLINE_MS = 2_500;
 const REMOTE_LOGOUT_DEADLINE_MS = 8_000;
 const SAVED_SESSION_RETRY_DELAY_MS = 5_000;
-const RESIGN_COMPATIBLE_BUILD = Constants.expoConfig?.extra?.hermesResignCompatible === true;
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
 const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
@@ -131,21 +130,14 @@ async function activateNativeOwnerScope(
   accountGeneration: string,
 ): Promise<void> {
   if (!hasNativeIOSContext) return;
-  const activation = () => HermesIOSContext.activateOwnerScope(ownerScope, accountGeneration);
-  // The resign-compatible artifact intentionally has no extension-owned
-  // App Group/keychain capabilities. Native collection is therefore best
-  // effort; it must not turn a valid server login into a connection error.
-  if (RESIGN_COMPATIBLE_BUILD) {
-    await runOptionalAuthEffect(activation);
-    return;
-  }
-  await activation();
+  await HermesIOSContext.activateOwnerScope(ownerScope, accountGeneration);
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
   const [state, dispatch] = useReducer(authReducer, initialAuthState);
   const authLifecycle = useRef(new AuthLifecycleCoordinator());
   const authenticatedConnection = useRef<SavedConnection | null>(null);
+  const persistAuthenticatedSession = useRef(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const [rememberedLogin, setRememberedLogin] = useState<RememberedLogin>(
     EMPTY_REMEMBERED_LOGIN,
@@ -186,8 +178,23 @@ export function AuthProvider({ children }: PropsWithChildren) {
           credentialStore.sessionUnlockRequired(),
         ]);
         if (!current()) return;
-        setRememberedLogin(savedLogin);
-        if (unlockRequired) {
+        if (!savedLogin.enabled) {
+          // Older builds persisted a refresh session even when the user did
+          // not opt in to remembered login. Remove that legacy session before
+          // it can bypass password authentication on this launch.
+          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+          if (!current()) return;
+          setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
+        } else {
+          setRememberedLogin(savedLogin);
+        }
+        if (savedLogin.enabled && !unlockRequired) {
+          // Remembered sessions must stay biometric-gated. If a previous
+          // Keychain write fell back to device-only protection, keep the
+          // remembered password but require a fresh explicit login.
+          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+          if (!current()) return;
+        } else if (savedLogin.enabled && unlockRequired) {
           const inspection = await inspectSavedConnection(credentialStore);
           if (!current()) return;
           if (inspection.status === 'locked') {
@@ -218,6 +225,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
             return;
           }
           if (adoption.outcome === 'authenticated' && current()) {
+            persistAuthenticatedSession.current = true;
             await activateLocalAccountData(adoption.connection);
             dispatch({ type: 'AUTHENTICATED', connection: adoption.connection });
           }
@@ -305,6 +313,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     mobileAuth: MobileAuthApiClient,
     session: MobileAuthSession,
     operationGeneration: number,
+    persistCredentials: boolean,
   ) => {
     const connection = await persistVerifiedConnection(
       {
@@ -323,9 +332,9 @@ export function AuthProvider({ children }: PropsWithChildren) {
               if (!authLifecycle.current.isCurrent(operationGeneration)) {
                 throw new Error('Stale Hermes authentication operation');
               }
-              await credentialStore.save(candidate);
+              if (persistCredentials) await credentialStore.save(candidate);
               if (!authLifecycle.current.isCurrent(operationGeneration)) {
-                await credentialStore.clear();
+                if (persistCredentials) await credentialStore.clearSession();
                 throw new Error('Stale Hermes authentication operation');
               }
             });
@@ -375,25 +384,32 @@ export function AuthProvider({ children }: PropsWithChildren) {
           mobileAuth,
           session,
           operationGeneration,
+          rememberLogin,
         );
         const rememberedLoginSaved = await runOptionalAuthEffect(
           () => credentialMutations.run(async () => {
             if (!authLifecycle.current.isCurrent(operationGeneration)) return;
             await credentialStore.saveRememberedLogin(username, password, rememberLogin);
+            if (!rememberLogin) await credentialStore.clearSession();
           }),
         );
         if (!rememberedLoginSaved && rememberLogin) {
           await runOptionalAuthEffect(() => credentialMutations.run(async () => {
             await credentialStore.saveRememberedLogin(username, password, false);
+            await credentialStore.clearSession();
           }));
         }
         if (!authLifecycle.current.isCurrent(operationGeneration)) return;
         const remembered = rememberLogin && rememberedLoginSaved;
-        setRememberedLogin({
-          enabled: remembered,
-          password: remembered ? password : '',
-          username: username.trim(),
-        });
+        const biometricSessionSaved = remembered
+          && await credentialStore.sessionUnlockRequired().catch(() => false);
+        if (remembered && !biometricSessionSaved) {
+          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+        }
+        persistAuthenticatedSession.current = biometricSessionSaved;
+        setRememberedLogin(remembered
+          ? { enabled: true, password: '', username: username.trim() }
+          : EMPTY_REMEMBERED_LOGIN);
         await activateLocalAccountData(connection);
         dispatch({ type: 'AUTHENTICATED', connection });
       } catch (error) {
@@ -477,6 +493,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         return;
       }
       if (adoption.outcome === 'authenticated' && currentOperation()) {
+        persistAuthenticatedSession.current = true;
         await activateLocalAccountData(adoption.connection);
         dispatch({ type: 'AUTHENTICATED', connection: adoption.connection });
       }
@@ -579,6 +596,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         mobileAuth,
         session,
         operationGeneration,
+        false,
       );
       if (authLifecycle.current.isCurrent(operationGeneration)) {
         await activateLocalAccountData(connection);
@@ -626,7 +644,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       store: {
         saveSessionTokens(accessToken, refreshToken, expiresAt, accountGeneration) {
           return credentialMutations.run(async () => {
-            if (!isCurrentConnection()) return;
+            if (!isCurrentConnection() || !persistAuthenticatedSession.current) return;
             await credentialStore.saveSessionTokens(
               accessToken,
               refreshToken,
@@ -759,6 +777,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       // events remain local until the next authenticated upload.
       await credentialMutations.run(() => credentialStore.clearSession());
       if (authLifecycle.current.isCurrent(operationGeneration)) {
+        persistAuthenticatedSession.current = false;
         if (!rememberedLogin.enabled) setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         dispatch({ type: 'LOGGED_OUT' });
       }
@@ -793,6 +812,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
       await localAccountCleanupSaga.run(ownerScope, localAccountCleanupTasks());
       if (authLifecycle.current.isCurrent(operationGeneration)) {
         await credentialMutations.run(() => credentialStore.clear());
+        persistAuthenticatedSession.current = false;
         setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         dispatch({ type: 'LOGGED_OUT' });
       }
@@ -807,6 +827,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         await credentialMutations
           .run(() => credentialStore.clear())
           .catch(() => undefined);
+        persistAuthenticatedSession.current = false;
         setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         dispatch({ type: 'LOGGED_OUT' });
         return;

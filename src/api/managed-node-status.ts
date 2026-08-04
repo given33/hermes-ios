@@ -30,10 +30,11 @@ export function managedNodeGatewayStatuses(
       const directSource = sources.find(
         (entry) => stringField(entry, 'id').toLowerCase() === id,
       );
+      const targetState = managedTargetState(sources, id);
       return {
         id,
         label: id.toUpperCase(),
-        state: directSource?.online === false ? 'offline' : 'unknown',
+        state: directSource?.online === false ? 'offline' : targetState,
       };
     }
 
@@ -61,6 +62,35 @@ export function managedNodeGatewayStatuses(
       version: versionField(value),
     };
   });
+}
+
+function managedTargetState(
+  sources: readonly JsonRecord[],
+  id: string,
+): ManagedNodeGatewayState {
+  for (const source of sources) {
+    const recovery = isRecord(source.recovery) ? source.recovery : {};
+    const targetStates = isRecord(recovery.target_states)
+      ? recovery.target_states
+      : isRecord(source.target_states)
+        ? source.target_states
+        : {};
+    const target = targetStates[id];
+    if (target === true) return 'online';
+    if (target === false) return 'offline';
+    const targetRecord = isRecord(target) ? target : {};
+    if (targetRecord.online === true) return 'online';
+    if (targetRecord.online === false) return 'offline';
+    const state = (
+      typeof target === 'string'
+        ? target
+        : stringField(targetRecord, 'state') || stringField(targetRecord, 'status')
+    ).toLowerCase();
+    if (['active', 'online', 'ready', 'running', 'success'].includes(state)) return 'online';
+    if (['degraded', 'partial', 'warning'].includes(state)) return 'degraded';
+    if (['error', 'failed', 'offline', 'timeout', 'unreachable'].includes(state)) return 'offline';
+  }
+  return 'unknown';
 }
 
 export function isFreshObservation(value: JsonRecord, now = Date.now()): boolean {

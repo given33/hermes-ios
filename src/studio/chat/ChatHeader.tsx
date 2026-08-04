@@ -128,7 +128,9 @@ export function ChatHeader({
                       ? tokens.colors.success
                       : gateway.state === 'degraded'
                         ? tokens.colors.warning
-                        : tokens.colors.destructive,
+                        : gateway.state === 'offline'
+                          ? tokens.colors.destructive
+                          : tokens.colors.textDisabled,
                   },
                 ]}
               />
@@ -142,7 +144,15 @@ export function ChatHeader({
                 numberOfLines={1}
                 style={[styles.gatewayStatusVersion, { color: tokens.colors.textTertiary }]}
               >
-                {gateway.version?.split(' ')[0] || '—'}
+                {gateway.version?.split(' ')[0] || (
+                  gateway.state === 'online'
+                    ? (isChinese ? '在线' : 'online')
+                    : gateway.state === 'degraded'
+                      ? (isChinese ? '异常' : 'degraded')
+                      : gateway.state === 'offline'
+                        ? (isChinese ? '离线' : 'offline')
+                        : (isChinese ? '检测中' : 'checking')
+                )}
               </Text>
             </View>
           ))}

@@ -46,6 +46,8 @@ public final class HermesIOSContextModule: Module {
     ["capability": "ios-contacts", "actions": ["list", "search", "create"], "permission": "contacts", "confirmation": "create"],
     ["capability": "ios-photos", "actions": ["list", "search", "capture", "scan", "ocr", "albums", "near", "favorite", "delete", "album-create", "album-add", "import", "export"], "permission": "photos/camera", "confirmation": "capture/write"],
     ["capability": "ios-vision", "actions": ["analyze"], "permission": "photos", "confirmation": "none"],
+    ["capability": "ios-nlp", "actions": ["analyze"], "permission": "none", "confirmation": "none"],
+    ["capability": "ios-alarm", "actions": ["schedule", "list", "cancel"], "permission": "reminders/notification", "confirmation": "schedule/cancel"],
     ["capability": "ios-media", "actions": ["get", "control", "play", "pause", "next", "previous", "stop", "search", "play-search", "volume"], "permission": "media", "confirmation": "controls"],
     ["capability": "ios-bluetooth", "actions": ["state", "scan", "connect", "disconnect", "services", "read", "write", "notify"], "permission": "bluetooth", "confirmation": "connect/write"],
     ["capability": "ios-nfc", "actions": ["scan", "write"], "permission": "nfc", "confirmation": "write"],
@@ -54,18 +56,18 @@ public final class HermesIOSContextModule: Module {
     ["capability": "ios-browser", "actions": ["navigate", "screenshot", "click", "type", "get_text", "scroll", "get_page_info", "execute_js", "find_elements", "hover", "get_readable", "set_user_agent", "set_viewport", "get_backbone", "fetch", "new_tab", "close_tab", "list_tabs", "get_cookies", "set_cookies", "scroll_and_collect", "wait_for_dom_stable"], "permission": "network/web", "confirmation": "execute_js/write/cookies"],
     ["capability": "ios-device", "actions": ["open-url", "settings"], "permission": "device", "confirmation": "open-url"],
   ]
-  private let location = HermesLocationService.shared
-  private let motion = HermesMotionService.shared
-  private let health = HermesHealthService.shared
-  private let events = HermesEventStore.shared
-  private let eventQueue = HermesContextEventQueue.shared
-  private let watch = HermesWatchService.shared
-  private let device = HermesDeviceService.shared
-  private let screenTime = HermesScreenTimeService.shared
-  private let liveActivity = HermesLiveActivityService.shared
-  private let attachmentVault = HermesAttachmentVault.shared
-  private let voice = HermesVoiceService.shared
-  private let protectedExport = HermesProtectedExportFile.shared
+  private lazy var location = HermesLocationService.shared
+  private lazy var motion = HermesMotionService.shared
+  private lazy var health = HermesHealthService.shared
+  private lazy var events = HermesEventStore.shared
+  private lazy var eventQueue = HermesContextEventQueue.shared
+  private lazy var watch = HermesWatchService.shared
+  private lazy var device = HermesDeviceService.shared
+  private lazy var screenTime = HermesScreenTimeService.shared
+  private lazy var liveActivity = HermesLiveActivityService.shared
+  private lazy var attachmentVault = HermesAttachmentVault.shared
+  private lazy var voice = HermesVoiceService.shared
+  private lazy var protectedExport = HermesProtectedExportFile.shared
   private var relayWakeObserver: NSObjectProtocol?
 
   private static func requireCommandID(_ rawValue: String) throws -> String {
@@ -167,6 +169,7 @@ public final class HermesIOSContextModule: Module {
     }
 
     OnCreate {
+      guard HermesRuntimeConfiguration.nativeContextEnabled else { return }
       HermesBackgroundService.shared.register()
       self.relayWakeObserver = NotificationCenter.default.addObserver(
         forName: HermesBackgroundService.relayWakeNotification,
@@ -849,6 +852,10 @@ public final class HermesIOSContextModule: Module {
         let image = try HermesPhotosService.visionImage(imageURL: imageURL, owner: ownerScope)
         return try HermesVisionService.analyze(image: image, mode: mode ?? "analyze")
       }
+    }
+
+    AsyncFunction("analyzeNaturalLanguage") { (text: String) throws -> [String: Any] in
+      try HermesNaturalLanguageService.analyze(text: text)
     }
 
     AsyncFunction("getMediaSnapshot") { () -> [String: Any] in
