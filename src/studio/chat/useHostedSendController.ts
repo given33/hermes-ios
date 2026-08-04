@@ -14,7 +14,6 @@ import type {
   HostedTurnOutboxItem,
   OptimisticPendingTurn,
 } from '../../api/conversation-store-types';
-import { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
 import {
   captureConversationStorageEpoch,
   isConversationStorageEpochCurrent,
@@ -90,7 +89,6 @@ interface HostedSendControllerOptions {
   ): void;
   contentRef: MutableRefObject<string>;
   conversationIndexRef: MutableRefObject<SingleConversation[]>;
-  conversationSyncGenerationRef: MutableRefObject<ConversationSyncGeneration>;
   firstTokenAtRef: MutableRefObject<number>;
   fixtureMode: boolean;
   hostedRunning: boolean;
@@ -99,11 +97,6 @@ interface HostedSendControllerOptions {
   intervention: HostedInterventionController;
   isChinese: boolean;
   keepLatestVisible(animated?: boolean, force?: boolean): void;
-  loadConversation(
-    conversationId: string,
-    expectedGeneration?: number,
-    signal?: AbortSignal,
-  ): Promise<unknown>;
   localStore: ConversationLocalStore | null;
   messagesRef: MutableRefObject<ChatMessage[]>;
   notify(message: string): void;
@@ -170,7 +163,6 @@ export function useHostedSendController({
   commitConversationIndex,
   contentRef,
   conversationIndexRef,
-  conversationSyncGenerationRef,
   firstTokenAtRef,
   fixtureMode,
   hostedRunning,
@@ -179,7 +171,6 @@ export function useHostedSendController({
   intervention,
   isChinese,
   keepLatestVisible,
-  loadConversation,
   localStore,
   messagesRef,
   notify,
@@ -599,9 +590,9 @@ export function useHostedSendController({
         cancelledPendingSendKeysRef.current.delete(sendKey);
         await outbox.settleAcceptedOutboxItem(queuedItem, ownerEpoch);
         if (!isCurrentSend()) return;
-        const generation = conversationSyncGenerationRef.current.advanceActive();
-        await loadConversation(conversationId, generation);
-        if (!isCurrentSend()) return;
+        // SSE is the authoritative post-acceptance path. A second full GET
+        // delays the first token and replaces the optimistic list while it is
+        // already rendering; disconnected polling remains the recovery path.
       }
     } catch (error) {
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;

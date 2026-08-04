@@ -42,6 +42,14 @@ test('composer attachments and console prompts stay bound to their conversation'
   );
 });
 
+test('accepted hosted sends hand off directly to SSE without a blocking snapshot reload', () => {
+  const hostedSend = read('src/studio/chat/useHostedSendController.ts');
+
+  assert.match(hostedSend, /settleAcceptedOutboxItem\(queuedItem, ownerEpoch\)/);
+  assert.doesNotMatch(hostedSend, /await loadConversation\(conversationId, generation\)/);
+  assert.doesNotMatch(hostedSend, /conversationSyncGenerationRef/);
+});
+
 test('frontend preview renders every customized route and authenticated builds may attach cloud ownership', () => {
   const app = read('src/studio/FrontendPreviewApp.tsx');
   const previewSources = [
