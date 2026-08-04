@@ -964,23 +964,27 @@ export function streamEventToActivity(
   }
   const isTool = eventType.startsWith('tool.');
   const isSubagent = eventType.startsWith('subagent.');
-  if (!isTool && !isSubagent) return null;
+  const isCommand = eventType.startsWith('command.');
+  if (!isTool && !isSubagent && !isCommand) return null;
   const toolName = stringValue(payload.tool_name)
     || stringValue(payload.tool)
-    || stringValue(payload.name);
+    || stringValue(payload.name)
+    || (isCommand ? stringValue(payload.command) : '');
   const name = isSubagent
     ? stringValue(payload.profile)
       || stringValue(payload.agent_name)
       || stringValue(payload.name)
       || '子 Agent'
-    : toolName || '工具调用';
+    : isCommand ? stringValue(payload.name) || '命令' : toolName || '工具调用';
   const status = eventType === 'tool.error' || eventType === 'tool.failed'
       || eventType === 'subagent.failed'
+      || eventType === 'command.failed'
     ? 'failed'
     : eventType === 'tool.end'
         || eventType === 'tool.complete'
         || eventType === 'tool.completed'
         || eventType === 'subagent.completed'
+        || eventType === 'command.completed'
       ? 'completed'
       : 'running';
   const durationMs = numberValue(payload.duration_ms)
@@ -990,7 +994,9 @@ export function streamEventToActivity(
   return {
     category: isSubagent
       ? 'subagent'
-      : normalizedActivityCategory(
+      : isCommand
+        ? 'command'
+        : normalizedActivityCategory(
           stringValue(payload.category) || stringValue(payload.kind),
           toolName || name,
         ),
@@ -1000,13 +1006,14 @@ export function streamEventToActivity(
     durationMs,
     error: structuredText(payload.error) || undefined,
     id: stringValue(payload.tool_id)
+      || stringValue(payload.command_id)
       || stringValue(payload.child_session_id)
       || stringValue(payload.subagent_id)
       || stringValue(payload.task_id)
       || stringValue(payload.entity_id)
       || `tool-${now}`,
     input: structuredText(
-      payload.args_text ?? payload.args ?? payload.input ?? payload.context,
+      payload.command ?? payload.args_text ?? payload.args ?? payload.input ?? payload.context,
     ) || undefined,
     model: stringValue(payload.model) || undefined,
     name,

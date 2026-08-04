@@ -197,7 +197,7 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
   );
   assert.match(service, /appendStreamingSpeech[\s\S]*enqueueStreamingClauses/);
   assert.match(service, /takeSpeakableClauses/);
-  assert.match(service, /scheduleStreamingSpeechIdleFlush[\s\S]*\.now\(\) \+ 2/);
+  assert.match(service, /scheduleStreamingSpeechIdleFlush[\s\S]*\.now\(\) \+ 0\.45/);
   assert.match(service, /stopSpeaking\(interrupted: true\)/);
   assert.match(service, /catch \{[\s\S]*deactivateAudioSession\(\)[\s\S]*throw error/);
   assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 9);

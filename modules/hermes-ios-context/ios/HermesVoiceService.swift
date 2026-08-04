@@ -442,7 +442,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
       self.enqueueStreamingClauses(force: true)
     }
     streamingSpeechIdleFlush = flush
-    DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: flush)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: flush)
   }
 
   private func finishUtterance(_ utterance: AVSpeechUtterance) {

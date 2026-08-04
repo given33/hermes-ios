@@ -60,6 +60,34 @@ test('hosted lifecycle waits for real reasoning content before thinking and timi
   assert.equal(thinking.messages[0].activities?.[0].output, 'Inspecting the request.');
 });
 
+test('empty thinking completion never creates a reasoning row or starts timing', () => {
+  const result = applyHostedLifecycleEvents([], [
+    event(1, 'agent.started', { source_event_type: 'request.accepted' }),
+    event(2, 'thinking.started', { entity_id: 'thought-1' }),
+    event(3, 'thinking.completed', { entity_id: 'thought-1' }),
+  ], false);
+
+  assert.equal(result.phase, undefined);
+  assert.equal(result.messages[0].startedAt, undefined);
+  assert.equal(result.messages[0].firstTokenAt, undefined);
+  assert.equal(result.messages[0].activities?.length || 0, 0);
+});
+
+test('retry lifecycle is visible only while reconnecting', () => {
+  const reconnecting = applyHostedLifecycleEvents([], [
+    event(1, 'connection.retry_scheduled', { attempt: 2, max_attempts: 5 }),
+  ], false);
+  assert.equal(reconnecting.phase, 'reconnecting');
+  assert.equal(reconnecting.messages[0].timingLabel, 'Reconnecting (2/5)');
+
+  const recovered = applyHostedLifecycleEvents(reconnecting.messages, [
+    event(2, 'connection.retry_finished', { attempt: 2, success: true }),
+  ], false);
+  assert.equal(recovered.phase, undefined);
+  assert.equal(recovered.messages[0].timingLabel, undefined);
+  assert.equal(recovered.messages[0].activities?.length || 0, 0);
+});
+
 test('hosted lifecycle streams answer chunks into one stable assistant message', () => {
   const connected = applyHostedLifecycleEvents([], [event(1, 'agent.started', {
     source_event_type: 'request.accepted',
@@ -146,4 +174,43 @@ test('hosted lifecycle keeps subagent progress as a structured execution step', 
   assert.equal(result.messages[0].activities?.length, 1);
   assert.equal(result.messages[0].activities?.[0].category, 'subagent');
   assert.equal(result.messages[0].activities?.[0].status, 'completed');
+});
+
+test('hosted lifecycle accumulates command output in one structured step', () => {
+  const result = applyHostedLifecycleEvents([], [
+    event(1, 'command.started', {
+      command_id: 'command-1',
+      command: 'git status',
+    }),
+    event(2, 'command.output', {
+      command_id: 'command-1',
+      text: 'line one\n',
+    }),
+    event(3, 'command.output', {
+      command_id: 'command-1',
+      text: 'line two',
+    }),
+    event(4, 'command.completed', {
+      command_id: 'command-1',
+    }),
+  ], false);
+
+  const activity = result.messages[0].activities?.[0];
+  assert.equal(activity?.category, 'command');
+  assert.equal(activity?.input, 'git status');
+  assert.equal(activity?.output, 'line one\nline two');
+  assert.equal(activity?.status, 'completed');
+});
+
+test('cancel request immediately closes the live turn', () => {
+  const running = applyHostedLifecycleEvents([], [
+    event(1, 'message.delta', { text: 'Working' }),
+  ], false);
+  const cancelled = applyHostedLifecycleEvents(running.messages, [
+    event(2, 'turn.cancel_requested'),
+  ], false);
+
+  assert.equal(cancelled.messages[0].status, 'cancelled');
+  assert.equal(cancelled.messages[0].timingLabel, undefined);
+  assert.equal(cancelled.messages[0].completedAt, 1_200);
 });

@@ -55,7 +55,10 @@ export function applyHostedLifecycleEvents(
         status: undefined,
         timingLabel: undefined,
       };
-    } else if (eventType === 'connection.retry_started') {
+    } else if (
+      eventType === 'connection.retry_scheduled'
+      || eventType === 'connection.retry_started'
+    ) {
       const attempt = Math.max(1, numericValue(payload.attempt) || 1);
       const maxAttempts = Math.max(attempt, numericValue(payload.max_attempts) || 5);
       phase = 'reconnecting';
@@ -80,6 +83,14 @@ export function applyHostedLifecycleEvents(
           : `Reconnecting (${attempt}/${maxAttempts})`,
         updatedAt: occurredAt,
       };
+    } else if (eventType === 'connection.retry_finished') {
+      message = {
+        ...message,
+        activities: removeActivity(message.activities, 'model-connection-retry'),
+        status: message.firstTokenAt ? message.status : undefined,
+        timingLabel: message.firstTokenAt ? message.timingLabel : undefined,
+        updatedAt: occurredAt,
+      };
     } else if (
       (eventType === 'thinking.started' || eventType === 'thinking.delta' || eventType === 'thinking.completed')
       && (!sourceEventType || sourceEventType.startsWith('reasoning.'))
@@ -89,14 +100,7 @@ export function applyHostedLifecycleEvents(
       const text = structuredText(
         payload.text ?? payload.delta ?? payload.output ?? payload.reasoning,
       );
-      if (!text && eventType === 'thinking.started') {
-        message = {
-          ...message,
-          modelStartedAt,
-          status: undefined,
-          timingLabel: undefined,
-        };
-        nextMessages = upsertLiveMessage(nextMessages, message);
+      if (!text && !existing?.output?.trim()) {
         continue;
       }
       const output = appendDelta(existing?.output || '', text);
@@ -130,13 +134,33 @@ export function applyHostedLifecycleEvents(
         timingLabel: chinese ? '正在思考' : 'Thinking',
         updatedAt: occurredAt,
       };
-    } else if (eventType.startsWith('tool.') || eventType.startsWith('subagent.')) {
+    } else if (
+      eventType.startsWith('tool.')
+      || eventType.startsWith('subagent.')
+      || eventType.startsWith('command.')
+    ) {
+      if (eventType === 'command.output' && sourceEventType === 'status.update') {
+        continue;
+      }
       const activity = streamEventToActivity(eventType, payload, occurredAt);
       if (activity) {
+        const existing = message.activities?.find(({ id }) => id === activity.id);
+        const mergedActivity = existing
+          ? {
+              ...activity,
+              input: activity.input || existing.input,
+              name: activity.name === '命令' ? existing.name : activity.name,
+              output: eventType === 'command.output'
+                ? appendDelta(existing.output || '', activity.output || '')
+                : activity.output || existing.output,
+              startedAt: existing.startedAt || activity.startedAt,
+              toolName: activity.toolName === '命令' ? existing.toolName : activity.toolName,
+            }
+          : activity;
         const firstOutput = !message.firstTokenAt;
         message = {
           ...message,
-          activities: upsertActivity(message.activities, activity),
+          activities: upsertActivity(message.activities, mergedActivity),
           firstTokenAt: message.firstTokenAt || occurredAt,
           modelStartedAt,
           startedAt: message.startedAt || occurredAt,
@@ -148,30 +172,6 @@ export function applyHostedLifecycleEvents(
       }
       phase = 'executing';
       phaseStartedAt = message.startedAt || occurredAt;
-    } else if (eventType === 'command.output') {
-      const text = structuredText(payload.text ?? payload.status ?? payload.output);
-      // Gateway status callbacks describe transport/runtime setup, not model
-      // reasoning. Keep them out of the visible state machine until real
-      // model output has already established the turn.
-      if (text && message.firstTokenAt && sourceEventType !== 'status.update') {
-        message = {
-          ...message,
-          activities: upsertActivity(message.activities, {
-            category: 'status',
-            duration: '',
-            id: 'model-runtime-status',
-            name: chinese ? '运行状态' : 'Runtime status',
-            output: text,
-            preview: text.slice(0, 120),
-            startedAt: occurredAt,
-            status: 'running',
-          }),
-          modelStartedAt,
-          status: 'running',
-          timingLabel: message.timingLabel,
-          updatedAt: occurredAt,
-        };
-      }
     } else if (eventType === 'message.delta' || eventType === 'message.completed') {
       const text = structuredText(
         payload.text ?? payload.delta ?? payload.content ?? payload.message,
@@ -199,6 +199,15 @@ export function applyHostedLifecycleEvents(
       phase = 'responding';
       phaseStartedAt = message.startedAt || occurredAt;
       if (eventType === 'message.completed') completed = true;
+    } else if (eventType === 'turn.cancel_requested') {
+      message = {
+        ...message,
+        activities: finishActivities(message.activities, 'cancelled', occurredAt),
+        completedAt: occurredAt,
+        status: 'cancelled',
+        timingLabel: undefined,
+        updatedAt: occurredAt,
+      };
     } else if (eventType === 'turn.completed' || eventType === 'turn.cancelled' || eventType === 'turn.failed') {
       completed = eventType === 'turn.completed';
       failed = eventType === 'turn.failed';
@@ -281,6 +290,14 @@ function upsertActivity(
   return current.map((existing, existingIndex) => (
     existingIndex === index ? { ...existing, ...activity } : existing
   ));
+}
+
+function removeActivity(
+  activities: HermesChatActivity[] | undefined,
+  id: string,
+): HermesChatActivity[] | undefined {
+  const remaining = (activities || []).filter((activity) => activity.id !== id);
+  return remaining.length ? remaining : undefined;
 }
 
 function completeTransientActivities(
