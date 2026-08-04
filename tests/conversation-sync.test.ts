@@ -1083,6 +1083,86 @@ test('optimistic cache updates merge locally while later authority confirms exac
   assert.deepEqual(settled.messages.map(({ id }) => id), ['optimistic-1']);
 });
 
+test('optimistic user messages reconcile against legacy server ids without duplicate bubbles', () => {
+  const optimistic: HermesChatViewMessage = {
+    content: '你好',
+    createdAt: 10_000,
+    id: 'client-message',
+    name: 'You',
+    role: 'user',
+    status: 'completed',
+  };
+  const authoritative: HermesChatViewMessage = {
+    ...optimistic,
+    createdAt: 10_250,
+    id: 'server-message',
+  };
+
+  const first = reconcileOptimisticMessages([authoritative], [optimistic], 11_000);
+  assert.deepEqual(first.messages.map(({ id }) => id), ['client-message']);
+  assert.equal(first.pending[0].optimisticConfirmedAt, 11_000);
+
+  const settled = reconcileOptimisticMessages(
+    [authoritative],
+    first.pending,
+    131_001,
+  );
+  assert.deepEqual(settled.pending, []);
+  assert.deepEqual(settled.messages.map(({ id }) => id), ['server-message']);
+});
+
+test('runtime turn identity reconciles a delayed server echo without a duplicate bubble', () => {
+  const optimistic: HermesChatViewMessage = {
+    content: '你好',
+    createdAt: 10_000,
+    id: 'client-message',
+    name: 'You',
+    role: 'user',
+    runtimeTurnId: 'hosted-turn',
+    status: 'completed',
+  };
+  const authoritative: HermesChatViewMessage = {
+    ...optimistic,
+    createdAt: 45_000,
+    id: 'server-message',
+  };
+
+  const reconciliation = reconcileOptimisticMessages(
+    [authoritative],
+    [optimistic],
+    46_000,
+  );
+
+  assert.deepEqual(reconciliation.messages.map(({ id }) => id), ['client-message']);
+  assert.equal(reconciliation.pending[0].optimisticConfirmedAt, 46_000);
+});
+
+test('identical optimistic user sends consume distinct legacy server echoes', () => {
+  const optimistic = (id: string, createdAt: number): HermesChatViewMessage => ({
+    content: '你好',
+    createdAt,
+    id,
+    name: 'You',
+    role: 'user',
+    status: 'completed',
+  });
+  const clientMessages = [
+    optimistic('client-1', 10_000),
+    optimistic('client-2', 12_000),
+  ];
+  const serverMessages = [
+    optimistic('server-1', 10_100),
+    optimistic('server-2', 12_100),
+  ];
+
+  const reconciliation = reconcileOptimisticMessages(serverMessages, clientMessages, 13_000);
+  assert.deepEqual(
+    reconciliation.messages.map(({ id }) => id),
+    ['client-1', 'client-2'],
+  );
+  assert.equal(reconciliation.pending.length, 2);
+});
+
 test('lightweight index summaries never clear a complete cached transcript', () => {
   const cached = conversation('conversation-1', 100, [
     { id: 'm-1', role: 'user', name: 'You', content: 'one' },

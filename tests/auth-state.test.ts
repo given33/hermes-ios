@@ -851,6 +851,11 @@ test('native auth gates the saved session behind the Face ID lock and keeps the 
   assert.match(providerSource, /MAX_FACE_ID_ATTEMPTS/);
   assert.match(providerSource, /revealRememberedPassword/);
   assert.match(loginSource, /void unlock\(\)/);
+  assert.doesNotMatch(loginSource, /autoUnlockRequested/);
+  assert.match(providerSource, /if \(!savedLogin\.enabled\)/);
+  assert.match(providerSource, /if \(persistCredentials\) await credentialStore\.save\(candidate\)/);
+  assert.match(providerSource, /!persistAuthenticatedSession\.current/);
+  assert.match(providerSource, /\{ enabled: true, password: '', username: username\.trim\(\) \}/);
   assert.match(loginSource, /使用 Face ID 解锁/);
   assert.match(loginSource, /使用密码登录/);
   assert.match(loginSource, /MAX_FACE_ID_ATTEMPTS/);

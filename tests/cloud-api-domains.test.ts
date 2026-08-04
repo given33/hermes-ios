@@ -35,6 +35,13 @@ function recordingApi() {
           resources: [],
         } as T);
       }
+      if (path === '/api/audio/transcribe') {
+        return Promise.resolve({
+          ok: true,
+          provider: 'test-stt',
+          transcript: 'voice transcript',
+        } as T);
+      }
       return Promise.resolve({} as T);
     },
   } as HermesApiClient;
@@ -142,6 +149,27 @@ test('memory methods keep their wire contract and normalize server mtimes', asyn
   assert.equal(loaded.userMtime, '');
   assert.equal(saved.user, 'user text');
   assert.notEqual(loaded.memoryMtime, '');
+});
+
+test('voice transcription stays authenticated on the Hermes origin', async () => {
+  const { api, calls } = recordingApi();
+
+  const result = await api.transcribeAudio(
+    'data:audio/mp4;base64,AAAA',
+    'audio/mp4',
+  );
+
+  assert.deepEqual(result, {
+    provider: 'test-stt',
+    transcript: 'voice transcript',
+  });
+  assert.equal(calls[0].path, '/api/audio/transcribe');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.deadlineMs, 120_000);
+  assert.deepEqual(parsedBody(calls[0]), {
+    data_url: 'data:audio/mp4;base64,AAAA',
+    mime_type: 'audio/mp4',
+  });
 });
 
 test('model methods keep their exact wire contract through cloud/models', async () => {
@@ -275,20 +303,28 @@ test('skills and managed installation methods keep their wire contract through c
   });
 
   calls.length = 0;
+  await api.createSkill('weather', '# skill', 'research', 'ops');
   await api.toggleSkill('weather', true, 'ops');
   await api.getSkillContent('weather', 'ops');
   await api.updateSkillContent('weather', '# skill', 'ops');
   assert.deepEqual(
     calls.map(({ path, options }) => [path, options.method ?? 'GET']),
     [
+      ['/api/skills', 'POST'],
       ['/api/skills/toggle', 'PUT'],
       ['/api/skills/content', 'GET'],
       ['/api/skills/content', 'PUT'],
     ],
   );
-  assert.deepEqual(parsedBody(calls[0]), { name: 'weather', enabled: true, profile: 'ops' });
-  assert.deepEqual(calls[1].options.query, { name: 'weather', profile: 'ops' });
-  assert.deepEqual(parsedBody(calls[2]), { name: 'weather', content: '# skill', profile: 'ops' });
+  assert.deepEqual(parsedBody(calls[0]), {
+    category: 'research',
+    content: '# skill',
+    name: 'weather',
+    profile: 'ops',
+  });
+  assert.deepEqual(parsedBody(calls[1]), { name: 'weather', enabled: true, profile: 'ops' });
+  assert.deepEqual(calls[2].options.query, { name: 'weather', profile: 'ops' });
+  assert.deepEqual(parsedBody(calls[3]), { name: 'weather', content: '# skill', profile: 'ops' });
 });
 
 test('plugin and MCP methods keep their wire contract through cloud/extensions', async () => {

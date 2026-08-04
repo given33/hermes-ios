@@ -60,6 +60,8 @@ test('the iOS cancellation flow retains its outbox until snapshot reconciliation
   assert.match(cancellation, /authority === 'missing'[\s\S]*reconciliationAttempts >= 5/);
   assert.match(cancellation, /claimPendingEnqueueByRequest/);
   assert.match(cancellation, /phase: 'cancel_requested'/);
+  assert.match(cancellation, /updatePendingPhase\('thinking', 0\)/);
+  assert.doesNotMatch(cancellation, /updatePendingPhase\('executing', Date\.now\(\)\)/);
   assert.match(actions, /正在取消任务/);
   assert.doesNotMatch(
     actions,

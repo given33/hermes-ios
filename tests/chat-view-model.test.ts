@@ -143,6 +143,182 @@ test('collaboration lift state follows persisted route and workflow progress', (
   })), 'active');
 });
 
+test('a lone failed workflow role stays in ordinary chat instead of lifting a group', () => {
+  const failed = conversation({
+    messages: [{
+      content: "No module named 'agent.runtime_provider'",
+      id: 'reporter-failure',
+      meta: { role_stage: 'reporter' },
+      name: 'reporter',
+      role: 'assistant',
+      status: 'failed',
+    }],
+  });
+
+  assert.equal(conversationCollaborationState(failed), 'single');
+  const [message] = conversationMessagesToView(failed, true);
+  assert.equal(message.name, 'Hermes Agent');
+  assert.equal(message.roleStage, 'chat');
+  assert.equal(message.avatarRole, 'hermes');
+  assert.equal(message.roleLabel, '运行失败');
+});
+
+test('completed workflow history does not keep later ordinary turns in group chat', () => {
+  const completedRoles = ['manager', 'worker', 'reviewer', 'reporter'].map((role) => ({
+    content: `${role} complete`,
+    id: `${role}-complete`,
+    meta: { role_stage: role },
+    name: role,
+    role: 'assistant' as const,
+    status: 'completed',
+  }));
+
+  assert.equal(conversationCollaborationState(conversation({
+    messages: completedRoles,
+  })), 'single');
+  assert.equal(conversationCollaborationState(conversation({
+    messages: completedRoles.map(({ status: _status, ...message }) => message),
+  })), 'single');
+});
+
+test('legacy hosted wrapper errors are presented as ordinary chat failures', () => {
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      content: "服务端托管任务失败：No module named 'agent.runtime_provider'",
+      id: 'legacy-hosted-wrapper-failure',
+      meta: { role_stage: 'reporter' },
+      name: 'default',
+      role: 'assistant',
+      status: 'failed',
+    }],
+  }), true);
+
+  assert.equal(message.roleStage, 'chat');
+  assert.equal(message.name, 'Hermes Agent');
+  assert.equal(message.content, "对话运行失败：No module named 'agent.runtime_provider'");
+  assert.doesNotMatch(message.content, /托管/);
+});
+
+test('ordinary chat waiting phases only start elapsed time after the first token', () => {
+  const now = 1_800_000_000_000;
+  const statusMessage = (output: string, firstTokenAt = 0) => conversationMessagesToView(conversation({
+    messages: [{
+      content: firstTokenAt ? '首个 token' : '',
+      created_at: now - 4_000,
+      id: `chat-status-${output}`,
+      meta: {
+        activities: [{
+          id: `status-${output}`,
+          name: '运行状态',
+          output,
+          started_at: now - 2_000,
+          status: 'completed',
+        }],
+        first_token_at: firstTokenAt,
+        role_stage: 'chat',
+      },
+      name: 'default',
+      role: 'assistant',
+      status: 'running',
+      updated_at: now,
+    }],
+  }), true, now)[0];
+
+  const reconnecting = statusMessage('正在重连 (2/5)');
+  assert.equal(reconnecting.timingLabel, '正在重新连接 (2/5)');
+
+  const thinkingWithoutToken = statusMessage('正在思考');
+  assert.equal(thinkingWithoutToken.timingLabel, '正在思考');
+  assert.equal(thinkingWithoutToken.startedAt, undefined);
+
+  const firstTokenAt = now - 1_250;
+  const thinkingWithToken = statusMessage('正在思考', firstTokenAt);
+  assert.equal(thinkingWithToken.timingLabel, '正在回复');
+  assert.equal(thinkingWithToken.startedAt, firstTokenAt);
+});
+
+test('server user echoes from one runtime turn collapse to one bubble', () => {
+  const messages = conversationMessagesToView(conversation({
+    messages: [
+      {
+        content: '你好',
+        created_at: 10_000,
+        id: 'server-user-a',
+        meta: { runtime_turn_id: 'turn-one' },
+        name: 'You',
+        role: 'user',
+        status: 'completed',
+      },
+      {
+        content: '你好',
+        created_at: 20_000,
+        id: 'server-user-b',
+        meta: { runtime_turn_id: 'turn-one' },
+        name: 'You',
+        role: 'user',
+        status: 'completed',
+      },
+    ],
+  }), true);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'server-user-b');
+});
+
+test('identical user text in distinct runtime turns remains distinct', () => {
+  const messages = conversationMessagesToView(conversation({
+    messages: [
+      {
+        content: '你好',
+        created_at: 10_000,
+        id: 'server-user-a',
+        meta: { runtime_turn_id: 'turn-one' },
+        name: 'You',
+        role: 'user',
+        status: 'completed',
+      },
+      {
+        content: '你好',
+        created_at: 20_000,
+        id: 'server-user-b',
+        meta: { runtime_turn_id: 'turn-two' },
+        name: 'You',
+        role: 'user',
+        status: 'completed',
+      },
+    ],
+  }), true);
+
+  assert.equal(messages.length, 2);
+});
+
+test('connection retry state is recognized when the backend stores it in the activity name', () => {
+  const now = 1_800_000_000_000;
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      content: '',
+      id: 'chat-retry-name',
+      meta: {
+        activities: [{
+          id: 'model-connection-retry',
+          name: '正在重新连接 (3/5)',
+          output: '',
+          started_at: now - 1_000,
+          status: 'running',
+        }],
+        role_stage: 'chat',
+      },
+      name: 'default',
+      role: 'assistant',
+      status: 'running',
+      updated_at: now,
+    }],
+  }), true, now);
+
+  assert.equal(message.timingLabel, '正在重新连接 (3/5)');
+  assert.equal(message.startedAt, now - 1_000);
+});
+
 test('server workflow metadata restores sender, runtime, timestamps, handoff, and full activities', () => {
   const startedAt = new Date(2026, 6, 16, 9, 5, 0).getTime();
   const completedAt = startedAt + 132_000;
@@ -619,6 +795,12 @@ test('missing model credentials produce one terminal error without a second pend
   };
   const withPlaceholder = upsertChatMessage([user], assistant);
   assert.equal(shouldRenderPendingMessage(withPlaceholder, true), false);
+  const withRuntimePlaceholder = upsertChatMessage([user], {
+    ...assistant,
+    roleStage: 'chat',
+    status: 'running',
+  });
+  assert.equal(shouldRenderPendingMessage(withRuntimePlaceholder, true), true);
   const failed = upsertChatMessage(withPlaceholder, {
     ...assistant,
     content: '模型配置错误',

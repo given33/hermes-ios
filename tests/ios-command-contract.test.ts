@@ -91,6 +91,9 @@ test('native action bridge policies cover contacts, photos, media, Bluetooth, NF
     ['ios-browser', 'execute_js', 'destructive', 'required'],
     ['ios-browser', 'click', 'write', 'required'],
     ['ios-browser', 'set_cookies', 'write', 'required'],
+    ['ios-alarm', 'schedule', 'write', 'required'],
+    ['ios-alarm', 'cancel', 'destructive', 'required'],
+    ['ios-nlp', 'analyze', 'read', 'none'],
   ] as const;
   for (const [capability, action, risk, confirmation] of cases) {
     const metadata = nativeActionMetadata({ capability, action });

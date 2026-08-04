@@ -193,7 +193,8 @@ test('only user timestamps stay adjacent to sender names while assistant runtime
 test('the same conversation lifts into the Studio collaboration surface from persisted work state', () => {
   assert.match(source, /conversationCollaborationState/);
   assert.match(source, /collaborationStateByConversationRef/);
-  assert.match(source, /response\.route\.mode === 'work'/);
+  assert.doesNotMatch(source, /response\.route\.mode === 'work'/);
+  assert.match(source, /conversationCollaborationState\(conversation\)/);
   assert.match(source, /群聊正在拉起/);
   assert.match(source, /群聊已拉起/);
   assert.match(source, /function CollaborationLiftNotice/);
@@ -343,11 +344,12 @@ test('an accepted hosted turn reaches a terminal state even when every poll fail
   assert.match(source, /setHostedRunning\(false\)[\s\S]*setSending\(false\)/);
 });
 
-test('running simple chats expose elapsed time and a runtime-status fold', () => {
+test('running simple chats keep runtime state compact and start timing from the first token', () => {
   assert.match(source, /function PendingMessage/);
-  assert.match(source, /status: 'running'/);
-  assert.match(source, /startedAt/);
-  assert.match(source, /<RoleActivityGroup[\s\S]*message=\{pendingMessage\}/);
+  assert.match(source, /formatPendingElapsedTime/);
+  assert.match(source, /executionStartedAt \?/);
+  assert.doesNotMatch(source, /id: 'pending-status'/);
+  assert.doesNotMatch(source, /message=\{pendingMessage\}/);
 });
 
 test('activity inspection pauses stream following and renders one primary body', () => {

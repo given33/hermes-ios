@@ -17,9 +17,12 @@ const indexSource = readFileSync(resolve(projectRoot, 'index.ts'), 'utf8');
 const appConfig = JSON.parse(readFileSync(resolve(projectRoot, 'app.base.json'), 'utf8'));
 const packageConfig = JSON.parse(readFileSync(resolve(projectRoot, 'package.json'), 'utf8'));
 
-test('native v2 has no WebView runtime', () => {
-  assertNoWebRuntime(readNativeRuntimeSources(projectRoot));
-  assert.equal(packageConfig.dependencies['react-native-webview'], undefined);
+test('native v2 isolates WebView runtime to the built-in browser surface', () => {
+  assertNoWebRuntime(
+    readNativeRuntimeSources(projectRoot),
+    ['src/browser/BuiltinBrowserPage.tsx'],
+  );
+  assert.equal(packageConfig.dependencies['react-native-webview'], '13.15.0');
 });
 
 test('native runtime guard rejects nested WebView, WKWebView, DOM, and iframe sources', () => {
@@ -50,6 +53,7 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
       '/files',
       '/analytics',
       '/smart-weather',
+      '/browser',
       '/models',
       '/logs',
       '/cron',

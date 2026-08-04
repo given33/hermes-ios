@@ -16,6 +16,7 @@ const CORE_ROUTE_PATHS = [
   '/files',
   '/analytics',
   '/smart-weather',
+  '/browser',
   '/models',
   '/logs',
   '/cron',
@@ -39,6 +40,7 @@ const CORE_ROUTE_PATHS = [
 const CORE_NAV_PATHS = [
   '/analytics',
   '/smart-weather',
+  '/browser',
   '/models',
   '/memory',
   '/logs',
@@ -60,6 +62,7 @@ const CORE_NAV_PATHS = [
 
 const CORE_NAV_ICONS = [
   'BarChart3',
+  'Globe',
   'Globe',
   'Cpu',
   'BookOpen',
@@ -83,6 +86,7 @@ const CORE_NAV_ICONS = [
 const ENGLISH_NAV_LABELS = [
   'Analytics',
   'Smart Weather',
+  'Browser',
   'Models',
   'Memory',
   'Logs',
@@ -105,6 +109,7 @@ const ENGLISH_NAV_LABELS = [
 const CHINESE_NAV_LABELS = [
   '\u5206\u6790',
   '\u667a\u80fd\u5929\u6c14',
+  '\u6d4f\u89c8\u5668',
   '\u6a21\u578b',
   '\u8bb0\u5fc6',
   '\u65e5\u5fd7',

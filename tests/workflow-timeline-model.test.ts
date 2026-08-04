@@ -239,11 +239,20 @@ test('the timing line exposes the first-token boundary and terminal elapsed time
       startedAt: 1_000,
       status: 'completed',
     }, false),
-    'First token 900 ms · Total 3.5 s',
+    'First token 900 ms · Total 3 s',
   );
   assert.equal(
     turnTimingLine({ startedAt: 1_000, status: 'running' }, true, 13_000),
-    '12.0 s',
+    '12 s',
+  );
+  assert.equal(
+    turnTimingLine({
+      durationMs: 21_000,
+      firstTokenAt: 27_000,
+      startedAt: 1_000,
+      status: 'completed',
+    }, false),
+    'First token 26 s \u00b7 Total 26 s',
   );
 });
 
@@ -258,7 +267,7 @@ test('elapsed labels stay live for running work and settle with the record', () 
   assert.equal(activityIsRunning(activity({ status: 'queued' })), true);
   assert.equal(
     activityElapsedLabel(activity({ startedAt: 5_000, status: 'running' }), 10_000),
-    '5.0 s',
+    '5 s',
   );
   assert.equal(activityElapsedLabel(activity({ duration: '0.6s' })), '0.6s');
   assert.equal(activityElapsedLabel(activity({ durationMs: 340 })), '340 ms');
@@ -267,13 +276,13 @@ test('elapsed labels stay live for running work and settle with the record', () 
       activity({ durationMs: 400 }),
       activity({ completedAt: 2_000, id: 'a2', startedAt: 1_000 }),
     ]),
-    '1.4 s',
+    '1 s',
   );
   assert.equal(
     reasoningElapsedLabel([
       activity({ category: 'reasoning', startedAt: 1_000, status: 'running' }),
     ], 4_000),
-    '3.0 s',
+    '3 s',
   );
   assert.equal(formatDurationLabel(0), '');
   assert.equal(formatDurationLabel(75_000), '1m 15s');

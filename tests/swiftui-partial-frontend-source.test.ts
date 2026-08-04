@@ -169,6 +169,7 @@ test('SwiftUI management pages expose the server write operations', () => {
   const routeData = read('src/app/hermes-route-data.ts');
 
   assert.match(routes, /\.skillSelect/);
+  assert.match(routes, /\.skillCreate/);
   assert.match(routes, /\.skillUpdate/);
   assert.match(routes, /\.achievementsRescan/);
   assert.match(routes, /\.kanbanCreate/);
@@ -374,7 +375,9 @@ test('the composer uses the source-attributed OpenMinis solid two-level surface'
   assert.match(native, /selectedModel = \$0\s*props\.onModelChange/);
   assert.match(chat, /<View style=\{surfaceStyle\}>/);
   assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
-  assert.match(chat, /DynamicColorIOS\(\{ dark: '#3a3a3a', light: '#f2f2f2' \}\)/);
+  assert.match(chat, /backgroundColor: tokens\.colors\.card/);
+  assert.match(chat, /borderColor: tokens\.colors\.border/);
+  assert.doesNotMatch(chat, /DynamicColorIOS/);
   assert.match(chat, /styles\.openMinisToolbar/);
   assert.doesNotMatch(chat, /<HermesLiveBlurView/);
   assert.match(chat, /borderWidth: StyleSheet\.hairlineWidth/);

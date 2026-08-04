@@ -48,6 +48,25 @@ test('missing devices never inherit another source state', () => {
   );
 });
 
+test('aggregate recovery reports explicit DBB3 and WSL target failures', () => {
+  const statuses = managedNodeGatewayStatuses({
+    sources: [{
+      id: 'hermes-fabric',
+      recovery: {
+        target_states: {
+          dbb3: { status: 'failed' },
+          wsl: 'unreachable',
+        },
+      },
+    }],
+  });
+
+  assert.deepEqual(statuses.map(({ id, state }) => ({ id, state })), [
+    { id: 'dbb3', state: 'offline' },
+    { id: 'wsl', state: 'offline' },
+  ]);
+});
+
 test('invalid, explicitly stale, and far-future observations fail closed', () => {
   assert.equal(isFreshObservation({ observed_at: 'invalid' }, now), false);
   assert.equal(isFreshObservation({ fresh: false, observed_at: '2026-07-18T09:59:59Z' }, now), false);

@@ -32,8 +32,13 @@ export function readNativeRuntimeSources(projectRoot: string): NativeRuntimeSour
     }));
 }
 
-export function assertNoWebRuntime(sources: readonly NativeRuntimeSource[]): void {
+export function assertNoWebRuntime(
+  sources: readonly NativeRuntimeSource[],
+  allowedPaths: readonly string[] = [],
+): void {
+  const allowed = new Set(allowedPaths);
   for (const { path, source } of sources) {
+    if (allowed.has(path)) continue;
     for (const marker of FORBIDDEN_WEB_RUNTIME) {
       if (marker.pattern.test(source)) {
         throw new Error(`Forbidden web runtime (${marker.name}) in ${path}`);

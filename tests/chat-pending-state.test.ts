@@ -25,14 +25,14 @@ test('pending turn state preserves explicit phase timing and reconnect count', (
   });
 });
 
-test('pending turn reset clears attempts and restores a fresh thinking clock', () => {
+test('pending turn reset clears attempts and restores a fresh connection clock', () => {
   const running = {
     phase: 'reconnecting' as const,
     phaseStartedAt: 200,
     reconnectAttempt: 5,
   };
   assert.deepEqual(pendingTurnReducer(running, { now: 900, type: 'reset' }), {
-    phase: 'thinking',
+    phase: 'connecting',
     phaseStartedAt: 900,
     reconnectAttempt: 0,
   });

@@ -340,6 +340,7 @@ test('native browser bridge exposes bounded OpenMinis-compatible actions', () =>
   assert.match(module, /"capability": "ios-browser"/);
   assert.match(service, /WKWebView/);
   assert.match(service, /case "navigate"/);
+  assert.match(service, /rawAction\.hasPrefix\("ios-browser:"\)/);
   assert.match(service, /case "execute_js"/);
   assert.match(service, /case "set_cookies"/);
   assert.match(service, /maxFetchBytes = 10 \* 1024 \* 1024/);
@@ -353,6 +354,23 @@ test('native browser bridge exposes bounded OpenMinis-compatible actions', () =>
   assert.match(provider, /case 'ios-browser:navigate'/);
   assert.match(provider, /payload\.withBase64 === true/);
   assert.match(contract, /'ios-browser:execute_js': \{ risk: 'destructive', confirmation: 'required'/);
+});
+
+test('native OpenMinis-compatible alarm and NLP actions are wired end to end', () => {
+  const bridge = read('index.ts');
+  const module = read('ios/HermesIOSContextModule.swift');
+  const services = read('ios/HermesNativeActionServices.swift');
+  const provider = readFileSync(resolve(root, 'src/context/IOSContextProvider.tsx'), 'utf8');
+
+  assert.match(module, /"capability": "ios-alarm"/);
+  assert.match(module, /"capability": "ios-nlp"/);
+  assert.match(module, /AsyncFunction\("analyzeNaturalLanguage"\)/);
+  assert.match(services, /NLLanguageRecognizer/);
+  assert.match(services, /NLTokenizer/);
+  assert.match(bridge, /analyzeNaturalLanguage/);
+  assert.match(provider, /case 'ios-alarm:schedule'/);
+  assert.match(provider, /case 'ios-alarm:cancel'/);
+  assert.match(provider, /case 'ios-nlp:analyze'/);
 });
 
 test('account exports use a protected native ciphertext file and delete it after sharing', () => {

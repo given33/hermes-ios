@@ -251,7 +251,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
     read('src/studio/chat/ChatMessageStream.tsx'),
     read('src/studio/chat/ChatComposer.tsx'),
     read('src/studio/chat/ChatComposerPresentation.tsx'),
+    read('src/studio/chat/ChatPlanDrawer.tsx'),
     read('src/studio/chat/ChatPageShell.tsx'),
+    read('src/studio/chat/chat-plan-model.ts'),
     read('src/studio/chat/ConversationHistory.tsx'),
     read('src/studio/chat/ChatModelToolsDrawer.tsx'),
     read('src/studio/chat/chat-presentation-styles.ts'),
@@ -271,6 +273,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
     read('src/studio/chat/useHostedTurnDeliveryService.ts'),
     read('src/studio/chat/useConversationActionsController.ts'),
     read('src/studio/chat/useChatComposerNavigationController.ts'),
+    read('src/studio/chat/useHermesVoice.ts'),
   ].join('\n');
   const contextMenu = read('src/components/ios/IOSContextMenu.tsx');
   const contextMenuBridge = read('modules/hermes-context-menu/index.ts');
@@ -286,8 +289,8 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(app, /from '\.\/PreviewChatPage'/);
   assert.doesNotMatch(chat, /KeyboardAvoidingView/);
   assert.match(chat, /useAnimatedKeyboard\(\)/);
-  assert.match(chat, /useAnimatedReaction\(/);
-  assert.match(chat, /runOnJS\(keepLatestVisible\)\(false\)/);
+  assert.doesNotMatch(chat, /useAnimatedReaction\(/);
+  assert.doesNotMatch(chat, /runOnJS\(keepLatestVisible\)\(false\)/);
   assert.match(chat, /paddingBottom: keyboard\.height\.value \* keyboardAvoidanceEnabled\.value/);
   assert.match(chat, /composerInputRef\.current\?\.blur\(\)/);
   assert.match(chat, /keyboardAvoidanceEnabled\.value = 0/);
@@ -303,8 +306,11 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /keyboardDidHide/);
   assert.match(chat, /Keyboard\.dismiss\(\)/);
   assert.match(chat, /keyboardDismissMode="interactive"/);
-  assert.match(chat, /onContentSizeChange=\{\(\) => keepLatestVisible\(true\)\}/);
-  assert.match(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
+  assert.match(chat, /useEffect\(\(\) => \{\s*keepLatestVisible\(false\);\s*\}, \[followVersion, keepLatestVisible\]\)/);
+  assert.doesNotMatch(chat, /onContentSizeChange=\{\(\) => keepLatestVisible/);
+  assert.doesNotMatch(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
+  assert.match(chat, /cancelAnimationFrame\(pendingScrollFrame\.current\)/);
+  assert.match(chat, /keepLatestVisible\(false, true\)/);
   assert.match(chat, /onFocus=\{actions\.onFocus\}/);
   assert.match(
     chat,
@@ -318,8 +324,18 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /accessibilityLabel=\{model\.isChinese \? '拍照'/);
   assert.match(chat, /onPress=\{actions\.onTakePhoto\}/);
   assert.match(chat, /onTakePhoto: \(\) => \{ void pickPhoto\(true\); \}/);
-  assert.match(chat, /onLongPress=\{hasNativeIOSContext \? actions\.onToggleReadRepliesAloud : undefined\}/);
-  assert.match(chat, /accessibilityHint=\{!hasNativeIOSContext/);
+  assert.match(chat, /ImagePicker\.launchCameraAsync/);
+  assert.match(chat, /UIImagePickerPresentationStyle\.FULL_SCREEN/);
+  assert.match(chat, /onLongPress=\{voiceInputActive \? undefined : actions\.onToggleReadRepliesAloud\}/);
+  assert.doesNotMatch(chat, /语音输入需要在 iPhone 原生版本中使用/);
+  assert.match(chat, /useAudioRecorder\(RecordingPresets\.HIGH_QUALITY\)/);
+  assert.match(chat, /cloudApi\.transcribeAudio\(/);
+  assert.match(chat, /subscribeVoiceTranscript/);
+  assert.match(chat, /applyTranscript\(`\$\{voiceDraftPrefixRef\.current\}\$\{event\.text\}`\)/);
+  assert.match(chat, /ImagePicker\.launchCameraAsync/);
+  assert.match(chat, /name="camera\.fill"[\s\S]{0,80}size=\{22\}/);
+  assert.match(chat, /name=\{model\.voiceState === 'listening' \? 'stop\.fill' : 'mic'\}/);
+  assert.match(chat, /model\.voiceState === 'listening' \? 16 : 22/);
   assert.match(chat, /voicePrimaryAction === 'toggleReadRepliesAloud'/);
   assert.match(chat, /accessibilityState=\{\{[\s\S]{0,120}disabled: voiceControlDisabled/);
   assert.match(chat, /delayLongPress=\{400\}/);
@@ -330,7 +346,17 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /showScrollToBottom && !slashMenuOpen/);
   assert.match(chat, /OpenMinisVoiceWaveform/);
   assert.match(chat, /openMinisToolbar: \{[^}]*flexDirection: 'row'/);
-  assert.match(chat, /openMinisRoundControl: \{[^}]*height: 42[^}]*width: 42/);
+  assert.match(chat, /openMinisRoundControl: \{[^}]*height: 38[^}]*width: 38/);
+  assert.match(chat, /<ChatPlanDrawer/);
+  assert.match(chat, /const chatPlan = useMemo\(\(\) => latestChatPlan\(displayMessages\)/);
+  assert.match(chat, /Gesture\.Pan\(\)/);
+  assert.match(chat, /event\.translationX/);
+  assert.match(chat, /const drawerWidth = width/);
+  assert.match(chat, /\[0, 1\], Extrapolation\.CLAMP/);
+  assert.doesNotMatch(chat, /pointerEvents=\{open \? 'auto' : 'none'\}/);
+  assert.match(chat, /Plan.*\$\{completed\}\/\$\{total\}/s);
+  assert.match(chat, /activity\.toolName, activity\.name/);
+  assert.match(chat, /'cancelled',\s*'completed',\s*'in_progress',\s*'pending'/s);
   assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
   assert.match(chat, /styles\.gatewayStatusLabel/);
   assert.match(chat, /styles\.gatewayStatusVersion/);
@@ -362,7 +388,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /runOnJS\(setMounted\)\(false\)/);
   assert.match(chat, /styles\.drawerBackdrop, backdropStyle/);
   assert.match(chat, /safeAreaBottom/);
-  assert.match(chat, /\[7 \+ safeAreaBottom, 3\]/);
+  assert.match(chat, /\[Math\.max\(8, safeAreaBottom - 16\), 3\]/);
   assert.match(chat, /ActionSheetIOS\.showActionSheetWithOptions/);
   assert.match(chat, /launchImageLibraryAsync/);
   assert.match(chat, /launchCameraAsync/);
@@ -400,7 +426,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(contextMenuNative, /UIAction/);
   assert.match(chat, /<SymbolView/);
   assert.match(chat, /PlatformColor\('secondarySystemBackground'\)/);
-  assert.match(chat, /DynamicColorIOS\(\{ dark: '#3a3a3a', light: '#f2f2f2' \}\)/);
+  assert.match(chat, /backgroundColor: tokens\.colors\.card/);
+  assert.match(chat, /borderColor: tokens\.colors\.border/);
+  assert.doesNotMatch(chat, /DynamicColorIOS/);
   assert.doesNotMatch(chat, /<HermesLiveBlurView/);
   assert.match(chat, /borderColor: 'transparent', borderWidth: 0/);
   assert.match(chat, /outlineColor: 'transparent', outlineStyle: 'solid', outlineWidth: 0/);
@@ -410,6 +438,9 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /resolveComposerFontSize\(content\)/);
   assert.match(chat, /Math\.max\(12, 16 - \(Math\.min\(glyphCount, 40\) - 28\) \/ 3\)/);
   assert.equal(packageJson.dependencies['expo-glass-effect'], '~0.1.10');
+  assert.equal(packageJson.dependencies['expo-asset'], '~12.0.13');
+  assert.equal(packageJson.dependencies['expo-audio'], '~1.1.1');
+  assert.equal(packageJson.dependencies['expo-speech'], '~14.0.8');
   assert.equal(packageJson.dependencies['expo-symbols'], '~1.0.8');
   assert.match(quickLookBridge, /requireOptionalNativeModule<.*>\([\s\S]*'HermesQuickLook'/);
   assert.match(quickLookNative, /import QuickLook/);
