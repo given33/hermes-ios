@@ -1011,6 +1011,8 @@ export function streamEventToActivity(
       || eventType === 'subagent.failed'
       || eventType === 'command.failed'
     ? 'failed'
+    : eventType === 'subagent.queued'
+      ? 'queued'
     : eventType === 'tool.end'
         || eventType === 'tool.complete'
         || eventType === 'tool.completed'

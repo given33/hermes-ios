@@ -243,6 +243,19 @@ test('hosted lifecycle keeps subagent progress as a structured execution step', 
   assert.equal(result.messages[0].activities?.[0].status, 'completed');
 });
 
+test('official subagent spawn requests remain queued without starting token timing', () => {
+  const result = applyHostedLifecycleEvents([], [
+    event(1, 'subagent.queued', {
+      child_session_id: 'child-queued',
+      profile: 'reviewer',
+    }),
+  ], false);
+
+  assert.equal(result.messages[0].activities?.[0].id, 'child-queued');
+  assert.equal(result.messages[0].activities?.[0].status, 'queued');
+  assert.equal(result.messages[0].firstTokenAt, undefined);
+});
+
 test('hosted lifecycle accumulates command output in one structured step', () => {
   const result = applyHostedLifecycleEvents([], [
     event(1, 'command.started', {

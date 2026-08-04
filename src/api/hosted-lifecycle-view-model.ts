@@ -56,6 +56,9 @@ export function applyHostedLifecycleEvents(
     }
     if (
       eventType === 'notification.clear'
+      || eventType === 'gateway.ready'
+      || eventType === 'skin.changed'
+      || eventType === 'reaction'
       || eventType === 'voice.status'
       || eventType === 'voice.transcript'
       || eventType === 'wake.detected'
@@ -191,6 +194,7 @@ export function applyHostedLifecycleEvents(
             }
           : activity;
         const countsAsModelOutput = ![
+          'subagent.queued',
           'approval.request',
           'clarify.request',
           'secret.request',
