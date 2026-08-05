@@ -322,7 +322,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /onFocus=\{actions\.onFocus\}/);
   assert.match(
     chat,
-    /onFocus: \(\) => \{[\s\S]{0,180}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,100}keepLatestVisible\(true, true\);/,
+    /onFocus: \(\) => \{[\s\S]{0,260}keyboardAvoidanceEnabled\.value = 1;[\s\S]{0,160}keepLatestVisible\(false, true\);/,
   );
   assert.match(chat, /Hermes Agent/);
   assert.doesNotMatch(chat, /当前窗口持续使用同一个会话|This window keeps using the same conversation/);

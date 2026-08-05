@@ -758,7 +758,7 @@ export function ChatPreviewPage({
           onFocus: () => {
             keyboardAvoidanceEnabled.value = 1;
             autoFollowStreamRef.current = true;
-            keepLatestVisible(true, true);
+            keepLatestVisible(false, true);
           },
           onOpenAttachmentPicker: openAttachmentPicker,
           onPreviewAttachment: (attachment) => { void previewAttachment(attachment); },

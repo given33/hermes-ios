@@ -60,6 +60,19 @@ test('hosted lifecycle waits for real reasoning content before thinking and timi
   assert.equal(thinking.messages[0].activities?.[0].output, 'Inspecting the request.');
 });
 
+test('canonical reasoning deltas stream into the same thinking activity', () => {
+  const result = applyHostedLifecycleEvents([], [
+    event(1, 'agent.started', { source_event_type: 'request.accepted' }),
+    event(2, 'reasoning.delta', { entity_id: 'reasoning-1', text: '先核对 ' }),
+    event(3, 'reasoning.delta', { entity_id: 'reasoning-1', text: '模型状态。' }),
+  ], false);
+
+  assert.equal(result.phase, 'thinking');
+  assert.equal(result.messages[0].firstTokenAt, 1_200);
+  assert.equal(result.messages[0].timingLabel, 'Thinking');
+  assert.equal(result.messages[0].activities?.[0].output, '先核对 模型状态。');
+});
+
 test('empty thinking completion never creates a reasoning row or starts timing', () => {
   const result = applyHostedLifecycleEvents([], [
     event(1, 'agent.started', { source_event_type: 'request.accepted' }),

@@ -196,7 +196,12 @@ export function ChatMessageStream({
 }
 
 function messageReactKey(message: ChatMessage): string {
-  if (message.runtimeTurnId) {
+  // User bubbles are durable records and must keep their own identity. Using
+  // the runtime turn as their React key makes a snapshot echo remount the
+  // bubble (and can briefly render it twice) while the optimistic ledger is
+  // being reconciled. Assistant streaming content, however, intentionally
+  // keeps one stable key across its live/final projections.
+  if (message.role !== 'user' && message.runtimeTurnId) {
     return `${message.role}:${message.runtimeTurnId}:${message.roleStage || 'chat'}`;
   }
   return message.id;

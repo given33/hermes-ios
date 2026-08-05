@@ -113,8 +113,21 @@ export function applyHostedLifecycleEvents(
         updatedAt: occurredAt,
       };
     } else if (
-      (eventType === 'thinking.started' || eventType === 'thinking.delta' || eventType === 'thinking.completed')
-      && (!sourceEventType || sourceEventType.startsWith('reasoning.'))
+      (
+        eventType === 'reasoning.delta'
+        || eventType === 'reasoning.available'
+        || eventType === 'thinking.started'
+        || eventType === 'thinking.delta'
+        || eventType === 'thinking.completed'
+      )
+      // `reasoning.*` is already the canonical event family. The older
+      // `thinking.*` aliases are accepted only when they came from the
+      // reasoning channel, so a gateway status string cannot start timing.
+      && (
+        eventType.startsWith('reasoning.')
+        || !sourceEventType
+        || sourceEventType.startsWith('reasoning.')
+      )
     ) {
       const id = stringValue(payload.entity_id) || `thinking:${event.turn_id}`;
       const existing = message.activities?.find((activity) => activity.id === id);
@@ -126,7 +139,10 @@ export function applyHostedLifecycleEvents(
       }
       turnActive = true;
       const output = appendDelta(existing?.output || '', text);
-      const status = eventType === 'thinking.completed' ? 'completed' : 'running';
+      const status = (
+        eventType === 'reasoning.available'
+        || eventType === 'thinking.completed'
+      ) ? 'completed' : 'running';
       const activity: HermesChatActivity = {
         category: 'reasoning',
         completedAt: status === 'completed' ? occurredAt : undefined,

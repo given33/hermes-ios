@@ -291,6 +291,34 @@ test('server user echoes from one runtime turn collapse to one bubble', () => {
   assert.equal(messages[0].id, 'server-user-b');
 });
 
+test('snapshot and journal user echoes collapse when runtime ids differ', () => {
+  const messages = conversationMessagesToView(conversation({
+    messages: [
+      {
+        content: '你好',
+        created_at: 10_000,
+        id: 'snapshot-user',
+        meta: { runtime_turn_id: 'turn-snapshot' },
+        name: 'You',
+        role: 'user',
+        status: 'completed',
+      },
+      {
+        content: '你好',
+        created_at: 10_000,
+        id: 'journal-user',
+        meta: { runtime_turn_id: 'turn-journal' },
+        name: 'You',
+        role: 'user',
+        status: 'completed',
+      },
+    ],
+  }), true);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].id, 'journal-user');
+});
+
 test('identical user text in distinct runtime turns remains distinct', () => {
   const messages = conversationMessagesToView(conversation({
     messages: [

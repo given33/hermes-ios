@@ -1309,10 +1309,19 @@ function deduplicateByContent(messages: HermesChatViewMessage[]): HermesChatView
           const sameRuntimeTurn = Boolean(existing.runtimeTurnId)
             && existing.runtimeTurnId === message.runtimeTurnId;
           if (sameRuntimeTurn) return true;
-          if (message.role !== 'user' || existing.runtimeTurnId || message.runtimeTurnId) return false;
           const existingTimestamp = existing.createdAt || existing.updatedAt || 0;
           const messageTimestamp = message.createdAt || message.updatedAt || 0;
-          return existingTimestamp > 0 && existingTimestamp === messageTimestamp;
+          // A durable enqueue can be projected once from the conversation
+          // snapshot and once from the append-only session journal. Those
+          // records may carry different runtime ids, but the server assigns
+          // the same millisecond timestamp to both copies. Collapse only that
+          // exact user echo; two real, rapid sends still have distinct times.
+          if (
+            message.role === 'user'
+            && existingTimestamp > 0
+            && existingTimestamp === messageTimestamp
+          ) return true;
+          return false;
         },
       );
       if (duplicateIndex >= 0) {
