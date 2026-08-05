@@ -149,11 +149,21 @@ export function useConversationSnapshotController({
     conversations: readonly SingleConversation[],
     activeId = activeConversationIdRef.current,
     expectedEpoch = captureConversationStorageEpoch(cacheOwner),
+    deferCacheWrite = false,
   ) => {
     if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
     const next = [...conversations];
     conversationIndexRef.current = next;
     setConversations(next);
+    if (deferCacheWrite) {
+      // The first SSE snapshot must return to the stream reader immediately.
+      // Serializing a long conversation into device storage on this call
+      // blocks native fetch callbacks and makes the first token look slow.
+      setTimeout(() => {
+        void persistConversationCache(next, activeId, expectedEpoch);
+      }, 0);
+      return;
+    }
     await persistConversationCache(next, activeId, expectedEpoch);
   }, [activeConversationIdRef, cacheOwner, conversationIndexRef, persistConversationCache, setConversations]);
 
@@ -162,6 +172,7 @@ export function useConversationSnapshotController({
     expectedEpoch = captureConversationStorageEpoch(cacheOwner),
     resetCursor = false,
     activateConversation = false,
+    deferCacheWrite = false,
   ) => {
     if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
     if (
@@ -348,6 +359,7 @@ export function useConversationSnapshotController({
       replaceCachedConversationSnapshot(conversationIndexRef.current, conversation),
       conversation.id,
       expectedEpoch,
+      deferCacheWrite,
     );
     if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
     hostedEventCursorRef.current.set(

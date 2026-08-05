@@ -802,7 +802,7 @@ test('same-owner account epochs fence every long-lived chat callback', () => {
   assert.match(actions, /applyConversation\(response\.conversation, ownerEpoch, false, true\)/);
   assert.match(
     stream,
-    /applyConversation\([\s\S]*hosted_event_cursor:[\s\S]*ownerEpoch, resetCursor\)/,
+    /applyConversation\([\s\S]*hosted_event_cursor:[\s\S]*ownerEpoch, resetCursor(?:, false, true)?\)/,
   );
   assert.match(outbox, /const lifecycleCurrent = \(\) => isConversationStorageEpochCurrent/);
 });

@@ -26,6 +26,8 @@ interface HostedConversationStreamOptions {
     conversation: SingleConversation,
     expectedOwnerEpoch?: number,
     resetCursor?: boolean,
+    activateConversation?: boolean,
+    deferCacheWrite?: boolean,
   ): void | Promise<void>;
   applyLifecycleEvents(events: readonly HostedLifecycleEvent[]): void | Promise<void>;
   cacheOwner: string;
@@ -152,7 +154,7 @@ export function useHostedConversationStream({
                 hosted_event_cursor: resetCursor
                   ? cursor
                   : Math.max(Number(conversation.hosted_event_cursor) || 0, cursor),
-              }, ownerEpoch, resetCursor);
+              }, ownerEpoch, resetCursor, false, true);
             } else if (hasGap) {
               throw new Error('Hermes hosted event gap could not be recovered');
             } else if (events.length) {
