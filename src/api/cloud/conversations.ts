@@ -68,6 +68,7 @@ export class HermesConversationsCloudApi {
     cursor: number,
     signal: AbortSignal,
     expectedAccountGeneration: string,
+    deadlineMs = 5_000,
   ) {
     return this.transport.openEventStream(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-events`,
@@ -76,6 +77,7 @@ export class HermesConversationsCloudApi {
           cursor: Math.max(0, Math.floor(cursor)),
           expected_account_generation: expectedAccountGeneration,
         },
+        deadlineMs,
         signal,
       },
     );

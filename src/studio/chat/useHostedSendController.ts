@@ -416,8 +416,10 @@ export function useHostedSendController({
       clearQueuedComposer();
       // The request claim makes this idempotent across a kill between the
       // outbox commit and draft cleanup. A newer, non-matching draft survives.
-      await localStore.clearDraftClaim(cacheOwner, queuedItem, ownerEpoch).catch(() => undefined);
-      if (!isCurrentSend()) return;
+      // Draft cleanup is independent of transport delivery. Run it in the
+      // background so a slow storage queue cannot delay the first network hop.
+      void localStore.clearDraftClaim(cacheOwner, queuedItem, ownerEpoch)
+        .catch(() => undefined);
       optimisticMessagesByConversationRef.current.set(
         sendingConversationId,
         durableOptimisticMessages,
@@ -513,27 +515,39 @@ export function useHostedSendController({
         }, ownerEpoch);
         return;
       }
+      // Open the hosted SSE path as soon as the durable local intent exists.
+      // The enqueue request and gateway prewarm then run in parallel instead
+      // of making the first live token wait for a React render after the
+      // enqueue response.  A brand-new conversation may briefly return 404;
+      // the stream hook retries with its bounded backoff once the enqueue has
+      // created it.  Pending-turn state keeps that transient snapshot from
+      // closing the stream or clearing the optimistic message.
+      activeHostedTurnIdRef.current = hostedTurnId;
+      setActiveHostedTurnId(hostedTurnId);
+      setHostedRunning(true);
       // The official Hermes gateway owns model readiness, retries, and
       // provider errors. A client-side /api/model preflight adds a cold-start
       // round trip and can disagree with the session that will actually run.
       let conversationId = sendingConversationId;
-      const durableAttachments = await persistPendingAttachments(
-        cacheOwner,
-        userMessageId,
-        plannedAttachments,
-      );
-      if (!isCurrentSend()) {
-        cleanupPendingAttachments({ ...queuedItem, pendingAttachments: durableAttachments });
-        return;
+      if (plannedAttachments.length) {
+        const durableAttachments = await persistPendingAttachments(
+          cacheOwner,
+          userMessageId,
+          plannedAttachments,
+        );
+        if (!isCurrentSend()) {
+          cleanupPendingAttachments({ ...queuedItem, pendingAttachments: durableAttachments });
+          return;
+        }
+        const durableMutation = await localStore.upsertPendingEnqueueIfActive(cacheOwner, {
+          ...queuedItem,
+          pendingAttachments: durableAttachments,
+        }, ownerEpoch);
+        if (!isCurrentSend()) return;
+        if (!durableMutation.updated || !durableMutation.item) return;
+        queuedItem = durableMutation.item;
+        cleanupAttachmentSources(pendingAttachments);
       }
-      const durableMutation = await localStore.upsertPendingEnqueueIfActive(cacheOwner, {
-        ...queuedItem,
-        pendingAttachments: durableAttachments,
-      }, ownerEpoch);
-      if (!isCurrentSend()) return;
-      if (!durableMutation.updated || !durableMutation.item) return;
-      queuedItem = durableMutation.item;
-      cleanupAttachmentSources(pendingAttachments);
       deliveryClaim = hostedTurnDeliveryClaimsRef.current.tryAcquire(sendKey);
       if (!deliveryClaim) {
         deliveryRetryScheduled = true;
@@ -566,18 +580,21 @@ export function useHostedSendController({
         lastError: '',
         nextAttemptAt: 0,
       };
-      const acceptedMutation = await outbox.acceptPendingOutboxItem(queuedItem, ownerEpoch);
-      if (!isCurrentSend()) return;
-      if (!acceptedMutation.updated || !acceptedMutation.item) {
+      // The server has already durably accepted the turn. Keep the first-token
+      // path independent from another AsyncStorage read/write pair: a busy
+      // iPhone storage queue can otherwise delay the stream while the model is
+      // already producing output. Replay remains idempotent if this settles
+      // after a process interruption.
+      const acceptPromise = outbox.acceptPendingOutboxItem(queuedItem, ownerEpoch);
+      void acceptPromise.then((acceptedMutation) => {
         if (acceptedMutation.item?.cancelledAt) {
           void cancellation.deliverAndReconcilePendingCancellation(
             acceptedMutation.item,
             ownerEpoch,
           );
         }
-        return;
-      }
-      queuedItem = acceptedMutation.item;
+      }).catch(() => undefined);
+      if (!isCurrentSend()) return;
       activeConversationIdRef.current = conversationId;
       setActiveConversationId(conversationId);
       if (activeConversationIdRef.current === conversationId) {
@@ -588,11 +605,12 @@ export function useHostedSendController({
         pendingTurnActiveRef.current = true;
         pendingChatSendRef.current = null;
         cancelledPendingSendKeysRef.current.delete(sendKey);
-        await outbox.settleAcceptedOutboxItem(queuedItem, ownerEpoch);
-        if (!isCurrentSend()) return;
-        // SSE is the authoritative post-acceptance path. A second full GET
-        // delays the first token and replaces the optimistic list while it is
-        // already rendering; disconnected polling remains the recovery path.
+        // SSE is the authoritative post-acceptance path. Keep outbox cleanup
+        // off the first-token critical path; a large AsyncStorage envelope
+        // must not delay the stream reader or replace the optimistic list
+        // while the model is already producing output.
+        void outbox.settleAcceptedOutboxItem(queuedItem, ownerEpoch)
+          .catch(() => undefined);
       }
     } catch (error) {
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;

@@ -73,6 +73,40 @@ test('canonical reasoning deltas stream into the same thinking activity', () => 
   assert.equal(result.messages[0].activities?.[0].output, '先核对 模型状态。');
 });
 
+test('reasoning content/message payload variants still start the thinking clock', () => {
+  const base = {
+    account_generation: 'account-1',
+    conversation_id: 'conversation-1',
+    cursor: 1,
+    event_id: 'event-reasoning-content',
+    event_type: 'reasoning.delta',
+    idempotency_key: 'reasoning-content-1',
+    occurred_at: 4_000,
+    payload: { content: '先检查连接' },
+    role_stage: 'chat',
+    schema_version: 'hermes.hosted-event.v1' as const,
+    sequence: 1,
+    turn_id: 'turn-reasoning-content',
+  };
+  const result = applyHostedLifecycleEvents([], [base]);
+  const message = result.messages[0];
+  assert.equal(message.firstTokenAt, 4_000);
+  assert.equal(message.timingLabel, '正在思考');
+  assert.equal(message.activities?.[0]?.output, '先检查连接');
+});
+
+test('thinking clock ignores an earlier queued tool activity', () => {
+  const result = applyHostedLifecycleEvents([], [
+    event(1, 'agent.started', { source_event_type: 'request.accepted' }),
+    event(2, 'tool.started', { entity_id: 'lookup', name: 'browser.search' }),
+    event(3, 'reasoning.delta', { entity_id: 'reasoning-1', text: '先思考。' }),
+  ], false);
+
+  assert.equal(result.phase, 'thinking');
+  assert.equal(result.phaseStartedAt, 1_300);
+  assert.equal(result.messages[0].firstTokenAt, 1_300);
+});
+
 test('empty thinking completion never creates a reasoning row or starts timing', () => {
   const result = applyHostedLifecycleEvents([], [
     event(1, 'agent.started', { source_event_type: 'request.accepted' }),

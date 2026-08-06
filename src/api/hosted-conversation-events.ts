@@ -48,6 +48,7 @@ export async function consumeHostedConversationEvents(
   signal: AbortSignal,
   onEvent: (event: HostedConversationEventFrame) => void | Promise<void>,
   onMalformedFrame: (error: Error) => void = defaultMalformedFrameReporter,
+  connectionTimeoutMs = 5_000,
 ): Promise<number> {
   const expectedGeneration = expectedAccountGeneration.trim();
   if (!conversationId.trim() || !expectedGeneration) {
@@ -58,6 +59,7 @@ export async function consumeHostedConversationEvents(
     Math.max(0, Math.floor(cursor)),
     signal,
     expectedGeneration,
+    connectionTimeoutMs,
   );
   if (!response.body) throw new Error('Hermes hosted event stream has no response body');
 

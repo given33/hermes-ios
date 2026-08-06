@@ -70,7 +70,7 @@ export function messageDurationMs(
   message: Pick<
     HermesChatViewMessage,
     'activities' | 'completedAt' | 'durationMs' | 'firstTokenAt' | 'modelStartedAt' | 'startedAt'
-    | 'status' | 'updatedAt'
+    | 'roleStage' | 'status' | 'updatedAt'
   >,
   now = Date.now(),
 ): number {
@@ -79,6 +79,9 @@ export function messageDurationMs(
   const firstTokenLowerBound = modelBoundary && message.firstTokenAt
     ? Math.max(0, message.firstTokenAt - modelBoundary)
     : 0;
+  // Tool/MCP startup may be visible as an execution label, but it is not
+  // model latency. Keep the clock blank until real model output arrives.
+  if (running && message.roleStage === 'chat' && !message.firstTokenAt) return 0;
   if (running && message.startedAt) {
     return Math.max(0, now - message.startedAt);
   }

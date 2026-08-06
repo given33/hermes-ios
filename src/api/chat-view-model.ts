@@ -941,7 +941,14 @@ export function streamEventToActivity(
     || eventType === 'thinking.delta'
     || eventType === 'thinking.completed'
   ) {
-    const text = structuredText(payload.text);
+    const text = structuredText(
+      payload.text
+        ?? payload.delta
+        ?? payload.output
+        ?? payload.reasoning
+        ?? payload.content
+        ?? payload.message,
+    );
     if (!text) return null;
     return {
       category: 'reasoning',

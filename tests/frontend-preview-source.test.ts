@@ -315,7 +315,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /Keyboard\.dismiss\(\)/);
   assert.match(chat, /keyboardDismissMode="interactive"/);
   assert.match(chat, /useEffect\(\(\) => \{\s*keepLatestVisible\(false\);\s*\}, \[followVersion, keepLatestVisible\]\)/);
-  assert.doesNotMatch(chat, /onContentSizeChange=\{\(\) => keepLatestVisible/);
+  assert.match(chat, /onContentSizeChange=\{\(\) => keepLatestVisible\(false\)\}/);
   assert.doesNotMatch(chat, /onLayout=\{\(\) => keepLatestVisible\(false\)\}/);
   assert.match(chat, /cancelAnimationFrame\(pendingScrollFrame\.current\)/);
   assert.match(chat, /keepLatestVisible\(true, true\)/);
@@ -357,12 +357,12 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /openMinisRoundControl: \{[^}]*height: 38[^}]*width: 38/);
   assert.match(chat, /<ChatPlanDrawer/);
   assert.match(chat, /const chatPlan = useMemo\(\(\) => latestChatPlan\(displayMessages\)/);
-  assert.match(chat, /Gesture\.Pan\(\)/);
-  assert.match(chat, /event\.translationX/);
-  assert.match(chat, /const drawerWidth = width/);
-  assert.match(chat, /\[0, 1\], Extrapolation\.CLAMP/);
-  assert.doesNotMatch(chat, /pointerEvents=\{open \? 'auto' : 'none'\}/);
-  assert.match(chat, /Plan.*\$\{completed\}\/\$\{total\}/s);
+  assert.match(chat, /ChevronUp/);
+  assert.match(chat, /ChevronDown/);
+  assert.match(chat, /accessibilityState=\{\{ expanded: open \}\}/);
+  assert.doesNotMatch(chat, /Gesture\.Pan\(\)/);
+  assert.doesNotMatch(chat, /const drawerWidth = width/);
+  assert.match(chat, /\{completed\}\/\{total\}/);
   assert.match(chat, /activity\.toolName, activity\.name/);
   assert.match(chat, /'cancelled',\s*'completed',\s*'in_progress',\s*'pending'/s);
   assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
@@ -396,7 +396,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /runOnJS\(setMounted\)\(false\)/);
   assert.match(chat, /styles\.drawerBackdrop, backdropStyle/);
   assert.match(chat, /safeAreaBottom/);
-  assert.match(chat, /\[Math\.max\(10, safeAreaBottom - 12\), 6\]/);
+  assert.match(chat, /\[Math\.max\(8, safeAreaBottom - 12\), 3\]/);
   assert.match(chat, /ActionSheetIOS\.showActionSheetWithOptions/);
   assert.match(chat, /launchImageLibraryAsync/);
   assert.match(chat, /launchCameraAsync/);
@@ -472,7 +472,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const acceptedMutation = await outbox\.acceptPendingOutboxItem\(queuedItem, ownerEpoch\);[\s\S]{0,1400}setHostedRunning\(true\);/,
+    /const acceptPromise = outbox\.acceptPendingOutboxItem\(queuedItem, ownerEpoch\);[\s\S]{0,1800}setHostedRunning\(true\);/,
   );
   assert.match(
     chat,

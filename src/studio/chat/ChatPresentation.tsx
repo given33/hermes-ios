@@ -20,7 +20,6 @@ import Reanimated, {
   FadeIn,
   FadeInUp,
   FadeOut,
-  LinearTransition,
   cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
@@ -584,11 +583,6 @@ function RoleActivityGroup({
           exiting={FadeOut
             .duration(motion.fadeDuration(IOS_MOTION.duration.press))
             .easing(IOS_STANDARD_EASING)}
-          layout={motion.animate(
-            LinearTransition
-              .duration(IOS_MOTION.duration.control)
-              .easing(IOS_STANDARD_EASING),
-          )}
           style={styles.activityTimeline}
         >
           {reasoningText ? (

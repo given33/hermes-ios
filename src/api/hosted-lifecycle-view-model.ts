@@ -132,7 +132,12 @@ export function applyHostedLifecycleEvents(
       const id = stringValue(payload.entity_id) || `thinking:${event.turn_id}`;
       const existing = message.activities?.find((activity) => activity.id === id);
       const text = structuredText(
-        payload.text ?? payload.delta ?? payload.output ?? payload.reasoning,
+        payload.text
+          ?? payload.delta
+          ?? payload.output
+          ?? payload.reasoning
+          ?? payload.content
+          ?? payload.message,
       );
       if (!text && !existing?.output?.trim()) {
         continue;
@@ -162,7 +167,10 @@ export function applyHostedLifecycleEvents(
         message = { ...message, firstTokenAt: occurredAt };
       }
       phase = 'thinking';
-      phaseStartedAt = message.startedAt || occurredAt;
+      // The visible thinking clock begins at the first real reasoning token,
+      // not at an earlier queue/tool event that may have created the same
+      // assistant envelope.
+      phaseStartedAt = message.firstTokenAt || occurredAt;
       message = {
         ...message,
         activities: upsertActivity(message.activities, activity),
@@ -209,33 +217,24 @@ export function applyHostedLifecycleEvents(
               toolName: activity.toolName === '命令' ? existing.toolName : activity.toolName,
             }
           : activity;
-        const countsAsModelOutput = ![
-          'subagent.queued',
-          'approval.request',
-          'clarify.request',
-          'secret.request',
-          'sudo.request',
-          'secret.expire',
-          'sudo.expire',
-          'background.complete',
-          'review.summary',
-        ].includes(eventType);
-        const firstOutput = countsAsModelOutput && !message.firstTokenAt;
         message = {
           ...message,
           activities: upsertActivity(message.activities, mergedActivity),
-          firstTokenAt: message.firstTokenAt || (countsAsModelOutput ? occurredAt : undefined),
+          // Tool/command/subagent events are execution details, not model
+          // output. The first-token clock is owned by reasoning/message deltas.
+          firstTokenAt: message.firstTokenAt,
           modelStartedAt,
           startedAt: message.startedAt || occurredAt,
           status: 'running',
           timingLabel: chinese ? '正在执行' : 'Executing',
           updatedAt: occurredAt,
         };
-        if (firstOutput) firstTokenAt = occurredAt;
       }
       if (!['background.complete', 'review.summary'].includes(eventType)) {
         phase = 'executing';
-        phaseStartedAt = message.startedAt || occurredAt;
+        // Keep the execution label visible without starting its timer before
+        // the first real model token arrives.
+        phaseStartedAt = message.firstTokenAt || undefined;
       }
     } else if (
       eventType === 'message.delta'
@@ -267,7 +266,7 @@ export function applyHostedLifecycleEvents(
         updatedAt: occurredAt,
       };
       phase = 'responding';
-      phaseStartedAt = message.startedAt || occurredAt;
+      phaseStartedAt = message.firstTokenAt || occurredAt;
       if (eventType === 'message.completed') completed = true;
     } else if (eventType === 'turn.cancel_requested') {
       turnActive = true;

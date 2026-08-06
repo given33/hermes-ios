@@ -837,12 +837,14 @@ export class HermesCloudApi {
     cursor: number,
     signal: AbortSignal,
     expectedAccountGeneration: string,
+    deadlineMs = 5_000,
   ) {
     return this.conversations.openHostedConversationEvents(
       conversationId,
       cursor,
       signal,
       expectedAccountGeneration,
+      deadlineMs,
     );
   }
 

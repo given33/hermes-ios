@@ -47,7 +47,10 @@ export function latestChatPlan(messages: readonly HermesChatViewMessage[]): Chat
     })
   ));
   const latest = snapshots.sort((left, right) => right.updatedAt - left.updatedAt)[0];
-  if (!latest) return null;
+  // An empty todo snapshot is a clear signal that no plan is active. Treat it
+  // as absence instead of opening a full-width drawer that only says
+  // “暂无计划”; the drawer is reserved for an actual model-generated plan.
+  if (!latest || latest.items.length === 0) return null;
   return {
     completed: latest.items.filter(({ status }) => status === 'completed').length,
     items: latest.items,

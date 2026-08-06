@@ -317,7 +317,6 @@ export function ChatPreviewPage({
     setSending,
     updatePendingPhase,
   });
-
   const {
     acceptPendingOutboxItem,
     deliverPendingEnqueue,
@@ -358,7 +357,6 @@ export function ChatPreviewPage({
     updateConversationCollaborationState,
     updatePendingPhase,
   });
-
   const { sendIntervention } = useHostedInterventionController({
     activeConversationIdRef,
     activeHostedTurnIdRef,
@@ -582,7 +580,7 @@ export function ChatPreviewPage({
     } else if (result.phase && result.phase !== 'reconnecting') {
       setReconnectAttempt(0);
     }
-    if (result.phase) {
+    if (result.phase && (result.phase === 'reconnecting' || result.phaseStartedAt !== undefined)) {
       updatePendingPhase(result.phase, result.phaseStartedAt || Date.now());
     }
     if (result.completed || result.failed) {
@@ -625,6 +623,7 @@ export function ChatPreviewPage({
     branchFromMessage,
     cancelActiveHostedTurn,
     createConversation,
+    deleteConversations,
     selectConversation,
   } = useConversationActionsController({
     activeConversationIdRef,
@@ -669,7 +668,6 @@ export function ChatPreviewPage({
     setSlashMenuOpen,
     updatePendingPhase,
   });
-
   useEffect(() => {
     const interrupt = async () => {
       if (canCancelHostedTurn) await cancelActiveHostedTurn();
@@ -823,6 +821,7 @@ export function ChatPreviewPage({
         conversations,
         isChinese,
         onCheckRelay: checkApiRelay,
+        onDeleteMany: deleteConversations,
         onNew: createConversation,
         onRefresh: refreshConversationHistory,
         onSelect: (id) => { void selectConversation(id); },
@@ -834,6 +833,7 @@ export function ChatPreviewPage({
         conversations,
         isChinese,
         onCheckRelay: checkApiRelay,
+        onDeleteMany: deleteConversations,
         onClose: () => setHistoryModalOpen(false),
         onNew: () => {
           void createConversation();

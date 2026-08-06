@@ -353,7 +353,11 @@ export function useConversationSnapshotController({
     ));
     activeHostedTurnIdRef.current = runningHostedTurnId;
     setActiveHostedTurnId(runningHostedTurnId);
-    setHostedRunning(running);
+    // Keep the stream alive while a durable enqueue is still awaiting server
+    // acknowledgement.  The local pending-turn state is authoritative for
+    // this short hand-off window; dropping hostedRunning here closes the SSE
+    // connection just before the gateway emits its first live event.
+    setHostedRunning(running || pendingTurnActiveRef.current);
     setSending(running || pendingTurnActiveRef.current);
     await commitConversationIndex(
       replaceCachedConversationSnapshot(conversationIndexRef.current, conversation),

@@ -89,6 +89,7 @@ export interface ConversationActionsController {
   branchFromMessage(message: ChatMessage): Promise<void>;
   cancelActiveHostedTurn(): Promise<void>;
   createConversation(): Promise<void>;
+  deleteConversations(conversationIds: readonly string[]): Promise<void>;
   selectConversation(conversationId: string): Promise<void>;
 }
 
@@ -135,6 +136,22 @@ export function useConversationActionsController({
 }: ConversationActionsControllerOptions): ConversationActionsController {
   const prepareComposerNavigation = () => {
     setSlashMenuOpen(false);
+  };
+
+  const settleCancelledHostedTurn = async (conversationId: string) => {
+    if (activeConversationIdRef.current !== conversationId) return;
+    // The cancellation endpoint is authoritative, but the stop control must
+    // not remain armed while the durable reconciliation row is being cleaned
+    // up. Clear only the local activity flags; the refreshed conversation has
+    // already been applied by the cancellation controller and remains visible.
+    pendingTurnActiveRef.current = false;
+    activeHostedTurnIdRef.current = '';
+    clearOptimisticHostedTurn();
+    setActiveHostedTurnId('');
+    setHostedRunning(false);
+    setSending(false);
+    resetPendingStateMachine();
+    await clearOptimisticPendingTurn(conversationId);
   };
 
   const createConversation = async () => {
@@ -297,8 +314,10 @@ export function useConversationActionsController({
       );
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       if (result.outcome === 'cancel-accepted') {
+        await settleCancelledHostedTurn(conversationId);
         notify(isChinese ? '任务已取消' : 'Task cancelled');
       } else if (result.outcome === 'completed-before-cancel') {
+        await settleCancelledHostedTurn(conversationId);
         notify(isChinese ? '任务已在取消前结束' : 'Task finished before cancellation');
       }
     } catch (error) {
@@ -382,6 +401,92 @@ export function useConversationActionsController({
     }
   };
 
+  const deleteConversations = async (conversationIds: readonly string[]) => {
+    const requestedIds = [...new Set(
+      conversationIds.map((id) => String(id || '').trim()).filter(Boolean),
+    )];
+    if (!requestedIds.length) return;
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+
+    // A conversation with an active turn must be cancelled before its server
+    // record is removed. This keeps remote connector runs from being orphaned
+    // and makes the delete action deterministic even while the stop control
+    // is still reconciling.
+    if (requestedIds.includes(activeConversationIdRef.current)
+      && (sending || hostedRunning || pendingTurnActiveRef.current)) {
+      await cancelActiveHostedTurn();
+      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+    }
+
+    const successfulIds: string[] = [];
+    const failedIds: string[] = [];
+    if (cloudApi) {
+      for (const id of requestedIds) {
+        try {
+          const conversation = conversationIndexRef.current.find((item) => item.id === id);
+          if (id.startsWith('official:')) {
+            await cloudApi.deleteSession(id, conversation?.profile || profile);
+          } else {
+            await cloudApi.deleteConversation(id);
+          }
+          successfulIds.push(id);
+        } catch {
+          failedIds.push(id);
+        }
+      }
+    } else {
+      successfulIds.push(...requestedIds);
+    }
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+    if (!successfulIds.length) {
+      notify(isChinese ? '删除会话失败' : 'Unable to delete conversations');
+      return;
+    }
+
+    const deleted = new Set(successfulIds);
+    const remaining = conversationIndexRef.current.filter(({ id }) => !deleted.has(id));
+    const activeDeleted = deleted.has(activeConversationIdRef.current);
+    const fallbackId = activeDeleted ? (remaining[0]?.id || '') : activeConversationIdRef.current;
+    for (const id of successfulIds) {
+      optimisticMessagesByConversationRef.current.delete(id);
+      optimisticPendingByConversationRef.current.delete(id);
+      collaborationStateByConversationRef.current.delete(id);
+      await clearOptimisticPendingTurn(id);
+    }
+    await commitConversationIndex(remaining, fallbackId, ownerEpoch);
+    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+    if (activeDeleted) {
+      sendOperationGenerationRef.current += 1;
+      pendingChatSendRef.current = null;
+      pendingTurnActiveRef.current = false;
+      activeConversationIdRef.current = '';
+      activeHostedTurnIdRef.current = '';
+      clearOptimisticHostedTurn();
+      resetPendingStateMachine();
+      setActiveConversationId('');
+      setActiveHostedTurnId('');
+      setHostedRunning(false);
+      setSending(false);
+      setCollaborationState('single');
+      if (fallbackId) {
+        const generation = conversationSyncGenerationRef.current.advanceActive();
+        await openConversation(fallbackId, generation);
+      } else {
+        setMessages([]);
+      }
+    }
+    if (failedIds.length) {
+      notify(isChinese
+        ? `已删除 ${successfulIds.length} 个会话，${failedIds.length} 个删除失败`
+        : `Deleted ${successfulIds.length}; ${failedIds.length} failed`);
+    } else {
+      notify(isChinese
+        ? `已删除 ${successfulIds.length} 个会话`
+        : `Deleted ${successfulIds.length} conversation${successfulIds.length === 1 ? '' : 's'}`);
+    }
+  };
+
   const branchFromMessage = async (message: ChatMessage) => {
     const conversationId = activeConversationIdRef.current;
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
@@ -421,6 +526,7 @@ export function useConversationActionsController({
     branchFromMessage,
     cancelActiveHostedTurn,
     createConversation,
+    deleteConversations,
     selectConversation,
   };
 }

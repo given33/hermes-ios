@@ -1,45 +1,35 @@
 import {
   Check,
+  ChevronDown,
+  ChevronUp,
   Circle,
   CircleDashed,
   ListTodo,
   X,
 } from 'lucide-react-native';
+import { type ReactNode, useState } from 'react';
 import {
-  type ReactNode,
-  useCallback,
-  useMemo,
-} from 'react';
-import {
-  Keyboard,
   ScrollView,
   StyleSheet,
   Text,
-  useWindowDimensions,
   View,
 } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Reanimated, {
-  Easing,
-  Extrapolation,
-  interpolate,
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withTiming,
-} from 'react-native-reanimated';
 
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { useTheme } from '../../design/ThemeProvider';
-import { IOS_MOTION } from '../../design/ios-motion';
 import type { ChatPlan, ChatPlanItemStatus } from './chat-plan-model';
 
-const BODY_REGULAR = 'HermesGoogle-IBMPlexSans-400-Normal';
 const BODY_MEDIUM = 'HermesGoogle-IBMPlexSans-500-Normal';
 const BODY_SEMIBOLD = 'HermesGoogle-IBMPlexSans-600-Normal';
-const MONO_REGULAR = 'HermesTerminal-JetBrainsMono-400-Normal';
-const SWIPE_ACTIVATION_PX = 16;
 
+/**
+ * Conversation-local plan disclosure.
+ *
+ * Todo snapshots are produced by the model through the canonical todo tool;
+ * the client only renders the newest complete snapshot. Keeping this panel
+ * above the composer avoids a second chat surface, a full-screen swipe drawer,
+ * and the old floating close button/empty-plan state.
+ */
 export function ChatPlanDrawer({
   children,
   isChinese,
@@ -49,104 +39,58 @@ export function ChatPlanDrawer({
   isChinese: boolean;
   plan: ChatPlan | null;
 }) {
-  const { width } = useWindowDimensions();
   const { tokens } = useTheme();
-  const drawerWidth = width;
-  const offset = useSharedValue(0);
-  const gestureStart = useSharedValue(0);
-
-  const settleDrawer = useCallback((nextOpen: boolean) => {
-    if (nextOpen) Keyboard.dismiss();
-  }, []);
-  const closeDrawer = useCallback(() => {
-    offset.value = withTiming(0, {
-      duration: IOS_MOTION.duration.content,
-      easing: Easing.bezier(...IOS_MOTION.curve.decelerate),
-    });
-  }, [offset]);
-
-  const pan = useMemo(() => Gesture.Pan()
-    .activeOffsetX([-SWIPE_ACTIVATION_PX, SWIPE_ACTIVATION_PX])
-    .failOffsetY([-18, 18])
-    .onBegin(() => {
-      gestureStart.value = offset.value;
-    })
-    .onUpdate((event) => {
-      offset.value = Math.max(0, Math.min(drawerWidth, gestureStart.value + event.translationX));
-    })
-    .onEnd((event) => {
-      const nextOpen = event.velocityX > 650
-        || (event.velocityX >= -650 && offset.value >= drawerWidth * 0.38);
-      offset.value = withTiming(nextOpen ? drawerWidth : 0, {
-        duration: IOS_MOTION.duration.content,
-        easing: Easing.bezier(...IOS_MOTION.curve.decelerate),
-      });
-      runOnJS(settleDrawer)(nextOpen);
-    }), [drawerWidth, gestureStart, offset, settleDrawer]);
-
-  const drawerStyle = useAnimatedStyle(() => ({
-    opacity: interpolate(offset.value, [0, Math.max(1, drawerWidth * 0.08)], [0, 1], Extrapolation.CLAMP),
-    transform: [{
-      translateX: interpolate(offset.value, [0, drawerWidth], [-drawerWidth * 0.08, 0], Extrapolation.CLAMP),
-    }],
-  }));
-  const surfaceStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: offset.value }],
-  }));
-
+  const [open, setOpen] = useState(false);
   const completed = plan?.completed || 0;
   const total = plan?.total || 0;
 
+  if (!plan || total === 0) return <>{children}</>;
+
   return (
-    <GestureDetector gesture={pan}>
-      <View style={drawerStyles.workspace}>
-        <Reanimated.View
+    <View style={planStyles.container}>
+      <IOSPressable
+        accessibilityLabel={isChinese ? '展开或收起计划' : 'Expand or collapse plan'}
+        accessibilityState={{ expanded: open }}
+        haptic="selection"
+        onPress={() => setOpen((current) => !current)}
+        style={[
+          planStyles.header,
+          {
+            backgroundColor: tokens.colors.card,
+            borderColor: tokens.colors.border,
+          },
+        ]}
+      >
+        <View style={planStyles.titleRow}>
+          <ListTodo color={tokens.colors.textSecondary} size={16} strokeWidth={1.9} />
+          <Text style={[planStyles.title, { color: tokens.colors.foreground }]}>
+            {isChinese ? '计划' : 'Plan'} {completed}/{total}
+          </Text>
+        </View>
+        {open ? (
+          <ChevronUp color={tokens.colors.textSecondary} size={17} strokeWidth={1.9} />
+        ) : (
+          <ChevronDown color={tokens.colors.textSecondary} size={17} strokeWidth={1.9} />
+        )}
+      </IOSPressable>
+
+      {open ? (
+        <View
           style={[
-            drawerStyles.drawer,
+            planStyles.content,
             {
               backgroundColor: tokens.colors.foregroundLayer,
-              borderRightColor: tokens.colors.border,
-              width: drawerWidth,
+              borderColor: tokens.colors.border,
             },
-            drawerStyle,
           ]}
         >
-          <View style={[drawerStyles.header, { borderBottomColor: tokens.colors.border }]}>
-            <View style={drawerStyles.titleRow}>
-              <ListTodo color={tokens.colors.foreground} size={18} strokeWidth={1.9} />
-              <Text style={[drawerStyles.title, { color: tokens.colors.foreground }]}>
-                {total > 0
-                  ? `${isChinese ? '计划' : 'Plan'} ${completed}/${total}`
-                  : (isChinese ? '计划' : 'Plan')}
-              </Text>
-            </View>
-            <IOSPressable
-              accessibilityLabel={isChinese ? '关闭计划' : 'Close plan'}
-              onPress={closeDrawer}
-              style={drawerStyles.close}
-            >
-              <X color={tokens.colors.textSecondary} size={18} strokeWidth={1.8} />
-            </IOSPressable>
-          </View>
-
           <ScrollView
-            contentContainerStyle={drawerStyles.list}
-            decelerationRate="normal"
+            contentContainerStyle={planStyles.list}
+            nestedScrollEnabled
             showsVerticalScrollIndicator={false}
           >
-            {plan?.items.length ? plan.items.map((item) => (
-              <View
-                key={item.id}
-                style={[
-                  drawerStyles.item,
-                  {
-                    backgroundColor: tokens.colors.card,
-                    borderColor: item.status === 'in_progress'
-                      ? tokens.colors.success
-                      : tokens.colors.border,
-                  },
-                ]}
-              >
+            {plan.items.map((item) => (
+              <View key={item.id} style={planStyles.item}>
                 <PlanStatusIcon
                   color={item.status === 'cancelled'
                     ? tokens.colors.destructive
@@ -157,31 +101,22 @@ export function ChatPlanDrawer({
                 />
                 <Text
                   style={[
-                    drawerStyles.itemText,
+                    planStyles.itemText,
                     { color: tokens.colors.foreground },
                     (item.status === 'completed' || item.status === 'cancelled')
-                      && drawerStyles.terminalItemText,
+                      && planStyles.terminalItemText,
                   ]}
                 >
                   {item.content}
                 </Text>
               </View>
-            )) : (
-              <View style={drawerStyles.empty}>
-                <CircleDashed color={tokens.colors.textTertiary} size={22} strokeWidth={1.6} />
-                <Text style={[drawerStyles.emptyText, { color: tokens.colors.textSecondary }]}>
-                  {isChinese ? '暂无计划' : 'No active plan'}
-                </Text>
-              </View>
-            )}
+            ))}
           </ScrollView>
-        </Reanimated.View>
+        </View>
+      ) : null}
 
-        <Reanimated.View style={[drawerStyles.surface, surfaceStyle]}>
-          {children}
-        </Reanimated.View>
-      </View>
-    </GestureDetector>
+      {children}
+    </View>
   );
 }
 
@@ -193,29 +128,53 @@ function PlanStatusIcon({
   status: ChatPlanItemStatus;
 }) {
   if (status === 'completed') {
-    return <Check color={color} size={17} strokeWidth={2.2} />;
+    return <Check color={color} size={16} strokeWidth={2.2} />;
   }
   if (status === 'cancelled') {
-    return <X color={color} size={17} strokeWidth={2} />;
+    return <X color={color} size={16} strokeWidth={2} />;
   }
   if (status === 'in_progress') {
-    return <CircleDashed color={color} size={17} strokeWidth={2} />;
+    return <CircleDashed color={color} size={16} strokeWidth={2} />;
   }
-  return <Circle color={color} size={17} strokeWidth={1.7} />;
+  return <Circle color={color} size={16} strokeWidth={1.7} />;
 }
 
-const drawerStyles = StyleSheet.create({
-  close: { alignItems: 'center', height: 36, justifyContent: 'center', width: 36 },
-  drawer: { borderRightWidth: StyleSheet.hairlineWidth, bottom: 0, left: 0, position: 'absolute', top: 0, zIndex: 1 },
-  empty: { alignItems: 'center', gap: 10, justifyContent: 'center', minHeight: 180 },
-  emptyText: { fontFamily: BODY_REGULAR, fontSize: 12, lineHeight: 17 },
-  header: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 54, paddingHorizontal: 14 },
-  item: { alignItems: 'flex-start', borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 10, minHeight: 42, paddingHorizontal: 12, paddingVertical: 11 },
-  itemText: { flex: 1, fontFamily: BODY_MEDIUM, fontSize: 12, lineHeight: 18, minWidth: 0 },
-  list: { gap: 7, paddingBottom: 22, paddingHorizontal: 12, paddingTop: 12 },
-  surface: { flex: 1, minHeight: 0, overflow: 'hidden', zIndex: 2 },
+const planStyles = StyleSheet.create({
+  container: { minHeight: 0 },
+  content: {
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginBottom: 5,
+    maxHeight: 172,
+    overflow: 'hidden',
+  },
+  header: {
+    alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 5,
+    minHeight: 36,
+    paddingHorizontal: 12,
+  },
+  item: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 9,
+    minHeight: 30,
+    paddingHorizontal: 3,
+    paddingVertical: 6,
+  },
+  itemText: {
+    flex: 1,
+    fontFamily: BODY_MEDIUM,
+    fontSize: 12,
+    lineHeight: 17,
+    minWidth: 0,
+  },
+  list: { paddingHorizontal: 11, paddingVertical: 7 },
   terminalItemText: { opacity: 0.55, textDecorationLine: 'line-through' },
-  title: { fontFamily: MONO_REGULAR, fontSize: 13, lineHeight: 18 },
-  titleRow: { alignItems: 'center', flexDirection: 'row', gap: 8 },
-  workspace: { flex: 1, minHeight: 0, overflow: 'hidden' },
+  title: { fontFamily: BODY_SEMIBOLD, fontSize: 12, lineHeight: 17 },
+  titleRow: { alignItems: 'center', flexDirection: 'row', gap: 7 },
 });

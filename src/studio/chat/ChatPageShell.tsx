@@ -77,8 +77,8 @@ export function ChatPageShell({
 
         <View style={styles.main}>
           <ChatHeader {...headerProps} />
+          <ChatMessageStream {...streamProps} />
           <ChatPlanDrawer isChinese={isChinese} plan={plan}>
-            <ChatMessageStream {...streamProps} />
             <Reanimated.View
               style={[
                 styles.composer,

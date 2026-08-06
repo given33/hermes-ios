@@ -55,7 +55,10 @@ export function useChatScrollController(safeAreaBottom: number) {
     paddingBottom: interpolate(
       keyboard.height.value * keyboardAvoidanceEnabled.value,
       [0, Math.max(1, safeAreaBottom)],
-      [Math.max(10, safeAreaBottom - 12), 6],
+      // Keep only a small breathing room above the keyboard; the previous
+      // six-point inset made the composer visibly float away from the iOS
+      // keyboard/home-indicator edge.
+      [Math.max(8, safeAreaBottom - 12), 3],
       Extrapolation.CLAMP,
     ),
   }));

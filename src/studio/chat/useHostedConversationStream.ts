@@ -18,6 +18,7 @@ import {
 const FAILURE_LOG_INTERVAL_MS = 60_000;
 const HEALTHY_POLL_MS = 15_000;
 const DISCONNECTED_POLL_MS = 1_000;
+const EVENT_STREAM_CONNECTION_TIMEOUT_MS = 5_000;
 
 interface HostedConversationStreamOptions {
   activeConversationId: string;
@@ -90,7 +91,7 @@ export function useHostedConversationStream({
       lastFailureLogAt = now;
       console.warn(
         `Hermes hosted conversation ${kind} refresh failed`,
-        error instanceof Error ? error.name : 'Error',
+        error instanceof Error ? `${error.name}: ${error.message}` : String(error),
       );
     };
 
@@ -166,6 +167,8 @@ export function useHostedConversationStream({
             reconnectAttempt = 0;
           });
         },
+        undefined,
+        EVENT_STREAM_CONNECTION_TIMEOUT_MS,
       ).catch((error: unknown) => {
         if (!streamController?.signal.aborted) {
           streamHealthy = false;
@@ -182,10 +185,23 @@ export function useHostedConversationStream({
 
     const poll = async () => {
       if (disposed || !lifecycleCurrent()) return;
+      // A connection attempt is the authoritative live path.  Do not start
+      // a competing full-snapshot GET while it is in flight: both operations
+      // share the ordered reconciliation queue, so a slow snapshot could
+      // hold a first-token SSE frame for the request deadline.  The stream's
+      // bounded connection timeout schedules this fallback as soon as it
+      // actually fails.
+      if (streamActive) {
+        pollTimer = setTimeout(
+          () => void poll(),
+          DISCONNECTED_POLL_MS,
+        );
+        return;
+      }
       if (AppState.currentState === 'active' && !streamHealthy) {
         await reconcileInOrder(() => withAbortableDeadline(
           (signal) => loadConversation(activeConversationId, activeGeneration, signal),
-          requestTimeoutMs,
+          Math.min(requestTimeoutMs, EVENT_STREAM_CONNECTION_TIMEOUT_MS),
           'Hermes conversation polling timed out',
         )).catch((error: unknown) => {
           reportRefreshFailure('poll', error);
@@ -209,7 +225,6 @@ export function useHostedConversationStream({
     });
 
     startStream();
-    pollTimer = setTimeout(() => void poll(), DISCONNECTED_POLL_MS);
     return () => {
       disposed = true;
       streamController?.abort();

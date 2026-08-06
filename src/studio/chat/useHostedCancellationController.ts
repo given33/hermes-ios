@@ -736,10 +736,34 @@ export function useHostedCancellationController({
       setSending(true);
       setHostedRunning(true);
     }
-    await deliverAndReconcilePendingCancellation(cancelled, ownerEpoch);
+    const result = await deliverAndReconcilePendingCancellation(cancelled, ownerEpoch);
+    if (
+      (result.outcome === 'cancel-accepted' || result.outcome === 'completed-before-cancel')
+      && mountedRef.current
+      && activeConversationIdRef.current === conversationId
+    ) {
+      // The server snapshot has already been applied by reconciliation. Drop
+      // the local pending flags immediately so the composer cannot continue to
+      // render a stop button while the outbox cleanup finishes.
+      pendingTurnActiveRef.current = false;
+      activeHostedTurnIdRef.current = '';
+      setActiveHostedTurnId('');
+      setHostedRunning(false);
+      setSending(false);
+      resetPendingStateMachine();
+      await replaceOptimisticMessages(
+        conversationId,
+        optimisticMessagesByConversationRef.current.get(conversationId) || [userMessage],
+        null,
+        ownerEpoch,
+      );
+      optimisticPendingByConversationRef.current.delete(conversationId);
+      pendingChatSendRef.current = null;
+    }
     return true;
   }, [
     activeConversationIdRef,
+    activeHostedTurnIdRef,
     cacheOwner,
     cancelledKeysRef,
     deliverAndReconcilePendingCancellation,
@@ -749,7 +773,9 @@ export function useHostedCancellationController({
     optimisticPendingByConversationRef,
     pendingChatSendRef,
     replaceOptimisticMessages,
+    resetPendingStateMachine,
     sendOperationGenerationRef,
+    setActiveHostedTurnId,
     setHostedRunning,
     setSending,
     updatePendingPhase,

@@ -1,4 +1,14 @@
-import { Clock3, ExternalLink, Plus, Search } from 'lucide-react-native';
+import {
+  Check,
+  CheckCircle2,
+  Circle,
+  Clock3,
+  ExternalLink,
+  Plus,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react-native';
 import { useState } from 'react';
 import { ScrollView, Text, TextInput, View } from 'react-native';
 
@@ -6,6 +16,7 @@ import type { SingleConversation } from '../../api/HermesCloudApi';
 import { conversationHasRunningWork } from '../../api/chat-view-model';
 import { StudioProfileAvatar } from '../../components/studio/StudioProfileAvatar';
 import { IOSPressable } from '../../components/ios/IOSPressable';
+import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useTheme } from '../../design/ThemeProvider';
 import { styles } from './chat-presentation-styles';
 
@@ -15,6 +26,7 @@ export function ConversationHistory({
   isChinese,
   onCheckRelay,
   onClose,
+  onDeleteMany,
   onNew,
   onRefresh,
   onSelect,
@@ -24,6 +36,7 @@ export function ConversationHistory({
   isChinese: boolean;
   onCheckRelay(): void;
   onClose?(): void;
+  onDeleteMany(ids: readonly string[]): Promise<void> | void;
   onNew(): void;
   onRefresh(): void;
   onSelect(id: string): void;
@@ -31,6 +44,10 @@ export function ConversationHistory({
   const { tokens } = useTheme();
   const [query, setQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = conversations.filter((conversation) => !normalizedQuery || [
     conversation.title,
@@ -38,6 +55,30 @@ export function ConversationHistory({
     conversation.official_model,
     conversation.preview,
   ].some((value) => value?.toLowerCase().includes(normalizedQuery)));
+  const toggleSelected = (id: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+  const leaveSelectionMode = () => {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  };
+  const confirmDelete = async () => {
+    const ids = [...pendingDeleteIds];
+    if (!ids.length || deleting) return;
+    setDeleting(true);
+    try {
+      await onDeleteMany(ids);
+      setPendingDeleteIds([]);
+      leaveSelectionMode();
+    } finally {
+      setDeleting(false);
+    }
+  };
   return (
     <View style={[
       styles.history,
@@ -69,6 +110,29 @@ export function ConversationHistory({
           <IOSPressable accessibilityLabel="Check API Relay" onPress={onCheckRelay} style={styles.pageSidebarAction}>
             <ExternalLink color={tokens.colors.textSecondary} size={15} />
             <Text style={[styles.pageSidebarActionText, { color: tokens.colors.textSecondary }]}>Relay</Text>
+          </IOSPressable>
+          <IOSPressable
+            accessibilityLabel={selectionMode
+              ? (isChinese ? '取消选择会话' : 'Cancel selecting conversations')
+              : (isChinese ? '删除会话' : 'Delete conversations')}
+            onPress={() => {
+              if (selectionMode) {
+                leaveSelectionMode();
+                return;
+              }
+              setSelectionMode(true);
+              setSelectedIds(new Set());
+            }}
+            style={styles.pageSidebarAction}
+          >
+            {selectionMode ? (
+              <X color={tokens.colors.textSecondary} size={15} />
+            ) : (
+              <Trash2 color={tokens.colors.textSecondary} size={15} />
+            )}
+            <Text style={[styles.pageSidebarActionText, { color: tokens.colors.textSecondary }]}>
+              {selectionMode ? (isChinese ? '取消' : 'Done') : (isChinese ? '删除' : 'Delete')}
+            </Text>
           </IOSPressable>
         </View>
       </View>
@@ -104,41 +168,93 @@ export function ConversationHistory({
         {filtered.map((conversation) => {
           const active = conversationHasRunningWork(conversation);
           const model = conversation.official_model || '';
+          const selected = selectedIds.has(conversation.id);
           return (
-            <IOSPressable
-              accessibilityLabel={`${isChinese ? '打开会话' : 'Open conversation'} ${conversation.title || ''}`}
+            <View
               key={conversation.id}
-              onPress={() => onSelect(conversation.id)}
               style={[
                 styles.historyItem,
                 activeId === conversation.id && { backgroundColor: tokens.colors.accent },
               ]}
             >
-              <View style={styles.historyItemTitleRow}>
-                <Text numberOfLines={1} style={[styles.historyItemTitle, { color: tokens.colors.foreground }]}>
-                  {conversation.title || (isChinese ? '新对话' : 'New conversation')}
-                </Text>
-                <Text style={[styles.historyItemTime, { color: tokens.colors.textSecondary }]}>
-                  {formatConversationRecency(conversation.updated_at, isChinese)}
-                </Text>
+              <View style={{ alignItems: 'center', flexDirection: 'row', gap: 4 }}>
+                <IOSPressable
+                  accessibilityLabel={`${selectionMode
+                    ? (isChinese ? '选择会话' : 'Select conversation')
+                    : (isChinese ? '打开会话' : 'Open conversation')} ${conversation.title || ''}`}
+                  onPress={() => selectionMode
+                    ? toggleSelected(conversation.id)
+                    : onSelect(conversation.id)}
+                  style={{ flex: 1, gap: 7, minWidth: 0 }}
+                >
+                  <View style={styles.historyItemTitleRow}>
+                    {selectionMode ? (
+                      selected ? (
+                        <CheckCircle2 color={tokens.colors.accent} size={15} />
+                      ) : (
+                        <Circle color={tokens.colors.textTertiary} size={15} />
+                      )
+                    ) : null}
+                    <Text numberOfLines={1} style={[styles.historyItemTitle, { color: tokens.colors.foreground }]}>
+                      {conversation.title || (isChinese ? '新对话' : 'New conversation')}
+                    </Text>
+                    <Text style={[styles.historyItemTime, { color: tokens.colors.textSecondary }]}>
+                      {formatConversationRecency(conversation.updated_at, isChinese)}
+                    </Text>
+                  </View>
+                  <View style={styles.historyItemProfileRow}>
+                    <StudioProfileAvatar seed={conversation.profile || model || 'default'} size={18} />
+                    <Text numberOfLines={1} style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>
+                      {[conversation.profile || 'default', model].filter(Boolean).join(' · ')}
+                    </Text>
+                    {active ? <View style={[styles.historyActiveDot, { backgroundColor: tokens.colors.success }]} /> : null}
+                  </View>
+                </IOSPressable>
+                {!selectionMode ? (
+                  <IOSPressable
+                    accessibilityLabel={`${isChinese ? '删除会话' : 'Delete conversation'} ${conversation.title || ''}`}
+                    hitSlop={8}
+                    onPress={() => setPendingDeleteIds([conversation.id])}
+                    style={{ alignItems: 'center', height: 30, justifyContent: 'center', width: 30 }}
+                  >
+                    <Trash2 color={tokens.colors.textTertiary} size={15} />
+                  </IOSPressable>
+                ) : null}
               </View>
-              <View style={styles.historyItemProfileRow}>
-                <StudioProfileAvatar seed={conversation.profile || model || 'default'} size={18} />
-                <Text numberOfLines={1} style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>
-                  {[conversation.profile || 'default', model].filter(Boolean).join(' · ')}
-                </Text>
-                {active ? <View style={[styles.historyActiveDot, { backgroundColor: tokens.colors.success }]} /> : null}
-              </View>
-            </IOSPressable>
+            </View>
           );
         })}
       </ScrollView>
       <View style={[styles.historyFooter, { borderTopColor: tokens.colors.border }]}>
-        <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>default</Text>
+        {selectionMode ? (
+          <IOSPressable
+            accessibilityLabel={isChinese ? '删除选中的会话' : 'Delete selected conversations'}
+            disabled={selectedIds.size === 0}
+            onPress={() => setPendingDeleteIds([...selectedIds])}
+            style={{ alignItems: 'center', flexDirection: 'row', gap: 5, minHeight: 32, opacity: selectedIds.size ? 1 : 0.45 }}
+          >
+            <Check color={tokens.colors.destructive} size={14} />
+            <Text style={[styles.historyItemMeta, { color: tokens.colors.destructive }]}>
+              {isChinese ? `删除 ${selectedIds.size} 个` : `Delete ${selectedIds.size}`}
+            </Text>
+          </IOSPressable>
+        ) : <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>default</Text>}
         <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>
           {filtered.length} {isChinese ? '个会话' : 'conversations'}
         </Text>
       </View>
+      <ConfirmDialog
+        confirmLabel={isChinese ? '删除' : 'Delete'}
+        description={isChinese
+          ? `确定删除 ${pendingDeleteIds.length} 个会话吗？此操作不可撤销。`
+          : `Delete ${pendingDeleteIds.length} conversation${pendingDeleteIds.length === 1 ? '' : 's'}? This cannot be undone.`}
+        destructive
+        loading={deleting}
+        onCancel={() => { if (!deleting) setPendingDeleteIds([]); }}
+        onConfirm={() => { void confirmDelete(); }}
+        open={pendingDeleteIds.length > 0}
+        title={isChinese ? '删除会话' : 'Delete conversations'}
+      />
     </View>
   );
 }

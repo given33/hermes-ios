@@ -106,6 +106,7 @@ export function ChatMessageStream({
         decelerationRate="normal"
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
+        onContentSizeChange={() => keepLatestVisible(false)}
         onScroll={onScroll}
         ref={streamRef}
         scrollEventThrottle={8}
@@ -196,13 +197,10 @@ export function ChatMessageStream({
 }
 
 function messageReactKey(message: ChatMessage): string {
-  // User bubbles are durable records and must keep their own identity. Using
-  // the runtime turn as their React key makes a snapshot echo remount the
-  // bubble (and can briefly render it twice) while the optimistic ledger is
-  // being reconciled. Assistant streaming content, however, intentionally
-  // keeps one stable key across its live/final projections.
-  if (message.role !== 'user' && message.runtimeTurnId) {
-    return `${message.role}:${message.runtimeTurnId}:${message.roleStage || 'chat'}`;
-  }
+  // `id` is the canonical message identity after the conversation reducer has
+  // reconciled live and durable projections. Keying by role/turn/stage made
+  // two legitimate dispatcher or progress messages collide, which caused
+  // React to reuse rows, jump the scroll position, and sometimes render an
+  // echo twice. Keep the key tied to the durable id for every role.
   return message.id;
 }
