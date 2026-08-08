@@ -1,0 +1,195 @@
+name: Build resign-compatible iOS IPA
+
+run-name: Hermes resign-compatible IPA ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-resign-compatible-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
+      HERMES_DISTRIBUTABLE_BUILD: '1'
+      HERMES_RESIGN_COMPAT_BUILD: '1'
+      HERMES_CI_BUILD_NUMBER: ${{ github.run_id }}
+      HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.15.1
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies with network retry
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if pnpm install --frozen-lockfile; then
+              exit 0
+            fi
+            echo "::warning::pnpm install attempt ${attempt}/3 failed" >&2
+            [ "${attempt}" -lt 3 ] && sleep $((attempt * 10))
+          done
+          exit 1
+
+      - run: pnpm doctor
+      - run: pnpm test
+      - run: pnpm typecheck
+
+      - name: Verify the production source graph
+        run: node scripts/verify-production-source-graph.mjs .
+
+      - name: Generate and verify the iOS asset export
+        shell: bash
+        run: |
+          pnpm exec expo export --platform ios --output-dir "$RUNNER_TEMP/hermes-font-export"
+          node scripts/verify-native-font-export.mjs "$RUNNER_TEMP/hermes-font-export"
+          node scripts/verify-production-bundle.mjs "$RUNNER_TEMP/hermes-font-export"
+
+      - name: Select Xcode with Swift 6.2
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          xcodebuild -version
+          swift --version
+
+      - name: Generate the resign-compatible native iOS project
+        run: pnpm exec expo prebuild --platform ios --clean --no-install
+
+      - name: Verify the generated AMap configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          MAP_PLIST="$(grep -rl --include='Info.plist' '<key>HermesAmapIOSAPIKey</key>' ios | head -n 1)"
+          if [ -z "$MAP_PLIST" ]; then
+            echo 'Generated iOS project is missing HermesAmapIOSAPIKey.' >&2
+            exit 1
+          fi
+          GENERATED_KEY="$(plutil -extract HermesAmapIOSAPIKey raw "$MAP_PLIST")"
+          GENERATED_MAP_BUNDLE="$(plutil -extract HermesAmapIOSBundleIdentifier raw "$MAP_PLIST")"
+          GENERATED_APP_BUNDLE="$(node -p "require('./app.base.json').expo.ios.bundleIdentifier")"
+          if [ "$GENERATED_KEY" != "${HERMES_AMAP_IOS_API_KEY:-}" ]; then
+            echo 'Generated HermesAmapIOSAPIKey does not match the selected map configuration.' >&2
+            exit 1
+          fi
+          if [ "$GENERATED_MAP_BUNDLE" != "$GENERATED_APP_BUNDLE" ]; then
+            echo 'Generated AMap Bundle Identifier does not match CFBundleIdentifier.' >&2
+            exit 1
+          fi
+
+      - name: Verify the resign-compatible target graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT_FILE="$(find ios -maxdepth 2 -name project.pbxproj -print -quit)"
+          test -n "$PROJECT_FILE"
+          APP_PATH="$(find "$RUNNER_TEMP" -path '*Build/Products/Release-iphoneos/*.app' -type d -print -quit || true)"
+          if [ -n "$APP_PATH" ]; then
+            test ! -d "$APP_PATH/PlugIns"
+            test ! -d "$APP_PATH/Watch"
+          fi
+
+      - name: Install CocoaPods
+        run: pod install --project-directory=ios
+
+      - name: Compile without code signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          WORKSPACE="$(find ios -maxdepth 1 -type d -name '*.xcworkspace' -print -quit)"
+          SCHEME="$(basename "$WORKSPACE" .xcworkspace)"
+          if [ -z "$WORKSPACE" ] || [ -z "$SCHEME" ]; then
+            echo 'Unable to locate the generated iOS workspace.' >&2
+            exit 1
+          fi
+          xcodebuild \
+            -workspace "$WORKSPACE" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/hermes-build" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Package the resign-compatible IPA
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$RUNNER_TEMP/hermes-build/Build/Products/Release-iphoneos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo 'The resign-compatible .app bundle was not produced.' >&2
+            exit 1
+          fi
+          if [ -d "$APP_PATH/PlugIns" ] || [ -d "$APP_PATH/Watch" ]; then
+            echo 'Resign-compatible build unexpectedly contains nested extensions.' >&2
+            exit 1
+          fi
+          APP_BUNDLE_IDENTIFIER="$(plutil -extract CFBundleIdentifier raw "$APP_PATH/Info.plist")"
+          APP_BUILD_NUMBER="$(plutil -extract CFBundleVersion raw "$APP_PATH/Info.plist")"
+          test "$APP_BUNDLE_IDENTIFIER" = 'app.sunstone1029.fig1171'
+          test "$APP_BUILD_NUMBER" = "$HERMES_CI_BUILD_NUMBER"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa/Payload/"
+          find "$RUNNER_TEMP/ipa/Payload" -name _CodeSignature -type d -prune -exec rm -rf {} +
+          find "$RUNNER_TEMP/ipa/Payload" \
+            \( -name embedded.mobileprovision -o -name CodeResources \) \
+            -type f -delete
+          while IFS= read -r -d '' plist; do
+            executable_name="$(plutil -extract CFBundleExecutable raw "$plist" 2>/dev/null || true)"
+            if [ -z "$executable_name" ]; then
+              continue
+            fi
+            executable_path="$(dirname "$plist")/$executable_name"
+            if [ -f "$executable_path" ]; then
+              if otool -l "$executable_path" 2>/dev/null | grep -q 'cmd LC_CODE_SIGNATURE'; then
+                codesign --remove-signature "$executable_path"
+              fi
+              if otool -l "$executable_path" 2>/dev/null | grep -q 'cmd LC_CODE_SIGNATURE'; then
+                echo "Embedded Mach-O signature remains after cleanup: $executable_path" >&2
+                exit 1
+              fi
+              chmod u+x,go+x "$executable_path"
+            fi
+          done < <(find "$RUNNER_TEMP/ipa/Payload" -type f -name Info.plist -print0)
+          cd "$RUNNER_TEMP/ipa"
+          ditto -c -k --sequesterRsrc --keepParent Payload "$RUNNER_TEMP/Hermes-Agent-resign-compatible.ipa"
+          unzip -t "$RUNNER_TEMP/Hermes-Agent-resign-compatible.ipa"
+          node "$GITHUB_WORKSPACE/scripts/verify-resignable-ipa.mjs" \
+            "$RUNNER_TEMP/Hermes-Agent-resign-compatible.ipa" \
+            --bundle-id "$APP_BUNDLE_IDENTIFIER" \
+            --root-app-only
+          IPA_SHA256="$(shasum -a 256 "$RUNNER_TEMP/Hermes-Agent-resign-compatible.ipa" | awk '{print $1}')"
+          printf '%s  %s\n' "$IPA_SHA256" 'Hermes-Agent-resign-compatible.ipa' \
+            > "$RUNNER_TEMP/Hermes-Agent-resign-compatible.ipa.sha256"
+          cat > "$RUNNER_TEMP/Hermes-Agent-build.json" <<JSON
+          {"build":"$APP_BUILD_NUMBER","commit":"$GITHUB_SHA","resign_compatible":true,"extensions":false,"bundle_id":"$APP_BUNDLE_IDENTIFIER","sha256":"$IPA_SHA256"}
+          JSON
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          echo "artifact_name=Hermes-Agent-resign-compatible-${APP_BUILD_NUMBER}-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/Hermes-Agent-resign-compatible.ipa
+            ${{ runner.temp }}/Hermes-Agent-resign-compatible.ipa.sha256
+            ${{ runner.temp }}/Hermes-Agent-build.json
