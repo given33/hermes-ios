@@ -14,6 +14,7 @@ import type {
   HermesChatActivityStatus,
   HermesChatAttachment,
   HermesChatAvatarRole,
+  HermesChatTodo,
   HermesChatViewMessage,
   HostedTurnVisibilityFailure,
 } from './chat-view-types';

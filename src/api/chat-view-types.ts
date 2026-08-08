@@ -44,6 +44,14 @@ export interface HermesChatActivity {
   toolName?: string;
 }
 
+export type HermesChatTodoStatus = 'cancelled' | 'completed' | 'in_progress' | 'pending';
+
+export interface HermesChatTodo {
+  id: string;
+  title: string;
+  status: HermesChatTodoStatus;
+}
+
 export interface HermesChatViewMessage {
   activities?: HermesChatActivity[];
   attachments?: HermesChatAttachment[];
@@ -78,6 +86,8 @@ export interface HermesChatViewMessage {
   startedAt?: number;
   status?: string;
   timingLabel?: string;
+  /** Live agent todo list from the `todo` tool, refreshed on tool.complete. */
+  todos?: HermesChatTodo[];
   updatedAt?: number;
 }
 

@@ -1,4 +1,6 @@
+import { isRecord } from './chat-view-values';
 import type { HostedLifecycleEvent } from './hosted-conversation-events';
+import type { HermesChatTodo } from './chat-view-types';
 import {
   streamEventToActivity,
   type HermesChatActivity,
@@ -220,6 +222,11 @@ export function applyHostedLifecycleEvents(
         message = {
           ...message,
           activities: upsertActivity(message.activities, mergedActivity),
+          // The `todo` tool result carries the full task list; refresh the
+          // live todo panel from every completion event.
+          todos: eventType === 'tool.complete' || eventType === 'tool.completed'
+            ? normalizeTodoList(payload.todos) ?? message.todos
+            : message.todos,
           // Tool/command/subagent events are execution details, not model
           // output. The first-token clock is owned by reasoning/message deltas.
           firstTokenAt: message.firstTokenAt,
@@ -464,6 +471,26 @@ function structuredText(value: unknown): string {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeTodoList(value: unknown): HermesChatTodo[] | null {
+  if (!Array.isArray(value)) return null;
+  const items = value
+    .map((entry): HermesChatTodo | null => {
+      if (!isRecord(entry)) return null;
+      const id = stringValue(entry.id);
+      const title = stringValue(entry.title) || stringValue(entry.content);
+      if (!id || !title) return null;
+      const rawStatus = stringValue(entry.status).toLowerCase();
+      const status = rawStatus === 'in_progress'
+        || rawStatus === 'completed'
+        || rawStatus === 'cancelled'
+        ? rawStatus
+        : 'pending';
+      return { id, title, status };
+    })
+    .filter((entry): entry is HermesChatTodo => entry !== null);
+  return items.length ? items : null;
 }
 
 function numericValue(value: unknown): number {

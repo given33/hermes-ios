@@ -47,6 +47,7 @@ import { IOS_MOTION } from '../../design/ios-motion';
 import { MOTION, useMotion } from '../../design/motion';
 import { useTheme } from '../../design/ThemeProvider';
 import { ReasoningSection } from '../ReasoningSection';
+import { TodoSection } from './TodoSection';
 import { AnimatedChevron, WorkflowTimeline } from '../WorkflowTimeline';
 import {
   reasoningElapsedLabel,
@@ -244,6 +245,13 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           onLongPress={isUser ? undefined : () => onMentionMember(message)}
         />
         <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
+          {!isUser && message.todos?.length ? (
+            <TodoSection
+              isChinese={isChinese}
+              running={messageIsRunning(message)}
+              todos={message.todos}
+            />
+          ) : null}
           {!isUser && shouldShowMessageTiming(message) ? (
             <RoleActivityGroup
               isChinese={isChinese}
@@ -492,8 +500,7 @@ export function PendingDot({ delay }: { delay: number }) {
   return <Reanimated.View style={[styles.pendingDot, { backgroundColor: tokens.colors.primary }, animatedStyle]} />;
 }
 
-const RoleActivityGroup = memo(function RoleActivityGroup({
-  isChinese,
+const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   message,
   onInspectActivity,
 }: {
