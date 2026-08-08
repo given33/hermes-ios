@@ -168,7 +168,7 @@ test('workflow activity sits above the role row and uses the Hermes Studio colla
   assert.doesNotMatch(source, /activitySummary: \{[^\n]*justifyContent: 'space-between'/);
   assert.match(source, /activityTitle: \{ flexShrink: 1,/);
   assert.match(source, /activityCount: \{ fontFamily: MONO_REGULAR/);
-  assert.match(source, /`\$\{stepActivities\.length\} 项`/);
+  assert.match(source, /`\$\{stepActivities\.length\} 个工具调用`/);
   assert.doesNotMatch(source.slice(source.indexOf('function RoleActivityGroup'), source.indexOf('function shouldShowMessageTiming')), /<Cpu/);
   assert.doesNotMatch(source, /activityDivider:/);
   assert.match(source, /shouldShowMessageTiming\(message\)/);

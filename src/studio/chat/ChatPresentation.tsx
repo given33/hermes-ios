@@ -8,7 +8,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   Image,
   StyleSheet,
@@ -504,6 +504,7 @@ const RoleActivityGroup = memo(function RoleActivityGroup({
   const { tokens } = useTheme();
   const motion = useMotion();
   const [open, setOpen] = useState(false);
+  const manualPinRef = useRef(false);
   const [now, setNow] = useState(Date.now());
   const activities = message.activities || [];
   const reasoningActivities = activities.filter(
@@ -520,6 +521,13 @@ const RoleActivityGroup = memo(function RoleActivityGroup({
     (activity) => activity.status === 'queued' || activity.status === 'running',
   );
   const running = messageIsRunning(message);
+  // Live workflow display: while the turn runs the activity group stays
+  // open so tool calls / searches appear in real time; once the turn ends it
+  // collapses by default. A manual tap pins the state until the next turn.
+  useEffect(() => {
+    if (manualPinRef.current) return;
+    setOpen(running);
+  }, [running]);
   useEffect(() => {
     if (!running) return undefined;
     const interval = setInterval(() => setNow(Date.now()), 1_000);
@@ -546,7 +554,7 @@ const RoleActivityGroup = memo(function RoleActivityGroup({
       </Text>
       {stepActivities.length ? (
         <Text style={[styles.activityCount, { color: tokens.colors.textTertiary }]}>
-          {isChinese ? `${stepActivities.length} 项` : `${stepActivities.length} steps`}
+          {isChinese ? `${stepActivities.length} 个工具调用` : `${stepActivities.length} tool calls`}
         </Text>
       ) : null}
       {activities.length ? (
@@ -565,6 +573,7 @@ const RoleActivityGroup = memo(function RoleActivityGroup({
           accessibilityLabel={formatActivitySummary(message, isChinese, now)}
           haptic="selection"
           onPress={() => {
+            manualPinRef.current = true;
             onInspectActivity();
             setOpen((current) => !current);
           }}

@@ -45,7 +45,7 @@ export interface AgentGroupChatViewProps {
   safeAreaBottom: number;
   safeAreaLeft: number;
   safeAreaRight: number;
-  safeAreaTop: number;
+  safeAreaTop?: number;
   /** When false the room rail is hidden for the embedded chat-mode surface. */
   showRoomRail?: boolean;
 }
@@ -58,7 +58,7 @@ export function AgentGroupChatView({
   safeAreaBottom,
   safeAreaLeft,
   safeAreaRight,
-  safeAreaTop,
+  safeAreaTop = 0,
   showRoomRail = true,
 }: AgentGroupChatViewProps) {
   const { tokens } = useTheme();

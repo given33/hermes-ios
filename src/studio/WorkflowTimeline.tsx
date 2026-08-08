@@ -413,7 +413,9 @@ const styles = StyleSheet.create({
   entrySection: { gap: 3 },
   entrySectionLabel: { fontFamily: BODY_SEMIBOLD, fontSize: 9, letterSpacing: 0.4, lineHeight: 13, textTransform: 'uppercase' },
   entryCodeBlock: { borderRadius: 5 },
-  entryCode: { fontFamily: MONO_REGULAR, fontSize: 10, lineHeight: 15, padding: 7 },
+  // Tool input/output often contains Chinese text; the mono Latin font has no
+  // CJK glyphs, so fall back to the system font for correct wrapping.
+  entryCode: { fontSize: 10, lineHeight: 15, padding: 7 },
   entryShowMore: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', minHeight: 26, paddingBottom: 4, paddingHorizontal: 7 },
   entryShowMoreText: { fontFamily: BODY_REGULAR, fontSize: 10, lineHeight: 14 },
   entryCopy: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 4, minHeight: 26, paddingHorizontal: 2 },

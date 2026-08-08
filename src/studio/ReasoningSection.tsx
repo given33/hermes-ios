@@ -184,7 +184,11 @@ const styles = StyleSheet.create({
   previewSpacer: { flex: 1 },
   duration: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13 },
   body: { borderLeftWidth: 2, gap: 4, marginBottom: 7, marginLeft: 17, marginRight: 8, marginTop: 3, paddingLeft: 10 },
-  reasoningText: { fontFamily: BODY_REGULAR, fontSize: 13, fontStyle: 'italic', lineHeight: 19 },
+  // IBMPlexSans has no CJK glyphs; a model's reasoning stream is dense
+  // Chinese text without spaces, so the Latin font gives it no break
+  // opportunities and the characters render glued together. Let the system
+  // font (SF Pro + PingFang SC) drive shaping so CJK wraps naturally.
+  reasoningText: { fontSize: 13, fontStyle: 'italic', lineHeight: 19 },
   showMore: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', minHeight: 26 },
   showMoreText: { fontFamily: BODY_REGULAR, fontSize: 10, lineHeight: 14 },
   copy: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 4, minHeight: 26 },
