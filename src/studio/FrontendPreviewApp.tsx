@@ -80,6 +80,7 @@ import {
 } from '../preview/PreviewCorePages';
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
+import { HermesStudioWorkflowPage } from './workflows/HermesStudioWorkflowPage';
 import { BuiltinBrowserPage } from '../browser/BuiltinBrowserPage';
 import { SkillsManagementPage } from '../skills/SkillsManagementPage';
 import { MemoryPreviewPage } from './PreviewMemoryPage';
@@ -461,7 +462,8 @@ function PreviewRoute({
     && route.routeId !== 'browser'
     && route.routeId !== 'memory'
     && route.routeId !== 'account'
-    && route.routeId !== 'chat';
+    && route.routeId !== 'chat'
+    && route.routeId !== 'workflows';
   useEffect(() => {
     if (usesNativeSwiftUIRoute) return undefined;
     const frame = requestAnimationFrame(() => reportRouteReady(route.path));
@@ -528,6 +530,7 @@ function PreviewRoute({
     && !(route.routeId === 'models' && client)
     && !(route.routeId === 'skills' && client)
     && route.routeId !== 'memory'
+    && route.routeId !== 'workflows'
   ) {
     const message = locale === 'zh'
       ? '此页面需要原生 SwiftUI 界面。请使用完整签名安装包。'
@@ -558,10 +561,20 @@ function PreviewRoute({
         client={client}
         fixtureMode={allowFixturePages}
         gatewayStatuses={gatewayStatuses}
+        navigate={navigate}
         notificationTarget={notificationTarget}
         openNavigation={openNavigation}
         onPreferredConversationConsumed={onPreferredConversationConsumed}
         preferredConversationId={preferredConversationId}
+        profile={profile}
+      />
+    );
+    case 'workflows': return (
+      <HermesStudioWorkflowPage
+        client={client}
+        fixtureMode={allowFixturePages}
+        locale={locale ?? 'zh'}
+        notify={notify}
         profile={profile}
       />
     );

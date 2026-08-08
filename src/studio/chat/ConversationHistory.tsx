@@ -3,10 +3,14 @@ import {
   CheckCircle2,
   Circle,
   Clock3,
+  Code2,
   ExternalLink,
+  GitBranch,
+  MessageSquare,
   Plus,
   Search,
   Trash2,
+  Users,
   X,
 } from 'lucide-react-native';
 import { useState } from 'react';
@@ -14,11 +18,24 @@ import { ScrollView, Text, TextInput, View } from 'react-native';
 
 import type { SingleConversation } from '../../api/HermesCloudApi';
 import { conversationHasRunningWork } from '../../api/chat-view-model';
+import { StudioOfficialAvatar } from '../../components/studio/StudioOfficialAvatar';
 import { StudioProfileAvatar } from '../../components/studio/StudioProfileAvatar';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { useTheme } from '../../design/ThemeProvider';
+import { multiplyAlpha } from '../../design/control-contracts';
 import { styles } from './chat-presentation-styles';
+
+export type ConversationHistoryKind = 'chat' | 'agent-group' | 'workflow' | 'coding';
+
+export interface ConversationHistoryItem extends SingleConversation {
+  active?: boolean;
+  deletable?: boolean;
+  historyKind?: ConversationHistoryKind;
+  historyLabel?: string;
+  sourceId?: string;
+  status?: string;
+}
 
 export function ConversationHistory({
   activeId,
@@ -30,9 +47,10 @@ export function ConversationHistory({
   onNew,
   onRefresh,
   onSelect,
+  onSelectItem,
 }: {
   activeId: string;
-  conversations: SingleConversation[];
+  conversations: ConversationHistoryItem[];
   isChinese: boolean;
   onCheckRelay(): void;
   onClose?(): void;
@@ -40,6 +58,7 @@ export function ConversationHistory({
   onNew(): void;
   onRefresh(): void;
   onSelect(id: string): void;
+  onSelectItem?(item: ConversationHistoryItem): void;
 }) {
   const { tokens } = useTheme();
   const [query, setQuery] = useState('');
@@ -166,9 +185,24 @@ export function ConversationHistory({
         style={styles.historyScroll}
       >
         {filtered.map((conversation) => {
-          const active = conversationHasRunningWork(conversation);
+          const kind = conversation.historyKind || 'chat';
+          const active = kind === 'chat'
+            ? conversationHasRunningWork(conversation)
+            : Boolean(conversation.active);
           const model = conversation.official_model || '';
           const selected = selectedIds.has(conversation.id);
+          const HistoryIcon = kind === 'agent-group'
+            ? Users
+            : kind === 'workflow'
+              ? GitBranch
+              : kind === 'coding'
+                ? Code2
+                : MessageSquare;
+          const historyLabel = conversation.historyLabel || (kind === 'agent-group'
+            ? (isChinese ? 'Agent 群聊' : 'Agent group')
+            : kind === 'workflow'
+              ? (isChinese ? '工作流' : 'Workflow')
+              : (isChinese ? '聊天' : 'Chat'));
           return (
             <View
               key={conversation.id}
@@ -184,7 +218,9 @@ export function ConversationHistory({
                     : (isChinese ? '打开会话' : 'Open conversation')} ${conversation.title || ''}`}
                   onPress={() => selectionMode
                     ? toggleSelected(conversation.id)
-                    : onSelect(conversation.id)}
+                    : onSelectItem
+                      ? onSelectItem(conversation)
+                      : onSelect(conversation.id)}
                   style={{ flex: 1, gap: 7, minWidth: 0 }}
                 >
                   <View style={styles.historyItemTitleRow}>
@@ -195,6 +231,7 @@ export function ConversationHistory({
                         <Circle color={tokens.colors.textTertiary} size={15} />
                       )
                     ) : null}
+                    <HistoryIcon color={kind === 'workflow' ? tokens.colors.warning : tokens.colors.primary} size={14} />
                     <Text numberOfLines={1} style={[styles.historyItemTitle, { color: tokens.colors.foreground }]}>
                       {conversation.title || (isChinese ? '新对话' : 'New conversation')}
                     </Text>
@@ -203,14 +240,29 @@ export function ConversationHistory({
                     </Text>
                   </View>
                   <View style={styles.historyItemProfileRow}>
-                    <StudioProfileAvatar seed={conversation.profile || model || 'default'} size={18} />
+                    {kind === 'agent-group' ? (
+                      <StudioOfficialAvatar size={18} variant="studio" />
+                    ) : kind === 'workflow' ? (
+                      <View style={[{ alignItems: 'center', borderRadius: 9, height: 18, justifyContent: 'center', width: 18 }, { backgroundColor: multiplyAlpha(tokens.colors.warning, 0.14) }]}>
+                        <GitBranch color={tokens.colors.warning} size={12} />
+                      </View>
+                    ) : kind === 'coding' ? (
+                      <View style={[{ alignItems: 'center', borderRadius: 9, height: 18, justifyContent: 'center', width: 18 }, { backgroundColor: multiplyAlpha(tokens.colors.primary, 0.14) }]}>
+                        <Code2 color={tokens.colors.primary} size={12} />
+                      </View>
+                    ) : (
+                      <StudioProfileAvatar seed={conversation.profile || model || 'default'} size={18} />
+                    )}
+                    <Text numberOfLines={1} style={[styles.historyItemMeta, { color: tokens.colors.textTertiary }]}>
+                      {historyLabel}
+                    </Text>
                     <Text numberOfLines={1} style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>
                       {[conversation.profile || 'default', model].filter(Boolean).join(' · ')}
                     </Text>
                     {active ? <View style={[styles.historyActiveDot, { backgroundColor: tokens.colors.success }]} /> : null}
                   </View>
                 </IOSPressable>
-                {!selectionMode ? (
+                {!selectionMode && (kind === 'chat' || conversation.deletable) ? (
                   <IOSPressable
                     accessibilityLabel={`${isChinese ? '删除会话' : 'Delete conversation'} ${conversation.title || ''}`}
                     hitSlop={8}

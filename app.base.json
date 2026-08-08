@@ -49,6 +49,10 @@
         "NSSpeechRecognitionUsageDescription": "Hermes 使用 Apple 语音识别将你主动录制的语音转换为会话文字。",
         "NSPhotoLibraryUsageDescription": "用于从照片图库选择图片并上传到 Hermes 会话。",
         "NSContactsUsageDescription": "Hermes accesses contacts only after explicit authorization and request.",
+        "NSLocalNetworkUsageDescription": "Hermes discovers and restores Coding Pi services on your local network.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        },
         "NSBluetoothAlwaysUsageDescription": "Hermes scans nearby Bluetooth devices only after an explicit request.",
         "NSHomeKitUsageDescription": "Hermes reads HomeKit device state only after explicit authorization and request.",
         "NSAppleMusicUsageDescription": "Hermes controls media playback only after explicit authorization and request.",

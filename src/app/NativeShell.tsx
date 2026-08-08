@@ -174,6 +174,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     labels: { en: 'Agent', zh: 'Agent' },
     items: [
       { path: '/chat', labels: { en: 'Chat', zh: '聊天' }, symbol: 'message.fill', fallback: 'MessageSquare' },
+      { path: '/workflows', labels: { en: 'Workflows', zh: '工作流' }, symbol: 'arrow.triangle.branch', fallback: 'Zap' },
       { path: '/cron', labels: { en: 'Jobs', zh: '任务' }, symbol: 'clock.arrow.circlepath', fallback: 'Clock' },
       { path: '/kanban', labels: { en: 'Kanban', zh: '看板' }, symbol: 'rectangle.3.group', fallback: 'Database' },
       { path: '/channels', labels: { en: 'Channels', zh: '消息渠道' }, symbol: 'dot.radiowaves.left.and.right', fallback: 'Radio' },

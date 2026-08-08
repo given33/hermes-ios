@@ -8,7 +8,7 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react-native';
-import { useCallback, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import {
   Image,
   StyleSheet,
@@ -76,7 +76,7 @@ const RECONNECT_MAX_ATTEMPTS = 5;
 
 
 
-export function UnifiedMessage({
+export const UnifiedMessage = memo(function UnifiedMessage({
   index,
   isChinese,
   message,
@@ -318,7 +318,7 @@ export function UnifiedMessage({
       ) : null}
     </Reanimated.View>
   );
-}
+});
 
 function MessageAvatar({
   compact = false,
@@ -492,7 +492,7 @@ export function PendingDot({ delay }: { delay: number }) {
   return <Reanimated.View style={[styles.pendingDot, { backgroundColor: tokens.colors.primary }, animatedStyle]} />;
 }
 
-function RoleActivityGroup({
+const RoleActivityGroup = memo(function RoleActivityGroup({
   isChinese,
   message,
   onInspectActivity,
@@ -607,7 +607,7 @@ function RoleActivityGroup({
       ) : null}
     </View>
   );
-}
+});
 
 function shouldShowMessageTiming(message: ChatMessage): boolean {
   if (

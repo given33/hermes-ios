@@ -22,7 +22,6 @@ import {
   type HermesChatViewMessage as ChatMessage,
   type ConversationCollaborationState,
 } from '../api/chat-view-model';
-import { applyHostedLifecycleEvents } from '../api/hosted-lifecycle-view-model';
 import { useTheme } from '../design/ThemeProvider';
 import type { HermesNotificationTarget } from '../notifications/notification-target';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
@@ -33,6 +32,7 @@ import {
   serverFailure,
 } from './chat/chat-domain';
 import { ChatPageShell } from './chat/ChatPageShell';
+import { useChatFeatureModes } from './chat/useChatFeatureModes';
 import { useChatPageState } from './chat/useChatPageState';
 import { useHostedTurnDeliveryService } from './chat/useHostedTurnDeliveryService';
 import { useHermesVoice } from './chat/useHermesVoice';
@@ -49,6 +49,7 @@ import { useChatAttachmentController } from './chat/useChatAttachmentController'
 import { isLargePaste } from './chat/composer-draft-policy';
 import { useHostedInterventionController } from './chat/useHostedInterventionController';
 import { useHostedSendController } from './chat/useHostedSendController';
+import { useHostedLifecycleEventApplication } from './chat/useHostedLifecycleEventApplication';
 import { latestChatPlan } from './chat/chat-plan-model';
 import { useConversationActionsController } from './chat/useConversationActionsController';
 import { useChatComposerNavigationController } from './chat/useChatComposerNavigationController';
@@ -71,6 +72,7 @@ interface ChatPreviewPageProps {
   gatewayStatuses?: readonly SidebarGatewayStatus[];
   locale?: 'en' | 'zh';
   notify(message: string): void;
+  navigate?(path: string): void;
   notificationTarget?: HermesNotificationTarget | null;
   openNavigation?(): void;
   onPreferredConversationConsumed?(conversationId: string): void;
@@ -84,6 +86,7 @@ export function ChatPreviewPage({
   gatewayStatuses = [],
   locale = 'zh',
   notify,
+  navigate,
   notificationTarget,
   openNavigation,
   onPreferredConversationConsumed,
@@ -568,30 +571,8 @@ export function ChatPreviewPage({
     replayDurableOutboxes,
   });
 
-  const applyLiveHostedEvents = useCallback((events: Parameters<typeof applyHostedLifecycleEvents>[1]) => {
-    const result = applyHostedLifecycleEvents(messagesRef.current, events, isChinese);
-    setMessages(result.messages);
-    for (const notice of result.notices) notify(notice);
-    if (result.firstTokenAt && !firstTokenAtRef.current) {
-      firstTokenAtRef.current = result.firstTokenAt;
-    }
-    if (result.reconnectAttempt !== undefined) {
-      setReconnectAttempt(result.reconnectAttempt);
-    } else if (result.phase && result.phase !== 'reconnecting') {
-      setReconnectAttempt(0);
-    }
-    if (result.phase && (result.phase === 'reconnecting' || result.phaseStartedAt !== undefined)) {
-      updatePendingPhase(result.phase, result.phaseStartedAt || Date.now());
-    }
-    if (result.completed || result.failed) {
-      pendingTurnActiveRef.current = false;
-      setHostedRunning(false);
-      setSending(false);
-    } else if (result.turnActive) {
-      pendingTurnActiveRef.current = true;
-      setHostedRunning(true);
-    }
-  }, [
+  const applyLiveHostedEvents = useHostedLifecycleEventApplication({
+    cacheOwner,
     firstTokenAtRef,
     isChinese,
     messagesRef,
@@ -602,7 +583,7 @@ export function ChatPreviewPage({
     setReconnectAttempt,
     setSending,
     updatePendingPhase,
-  ]);
+  });
 
   useHostedConversationStream({
     accountGenerationRef: hostedAccountGenerationRef,
@@ -716,10 +697,23 @@ export function ChatPreviewPage({
     updateAttachments,
   });
 
+  const chatFeatureModes = useChatFeatureModes({ activeConversationId, cacheOwner, client, conversations, deleteConversations, fixtureMode, isChinese, navigate, notify, profile, refreshConversationHistory, selectConversation });
+  const { activeHistoryId, agentGroupController, chatMode, codingPiCollabController, codingPiController, deleteHistoryItems, historyConversations, refreshUnifiedHistory, selectHistoryItem, setChatMode } = chatFeatureModes;
+
   return (
     <>
       <ChatPageShell
       attachmentsOpen={attachmentsOpen}
+      agentGroupChatProps={{ compact, controller: agentGroupController, isChinese, safeAreaBottom, safeAreaLeft, safeAreaRight }}
+       codingPiChatProps={{
+         compact,
+         controller: codingPiController,
+         collabController: codingPiCollabController,
+         isChinese,
+         safeAreaBottom,
+        safeAreaLeft,
+        safeAreaRight,
+      }}
       backgroundColor={tokens.colors.background}
       compact={compact}
       composerKeyboardStyle={composerKeyboardStyle}
@@ -794,11 +788,13 @@ export function ChatPreviewPage({
         },
       }}
       headerProps={{
+        chatMode,
         collaborationState,
         compact,
         gatewayStatuses,
         isChinese,
         messages: displayMessages,
+        onChangeChatMode: setChatMode,
         onMentionMember: mentionMember,
         onOpenConversations: () => {
           keyboardAvoidanceEnabled.value = 0;
@@ -816,35 +812,10 @@ export function ChatPreviewPage({
       }}
       historyCollapsed={historyCollapsed}
       historyModalOpen={historyModalOpen}
-      historyProps={{
-        activeId: activeConversationId,
-        conversations,
-        isChinese,
-        onCheckRelay: checkApiRelay,
-        onDeleteMany: deleteConversations,
-        onNew: createConversation,
-        onRefresh: refreshConversationHistory,
-        onSelect: (id) => { void selectConversation(id); },
-      }}
+       historyProps={{ activeId: activeHistoryId, conversations: historyConversations, isChinese, onCheckRelay: checkApiRelay, onDeleteMany: deleteHistoryItems, onNew: () => { if (chatMode === 'coding') void codingPiController.createSession(); else void createConversation(); }, onRefresh: refreshUnifiedHistory, onSelect: (id) => { void selectConversation(id); }, onSelectItem: selectHistoryItem }}
       isChinese={isChinese}
       keyboardRootStyle={keyboardRootStyle}
-      modalHistoryProps={{
-        activeId: activeConversationId,
-        conversations,
-        isChinese,
-        onCheckRelay: checkApiRelay,
-        onDeleteMany: deleteConversations,
-        onClose: () => setHistoryModalOpen(false),
-        onNew: () => {
-          void createConversation();
-          setHistoryModalOpen(false);
-        },
-        onRefresh: refreshConversationHistory,
-        onSelect: (id) => {
-          void selectConversation(id);
-          setHistoryModalOpen(false);
-        },
-      }}
+       modalHistoryProps={{ activeId: activeHistoryId, conversations: historyConversations, isChinese, onCheckRelay: checkApiRelay, onDeleteMany: deleteHistoryItems, onClose: () => setHistoryModalOpen(false), onNew: () => { if (chatMode === 'coding') void codingPiController.createSession(); else void createConversation(); setHistoryModalOpen(false); }, onRefresh: refreshUnifiedHistory, onSelect: (id) => { void selectConversation(id); setHistoryModalOpen(false); }, onSelectItem: (item) => { selectHistoryItem(item); setHistoryModalOpen(false); } }}
       onCloseAttachments={() => setAttachmentsOpen(false)}
       onCloseHistory={() => setHistoryModalOpen(false)}
       onPickFile={() => { void pickFile(); }}

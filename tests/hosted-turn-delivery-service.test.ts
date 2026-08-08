@@ -121,6 +121,32 @@ test('a deleted conversation is re-homed once without changing request identity'
   assert.equal(state.persisted.at(-1)?.conversationPending, false);
 });
 
+test('a text-only turn does not perform a redundant outbox write before enqueue', async () => {
+  const state = ports();
+  const cloud: HostedTurnCloudPort = {
+    async createConversation() {},
+    async enqueueHostedTurn() { return { accepted: true } as never; },
+    async interveneHostedTurn() { return { accepted: true }; },
+    async uploadConversationAttachment() { return {}; },
+  };
+  const service = createHostedTurnDeliveryService({
+    attachments,
+    cacheOwner: 'account-1',
+    cloud,
+    isChinese: false,
+    outbox: state.outbox,
+    profile: 'default',
+    requestTimeoutMs: 1_000,
+  });
+
+  await service.deliverPendingEnqueue(
+    pendingItem({ conversationId: 'conversation-1' }),
+    0,
+  );
+
+  assert.deepEqual(state.persisted, []);
+});
+
 test('a lost outbox claim stops delivery before any server call', async () => {
   let serverCalls = 0;
   const cloud: HostedTurnCloudPort = {

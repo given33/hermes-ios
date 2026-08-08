@@ -5,6 +5,8 @@ import Reanimated from 'react-native-reanimated';
 
 import { NativeButton } from '../../components/ui/NativeButton';
 import { PreviewModal } from '../PreviewPrimitives';
+import { AgentGroupChatView } from '../agent-group/AgentGroupChatView';
+import { CodingPiChatView } from '../coding-pi/CodingPiChatView';
 import { ChatComposer } from './ChatComposer';
 import { ChatHeader } from './ChatHeader';
 import { ChatMessageStream } from './ChatMessageStream';
@@ -16,6 +18,8 @@ type HistoryProps = ComponentProps<typeof ConversationHistory>;
 
 interface ChatPageShellProps {
   attachmentsOpen: boolean;
+  agentGroupChatProps: ComponentProps<typeof AgentGroupChatView>;
+  codingPiChatProps: ComponentProps<typeof CodingPiChatView>;
   backgroundColor: string;
   compact: boolean;
   composerKeyboardStyle: ComponentProps<typeof Reanimated.View>['style'];
@@ -41,6 +45,8 @@ interface ChatPageShellProps {
 /** Pure chat layout. Network, persistence and state-machine work stays in hooks. */
 export function ChatPageShell({
   attachmentsOpen,
+  agentGroupChatProps,
+  codingPiChatProps,
   backgroundColor,
   compact,
   composerKeyboardStyle,
@@ -71,28 +77,36 @@ export function ChatPageShell({
       ]}
     >
       <View style={styles.chat}>
-        {showHistory && !historyCollapsed ? (
+        {showHistory && !historyCollapsed && headerProps.chatMode !== 'agent-group' ? (
           <ConversationHistory {...historyProps} />
         ) : null}
 
         <View style={styles.main}>
           <ChatHeader {...headerProps} />
-          <ChatMessageStream {...streamProps} />
-          <ChatPlanDrawer isChinese={isChinese} plan={plan}>
-            <Reanimated.View
-              style={[
-                styles.composer,
-                {
-                  backgroundColor: 'transparent',
-                  paddingLeft: (compact ? 4 : 8) + safeAreaLeft,
-                  paddingRight: (compact ? 4 : 8) + safeAreaRight,
-                },
-                composerKeyboardStyle,
-              ]}
-            >
-              <ChatComposer {...composerProps} />
-            </Reanimated.View>
-          </ChatPlanDrawer>
+          {headerProps.chatMode === 'agent-group' ? (
+            <AgentGroupChatView {...agentGroupChatProps} />
+          ) : headerProps.chatMode === 'coding' ? (
+            <CodingPiChatView {...codingPiChatProps} />
+          ) : (
+            <>
+              <ChatMessageStream {...streamProps} />
+              <ChatPlanDrawer isChinese={isChinese} plan={plan}>
+                <Reanimated.View
+                  style={[
+                    styles.composer,
+                    {
+                      backgroundColor: 'transparent',
+                      paddingLeft: (compact ? 4 : 8) + safeAreaLeft,
+                      paddingRight: (compact ? 4 : 8) + safeAreaRight,
+                    },
+                    composerKeyboardStyle,
+                  ]}
+                >
+                  <ChatComposer {...composerProps} />
+                </Reanimated.View>
+              </ChatPlanDrawer>
+            </>
+          )}
         </View>
       </View>
 

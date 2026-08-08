@@ -24,6 +24,12 @@ export function hermesOriginTransportError(origin: string): string | null {
 export const HERMES_ORIGIN =
   (process.env.EXPO_PUBLIC_HERMES_URL ?? 'https://daxueshenmai.top').replace(/\/$/, '');
 
+// Optional independent Pi service. When set, Coding mode uses the native Pi
+// service origin and /api/coding-pi; when absent it uses the compatibility
+// route mounted in Hermes. This is an origin only, never a route or token.
+export const CODING_PI_ORIGIN =
+  (process.env.EXPO_PUBLIC_CODING_PI_URL ?? '').replace(/\/$/, '');
+
 // Non-null when the configured origin violates the transport rule above. The
 // app shell renders a config-error screen from it instead of booting auth.
 export const HERMES_ORIGIN_TRANSPORT_ERROR = hermesOriginTransportError(HERMES_ORIGIN);

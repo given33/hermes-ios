@@ -222,10 +222,16 @@ export function createHostedTurnDeliveryService({
       );
     }
 
-    item = await persistIfActive(
-      attachments.hydrate({ ...item, pendingAttachments }),
-      expectedOwnerEpoch,
-    );
+    // The initial outbox transaction already durably contains a text-only
+    // turn. Avoid another serialized AsyncStorage read/write before the
+    // network hop; attachment metadata is the only delivery-time mutation
+    // that must be persisted before enqueue.
+    if (pendingAttachments.length || item.pendingAttachments?.length) {
+      item = await persistIfActive(
+        attachments.hydrate({ ...item, pendingAttachments }),
+        expectedOwnerEpoch,
+      );
+    }
     const response = await withAbortableDeadline(
       (signal) => cloud.enqueueHostedTurn(item.conversationId, {
         ...item.input,

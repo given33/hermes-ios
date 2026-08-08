@@ -515,16 +515,11 @@ export function useHostedSendController({
         }, ownerEpoch);
         return;
       }
-      // Open the hosted SSE path as soon as the durable local intent exists.
-      // The enqueue request and gateway prewarm then run in parallel instead
-      // of making the first live token wait for a React render after the
-      // enqueue response.  A brand-new conversation may briefly return 404;
-      // the stream hook retries with its bounded backoff once the enqueue has
-      // created it.  Pending-turn state keeps that transient snapshot from
-      // closing the stream or clearing the optimistic message.
-      activeHostedTurnIdRef.current = hostedTurnId;
-      setActiveHostedTurnId(hostedTurnId);
-      setHostedRunning(true);
+      // Keep the optimistic composer state local while delivery is in flight,
+      // but do not start SSE until the server has accepted the turn. Starting
+      // it here races a brand-new conversation with /enqueue: the first GET
+      // can receive 404, after which the stream hook enters reconnect backoff
+      // and the first live token waits behind an avoidable retry.
       // The official Hermes gateway owns model readiness, retries, and
       // provider errors. A client-side /api/model preflight adds a cold-start
       // round trip and can disagree with the session that will actually run.

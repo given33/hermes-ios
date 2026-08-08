@@ -75,6 +75,44 @@ export function cleartextHttpAllowed(hostname: string): boolean {
     || normalized.endsWith('.local');
 }
 
+/**
+ * Coding Pi is an independent companion service and may intentionally be
+ * reached over a private LAN address during local development. Keep this
+ * allowance separate from the Hermes origin policy: bearer-token traffic to
+ * the public Hermes server still requires HTTPS, while RFC1918 Pi traffic is
+ * confined to the user's local network.
+ */
+export function companionCleartextHttpAllowed(hostname: string): boolean {
+  if (cleartextHttpAllowed(hostname)) return true;
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const parts = normalized.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  return parts[0] === 10
+    || parts[0] === 169 && parts[1] === 254
+    || parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31
+    || parts[0] === 192 && parts[1] === 168;
+}
+
+export function normalizeCompanionBaseUrl(input: string): string {
+  const candidate = input.trim();
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new Error('Invalid companion service URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Companion service URL must use HTTP or HTTPS');
+  }
+  if (url.protocol === 'http:' && !companionCleartextHttpAllowed(url.hostname)) {
+    throw new HermesCleartextBaseUrlError();
+  }
+  if (url.username || url.password || url.pathname !== '/' || url.search || url.hash || url.href !== `${url.origin}/`) {
+    throw new Error('Companion service URL must be a root origin');
+  }
+  return url.origin;
+}
+
 export function normalizeBaseUrl(input: string): string {
   const candidate = input.trim();
   let url: URL;
@@ -135,6 +173,36 @@ export class HermesApiClient {
     }
     this.fetchImpl = fetchImpl;
     this.streamFetchImpl = streamFetchImpl;
+  }
+
+  /**
+   * Socket.IO cannot use HermesApiClient.request(), but it still needs the
+   * same bearer credential. Keep the token lookup in this client so realtime
+   * features never have to persist or put credentials in a URL.
+   */
+  async getAccessTokenForRealtime(): Promise<string> {
+    return this.resolveAccessToken();
+  }
+
+  /**
+   * Create a same-credential client for an independent companion service.
+   *
+   * Coding Pi is allowed to live on a different origin from Hermes. Reusing
+   * the provider keeps token refresh behavior identical without putting a
+   * second credential in the React Native bundle. The companion service must
+   * validate that bearer credential itself (normally at its reverse proxy).
+   */
+  forOrigin(baseUrl: string): HermesApiClient {
+    const normalized = normalizeBaseUrl(baseUrl);
+    if (normalized === this.baseUrl) return this;
+    return new HermesApiClient(normalized, this.credential, this.fetchImpl, this.streamFetchImpl);
+  }
+
+  /** Create a same-credential client for a local companion such as Coding Pi. */
+  forCompanionOrigin(baseUrl: string): HermesApiClient {
+    const normalized = normalizeCompanionBaseUrl(baseUrl);
+    if (normalized === this.baseUrl) return this;
+    return new HermesApiClient(normalized, this.credential, this.fetchImpl, this.streamFetchImpl);
   }
 
   async request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {

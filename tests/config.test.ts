@@ -11,7 +11,7 @@ import {
   isHermesNavigation,
   selectIpaAsset,
 } from '../src/config';
-import { cleartextHttpAllowed } from '../src/api/HermesApiClient';
+import { cleartextHttpAllowed, companionCleartextHttpAllowed, normalizeCompanionBaseUrl } from '../src/api/HermesApiClient';
 
 test('the Hermes origin travels over HTTPS unless it targets a local dev host', () => {
   assert.match(HERMES_ORIGIN, /^https:\/\//);
@@ -23,6 +23,15 @@ test('the Hermes origin travels over HTTPS unless it targets a local dev host', 
   assert.equal(cleartextHttpAllowed('mac-studio.local'), true);
   assert.equal(cleartextHttpAllowed('daxueshenmai.top'), false);
   assert.equal(cleartextHttpAllowed('192.168.1.20'), false);
+  assert.equal(companionCleartextHttpAllowed('192.168.1.20'), true);
+  assert.equal(companionCleartextHttpAllowed('10.20.0.5'), true);
+  assert.equal(companionCleartextHttpAllowed('daxueshenmai.top'), false);
+});
+
+test('Coding Pi accepts private-LAN HTTP without weakening the Hermes origin policy', () => {
+  assert.equal(normalizeCompanionBaseUrl('http://192.168.1.20:8787'), 'http://192.168.1.20:8787');
+  assert.equal(normalizeCompanionBaseUrl('https://pi.example.test'), 'https://pi.example.test');
+  assert.throws(() => normalizeCompanionBaseUrl('http://pi.example.test:8787'), /https/i);
 });
 
 test('a cleartext public origin is recorded for the config screen and names the escape hatches', () => {

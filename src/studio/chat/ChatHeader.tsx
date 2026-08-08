@@ -1,4 +1,4 @@
-import { Menu } from 'lucide-react-native';
+import { Code2, Menu, MessageSquare, Users } from 'lucide-react-native';
 import { Text, View } from 'react-native';
 
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
@@ -11,13 +11,17 @@ import { CollaborationMemberStack } from './ChatCollaborationPresentation';
 import { LiveDot } from './ChatPresentation';
 import { styles } from './chat-presentation-styles';
 
+export type ChatMode = 'single' | 'agent-group' | 'coding';
+
 export interface ChatHeaderProps {
+  chatMode: ChatMode;
   collaborationState: 'active' | 'lifting' | 'single';
   compact: boolean;
   gatewayStatuses: readonly SidebarGatewayStatus[];
   isChinese: boolean;
   messages: readonly ChatMessage[];
   onMentionMember(message: ChatMessage): void;
+  onChangeChatMode(mode: ChatMode): void;
   onOpenConversations(): void;
   onOpenNavigation(): void;
   safeAreaLeft: number;
@@ -28,12 +32,14 @@ export interface ChatHeaderProps {
 }
 
 export function ChatHeader({
+  chatMode,
   collaborationState,
   compact,
   gatewayStatuses,
   isChinese,
   messages,
   onMentionMember,
+  onChangeChatMode,
   onOpenConversations,
   onOpenNavigation,
   safeAreaLeft,
@@ -75,7 +81,13 @@ export function ChatHeader({
           <Menu color={tokens.colors.foreground} size={compact ? 14 : 16} strokeWidth={1.7} />
         </IOSPressable>
         <View style={[styles.headerAvatar, compact && styles.headerAvatarCompact]}>
-          <StudioOfficialAvatar size={compact ? 26 : 28} />
+          {chatMode === 'coding' ? (
+            <View style={{ alignItems: 'center', backgroundColor: multiplyAlpha(tokens.colors.primary, 0.14), borderRadius: compact ? 13 : 14, height: compact ? 26 : 28, justifyContent: 'center', width: compact ? 26 : 28 }}>
+              <Code2 color={tokens.colors.primary} size={compact ? 15 : 17} />
+            </View>
+          ) : (
+            <StudioOfficialAvatar size={compact ? 26 : 28} variant={chatMode === 'agent-group' ? 'studio' : 'agent'} />
+          )}
         </View>
         <View style={styles.headingCopy}>
           <Text
@@ -86,17 +98,20 @@ export function ChatHeader({
               compact && styles.headingTitleCompact,
             ]}
           >
-            Hermes Agent
+            {chatMode === 'agent-group' ? 'Hermes Studio Agent 群聊' : 'Hermes Agent'}
           </Text>
-          {!compact && collaborationState !== 'single' ? (
+          {!compact && chatMode === 'single' && collaborationState !== 'single' ? (
             <Text numberOfLines={1} style={[styles.headingSubtitle, { color: tokens.colors.textTertiary }]}>
               {collaborationState === 'lifting'
                 ? (isChinese ? '群聊正在拉起' : 'Starting group chat')
                 : (isChinese ? '群聊已拉起' : 'Group chat ready')}
             </Text>
           ) : null}
+          {!compact && chatMode === 'coding' ? (
+            <Text numberOfLines={1} style={[styles.headingSubtitle, { color: tokens.colors.textTertiary }]}>Pi coding runtime</Text>
+          ) : null}
         </View>
-        {collaborationState === 'active' && !compact ? (
+        {chatMode === 'single' && collaborationState === 'active' && !compact ? (
           <View style={styles.collaborationHeaderInfo}>
             <CollaborationMemberStack
               isChinese={isChinese}
@@ -116,6 +131,71 @@ export function ChatHeader({
         ) : null}
       </View>
       <View style={styles.headerControls}>
+        <View
+          accessibilityLabel={isChinese ? '切换聊天模式' : 'Switch chat mode'}
+          style={{
+            alignItems: 'center',
+            backgroundColor: tokens.colors.card,
+            borderColor: tokens.colors.border,
+            borderRadius: 8,
+            borderWidth: 1,
+            flexDirection: 'row',
+            gap: 2,
+            padding: 2,
+          }}
+        >
+          <IOSPressable
+            accessibilityLabel={isChinese ? '切换到普通聊天' : 'Switch to chat'}
+            onPress={() => onChangeChatMode('single')}
+            pressedStyle={{ backgroundColor: tokens.colors.accent }}
+            style={{
+              alignItems: 'center',
+              backgroundColor: chatMode === 'single' ? tokens.colors.accent : 'transparent',
+              borderRadius: 6,
+              flexDirection: 'row',
+              gap: 4,
+              minHeight: 26,
+              paddingHorizontal: compact ? 5 : 7,
+            }}
+          >
+            <MessageSquare color={tokens.colors.foreground} size={13} />
+            {!compact ? <Text style={{ color: tokens.colors.foreground, fontSize: 10 }}>{isChinese ? '聊天' : 'Chat'}</Text> : null}
+          </IOSPressable>
+          <IOSPressable
+            accessibilityLabel={isChinese ? '切换到 Hermes Studio Agent 群聊' : 'Switch to Hermes Studio Agent group chat'}
+            onPress={() => onChangeChatMode('agent-group')}
+            pressedStyle={{ backgroundColor: tokens.colors.accent }}
+            style={{
+              alignItems: 'center',
+              backgroundColor: chatMode === 'agent-group' ? tokens.colors.accent : 'transparent',
+              borderRadius: 6,
+              flexDirection: 'row',
+              gap: 4,
+              minHeight: 26,
+              paddingHorizontal: compact ? 5 : 7,
+            }}
+          >
+            <Users color={tokens.colors.foreground} size={13} />
+            {!compact ? <Text style={{ color: tokens.colors.foreground, fontSize: 10 }}>{isChinese ? 'Agent 群聊' : 'Agent group'}</Text> : null}
+          </IOSPressable>
+          <IOSPressable
+            accessibilityLabel={isChinese ? '切换到 Coding Pi' : 'Switch to Coding Pi'}
+            onPress={() => onChangeChatMode('coding')}
+            pressedStyle={{ backgroundColor: tokens.colors.accent }}
+            style={{
+              alignItems: 'center',
+              backgroundColor: chatMode === 'coding' ? tokens.colors.accent : 'transparent',
+              borderRadius: 6,
+              flexDirection: 'row',
+              gap: 4,
+              minHeight: 26,
+              paddingHorizontal: compact ? 5 : 7,
+            }}
+          >
+            <Code2 color={tokens.colors.foreground} size={13} />
+            {!compact ? <Text style={{ color: tokens.colors.foreground, fontSize: 10 }}>Coding</Text> : null}
+          </IOSPressable>
+        </View>
         <View style={styles.gatewayStatuses}>
           {gatewayStatuses.map((gateway) => (
             <View key={gateway.id} style={styles.gatewayStatusRow}>
