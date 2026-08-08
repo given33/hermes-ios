@@ -15,16 +15,42 @@ export interface NativeDeviceMetadata {
   osVersion?: string | null;
 }
 
+// A re-signed iOS build can lose access to the original Keychain container
+// even though the app itself is otherwise usable. The installation ID is
+// useful for device/session management, but it is not an authentication
+// secret and must never make a correct password login fail. Keep a process
+// fallback so repeated login attempts in that environment do not create a
+// new device on every attempt.
+let volatileInstallationId = '';
+
 export async function getMobileDeviceIdentity(
   store: InstallationIdStore,
   metadata: NativeDeviceMetadata,
   createId: () => string = createInstallationId,
 ): Promise<MobileDeviceIdentity> {
-  let id = normalizeInstallationId(await store.getItemAsync(INSTALLATION_ID_STORAGE_KEY));
+  let id = '';
+  let storageReadFailed = false;
+  try {
+    id = normalizeInstallationId(await store.getItemAsync(INSTALLATION_ID_STORAGE_KEY));
+  } catch {
+    // Keychain access is an optional persistence enhancement for this value.
+    // Continue with the volatile fallback below when a signing profile or
+    // Keychain access group prevents the read.
+    storageReadFailed = true;
+  }
   if (!id) {
-    id = normalizeInstallationId(createId());
+    id = volatileInstallationId || normalizeInstallationId(createId());
     if (!id) throw new Error('Unable to create a stable Hermes device id');
-    await store.setItemAsync(INSTALLATION_ID_STORAGE_KEY, id);
+    let storageWriteFailed = false;
+    try {
+      await store.setItemAsync(INSTALLATION_ID_STORAGE_KEY, id);
+    } catch {
+      // The server only needs a valid device identifier for this session. A
+      // failed persistence write must not turn successful remote auth into a
+      // generic "cannot verify Hermes connection" error.
+      storageWriteFailed = true;
+    }
+    if (storageReadFailed || storageWriteFailed) volatileInstallationId = id;
   }
   const model = [metadata.modelName, metadata.modelId]
     .map(clean)

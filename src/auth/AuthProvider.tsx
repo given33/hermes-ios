@@ -345,8 +345,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
             candidate.baseUrl,
             candidate.accessToken,
           );
-          const response = await client.request<unknown>('/api/mobile/v1/handshake');
-          assertMobileHandshake(response);
+          await verifyMobileHandshake(client, mobileAuth);
         },
       },
     );
@@ -898,9 +897,45 @@ function localAccountCleanupTasks() {
 }
 
 async function activateLocalAccountData(connection: SavedConnection): Promise<void> {
-  await sharedConversationLocalStore().activate(
+  // Local conversation cleanup is an optional post-login effect. Its
+  // storage adapter may be unavailable in a re-signed build, but that must
+  // not turn a successful remote login into CONNECTION_ERROR.
+  await runOptionalAuthEffect(() => sharedConversationLocalStore().activate(
     accountOwnerScope(connection),
-  );
+  ));
+}
+
+async function verifyMobileHandshake(
+  client: HermesApiClient,
+  mobileAuth: MobileAuthApiClient,
+): Promise<void> {
+  try {
+    const response = await client.request<unknown>('/api/mobile/v1/handshake');
+    assertMobileHandshake(response);
+    return;
+  } catch (error) {
+    // The backend deliberately exposes this endpoint as a public, read-only
+    // contract probe. Some reverse proxies still send a newly minted bearer
+    // through the cookie gate and answer 401/403 (often as a login redirect),
+    // which used to make correct credentials look invalid. Retry the same
+    // probe without Authorization in that narrow case; all other failures
+    // retain their existing, useful error classification.
+    const retryWithoutBearer = error instanceof HermesApiError
+      ? error.status === 401 || error.status === 403
+      : error instanceof Error
+        && /incompatible mobile handshake|invalid JSON/i.test(error.message);
+    if (!retryWithoutBearer) {
+      throw error;
+    }
+    try {
+      assertMobileHandshake(await mobileAuth.getHandshake());
+      return;
+    } catch {
+      // Keep the original authenticated-probe error. In particular, do not
+      // turn a malformed server response into a misleading password error.
+      throw error;
+    }
+  }
 }
 
 async function hasPendingRemoteAccountDeletion(ownerScope: string): Promise<boolean> {
@@ -977,9 +1012,7 @@ async function adoptSavedSession(
       },
       async verify(candidate) {
         const client = new HermesApiClient(candidate.baseUrl, candidate.accessToken);
-        assertMobileHandshake(
-          await client.request<unknown>('/api/mobile/v1/handshake'),
-        );
+        await verifyMobileHandshake(client, mobileAuth);
       },
     },
   );

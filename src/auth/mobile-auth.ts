@@ -95,6 +95,16 @@ export class MobileAuthApiClient {
     };
   }
 
+  /**
+   * The mobile handshake is intentionally a public contract probe. Keep this
+   * request separate from HermesApiClient so a dashboard cookie gate or a
+   * proxy that mishandles a freshly issued bearer cannot reject a valid login
+   * before the app enters its authenticated state.
+   */
+  getHandshake(): Promise<unknown> {
+    return this.request('/api/mobile/v1/handshake');
+  }
+
   register(
     email: string,
     verificationCode: string,

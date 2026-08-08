@@ -194,6 +194,39 @@ test('stable installation identity is persisted separately from cloud workspace 
   assert.deepEqual(writes, [[INSTALLATION_ID_STORAGE_KEY, 'ios_stable_123456']]);
 });
 
+test('Keychain persistence failure does not block a remote login device identity', async () => {
+  let createCalls = 0;
+  const store = {
+    async getItemAsync() {
+      throw new Error('Keychain access group unavailable after re-signing');
+    },
+    async setItemAsync() {
+      throw new Error('Keychain access group unavailable after re-signing');
+    },
+  };
+  const metadata = {
+    appVersion: '2.0.0',
+    deviceName: 'Owner iPhone',
+    modelId: 'iPhone17,1',
+    modelName: 'iPhone 16 Pro',
+    osName: 'iOS',
+    osVersion: '18.5',
+  };
+
+  const first = await getMobileDeviceIdentity(store, metadata, () => {
+    createCalls += 1;
+    return 'ios_volatile_123456';
+  });
+  const second = await getMobileDeviceIdentity(store, metadata, () => {
+    createCalls += 1;
+    return 'must_not_replace_volatile_id';
+  });
+
+  assert.equal(first.id, 'ios_volatile_123456');
+  assert.equal(second.id, first.id);
+  assert.equal(createCalls, 1);
+});
+
 test('APNs synchronization is unavailable in Expo Go and registers only native iOS tokens', async () => {
   const calls: string[] = [];
   const api: MobileNotificationApi = {

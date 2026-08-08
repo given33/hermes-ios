@@ -117,6 +117,25 @@ test('owner status exposes registration and QQ verification capability', async (
   });
 });
 
+test('public mobile handshake probe does not attach a bearer token', async () => {
+  const calls: FetchCall[] = [];
+  const client = new MobileAuthApiClient('https://hermes.test', async (input, init) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    return jsonResponse(url, {
+      api_version: 1,
+      hermes_version: '0.20.0',
+      profiles: [],
+      capabilities: ['chat'],
+      server_time: '2026-08-08T00:00:00Z',
+    });
+  });
+
+  assert.equal((await client.getHandshake() as Record<string, unknown>).api_version, 1);
+  assert.equal(new URL(calls[0].url).pathname, '/api/mobile/v1/handshake');
+  assert.equal(new Headers(calls[0].init.headers).get('Authorization'), null);
+});
+
 test('authentication requests terminate even when the transport ignores abort', async () => {
   const captured: { signal?: AbortSignal } = {};
   const client = new MobileAuthApiClient(

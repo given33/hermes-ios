@@ -861,6 +861,11 @@ test('native auth gates the saved session behind the Face ID lock and keeps the 
   assert.match(loginSource, /MAX_FACE_ID_ATTEMPTS/);
   assert.match(loginSource, /revealRememberedPassword/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
+  assert.match(providerSource, /verifyMobileHandshake\(client, mobileAuth\)/);
+  assert.match(
+    providerSource,
+    /runOptionalAuthEffect\(\(\) => sharedConversationLocalStore\(\)\.activate/,
+  );
   assert.match(providerSource, /HermesIOSContext\.activateOwnerScope\(/);
   assert.match(providerSource, /runOptionalAuthEffect/);
   assert.match(providerSource, /const volatileWebSession = new Map<string, string>\(\)/);

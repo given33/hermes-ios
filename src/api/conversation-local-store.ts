@@ -489,9 +489,18 @@ export class ConversationLocalStore {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return;
     const epoch = beginConversationStorageOwnerActivation(normalizedOwner);
-    await enqueueConversationStorageMaintenance(normalizedOwner, async () => {
-      await this.storage.removeItem(conversationOwnerDeletionKey(normalizedOwner));
+    try {
+      await enqueueConversationStorageMaintenance(normalizedOwner, async () => {
+        await this.storage.removeItem(conversationOwnerDeletionKey(normalizedOwner));
+        completeConversationStorageOwnerActivation(normalizedOwner, epoch);
+      });
+    } catch (error) {
+      // A broken local storage adapter must not leave the account permanently
+      // fenced. Remote authentication is still valid; the next activation
+      // can retry removing the tombstone. Releasing this epoch also prevents
+      // every later local read/write from being silently blocked.
       completeConversationStorageOwnerActivation(normalizedOwner, epoch);
-    });
+      throw error;
+    }
   }
 }

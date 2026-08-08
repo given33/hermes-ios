@@ -932,6 +932,23 @@ test('a fresh account activation queued during purge preserves only its new writ
   assert.equal(storage.values.has(conversationOwnerDeletionKey(owner)), false);
 });
 
+test('failed account activation releases the local lifecycle fence for retry', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|activation-retry@example.test';
+  const deletionKey = conversationOwnerDeletionKey(owner);
+  storage.values.set(deletionKey, 'pending-deletion');
+  storage.removeFailures.add(deletionKey);
+
+  await assert.rejects(store.activate(owner), /storage cleanup failed/);
+  const epoch = captureConversationStorageEpoch(owner);
+  assert.equal(isConversationStorageEpochCurrent(owner, epoch), true);
+
+  storage.removeFailures.delete(deletionKey);
+  await store.activate(owner);
+  assert.equal(storage.values.has(deletionKey), false);
+});
+
 test('same-owner reactivation rejects old index detail create and fork callbacks', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
