@@ -239,7 +239,29 @@ function CodingPiConnectScreen({
   const [linkDraft, setLinkDraft] = useState(collabController.link);
   const [nameDraft, setNameDraft] = useState(collabController.name);
   const [showSessions, setShowSessions] = useState(true);
+  const autoCreateAttemptedRef = useRef(false);
   const bodyFont = resolveNativeFontStack(tokens.typography.fontSans, 400) || BODY_FONT;
+
+  // Coding is a zero-setup surface: when the Pi service is reachable, keep a
+  // persistent session alive automatically instead of asking for a join link.
+  // A failed auto-create resets so the next visit retries once the service
+  // or session list has recovered.
+  useEffect(() => {
+    if (controller.error) {
+      autoCreateAttemptedRef.current = false;
+      return;
+    }
+    if (controller.available !== true || controller.loading) return;
+    if (controller.sessions.length === 0) {
+      if (autoCreateAttemptedRef.current) return;
+      autoCreateAttemptedRef.current = true;
+      void controller.createSession();
+      return;
+    }
+    if (!controller.activeSessionId && controller.sessions[0]?.id) {
+      controller.selectSession(controller.sessions[0].id);
+    }
+  }, [controller]);
 
   useEffect(() => {
     if (!linkDraft && collabController.link) setLinkDraft(collabController.link);

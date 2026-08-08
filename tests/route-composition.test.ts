@@ -159,13 +159,13 @@ function navProjection(
 test('freezes the customized WebUI built-in route map without bundled plugins', () => {
   assert.deepEqual(
     HERMES_NATIVE_ROUTES.map((route) => route.path),
-    [...CORE_ROUTE_PATHS, '/chat'],
+    [...CORE_ROUTE_PATHS, '/agent-group', '/chat'],
   );
   assert.deepEqual(
     HERMES_NATIVE_ROUTES.filter((route) => route.visibleInSidebar)
       .map((route) => route.path)
       .sort(),
-    [...CORE_NAV_PATHS, '/chat'].sort(),
+    [...CORE_NAV_PATHS, '/agent-group', '/chat'].sort(),
   );
   assert.deepEqual(HERMES_NATIVE_ROUTES[0], {
     id: 'root',
@@ -314,11 +314,11 @@ test('composes conditional chat and strictly boolean-gated analytics navigation'
   });
   assert.deepEqual(
     enabled.routes.map((route) => route.path),
-    [...CORE_ROUTE_PATHS, '/chat'],
+    [...CORE_ROUTE_PATHS, '/agent-group', '/chat'],
   );
   assert.deepEqual(
     enabled.coreItems.map((item) => item.path),
-    ['/chat', ...CORE_NAV_PATHS],
+    ['/chat', '/agent-group', ...CORE_NAV_PATHS],
   );
   assert.equal(enabled.routes.at(-1)?.key, 'builtin:/chat');
 });
@@ -333,6 +333,7 @@ test('composes exact English and Chinese core labels and icons', () => {
   });
   assert.deepEqual(navProjection(english.coreItems), [
     { path: '/chat', label: 'Chat', icon: 'Terminal' },
+    { path: '/agent-group', label: 'Agent Rooms', icon: 'Users' },
     ...CORE_NAV_PATHS.map((path, index) => ({
       path,
       label: ENGLISH_NAV_LABELS[index],
@@ -348,6 +349,7 @@ test('composes exact English and Chinese core labels and icons', () => {
   });
   assert.deepEqual(navProjection(chinese.coreItems), [
     { path: '/chat', label: '\u804a\u5929', icon: 'Terminal' },
+    { path: '/agent-group', label: 'Agent \u623f\u95f4', icon: 'Users' },
     ...CORE_NAV_PATHS.map((path, index) => ({
       path,
       label: CHINESE_NAV_LABELS[index],

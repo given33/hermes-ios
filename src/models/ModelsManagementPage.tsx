@@ -154,7 +154,7 @@ export function ModelsManagementPage({
       state: 'running',
     });
     try {
-      const result = await api.discoverCustomModels(baseUrl, apiKey, profile);
+      const result = await api.discoverCustomModels(baseUrl, apiKey, profile, apiMode);
       if (!result.ok) throw new Error(modelConnectionFailure(chinese ? '模型检测' : 'Model detection', result, chinese));
       setDetectedModels(result.models);
       if (!result.models.includes(model)) setModel(result.models[0] || '');

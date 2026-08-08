@@ -282,6 +282,10 @@ export class HermesStudioGroupChatApi {
         description: options.description || '',
         ...(options.authUserId ? { authUserId: options.authUserId } : {}),
       },
+      // The Studio auth middleware accepts the token in both the handshake
+      // payload (auth.token) and the query string; carrying both widens
+      // compatibility with front proxies that only forward query parameters.
+      query: { token },
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,

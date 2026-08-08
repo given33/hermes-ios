@@ -2,9 +2,11 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File as ExpoFile } from 'expo-file-system';
 import {
   CheckCircle2,
+  ChevronLeft,
   CircleAlert,
   GitBranch,
   GitCommitHorizontal,
+  Menu,
   Pause,
   Play,
   Plus,
@@ -20,6 +22,7 @@ import {
 } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, Share, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { HermesApiClient } from '../../api/HermesApiClient';
 import { hermesStudioApiFor } from '../../api/hermes-api-registry';
@@ -43,9 +46,11 @@ import { PreviewModal, PreviewText, PreviewToggle } from '../PreviewPrimitives';
 
 export interface HermesStudioWorkflowPageProps {
   client?: HermesApiClient;
+  compact?: boolean;
   fixtureMode?: boolean;
   locale?: 'en' | 'zh';
   notify(message: string): void;
+  onOpenNavigation?(): void;
   profile?: string;
 }
 
@@ -94,12 +99,15 @@ const EMPTY_EDGE_EDITOR: EdgeEditorState = {
 
 export function HermesStudioWorkflowPage({
   client,
+  compact = false,
   fixtureMode = false,
   locale = 'zh',
   notify,
+  onOpenNavigation,
   profile = 'default',
 }: HermesStudioWorkflowPageProps) {
   const { tokens } = useTheme();
+  const insets = useSafeAreaInsets();
   const isChinese = locale === 'zh';
   const api = useMemo(() => client ? hermesStudioApiFor(client) : null, [client]);
   const [workflows, setWorkflows] = useState<HermesStudioWorkflowRecord[]>([]);
@@ -128,6 +136,7 @@ export function HermesStudioWorkflowPage({
   const [importPreview, setImportPreview] = useState<HermesStudioWorkflowImportPreview | null>(null);
   const [importDocument, setImportDocument] = useState('');
   const [importing, setImporting] = useState(false);
+  const [compactDetailOpen, setCompactDetailOpen] = useState(false);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedId) || null;
 
@@ -249,6 +258,7 @@ export function HermesStudioWorkflowPage({
           } satisfies HermesStudioWorkflowRecord;
       setWorkflows((current) => [workflow, ...current]);
       setSelectedId(workflow.id);
+      if (compact) setCompactDetailOpen(true);
       setCreateOpen(false);
       setWorkflowName('');
       notify(isChinese ? '工作流已创建' : 'Workflow created');
@@ -257,7 +267,7 @@ export function HermesStudioWorkflowPage({
       setError(message);
       notify(message);
     }
-  }, [api, isChinese, notify, profile, workflowName]);
+  }, [api, compact, isChinese, notify, profile, workflowName]);
 
   const openWorkflowSettings = useCallback(() => {
     if (!selectedWorkflow) return;
@@ -638,18 +648,80 @@ export function HermesStudioWorkflowPage({
 
   return (
     <View style={[styles.root, { backgroundColor: tokens.colors.background }]}> 
-      <View style={[styles.header, { borderBottomColor: tokens.colors.border }]}> 
-        <View style={styles.headerTitleRow}>
+      <View
+        style={[
+          styles.header,
+          compact && styles.headerCompact,
+          {
+            borderBottomColor: tokens.colors.border,
+            minHeight: compact ? 52 + insets.top : undefined,
+            paddingTop: compact ? insets.top + 7 : undefined,
+          },
+        ]}
+      > 
+        {compact ? (
+          <IOSPressable
+            accessibilityLabel={compactDetailOpen ? (isChinese ? '返回工作流列表' : 'Back to workflows') : (isChinese ? '返回导航' : 'Open navigation')}
+            hitSlop={8}
+            onPress={() => {
+              if (compactDetailOpen) setCompactDetailOpen(false);
+              else onOpenNavigation?.();
+            }}
+            style={styles.navigationButton}
+          >
+            {compactDetailOpen
+              ? <ChevronLeft color={tokens.colors.foreground} size={21} strokeWidth={1.8} />
+              : <Menu color={tokens.colors.foreground} size={19} strokeWidth={1.8} />}
+          </IOSPressable>
+        ) : null}
+        <View style={[styles.headerTitleRow, compact && styles.headerTitleRowCompact]}>
           <StudioOfficialAvatar size={28} variant="studio" />
-          <View>
-            <Text style={[styles.title, { color: tokens.colors.foreground }]}>
+          <View style={styles.headerTitleCopy}>
+            <Text numberOfLines={1} style={[styles.title, { color: tokens.colors.foreground }]}>
               {isChinese ? 'Hermes Studio 工作流' : 'Hermes Studio Workflows'}
             </Text>
-            <Text style={[styles.subtitle, { color: tokens.colors.textTertiary }]}>
+            {!compact ? (
+            <Text style={[styles.subtitle, { color: tokens.colors.textTertiary }]}> 
               {isChinese ? '可视化 Agent 编排 · 独立运行历史' : 'Visual Agent orchestration · independent run history'}
             </Text>
+            ) : null}
           </View>
         </View>
+        {compact ? (
+          <View style={[styles.headerActions, styles.headerActionsCompact]}>
+            <IOSPressable
+              accessibilityLabel={isChinese ? '导入工作流' : 'Import workflow'}
+              disabled={importing}
+              onPress={() => { void importWorkflow(); }}
+              style={styles.headerIconButton}
+            >
+              <Upload color={tokens.colors.textSecondary} size={16} />
+            </IOSPressable>
+            <IOSPressable
+              accessibilityLabel={isChinese ? '导出工作流' : 'Export workflow'}
+              disabled={!selectedWorkflow}
+              onPress={() => { void exportWorkflow(); }}
+              style={styles.headerIconButton}
+            >
+              <Download color={tokens.colors.textSecondary} size={16} />
+            </IOSPressable>
+            <IOSPressable
+              accessibilityLabel={isChinese ? '刷新工作流' : 'Refresh workflows'}
+              onPress={() => { void refresh(); }}
+              style={styles.headerIconButton}
+            >
+              <RefreshCw color={tokens.colors.textSecondary} size={16} />
+            </IOSPressable>
+            <IOSPressable
+              accessibilityLabel={isChinese ? '新建工作流' : 'Create workflow'}
+              onPress={() => setCreateOpen(true)}
+              style={styles.headerIconButton}
+            >
+              <Plus color={tokens.colors.foreground} size={18} />
+            </IOSPressable>
+          </View>
+        ) : null}
+        {!compact ? (
         <View style={styles.headerActions}>
           <NativeButton disabled={importing} ghost onPress={() => { void importWorkflow(); }} prefix={<Upload />} size="sm">
             {isChinese ? '导入' : 'Import'}
@@ -664,10 +736,12 @@ export function HermesStudioWorkflowPage({
             {isChinese ? '新建工作流' : 'New workflow'}
           </NativeButton>
         </View>
+        ) : null}
       </View>
 
-      <View style={styles.workspace}>
-        <View style={[styles.workflowList, { backgroundColor: tokens.colors.card, borderRightColor: tokens.colors.border }]}> 
+      <View style={[styles.workspace, compact && styles.workspaceCompact]}>
+        {(!compact || !compactDetailOpen) ? (
+        <View style={[styles.workflowList, compact && styles.workflowListCompact, { backgroundColor: tokens.colors.card, borderRightColor: tokens.colors.border }]}> 
           <View style={styles.listLabelRow}>
             <Text style={[styles.sectionLabel, { color: tokens.colors.textTertiary }]}>
               {isChinese ? `工作流 · ${workflows.length}` : `Workflows · ${workflows.length}`}
@@ -678,7 +752,10 @@ export function HermesStudioWorkflowPage({
             {workflows.map((workflow) => (
               <IOSPressable
                 key={workflow.id}
-                onPress={() => setSelectedId(workflow.id)}
+                onPress={() => {
+                  setSelectedId(workflow.id);
+                  if (compact) setCompactDetailOpen(true);
+                }}
                 pressedStyle={{ backgroundColor: multiplyAlpha(tokens.colors.primary, 0.12) }}
                 style={[styles.workflowItem, {
                   backgroundColor: selectedId === workflow.id ? multiplyAlpha(tokens.colors.primary, 0.12) : 'transparent',
@@ -704,8 +781,10 @@ export function HermesStudioWorkflowPage({
             ) : null}
           </ScrollView>
         </View>
+        ) : null}
 
-        <ScrollView contentContainerStyle={styles.detail} showsVerticalScrollIndicator={false}>
+        {(!compact || compactDetailOpen) ? (
+        <ScrollView contentContainerStyle={[styles.detail, compact && styles.detailCompact]} style={styles.detailScroll} showsVerticalScrollIndicator={false}>
           {error ? <Text style={[styles.error, { color: tokens.colors.destructive }]}>{error}</Text> : null}
           {selectedWorkflow ? (
             <>
@@ -943,6 +1022,7 @@ export function HermesStudioWorkflowPage({
             </View>
           )}
         </ScrollView>
+        ) : null}
       </View>
 
       <PreviewModal onClose={() => setCreateOpen(false)} open={createOpen} title={isChinese ? '新建工作流' : 'Create workflow'}>
@@ -1284,12 +1364,20 @@ function EdgeEvidence({
 const styles = {
   root: { flex: 1 },
   header: { alignItems: 'center' as const, borderBottomWidth: 1, flexDirection: 'row' as const, justifyContent: 'space-between' as const, minHeight: 64, paddingHorizontal: 16, paddingVertical: 10 },
-  headerTitleRow: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 9, minWidth: 0 },
+  headerCompact: { paddingHorizontal: 10, paddingVertical: 7 },
+  headerTitleRow: { alignItems: 'center' as const, flex: 1, flexDirection: 'row' as const, gap: 9, minWidth: 0 },
+  headerTitleRowCompact: { gap: 7 },
+  headerTitleCopy: { flex: 1, minWidth: 0 },
   title: { fontSize: 16, fontWeight: '700' as const },
   subtitle: { fontSize: 10, marginTop: 2 },
   headerActions: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 5, marginLeft: 10 },
+  headerActionsCompact: { flexShrink: 0, gap: 1, marginLeft: 4 },
+  headerIconButton: { alignItems: 'center' as const, borderRadius: 8, justifyContent: 'center' as const, minHeight: 30, minWidth: 30 },
+  navigationButton: { alignItems: 'center' as const, borderRadius: 8, justifyContent: 'center' as const, minHeight: 32, minWidth: 30, marginRight: 2 },
   workspace: { flex: 1, flexDirection: 'row' as const, minHeight: 0 },
+  workspaceCompact: { flexDirection: 'column' as const },
   workflowList: { borderRightWidth: 1, minWidth: 220, paddingHorizontal: 10, paddingTop: 12, width: 260 },
+  workflowListCompact: { borderRightWidth: 0, minWidth: 0, paddingHorizontal: 14, width: '100%' as const },
   listLabelRow: { alignItems: 'center' as const, flexDirection: 'row' as const, justifyContent: 'space-between' as const, paddingHorizontal: 4 },
   sectionLabel: { fontSize: 10, fontWeight: '700' as const, letterSpacing: 0.8, textTransform: 'uppercase' as const },
   workflowListContent: { gap: 7, paddingBottom: 20, paddingTop: 9 },
@@ -1299,7 +1387,9 @@ const styles = {
   workflowItemMeta: { fontSize: 10, marginTop: 3 },
   emptyList: { alignItems: 'center' as const, gap: 7, paddingVertical: 34 },
   emptyListText: { fontSize: 11 },
-  detail: { gap: 12, padding: 16, paddingBottom: 34 },
+  detailScroll: { flex: 1, minWidth: 0 },
+  detail: { gap: 12, minWidth: 0, padding: 16, paddingBottom: 34 },
+  detailCompact: { paddingHorizontal: 14, paddingTop: 14 },
   error: { fontSize: 11 },
   detailHeader: { alignItems: 'center' as const, flexDirection: 'row' as const, justifyContent: 'space-between' as const },
   detailTitleCopy: { flex: 1, minWidth: 0 },
@@ -1309,8 +1399,8 @@ const styles = {
   smallIconButton: { alignItems: 'center' as const, borderRadius: 7, justifyContent: 'center' as const, minHeight: 28, minWidth: 28 },
   sectionCard: { borderRadius: 12, borderWidth: 1, padding: 12 },
   runtimeCard: { borderRadius: 12, borderWidth: 1, padding: 12 },
-  sectionHeaderRow: { alignItems: 'center' as const, flexDirection: 'row' as const, justifyContent: 'space-between' as const, marginBottom: 10 },
-  sectionTitleRow: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 7 },
+  sectionHeaderRow: { alignItems: 'center' as const, flexDirection: 'row' as const, flexWrap: 'wrap' as const, justifyContent: 'space-between' as const, marginBottom: 10, minWidth: 0, rowGap: 6 },
+  sectionTitleRow: { alignItems: 'center' as const, flexDirection: 'row' as const, flexShrink: 1, gap: 7, minWidth: 0 },
   sectionActions: { alignItems: 'center' as const, flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 5 },
   cardTitle: { fontSize: 13, fontWeight: '700' as const },
   runtimeStatus: { fontSize: 11, fontWeight: '700' as const, textTransform: 'uppercase' as const },

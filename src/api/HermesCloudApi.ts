@@ -359,8 +359,9 @@ export class HermesCloudApi {
     baseUrl: string,
     apiKey = '',
     profile = 'default',
+    apiMode?: CustomModelConfiguration['apiMode'],
   ): Promise<CustomModelDiscoveryResult> {
-    return this.models.discoverCustomModels(baseUrl, apiKey, profile);
+    return this.models.discoverCustomModels(baseUrl, apiKey, profile, apiMode);
   }
 
   async setModel(

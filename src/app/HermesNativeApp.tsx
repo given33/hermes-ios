@@ -19,6 +19,7 @@ import {
   useTheme,
 } from '../design/ThemeProvider';
 import { useWebUiFonts } from './webui-fonts';
+import { isFrontendPreviewRuntime } from './frontend-preview-mode';
 import { subscribeHermesDeepLinks } from './hermes-deep-link-coordinator';
 import {
   parseHermesDeepLink,
@@ -31,7 +32,7 @@ import { initializeTemporaryPlaintextFiles } from '../api/temporary-plaintext-fi
 // The preview is deliberately limited to the web dev shell. Native builds keep
 // the real authentication boundary even when Metro is running in development.
 const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
-  || (__DEV__ && Platform.OS === 'web');
+  || isFrontendPreviewRuntime;
 
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();

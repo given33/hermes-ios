@@ -304,8 +304,15 @@ export function useConversationActionsController({
           userMessageId: currentPending?.userMessageId || cancellationItem.input.message.id,
         });
         updatePendingPhase('cancel_requested', cancelledAt);
-        setHostedRunning(true);
-        setSending(true);
+        // Optimistic cancellation: stop the local streaming UI immediately so
+        // the stop feels instant. The server reconciliation below continues in
+        // the background and converges the durable state.
+        pendingTurnActiveRef.current = false;
+        activeHostedTurnIdRef.current = '';
+        clearOptimisticHostedTurn();
+        setActiveHostedTurnId('');
+        setHostedRunning(false);
+        setSending(false);
       }
       notify(isChinese ? '正在取消任务' : 'Cancelling task');
       const result = await cancellation.deliverAndReconcilePendingCancellation(

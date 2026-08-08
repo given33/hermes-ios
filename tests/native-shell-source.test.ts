@@ -161,7 +161,10 @@ test('sidebar uses one opaque safe-area surface, full-width hit targets, and no 
   assert.doesNotMatch(source, /compactDrawerPanel:[\s\S]{0,80}overflow: 'hidden'/);
   assert.doesNotMatch(source, /compactDrawerSurface:[\s\S]{0,100}backgroundColor: 'transparent'/);
   assert.match(source, /referenceSidebar:[\s\S]*backgroundColor: 'transparent'/);
-  assert.match(referenceSidebar, /paddingBottom: insets\.bottom,[\s\S]*paddingTop: insets\.top/);
+  assert.match(
+    referenceSidebar,
+    /(?:paddingBottom: insets\.bottom,[\s\S]*paddingTop: insets\.top|paddingTop: insets\.top,[\s\S]*paddingBottom: insets\.bottom)/,
+  );
   assert.match(referenceSidebar, /automaticallyAdjustContentInsets=\{false\}/);
   assert.match(referenceSidebar, /contentInsetAdjustmentBehavior="never"/);
   assert.match(referenceSidebar, /bounces=\{false\}/);

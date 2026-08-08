@@ -63,8 +63,11 @@ test('the iOS cancellation flow retains its outbox until snapshot reconciliation
   assert.match(cancellation, /updatePendingPhase\('thinking', 0\)/);
   assert.doesNotMatch(cancellation, /updatePendingPhase\('executing', Date\.now\(\)\)/);
   assert.match(actions, /正在取消任务/);
-  assert.doesNotMatch(
+  // Cancellation is optimistic: the local streaming UI stops immediately
+  // after the cancel POST is durable, without waiting for the server's
+  // terminal event.
+  assert.match(
     actions,
-    /upsertPendingEnqueue\([\s\S]{0,1200}setHostedRunning\(false\)/,
+    /upsertPendingEnqueue\([\s\S]{0,1200}setHostedRunning\(false\)[\s\S]{0,400}setSending\(false\)/,
   );
 });

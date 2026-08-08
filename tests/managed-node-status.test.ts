@@ -38,12 +38,12 @@ test('managed node status accepts only fresh matching device observations', () =
   ]);
 });
 
-test('missing devices never inherit another source state', () => {
+test('missing devices fail closed to offline instead of checking forever', () => {
   assert.deepEqual(
     managedNodeGatewayStatuses({ sources: [{ id: 'dbb3', online: true }] }, now),
     [
-      { id: 'dbb3', label: 'DBB3', state: 'unknown' },
-      { id: 'wsl', label: 'WSL', state: 'unknown' },
+      { id: 'dbb3', label: 'DBB3', state: 'offline' },
+      { id: 'wsl', label: 'WSL', state: 'offline' },
     ],
   );
 });

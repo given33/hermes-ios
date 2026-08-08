@@ -72,6 +72,7 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
       '/runtime-center',
       '/env',
       '/docs',
+      '/agent-group',
       '/chat',
     ],
   );

@@ -34,7 +34,12 @@ export function managedNodeGatewayStatuses(
       return {
         id,
         label: id.toUpperCase(),
-        state: directSource?.online === false ? 'offline' : targetState,
+        // The server answered but has no node entry and no recovery target
+        // for this id: the node is not configured or not reporting. Treat it
+        // as offline instead of leaving the UI stuck on "checking" forever.
+        state: directSource?.online === false || targetState === 'unknown'
+          ? 'offline'
+          : targetState,
       };
     }
 
@@ -43,7 +48,9 @@ export function managedNodeGatewayStatuses(
       return {
         id,
         label: stringField(value, 'label') || id.toUpperCase(),
-        state: observedAt ? 'offline' : 'unknown',
+        // No observation timestamp means the relay never produced a status
+        // payload for this node; fail closed to offline rather than checking.
+        state: 'offline',
         version: versionField(value),
       };
     }

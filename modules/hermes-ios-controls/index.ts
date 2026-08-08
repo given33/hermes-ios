@@ -55,8 +55,9 @@ export interface HermesSwiftUIThemeProps {
 function optionalView<P extends NativeViewProps>(
   name: string,
   viewName?: string,
+  options: { enableInExpoGoParity?: boolean } = {},
 ) {
-  const available = !isExpoGoParityBuild
+  const available = (options.enableInExpoGoParity || !isExpoGoParityBuild)
     && requireOptionalNativeModule(name) !== null;
   const NativeView = available ? requireNativeView<P>(name, viewName) : null;
   const Component = forwardRef<View, P>(function OptionalNativeView(
@@ -173,14 +174,17 @@ const pressFeedback = optionalView<HermesPressFeedbackProps>('HermesPressFeedbac
 const swiftUIPartialRoute = optionalView<HermesSwiftUIRouteProps>(
   'HermesSwiftUIPartialFrontend',
   'HermesSwiftUIRouteView',
+  { enableInExpoGoParity: true },
 );
 const swiftUIPartialModelTools = optionalView<HermesSwiftUIModelToolsProps>(
   'HermesSwiftUIPartialFrontend',
   'HermesSwiftUIModelToolsView',
+  { enableInExpoGoParity: true },
 );
 const swiftUIPartialFrostedSurface = optionalView<HermesSwiftUIFrostedSurfaceProps>(
   'HermesSwiftUIPartialFrontend',
   'HermesSwiftUIFrostedSurfaceView',
+  { enableInExpoGoParity: true },
 );
 
 export const hasNativeSegmentedControl = segmented.available;

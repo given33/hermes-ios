@@ -172,6 +172,13 @@ const CHAT_NAV_ITEM: BuiltinNavigationDefinition = {
   icon: 'Terminal',
 };
 
+const AGENT_GROUP_NAV_ITEM: BuiltinNavigationDefinition = {
+  routeId: 'agent-group',
+  path: '/agent-group',
+  labels: { en: 'Agent Rooms', zh: 'Agent \u623f\u95f4' },
+  icon: 'Users',
+};
+
 const BUILTIN_NAV_REST = [
   {
     routeId: 'analytics',
@@ -352,7 +359,7 @@ function getBuiltinNavigation(
   locale: NativeRouteLocale,
 ): ComposedNavigationItem[] {
   const definitions = embeddedChat
-    ? [CHAT_NAV_ITEM, ...BUILTIN_NAV_REST]
+    ? [CHAT_NAV_ITEM, AGENT_GROUP_NAV_ITEM, ...BUILTIN_NAV_REST]
     : [...BUILTIN_NAV_REST];
   const visibleDefinitions = showTokenAnalytics
     ? definitions

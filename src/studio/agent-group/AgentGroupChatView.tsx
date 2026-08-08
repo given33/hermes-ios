@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronLeft,
   Eraser,
   FolderOpen,
   MessageSquare,
@@ -40,18 +41,25 @@ export interface AgentGroupChatViewProps {
   compact: boolean;
   controller: AgentGroupChatController;
   isChinese: boolean;
+  onOpenNavigation?(): void;
   safeAreaBottom: number;
   safeAreaLeft: number;
   safeAreaRight: number;
+  safeAreaTop: number;
+  /** When false the room rail is hidden for the embedded chat-mode surface. */
+  showRoomRail?: boolean;
 }
 
 export function AgentGroupChatView({
   compact,
   controller,
   isChinese,
+  onOpenNavigation,
   safeAreaBottom,
   safeAreaLeft,
   safeAreaRight,
+  safeAreaTop,
+  showRoomRail = true,
 }: AgentGroupChatViewProps) {
   const { tokens } = useTheme();
   const [createOpen, setCreateOpen] = useState(false);
@@ -81,19 +89,32 @@ export function AgentGroupChatView({
       style={[styles.root, { backgroundColor: tokens.colors.background }]}
     >
       <View style={[styles.body, compact && styles.bodyCompact]}>
-        <View
-          style={[
-            styles.roomRail,
-            compact && styles.roomRailCompact,
-            {
-              backgroundColor: tokens.colors.card,
-              borderColor: tokens.colors.border,
-              paddingLeft: 10 + safeAreaLeft,
-            },
-          ]}
-        >
-          <View style={styles.roomRailHeader}>
+        {showRoomRail ? (
+          <View
+            style={[
+              styles.roomRail,
+              compact && styles.roomRailCompact,
+              {
+                backgroundColor: tokens.colors.card,
+                borderColor: tokens.colors.border,
+                paddingLeft: 10 + safeAreaLeft,
+                paddingTop: compact ? safeAreaTop + 7 : 10,
+                paddingRight: compact ? 8 + safeAreaRight : 8,
+              },
+            ]}
+          >
+          <View style={[styles.roomRailHeader, compact && styles.roomRailHeaderCompact]}>
             <View style={styles.roomRailTitleRow}>
+              {compact ? (
+                <IOSPressable
+                  accessibilityLabel={isChinese ? '返回导航' : 'Open navigation'}
+                  hitSlop={8}
+                  onPress={() => onOpenNavigation?.()}
+                  style={styles.navigationButton}
+                >
+                  <ChevronLeft color={tokens.colors.foreground} size={20} strokeWidth={1.8} />
+                </IOSPressable>
+              ) : null}
               <Users color={tokens.colors.primary} size={16} />
               <Text style={[styles.roomRailTitle, { color: tokens.colors.foreground }]}> 
                 {isChinese ? 'Agent 房间' : 'Agent rooms'}
@@ -118,7 +139,7 @@ export function AgentGroupChatView({
               </IOSPressable>
             </View>
           </View>
-          <Text style={[styles.separationNote, { color: tokens.colors.textTertiary }]}>
+          <Text style={[styles.separationNote, { color: tokens.colors.textTertiary }]}> 
             {isChinese ? '独立于托管协作时间线' : 'Separate from hosted collaboration timeline'}
           </Text>
           <ScrollView
@@ -174,6 +195,7 @@ export function AgentGroupChatView({
             ) : null}
           </ScrollView>
         </View>
+        ) : null}
 
         <View style={[styles.conversation, { paddingRight: 8 + safeAreaRight }]}> 
           <View style={[styles.conversationToolbar, { borderBottomColor: tokens.colors.border }]}> 
@@ -232,10 +254,25 @@ export function AgentGroupChatView({
           </View>
 
           {controller.error && !activeRoom?.error ? (
-            <Text style={[styles.errorBanner, { color: tokens.colors.destructive }]}>{controller.error}</Text>
+            <View style={styles.errorBannerRow}>
+              <Text style={[styles.errorBanner, { color: tokens.colors.destructive, flex: 1 }]}>{controller.error}</Text>
+              <IOSPressable
+                accessibilityLabel={isChinese ? '重试连接' : 'Retry connection'}
+                hitSlop={8}
+                onPress={() => {
+                  void controller.refresh();
+                  void controller.refreshRoom(activeRoom?.room.id);
+                }}
+                style={styles.iconButton}
+              >
+                <RefreshCw color={tokens.colors.destructive} size={14} />
+              </IOSPressable>
+            </View>
           ) : null}
           {activeRoom?.error ? (
-            <Text style={[styles.errorBanner, { color: tokens.colors.destructive }]}>{activeRoom.error}</Text>
+            <View style={styles.errorBannerRow}>
+              <Text style={[styles.errorBanner, { color: tokens.colors.destructive, flex: 1 }]}>{activeRoom.error}</Text>
+            </View>
           ) : null}
 
           <View style={styles.messageStream}>
@@ -524,10 +561,12 @@ const styles = {
   bodyCompact: { flexDirection: 'column' as const },
   roomRail: { borderRightWidth: 1, minWidth: 220, paddingRight: 8, paddingTop: 10, width: 258 },
   roomRailCompact: { borderBottomWidth: 1, borderRightWidth: 0, maxHeight: 190, minWidth: 0, paddingRight: 10, width: '100%' as const },
-  roomRailHeader: { alignItems: 'center' as const, flexDirection: 'row' as const, justifyContent: 'space-between' as const },
+  roomRailHeader: { alignItems: 'center' as const, flexDirection: 'row' as const, justifyContent: 'space-between' as const, minWidth: 0 },
+  roomRailHeaderCompact: { minHeight: 36 },
   roomRailTitleRow: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 7 },
   roomRailTitle: { fontSize: 13, fontWeight: '700' as const },
   roomRailActions: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 4 },
+  navigationButton: { alignItems: 'center' as const, borderRadius: 8, justifyContent: 'center' as const, minHeight: 30, minWidth: 30 },
   iconButton: { alignItems: 'center' as const, borderRadius: 7, justifyContent: 'center' as const, minHeight: 28, minWidth: 28 },
   separationNote: { fontSize: 10, marginBottom: 8, marginTop: 3 },
   roomList: { gap: 6, paddingBottom: 18, paddingTop: 5 },
@@ -547,7 +586,8 @@ const styles = {
   conversationMeta: { fontSize: 10, marginTop: 2 },
   connectionStatus: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 4, marginLeft: 8 },
   connectionText: { fontSize: 10, fontWeight: '600' as const },
-  errorBanner: { fontSize: 11, paddingHorizontal: 12, paddingTop: 8 },
+  errorBannerRow: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 6, paddingLeft: 12, paddingRight: 6 },
+  errorBanner: { fontSize: 11, paddingTop: 8 },
   messageStream: { flex: 1, minHeight: 0 },
   typingText: { fontSize: 10, paddingLeft: 32 },
   runningText: { fontSize: 10, fontWeight: '600' as const, paddingLeft: 32 },

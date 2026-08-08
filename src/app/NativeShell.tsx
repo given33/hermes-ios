@@ -152,6 +152,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     labels: { en: 'Agent', zh: 'Agent' },
     items: [
       { path: '/chat', labels: { en: 'Chat', zh: '聊天' }, symbol: 'message.fill', fallback: 'MessageSquare' },
+      { path: '/agent-group', labels: { en: 'Agent Rooms', zh: 'Agent 房间' }, symbol: 'person.3.fill', fallback: 'Users' },
       { path: '/workflows', labels: { en: 'Workflows', zh: '工作流' }, symbol: 'arrow.triangle.branch', fallback: 'Zap' },
       { path: '/cron', labels: { en: 'Jobs', zh: '任务' }, symbol: 'clock.arrow.circlepath', fallback: 'Clock' },
       { path: '/kanban', labels: { en: 'Kanban', zh: '看板' }, symbol: 'rectangle.3.group', fallback: 'Database' },
@@ -595,7 +596,10 @@ export function NativeShell({
                     (item) => item.path === route.path,
                   )?.label ?? route.path;
                   const chatRoute = route.routeId === 'chat';
+                  const jsParityRoute = route.routeId === 'agent-group'
+                    || route.routeId === 'workflows';
                   const swiftUIRoute = nativeRouteChrome
+                    && !jsParityRoute
                     && route.routeId !== 'chat'
                     && route.routeId !== 'smart-weather'
                     && route.routeId !== 'account';
@@ -629,7 +633,7 @@ export function NativeShell({
                                 )}
                               </IOSPressable>
                             ),
-                        headerShown: !chatRoute && !swiftUIRoute,
+                        headerShown: !chatRoute && !swiftUIRoute && !jsParityRoute,
                         title: label || 'Hermes Agent',
                       })}
                     >
@@ -642,7 +646,7 @@ export function NativeShell({
                           <View
                             style={[
                               styles.routeStage,
-                              chatRoute ? undefined : {
+                              (chatRoute || jsParityRoute) ? undefined : {
                                 paddingLeft: insets.left,
                                 paddingRight: insets.right,
                               },
@@ -940,8 +944,12 @@ function ExpoReferenceSidebar({
       style={[
         styles.referenceSidebar,
         {
-          paddingBottom: insets.bottom,
+          // Full-height drawer surface: the brand row sits below the status
+          // bar and the footer content clears the home indicator, while the
+          // panel background itself extends edge-to-edge so no safe-area
+          // divider line is visible at top or bottom.
           paddingTop: insets.top,
+          paddingBottom: insets.bottom,
         },
       ]}
     >

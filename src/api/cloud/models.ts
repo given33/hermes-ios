@@ -186,6 +186,7 @@ export class HermesModelsCloudApi {
     baseUrl: string,
     apiKey = '',
     profile = 'default',
+    apiMode?: CustomModelConfiguration['apiMode'],
   ): Promise<CustomModelDiscoveryResult> {
     const normalizedBaseUrl = normalizeModelCatalogBaseUrl(baseUrl);
     const result = await this.transport.json<Omit<CustomModelDiscoveryResult, 'baseUrl'>>(
@@ -193,6 +194,7 @@ export class HermesModelsCloudApi {
       'POST',
       {
         api_key: apiKey.trim(),
+        api_mode: apiMode,
         base_url: normalizedBaseUrl,
         profile,
       },

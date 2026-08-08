@@ -704,7 +704,7 @@ export function ChatPreviewPage({
     <>
       <ChatPageShell
       attachmentsOpen={attachmentsOpen}
-      agentGroupChatProps={{ compact, controller: agentGroupController, isChinese, safeAreaBottom, safeAreaLeft, safeAreaRight }}
+      agentGroupChatProps={{ compact, controller: agentGroupController, isChinese, safeAreaBottom, safeAreaLeft, safeAreaRight, showRoomRail: false }}
        codingPiChatProps={{
          compact,
          controller: codingPiController,

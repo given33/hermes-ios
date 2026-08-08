@@ -50,6 +50,7 @@ import {
   type NativeShellSlotContext,
   type SidebarGatewayStatus,
 } from '../app/NativeShell';
+import { isFrontendPreviewRuntime } from '../app/frontend-preview-mode';
 import { useHermesSwiftUIRouteData } from '../app/useHermesSwiftUIRouteData';
 import {
   decodeHermesSwiftUIRouteAction,
@@ -80,6 +81,7 @@ import {
 } from '../preview/PreviewCorePages';
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
+import { AgentGroupChatPage } from './agent-group/AgentGroupChatPage';
 import { HermesStudioWorkflowPage } from './workflows/HermesStudioWorkflowPage';
 import { BuiltinBrowserPage } from '../browser/BuiltinBrowserPage';
 import { SkillsManagementPage } from '../skills/SkillsManagementPage';
@@ -463,6 +465,7 @@ function PreviewRoute({
     && route.routeId !== 'memory'
     && route.routeId !== 'account'
     && route.routeId !== 'chat'
+    && route.routeId !== 'agent-group'
     && route.routeId !== 'workflows';
   useEffect(() => {
     if (usesNativeSwiftUIRoute) return undefined;
@@ -520,11 +523,12 @@ function PreviewRoute({
   // frontend-preview packaging flag (manual Expo Go / design previews only).
   const allowFixturePages = !client && (
     process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
-    || (__DEV__ && Platform.OS === 'web')
+    || isFrontendPreviewRuntime
   );
   if (
     !allowFixturePages
     && route.routeId !== 'chat'
+    && route.routeId !== 'agent-group'
     && route.routeId !== 'account'
     && route.routeId !== 'browser'
     && !(route.routeId === 'models' && client)
@@ -569,12 +573,26 @@ function PreviewRoute({
         profile={profile}
       />
     );
+    case 'agent-group': return (
+      <AgentGroupChatPage
+        cacheOwner={cacheOwner}
+        client={client}
+        compact={compactNavigation}
+        fixtureMode={allowFixturePages}
+        isChinese={locale === 'zh'}
+        notify={notify}
+        onOpenNavigation={openNavigation}
+        profile={profile}
+      />
+    );
     case 'workflows': return (
       <HermesStudioWorkflowPage
         client={client}
         fixtureMode={allowFixturePages}
         locale={locale ?? 'zh'}
         notify={notify}
+        compact={compactNavigation}
+        onOpenNavigation={openNavigation}
         profile={profile}
       />
     );

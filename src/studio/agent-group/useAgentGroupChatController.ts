@@ -232,7 +232,20 @@ export function useAgentGroupChatController({
     };
     const onConnectError = (reason: Error) => {
       setConnected(false);
-      setError(reason.message || (isChinese ? 'Agent 群聊连接失败' : 'Agent group chat connection failed'));
+      // engine.io surfaces raw transport messages ("websocket error", "xhr
+      // poll error"). These describe the transport, not the room, and confuse
+      // users; surface a stable localized hint instead while retrying.
+      const raw = String(reason?.message || '').toLowerCase();
+      const transportFailure = raw.includes('websocket')
+        || raw.includes('poll')
+        || raw.includes('transport')
+        || raw.includes('xhr')
+        || raw.includes('error');
+      setError(transportFailure
+        ? (isChinese
+          ? '无法连接 Hermes Studio 实时通道，正在自动重试…'
+          : 'Cannot reach the Hermes Studio realtime channel; retrying…')
+        : (reason?.message || (isChinese ? 'Agent 群聊连接失败' : 'Agent group chat connection failed')));
     };
     const onMessage = (payload: unknown) => {
       const message = normalizeGroupMessage(payload);

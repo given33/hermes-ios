@@ -410,13 +410,18 @@ export function reconcileOptimisticMessages(
     }];
   });
   const pendingIds = new Set(pending.map(({ id }) => id));
+  // Keep the server's own ordering for confirmed messages and append
+  // optimistic entries in send order. Sorting the merged list by createdAt
+  // mixes client-clock timestamps (optimistic messages) with server-clock
+  // timestamps, so any clock skew reorders previous messages on every
+  // snapshot — the visible "jump" when a new message is sent.
   return {
     messages: [
       ...serverMessages.filter(({ id }) => (
         !pendingIds.has(id) && !hiddenServerMessageIds.has(id)
       )),
       ...pending,
-    ].sort((left, right) => (left.createdAt || 0) - (right.createdAt || 0)),
+    ],
     // A server replica can confirm a message and then briefly return an older
     // snapshot. Require another confirmation after the grace period before
     // deleting the durable ledger entry.

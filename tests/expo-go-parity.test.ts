@@ -27,6 +27,19 @@ test('re-sign-compatible builds opt into the same native fallbacks as Expo Go', 
       `${file} must honor the Expo Go parity flag`,
     );
   }
+
+  const controls = read('modules/hermes-ios-controls/index.ts');
+  for (const viewName of [
+    'HermesSwiftUIRouteView',
+    'HermesSwiftUIModelToolsView',
+    'HermesSwiftUIFrostedSurfaceView',
+  ]) {
+    assert.match(
+      controls,
+      new RegExp(`${viewName}',\\s*\\{ enableInExpoGoParity: true \\}`),
+      `${viewName} must remain available in a re-sign-compatible IPA`,
+    );
+  }
 });
 
 test('the app config derives parity for the unsigned re-sign workflow', () => {
@@ -57,4 +70,23 @@ test('the app config derives parity for the unsigned re-sign workflow', () => {
       else process.env[key] = value;
     }
   }
+});
+
+test('Expo Go uses the same preview surface as Expo Web for Studio routes', () => {
+  const previewMode = read('src/app/frontend-preview-mode.ts');
+  const nativeApp = read('src/app/HermesNativeApp.tsx');
+  const previewApp = read('src/studio/FrontendPreviewApp.tsx');
+  const shell = read('src/app/NativeShell.tsx');
+  const groupView = read('src/studio/agent-group/AgentGroupChatView.tsx');
+
+  assert.match(previewMode, /executionEnvironment === 'storeClient'/);
+  assert.match(previewMode, /Platform\.OS === 'web' \|\| isExpoGoRuntime/);
+  assert.match(nativeApp, /isFrontendPreviewRuntime/);
+  assert.match(previewApp, /isFrontendPreviewRuntime/);
+  assert.match(shell, /jsParityRoute[\s\S]*route\.routeId === 'workflows'/);
+  assert.match(shell, /headerShown: !chatRoute && !swiftUIRoute && !jsParityRoute/);
+  // The group surface supports two placements: embedded in the chat page with
+  // the rail hidden (showRoomRail=false) and the sidebar Agent Rooms page
+  // with the rail shown. Both must stay on the same preview surface.
+  assert.match(groupView, /showRoomRail/);
 });
