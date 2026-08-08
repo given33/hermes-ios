@@ -8,6 +8,7 @@ import {
   type NativeSyntheticEvent,
   type ViewProps,
 } from 'react-native';
+import { isExpoGoParityBuild } from '../build-flags';
 
 export interface HermesNativeSwipeAction {
   destructive?: boolean;
@@ -25,7 +26,7 @@ interface HermesSwipeActionsViewProps extends ViewProps {
 }
 
 export const hasNativeSwipeActions =
-  requireOptionalNativeModule('HermesSwipeActions') !== null;
+  !isExpoGoParityBuild && requireOptionalNativeModule('HermesSwipeActions') !== null;
 const NativeHermesSwipeActionsView = hasNativeSwipeActions
   ? requireNativeView<HermesSwipeActionsViewProps>('HermesSwipeActions')
   : null;

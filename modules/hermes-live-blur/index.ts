@@ -10,13 +10,14 @@ import {
   type ColorValue,
   type ViewProps,
 } from 'react-native';
+import { isExpoGoParityBuild } from '../build-flags';
 
 export interface HermesLiveBlurViewProps extends ViewProps {
   blurRadius: number;
 }
 
 const hasExactNativeBlur =
-  requireOptionalNativeModule('HermesLiveBlur') !== null;
+  !isExpoGoParityBuild && requireOptionalNativeModule('HermesLiveBlur') !== null;
 const NativeHermesLiveBlurView = hasExactNativeBlur
   ? requireNativeView<HermesLiveBlurViewProps>('HermesLiveBlur')
   : null;
@@ -29,7 +30,7 @@ export interface HermesLiquidGlassViewProps extends ViewProps {
 }
 
 const hasNativeLiquidGlass =
-  requireOptionalNativeModule('HermesLiquidGlass') !== null;
+  !isExpoGoParityBuild && requireOptionalNativeModule('HermesLiquidGlass') !== null;
 const NativeHermesLiquidGlassView = hasNativeLiquidGlass
   ? requireNativeView<HermesLiquidGlassViewProps>('HermesLiquidGlass')
   : null;

@@ -210,7 +210,6 @@ test('sidebar selections replace the chat stack and edge gestures reopen the sid
   assert.match(source, /dispatch\(\{ type: 'select-route', path: resolved \}\)/);
   assert.match(source, /const reportRouteReady = useCallback/);
   assert.match(source, /pendingSidebarPath\.current !== resolved/);
-  assert.match(source, /onNavigate=\{\(event\) => selectSidebarRoute\(event\.nativeEvent\.path\)\}/);
   assert.match(source, /navigate=\{selectSidebarRoute\}/);
 });
 
@@ -243,13 +242,10 @@ test('the generic sidebar is one scroll flow and exposes no fake release version
   assert.match(app, /Constants\.expoConfig\?\.ios\?\.buildNumber/);
 });
 
-test('the bundled sidebar avatar does not call the native image resolver on web', () => {
+test('the sidebar uses the React Native implementation on every platform', () => {
   const shell = read('src/app/NativeShell.tsx');
 
-  assert.match(shell, /Platform\.OS === 'web'/);
-  assert.doesNotMatch(
-    shell,
-    /const HERMES_SIDEBAR_AVATAR_URI = ReactNativeImage\.resolveAssetSource/,
-  );
-  assert.match(shell, /avatarUri=\{HERMES_SIDEBAR_AVATAR_URI\}/);
+  assert.match(shell, /const compactSidebar = \(\s*<Sidebar/);
+  assert.match(shell, /state\.mode === 'split'[\s\S]*<Sidebar/);
+  assert.doesNotMatch(shell, /HermesSwiftUISidebarView|useSwiftUISidebar|ReactNativeImage/);
 });

@@ -94,7 +94,7 @@ useHermesSwiftUIRouteData(routeId, profile, locale)      ── src/app/useHerme
 - **数据装配**：`src/app/hermes-route-data.ts`（loadHermesSwiftUIRouteSnapshot 按 routeId switch，L47-120+；performHermesSwiftUIRouteAction 动作分发，L144-505）。
 - **刷新节奏**：前台 15s；skills/mcp 因安装轮询加密到 2s；models 路由不自动刷新（表单页）；AppState 回前台即刷；system 路由失败时给数据打"过期"标记而不是编造指标（useHermesSwiftUIRouteData.ts:49-50、221-265，managed-node-status.ts）。
 - **swiftui-partial-frontend-source 测试还钉住**（tests/swiftui-partial-frontend-source.test.ts）：chat 路由在 SwiftUI 侧必须是 `EmptyView`（聊天永远是 RN，L70-75）；四个宿主视图必须 `ExpoSwiftUI.WithHostingView`；管理页写操作集合（skillUpdate/kanban*/model*/integrationUpdate/configImport/fileImport 的 security-scoped + staged 流程）；模型归一化只在 HermesCloudApi（禁止 route 层复制 customApiMode）；协作房间发送的 draft 保留 + requestId 幂等 + 401/408/429 之外的 4xx 判永久失败；主题经 props 注入禁止固定 palette；env 路由禁止 environmentUpsert 复活。
-- 原生模块 JS 契约：`modules/hermes-ios-controls/index.ts` 暴露 `HermesSwiftUISidebarView`/`HermesSwiftUIRouteView`/`HermesSwiftUIModelToolsView`/`HermesSwiftUIFrostedSurfaceView` 与帧率控制器。
+- 原生模块 JS 契约：`modules/hermes-ios-controls/index.ts` 暴露原生路由、模型工具、毛玻璃表面与帧率控制器；侧边栏统一由 React Native/JS 实现。
 
 ## 7. Studio 产品 UI 与 preview 设计走查
 
@@ -152,7 +152,7 @@ useHermesSwiftUIRouteData(routeId, profile, locale)      ── src/app/useHerme
 
 - 路由注册表 `src/app/route-registry.ts`：25 条路径（`/` 重定向 `/chat`），`visibleInSidebar` 决定侧栏露出；测试锁定完整路径清单（tests/native-v2-architecture.test.ts:41-74）。
 - `route-composition.ts`：把注册表 + 服务器插件清单组合成侧栏（双语 labels、位置提示、去重、Puzzle 图标兜底；tests/route-composition.test.ts 8 条规则）。
-- `NativeShell.tsx`：compact（iPhone）= react-native-drawer-layout 抽屉 + UIKit native-stack 边滑返回；regular（iPad）= split 双栏；SwiftUI 侧栏在签名构建替换 RN 侧栏（`useSwiftUISidebar`）。导航前必收键盘；抽屉在目标路由 ready（onReady 探针）前保持覆盖（tests/native-shell-source、shell-contracts 系列）。
+- `NativeShell.tsx`：compact（iPhone）= react-native-drawer-layout 抽屉 + UIKit native-stack 边滑返回；regular（iPad）= split 双栏；侧边栏统一使用 React Native/JS 实现。导航前必收键盘；抽屉在目标路由 ready（onReady 探针）前保持覆盖（tests/native-shell-source、shell-contracts 系列）。
 - 根组合被钉死：`GestureHandlerRootView > SafeAreaProvider > HermesNativeApp`，gesture-handler import 必须是入口第一条语句（tests/native-v2-architecture.test.ts:76-113）。
 
 ## 11. 架构测试防护网（tests/ 里谁在拦你）

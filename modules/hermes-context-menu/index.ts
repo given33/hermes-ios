@@ -8,6 +8,7 @@ import {
   type NativeSyntheticEvent,
   type ViewProps,
 } from 'react-native';
+import { isExpoGoParityBuild } from '../build-flags';
 
 export interface HermesContextMenuNativeAction {
   destructive?: boolean;
@@ -23,7 +24,7 @@ interface HermesContextMenuViewProps extends ViewProps {
 }
 
 export const hasNativeContextMenu =
-  requireOptionalNativeModule('HermesContextMenu') !== null;
+  !isExpoGoParityBuild && requireOptionalNativeModule('HermesContextMenu') !== null;
 const NativeHermesContextMenuView = hasNativeContextMenu
   ? requireNativeView<HermesContextMenuViewProps>('HermesContextMenu')
   : null;

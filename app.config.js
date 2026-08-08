@@ -3,6 +3,8 @@ const base = require('./app.base.json').expo;
 module.exports = () => {
   const buildProfile = String(process.env.EAS_BUILD_PROFILE || '').trim();
   const resignCompatibleBuild = process.env.HERMES_RESIGN_COMPAT_BUILD === '1';
+  const expoGoParityBuild = process.env.HERMES_EXPO_GO_PARITY === '1'
+    || resignCompatibleBuild;
   const distributableBuild = process.env.HERMES_DISTRIBUTABLE_BUILD === '1'
     || ['development', 'preview', 'production'].includes(buildProfile);
   const frontendPreview = String(process.env.EXPO_PUBLIC_FRONTEND_PREVIEW || '').trim();
@@ -46,6 +48,7 @@ module.exports = () => {
     plugins,
     extra: {
       ...base.extra,
+      hermesExpoGoParity: expoGoParityBuild,
       hermesResignCompatible: resignCompatibleBuild,
       ...(expoProjectId
         ? { eas: { ...base.extra?.eas, projectId: expoProjectId } }

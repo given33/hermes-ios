@@ -55,14 +55,12 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  Image as ReactNativeImage,
   Keyboard,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   View,
-  type ImageSourcePropType,
 } from 'react-native';
 import Reanimated, {
   Easing,
@@ -86,7 +84,6 @@ import {
   opaque,
 } from '../design/control-contracts';
 import { resolveNativeFontStack } from '../design/native-font-faces';
-import { resolveSwiftUIThemeProps } from '../design/swiftui-theme';
 import { useTheme } from '../design/ThemeProvider';
 import { IOS_MOTION } from '../design/ios-motion';
 import { MOTION, useMotion } from '../design/motion';
@@ -110,25 +107,6 @@ import {
   resolveVisibleSidebarWidth,
 } from './shell-contracts';
 import { useAdaptiveLayout } from './useAdaptiveLayout';
-import {
-  HermesSwiftUISidebarView,
-  hasNativeSwiftUIPartialFrontend,
-} from '../../modules/hermes-ios-controls';
-
-const HERMES_SIDEBAR_AVATAR_ASSET = require('../../assets/icon.png') as
-  | number
-  | string
-  | { uri?: string };
-const HERMES_SIDEBAR_AVATAR_URI =
-  Platform.OS === 'web'
-    ? typeof HERMES_SIDEBAR_AVATAR_ASSET === 'string'
-      ? HERMES_SIDEBAR_AVATAR_ASSET
-      : typeof HERMES_SIDEBAR_AVATAR_ASSET === 'object'
-        ? HERMES_SIDEBAR_AVATAR_ASSET.uri ?? ''
-        : ''
-    : ReactNativeImage.resolveAssetSource(
-        HERMES_SIDEBAR_AVATAR_ASSET as ImageSourcePropType,
-      )?.uri ?? '';
 
 const NAV_ICONS: Record<NativeNavigationIconName, LucideIcon> = {
   Activity,
@@ -302,8 +280,6 @@ export function NativeShell({
   const insets = useSafeAreaInsets();
   const layout = useAdaptiveLayout();
   const motion = useMotion();
-  const useSwiftUISidebar =
-    Platform.OS === 'ios' && hasNativeSwiftUIPartialFrontend;
   const { tokens } = useTheme();
   const compactNavigationRef = useNavigationContainerRef<CompactStackParamList>();
   const composition = useMemo(
@@ -335,14 +311,9 @@ export function NativeShell({
   const pendingSidebarFallback = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSidebarCloseFrame = useRef<number | null>(null);
   const typography = resolveShellTypography(tokens);
-  const swiftUIThemeProps = resolveSwiftUIThemeProps(tokens);
   const resolvedGatewayStatuses = useMemo(
     () => resolveSidebarGatewayStatuses(gatewayStatuses),
     [gatewayStatuses],
-  );
-  const gatewayStatusesJson = useMemo(
-    () => JSON.stringify(resolvedGatewayStatuses),
-    [resolvedGatewayStatuses],
   );
   const rootBackground = opaque(tokens.colors.background);
   const sidebarBackground = rootBackground;
@@ -501,21 +472,7 @@ export function NativeShell({
     reportRouteReady,
   };
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 700);
-  const compactSidebar = useSwiftUISidebar ? (
-    <HermesSwiftUISidebarView
-      {...swiftUIThemeProps}
-      activePath={state.activePath}
-      avatarUri={HERMES_SIDEBAR_AVATAR_URI}
-      gatewayStatusesJson={gatewayStatusesJson}
-      locale={locale}
-      onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
-      onRequestClose={closeMobile}
-      open
-      presentation="embedded"
-      themeBackgroundColor={rootBackground}
-      style={styles.swiftUISidebar}
-    />
-  ) : (
+  const compactSidebar = (
     <Sidebar
       borderSoft={borderSoft}
       borderStrong={borderStrong}
@@ -556,38 +513,22 @@ export function NativeShell({
               drawerWidthStyle,
             ]}
           >
-            {useSwiftUISidebar ? (
-              <HermesSwiftUISidebarView
-                {...swiftUIThemeProps}
-                activePath={state.activePath}
-                avatarUri={HERMES_SIDEBAR_AVATAR_URI}
-                gatewayStatusesJson={gatewayStatusesJson}
-                locale={locale}
-                onNavigate={(event) => selectSidebarRoute(event.nativeEvent.path)}
-                onRequestClose={closeMobile}
-                open
-                presentation="split"
-                themeBackgroundColor={rootBackground}
-                style={styles.swiftUISidebar}
-              />
-            ) : (
-              <Sidebar
-                borderSoft={borderSoft}
-                borderStrong={borderStrong}
-                closeMobile={closeMobile}
-                composition={composition}
-                gatewayStatuses={resolvedGatewayStatuses}
-                insets={insets}
-                locale={locale}
-                navigate={selectSidebarRoute}
-                onToggleCollapsed={toggleCollapsed}
-                sidebarBackground={sidebarBackground}
-                slotContext={slotContext}
-                slots={slots}
-                state={state}
-                typography={typography}
-              />
-            )}
+            <Sidebar
+              borderSoft={borderSoft}
+              borderStrong={borderStrong}
+              closeMobile={closeMobile}
+              composition={composition}
+              gatewayStatuses={resolvedGatewayStatuses}
+              insets={insets}
+              locale={locale}
+              navigate={selectSidebarRoute}
+              onToggleCollapsed={toggleCollapsed}
+              sidebarBackground={sidebarBackground}
+              slotContext={slotContext}
+              slots={slots}
+              state={state}
+              typography={typography}
+            />
           </Reanimated.View>
         ) : null}
 
@@ -1416,9 +1357,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 0,
     width: '100%',
-  },
-  swiftUISidebar: {
-    flex: 1,
   },
   sidebar: {
     flex: 1,

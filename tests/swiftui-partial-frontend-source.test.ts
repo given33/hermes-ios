@@ -67,7 +67,7 @@ test('SwiftUI route snapshots stay split by product domain', () => {
   );
 });
 
-test('signed iOS builds use the partial SwiftUI frontend without replacing chat', () => {
+test('signed iOS builds keep native route surfaces while the JS sidebar remains authoritative', () => {
   const config = JSON.parse(
     read('modules/hermes-ios-controls/expo-module.config.json'),
   ) as {
@@ -83,16 +83,15 @@ test('signed iOS builds use the partial SwiftUI frontend without replacing chat'
   assert.ok(
     config.apple?.modules?.includes('HermesSwiftUIPartialFrontendModule'),
   );
-  assert.match(bridge, /HermesSwiftUISidebarView/);
   assert.match(bridge, /HermesSwiftUIRouteView/);
   assert.match(bridge, /HermesSwiftUIModelToolsView/);
   assert.match(bridge, /HermesSwiftUIFrostedSurfaceView/);
-  assert.match(native, /View\(HermesSwiftUISidebarView\.self\)/);
+  assert.doesNotMatch(bridge, /HermesSwiftUISidebarView|hasNativeSwiftUISidebar/);
+  assert.doesNotMatch(native, /HermesSwiftUISidebarView|HermesSidebar/);
   assert.match(native, /View\(HermesSwiftUIRouteView\.self\)/);
   assert.match(native, /View\(HermesSwiftUIModelToolsView\.self\)/);
   assert.match(native, /View\(HermesSwiftUIFrostedSurfaceView\.self\)/);
   const hostedViews = [
-    'HermesSwiftUISidebarView',
     'HermesSwiftUIRouteView',
     'HermesSwiftUIModelToolsView',
     'HermesSwiftUIFrostedSurfaceView',
@@ -234,7 +233,7 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(controller, /routeId === 'skills' \|\| routeId === 'mcp'/);
 });
 
-test('SwiftUI owns one synchronized sidebar transition and native page navigation', () => {
+test('the JS sidebar remains authoritative while native page navigation stays available', () => {
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
@@ -251,11 +250,6 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
     apple?: { modules?: string[]; appDelegateSubscribers?: string[] };
   };
   const shell = read('src/app/NativeShell.tsx');
-  const nativeSidebar = native.slice(
-    native.indexOf('struct HermesSwiftUISidebarView'),
-    native.indexOf('final class HermesSwiftUIRouteProps'),
-  );
-
   assert.match(native, /private let hermesDrawerAnimation = Animation\.interactiveSpring/);
   assert.doesNotMatch(native, /HermesProMotionDriver|CADisplayLink/);
   assert.ok(config.apple?.modules?.includes('HermesFrameRateModule'));
@@ -288,37 +282,10 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(bridge, /startNativeFrameRateController/);
   assert.match(bridge, /getNativeFrameRateDiagnostics/);
   assert.match(app, /startNativeFrameRateController\(\)/);
-  assert.match(native, /withAnimation\(drawerAnimation\) \{ presented = true \}/);
-  assert.match(native, /withAnimation\(drawerAnimation\) \{ presented = next \}/);
   assert.match(native, /@Environment\(\\\.accessibilityReduceMotion\)/);
   assert.match(native, /hermesReducedMotionFade = Animation\.easeOut\(duration: 0\.12\)/);
   assert.match(native, /NavigationStack \{/);
   assert.doesNotMatch(native, /navigationTitle\("Hermes Agent"\)/);
-  assert.match(native, /HermesSidebarAvatar\(uri: avatarUri\)/);
-  assert.match(native, /Text\("Hermes Agent"\)\s*\.font\(\.title2\.bold\(\)\)/);
-  assert.match(nativeSidebar, /Image\(systemName: "xmark"\)/);
-  assert.match(nativeSidebar, /\.frame\(width: 44, height: 44\)/);
-  assert.match(nativeSidebar, /showsCloseButton: props\.presentation != "split"/);
-  assert.match(shell, /avatarUri=\{HERMES_SIDEBAR_AVATAR_URI\}/);
-  assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
-  assert.match(nativeSidebar, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
-  assert.equal(
-    nativeSidebar.match(/appearance\.palette\.background\s*\.ignoresSafeArea\(\)/g)?.length,
-    1,
-  );
-  assert.match(nativeSidebar, /padding\(\.top, proxy\.safeAreaInsets\.top\)/);
-  assert.match(nativeSidebar, /padding\(\.bottom, proxy\.safeAreaInsets\.bottom\)/);
-  assert.doesNotMatch(nativeSidebar, /\.background\(Color\.clear\.ignoresSafeArea\(\)\)/);
-  assert.doesNotMatch(nativeSidebar, /\.clipped\(\)/);
-  assert.match(native, /\.frame\(maxWidth: \.infinity, minHeight: 52, alignment: \.leading\)/);
-  assert.match(nativeSidebar, /ForEach\(HermesRoute\.allCases\.filter\(\\\.visibleInSidebar\)\)/);
-  assert.doesNotMatch(nativeSidebar, /ForEach\(0\.\.<4|sectionTitle|Workspace|Automation|Administration/);
-  assert.match(
-    native,
-    /private func select\(_ route: HermesRoute\) \{\s*dismissHermesKeyboard\(\)\s*feedbackTrigger \+= 1\s*props\.onNavigate\(\["path": route\.path\]\)\s*\}/,
-  );
-  assert.doesNotMatch(native, /props\.onNavigate\(\["path": route\.path\]\)\s*if isDrawer/);
-  assert.doesNotMatch(nativeSidebar, /DragGesture\(minimumDistance: 8/);
   assert.doesNotMatch(native, /DragGesture\(minimumDistance: 12/);
   assert.match(shell, /import \{ Drawer \} from 'react-native-drawer-layout'/);
   assert.match(admin, /HermesProfileEditor\([\s\S]*\.onDisappear \{ dismissHermesKeyboard\(\) \}/);
@@ -337,15 +304,11 @@ test('SwiftUI owns one synchronized sidebar transition and native page navigatio
   assert.match(native, /DispatchQueue\.main\.async \{ \[weak self\] in/);
   assert.doesNotMatch(native, /asyncAfter\(deadline: \.now\(\) \+ 0\.025\)/);
   assert.match(native, /props\.onReady\(\["path": path\]\)/);
-  assert.match(shell, /useSwiftUISidebar \? \(/);
-  assert.match(shell, /<HermesSwiftUISidebarView/);
-  assert.match(shell, /const compactSidebar = useSwiftUISidebar \? \(/);
+  assert.doesNotMatch(native, /HermesSwiftUISidebarView|HermesSidebar/);
+  assert.doesNotMatch(bridge, /HermesSwiftUISidebarView|hasNativeSwiftUIPartialFrontend|hasNativeSwiftUISidebar/);
+  assert.doesNotMatch(shell, /useSwiftUISidebar|HermesSwiftUISidebarView/);
+  assert.match(shell, /const compactSidebar = \(\s*<Sidebar/);
   assert.match(shell, /<CompactDrawerFrame[\s\S]*drawerContent=\{compactSidebar\}/);
-  assert.match(shell, /presentation="embedded"/);
-  assert.match(native, /fillsAvailableWidth/);
-  assert.match(native, /ForEach\(gateways\)/);
-  assert.match(native, /gatewayMeta\(gateway\)/);
-  assert.match(native, /gatewayColor\(gateway\.state\)/);
   assert.doesNotMatch(shell, /drawerTranslationStyle|swiftUIDrawerHost/);
 });
 
@@ -399,6 +362,8 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
   );
   const shell = read('src/app/NativeShell.tsx');
   const preview = read('src/studio/FrontendPreviewApp.tsx');
+  const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const admin = read('modules/hermes-ios-controls/ios/HermesSwiftUIAdminPages.swift');
 
   assert.match(bridge, /interface HermesSwiftUIThemeProps/);
   assert.match(native, /protocol HermesThemeProviding/);
@@ -413,19 +378,16 @@ test('SwiftUI partial pages inherit the active Hermes theme instead of a fixed p
   );
   assert.doesNotMatch(routeView, /\.onAppear \{ props\.applyTheme/);
   assert.doesNotMatch(routeView, /\.onChange\(of: props\.themeSignature\)/);
-  assert.match(native, /ScrollView\(\.vertical, showsIndicators: false\)/);
-  assert.doesNotMatch(native, /\.listStyle\(\.insetGrouped\)/);
+  assert.match(routes, /ScrollView/);
   assert.match(native, /appearance\.palette\.background\s*\.ignoresSafeArea\(\)/);
-  assert.match(native, /\.font\(HermesFonts\.body\(15\)\)/);
+  assert.match(admin, /\.font\(HermesFonts\.body\(15\)\)/);
   assert.doesNotMatch(native, /\.background\(\.ultraThinMaterial\)/);
-  assert.match(native, /minHeight: 52/);
-  assert.match(shell, /\.\.\.swiftUIThemeProps/);
   assert.match(shell, /<SymbolView[\s\S]*name=\{item\.symbol as SFSymbol\}[\s\S]*size=\{16\}/);
   assert.match(shell, /referenceSidebarRow:[\s\S]*minHeight: 52/);
   assert.match(preview, /\.\.\.resolveSwiftUIThemeProps\(tokens\)/);
 });
 
-test('chat header exposes live dual-gateway status while SwiftUI keeps back semantics without a theme shortcut', () => {
+test('chat header exposes live dual-gateway status while native routes keep back semantics', () => {
   const native = read(
     'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
   );
@@ -436,9 +398,7 @@ test('chat header exposes live dual-gateway status while SwiftUI keeps back sema
   ].join('\n');
   const shell = read('src/app/NativeShell.tsx');
 
-  assert.match(bridge, /gatewayStatusesJson: string/);
   assert.doesNotMatch(bridge, /onThemeChange\?\(event: NativeSyntheticEvent<\{ name: string \}>\)/);
-  assert.match(native, /decodeGateways\(props\.gatewayStatusesJson\)/);
   assert.match(chat, /gatewayStatuses\.map\(\(gateway\)/);
   assert.match(chat, /gateway\.state === 'online'[\s\S]*tokens\.colors\.success/);
   assert.match(chat, /gateway\.state === 'degraded'[\s\S]*tokens\.colors\.warning/);
@@ -455,7 +415,6 @@ test('chat header exposes live dual-gateway status while SwiftUI keeps back sema
   assert.match(native, /scrollEdge\.shadowColor = \.clear/);
   assert.match(native, /\.toolbarBackground\(appearance\.palette\.background, for: \.navigationBar\)/);
   assert.match(native, /\.toolbarBackground\(\.visible, for: \.navigationBar\)/);
-  assert.match(shell, /gatewayStatusesJson=\{gatewayStatusesJson\}/);
   assert.match(shell, /headerShadowVisible: false/);
   assert.doesNotMatch(shell, /themeName=\{themeName\}|themesJson=\{sidebarThemesJson\}/);
   assert.match(shell, /id: 'dbb3', label: 'DBB3', state: 'unknown'/);

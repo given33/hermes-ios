@@ -6,14 +6,13 @@ import UIKit
 public final class HermesSwiftUIPartialFrontendModule: Module {
   public func definition() -> ModuleDefinition {
     Name("HermesSwiftUIPartialFrontend")
-    View(HermesSwiftUISidebarView.self)
     View(HermesSwiftUIRouteView.self)
     View(HermesSwiftUIModelToolsView.self)
     View(HermesSwiftUIFrostedSurfaceView.self)
   }
 }
 
-enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
+enum HermesRoute: String, Hashable {
   case chat
   case sessions
   case memory
@@ -43,43 +42,7 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
   case system
   case docs
 
-  var id: String { rawValue }
   var path: String { "/\(rawValue)" }
-  var visibleInSidebar: Bool { self != .plugins && self != .sessions }
-
-  var symbol: String {
-    switch self {
-    case .chat: return "message.fill"
-    case .sessions: return "bubble.left.and.bubble.right"
-    case .memory: return "brain"
-    case .files: return "folder"
-    case .analytics: return "chart.bar.xaxis"
-    case .smartWeather: return "cloud.rain"
-    case .browser: return "safari"
-    case .models: return "cpu"
-    case .logs: return "doc.text.magnifyingglass"
-    case .cron: return "clock.arrow.circlepath"
-    case .skills: return "shippingbox"
-    case .plugins: return "puzzlepiece.extension"
-    case .mcp: return "network"
-    case .pairing: return "lock.shield"
-    case .channels: return "dot.radiowaves.left.and.right"
-    case .webhooks: return "arrow.triangle.branch"
-    case .achievements: return "trophy"
-    case .collaboration: return "person.3"
-    case .kanban: return "rectangle.3.group"
-    case .workflows: return "arrow.triangle.branch"
-    case .approvals: return "checkmark.shield"
-    case .runtimeCenter: return "waveform.path.ecg"
-    case .profiles: return "person.2"
-    case .config: return "slider.horizontal.3"
-    case .account: return "person.crop.circle"
-    case .env: return "key"
-    case .system: return "gauge.with.dots.needle.67percent"
-    case .docs: return "book.closed"
-    }
-  }
-
   func title(_ chinese: Bool) -> String {
     if !chinese { return rawValue.capitalized }
     switch self {
@@ -111,16 +74,6 @@ enum HermesRoute: String, CaseIterable, Identifiable, Hashable {
     case .env: return "密钥"
     case .system: return "系统监控"
     case .docs: return "文档"
-    }
-  }
-
-  var group: Int {
-    switch self {
-    case .chat, .sessions, .memory, .files, .analytics, .smartWeather, .browser, .models, .logs: return 0
-    case .cron, .skills, .plugins, .mcp, .pairing, .channels, .webhooks: return 1
-    case .achievements, .collaboration, .kanban, .workflows: return 2
-    case .approvals, .runtimeCenter: return 3
-    case .profiles, .config, .account, .env, .system, .docs: return 3
     }
   }
 
@@ -213,281 +166,6 @@ extension HermesThemeProviding {
 
   func applyTheme(to appearance: HermesAppearanceModel) {
     appearance.apply(palette: resolvedPalette, colorScheme: resolvedColorScheme)
-  }
-}
-
-final class HermesSwiftUISidebarProps: ExpoSwiftUI.ViewProps, HermesThemeProviding {
-  @Field var activePath = "/chat"
-  @Field var avatarUri = ""
-  @Field var gatewayStatusesJson = "[]"
-  @Field var locale = "zh"
-  @Field var open = false
-  @Field var presentation = "drawer"
-  @Field var themeAccentColor = "#ffe6cb"
-  @Field var themeBackgroundColor = "#041c1c"
-  @Field var themeBorderColor = "#ffe6cb26"
-  @Field var themeColorScheme = "dark"
-  @Field var themeDestructiveColor = "#fb2c36"
-  @Field var themeElevatedColor = "#0e2524"
-  @Field var themeForegroundColor = "#ffe6cb"
-  @Field var themePrimaryColor = "#ffe6cb"
-  @Field var themeSecondaryColor = "#ffe6cbcc"
-  @Field var themeSuccessColor = "#4ade80"
-  @Field var themeSurfaceColor = "#0e2524"
-  @Field var themeTertiaryColor = "#ffe6cba6"
-  @Field var themeWarningColor = "#ffbd38"
-  var onNavigate = EventDispatcher()
-  var onRequestClose = EventDispatcher()
-}
-
-struct HermesSwiftUISidebarView: ExpoSwiftUI.View, ExpoSwiftUI.WithHostingView {
-  @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-  @ObservedObject var props: HermesSwiftUISidebarProps
-  @StateObject private var appearance = HermesAppearanceModel()
-  @State private var presented = false
-  @State private var feedbackTrigger = 0
-
-  private var chinese: Bool { props.locale == "zh" }
-  private var isDrawer: Bool { props.presentation == "drawer" }
-  private var fillsAvailableWidth: Bool { props.presentation != "split" }
-
-  var body: some View {
-    GeometryReader { proxy in
-      let drawerWidth = proxy.size.width
-      ZStack(alignment: .leading) {
-        appearance.palette.background
-          .ignoresSafeArea()
-        HermesSidebarContent(
-          activePath: props.activePath,
-          avatarUri: props.avatarUri,
-          chinese: chinese,
-          gateways: decodeGateways(props.gatewayStatusesJson),
-          onClose: requestClose,
-          onNavigate: select,
-          showsCloseButton: props.presentation != "split"
-        )
-        .environmentObject(appearance)
-        .padding(.top, proxy.safeAreaInsets.top)
-        .padding(.bottom, proxy.safeAreaInsets.bottom)
-      }
-      .frame(width: drawerWidth)
-      .frame(maxHeight: .infinity, alignment: .leading)
-      .offset(x: isDrawer && !accessibilityReduceMotion ? drawerOffset(width: drawerWidth) : 0)
-      .opacity(isDrawer && accessibilityReduceMotion ? (presented ? 1 : 0) : 1)
-      .shadow(
-        color: .black.opacity(isDrawer && presented ? 0.22 : 0),
-        radius: 18,
-        x: 10
-      )
-      .contentShape(Rectangle())
-    }
-    .onAppear {
-      presented = isDrawer ? false : true
-      if isDrawer && props.open {
-        DispatchQueue.main.async {
-          withAnimation(drawerAnimation) { presented = true }
-        }
-      }
-    }
-    .onChange(of: props.open) { next in
-      guard isDrawer else { return }
-      withAnimation(drawerAnimation) { presented = next }
-    }
-    .onAppear { props.applyTheme(to: appearance) }
-    .onChange(of: props.themeSignature) { _ in props.applyTheme(to: appearance) }
-    .preferredColorScheme(appearance.colorScheme)
-    .hermesImpact(trigger: feedbackTrigger)
-  }
-
-  private func drawerOffset(width: CGFloat) -> CGFloat {
-    presented ? 0 : -width
-  }
-
-  private var drawerAnimation: Animation {
-    accessibilityReduceMotion ? hermesReducedMotionFade : hermesDrawerAnimation
-  }
-
-  private func select(_ route: HermesRoute) {
-    dismissHermesKeyboard()
-    feedbackTrigger += 1
-    props.onNavigate(["path": route.path])
-  }
-
-  private func requestClose() {
-    dismissHermesKeyboard()
-    feedbackTrigger += 1
-    props.onRequestClose([:])
-  }
-
-}
-
-private struct HermesSidebarGateway: Decodable, Identifiable {
-  let id: String
-  let label: String
-  let state: String
-  let version: String?
-}
-
-private func decodeGateways(_ json: String) -> [HermesSidebarGateway] {
-  (try? JSONDecoder().decode([HermesSidebarGateway].self, from: Data(json.utf8))) ?? []
-}
-
-private struct HermesSidebarContent: View {
-  @EnvironmentObject private var appearance: HermesAppearanceModel
-  let activePath: String
-  let avatarUri: String
-  let chinese: Bool
-  let gateways: [HermesSidebarGateway]
-  let onClose: () -> Void
-  let onNavigate: (HermesRoute) -> Void
-  let showsCloseButton: Bool
-
-  var body: some View {
-    ScrollView(.vertical, showsIndicators: false) {
-      LazyVStack(alignment: .leading, spacing: 0) {
-        HStack(spacing: 10) {
-          HermesSidebarAvatar(uri: avatarUri)
-          Text("Hermes Agent")
-            .font(.title2.bold())
-            .foregroundStyle(appearance.palette.foreground)
-            .lineLimit(1)
-            .minimumScaleFactor(0.85)
-            .accessibilityAddTraits(.isHeader)
-          Spacer(minLength: 4)
-          if showsCloseButton {
-            Button(action: onClose) {
-              Image(systemName: "xmark")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundStyle(appearance.palette.secondary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(chinese ? "\u{5173}\u{95ed}\u{5bfc}\u{822a}" : "Close navigation")
-          }
-        }
-        .padding(.leading, 18)
-        .padding(.trailing, showsCloseButton ? 4 : 18)
-        .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
-
-        ForEach(HermesRoute.allCases.filter(\.visibleInSidebar)) { route in
-          Button {
-            onNavigate(route)
-          } label: {
-            HStack(spacing: 10) {
-              Label {
-                Text(route.title(chinese))
-                  .foregroundStyle(appearance.palette.foreground)
-              } icon: {
-                Image(systemName: route.symbol)
-                  .foregroundStyle(appearance.palette.accent)
-              }
-              .font(HermesFonts.body(15))
-              Spacer(minLength: 8)
-              Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(appearance.palette.tertiary)
-            }
-            .padding(.horizontal, 20)
-            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-          .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
-          .background(
-            activePath == route.path
-              ? appearance.palette.accent.opacity(0.10)
-              : Color.clear
-          )
-          .contentShape(Rectangle())
-        }
-
-        ForEach(gateways) { gateway in
-          HStack(spacing: 10) {
-            Circle()
-              .fill(gatewayColor(gateway.state))
-              .frame(width: 8, height: 8)
-            Text(gateway.label)
-              .font(HermesFonts.body(13))
-              .foregroundStyle(appearance.palette.foreground)
-              .lineLimit(1)
-            Spacer(minLength: 8)
-            Text(gatewayMeta(gateway))
-              .font(HermesFonts.mono(11))
-              .foregroundStyle(appearance.palette.secondary)
-              .lineLimit(1)
-          }
-          .padding(.horizontal, 20)
-          .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        }
-      }
-    }
-    .padding(.bottom, 18)
-    .scrollDismissesKeyboard(.immediately)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Color.clear)
-  }
-
-  private func gatewayColor(_ state: String) -> Color {
-    switch state {
-    case "online": appearance.palette.success
-    case "degraded": appearance.palette.warning
-    case "offline": appearance.palette.destructive
-    default: appearance.palette.tertiary
-    }
-  }
-
-  private func gatewayMeta(_ gateway: HermesSidebarGateway) -> String {
-    let state: String
-    switch gateway.state {
-    case "online": state = chinese ? "在线" : "Online"
-    case "degraded": state = chinese ? "异常" : "Degraded"
-    case "offline": state = chinese ? "离线" : "Offline"
-    default: state = chinese ? "未知" : "Unknown"
-    }
-    guard let version = gateway.version?.trimmingCharacters(in: .whitespacesAndNewlines),
-          !version.isEmpty else { return state }
-    return "\(state) · \(version)"
-  }
-}
-
-private struct HermesSidebarAvatar: View {
-  let uri: String
-
-  var body: some View {
-    Group {
-      if let url = URL(string: uri), url.isFileURL,
-         let image = UIImage(contentsOfFile: url.path) {
-        Image(uiImage: image)
-          .resizable()
-      } else if let url = URL(string: uri) {
-        AsyncImage(url: url) { phase in
-          if let image = phase.image {
-            image.resizable()
-          } else {
-            fallback
-          }
-        }
-      } else {
-        fallback
-      }
-    }
-    .aspectRatio(contentMode: .fill)
-    .frame(width: 24, height: 24)
-    .background(appearanceColor)
-    .clipShape(Circle())
-    .accessibilityHidden(true)
-  }
-
-  private var fallback: some View {
-    Image(systemName: "sparkles")
-      .font(.system(size: 12, weight: .semibold))
-      .foregroundStyle(Color.secondary)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-  }
-
-  private var appearanceColor: Color {
-    Color(uiColor: .secondarySystemBackground)
   }
 }
 

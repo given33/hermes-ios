@@ -328,27 +328,10 @@ struct HermesMetric: View {
   }
 }
 
-private struct HermesImpactFeedbackModifier: ViewModifier {
-  let trigger: Int
-
-  @ViewBuilder
-  func body(content: Content) -> some View {
-    if #available(iOS 17.0, *) {
-      content.sensoryFeedback(.impact(weight: .light), trigger: trigger)
-    } else {
-      content
-    }
-  }
-}
-
 extension View {
   func hermesListStyle() -> some View {
     self
       .scrollContentBackground(.hidden)
       .listStyle(.insetGrouped)
-  }
-
-  func hermesImpact(trigger: Int) -> some View {
-    modifier(HermesImpactFeedbackModifier(trigger: trigger))
   }
 }

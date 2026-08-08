@@ -1083,7 +1083,10 @@ test('native map registration is verified after pods and after Xcode compilation
   assert.match(bridge, /requireNativeView<P>\(registeredModuleName\)/);
   assert.match(bridge, /NativeUnimoduleProxy\?\.viewManagersMetadata/);
   assert.match(bridge, /getViewConfig/);
-  assert.match(bridge, /export const hasNativeStandardMapView = NativeMap !== null;/);
+  assert.match(
+    bridge,
+    /export const hasNativeStandardMapView = !isExpoGoParityBuild && NativeMap !== null;/,
+  );
   assert.doesNotMatch(
     bridge,
     /nativeViewContract\.views\.includes\('HermesStandardMapView'\)/,

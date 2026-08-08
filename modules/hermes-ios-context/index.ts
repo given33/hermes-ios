@@ -9,6 +9,7 @@ import {
   type ViewProps,
 } from 'react-native';
 import { discoverRegisteredNativeView, readNativeViewContract } from './native-view-loader';
+import { isExpoGoParityBuild } from '../build-flags';
 
 export type IOSAuthorizationState =
   | 'authorized'
@@ -462,7 +463,9 @@ export interface IOSContextNativeModule {
   getAttachmentOutboxRootUri?(): string;
 }
 
-const nativeModule = requireOptionalNativeModule<IOSContextNativeModule>('HermesIOSContext');
+const nativeModule = isExpoGoParityBuild
+  ? null
+  : requireOptionalNativeModule<IOSContextNativeModule>('HermesIOSContext');
 const resignCompatibleBuild = Constants.expoConfig?.extra?.hermesResignCompatible === true;
 export interface HermesNativeMapProviderStatus {
   activeProvider: 'amap' | 'mapkit';
@@ -487,9 +490,9 @@ interface HermesStandardMapNativeModule {
   setAmapPrivacyConsent?(granted: boolean): Promise<HermesNativeMapProviderStatus>;
 }
 
-const nativeMapModule = requireOptionalNativeModule<HermesStandardMapNativeModule>(
-  'HermesStandardMap',
-);
+const nativeMapModule = isExpoGoParityBuild
+  ? null
+  : requireOptionalNativeModule<HermesStandardMapNativeModule>('HermesStandardMap');
 
 function requireContextModule(): IOSContextNativeModule {
   if (!nativeModule) {
@@ -500,7 +503,8 @@ function requireContextModule(): IOSContextNativeModule {
 
 export const hasNativeIOSContext = Platform.OS === 'ios'
   && nativeModule !== null
-  && !resignCompatibleBuild;
+  && !resignCompatibleBuild
+  && !isExpoGoParityBuild;
 
 export const HermesIOSContext = {
   getCapabilities: () => requireContextModule().getCapabilities(),
@@ -825,8 +829,8 @@ export const nativeIOSContextViewContractVersion = nativeViewContract.version;
 
 // A successful registry lookup proves the component is renderable; contract
 // metadata alone cannot make an absent view manager available.
-export const hasNativeStandardMapView = NativeMap !== null;
-export const hasNativeScreenTimeReportView = NativeScreenTimeReport !== null;
+export const hasNativeStandardMapView = !isExpoGoParityBuild && NativeMap !== null;
+export const hasNativeScreenTimeReportView = !isExpoGoParityBuild && NativeScreenTimeReport !== null;
 
 export function getNativeMapProviderStatus(): HermesNativeMapProviderStatus {
   return nativeMapModule?.getProviderStatus?.() ?? {
