@@ -467,6 +467,25 @@ const nativeModule = isExpoGoParityBuild
   ? null
   : requireOptionalNativeModule<IOSContextNativeModule>('HermesIOSContext');
 const resignCompatibleBuild = Constants.expoConfig?.extra?.hermesResignCompatible === true;
+// A module can be present in an unsigned or externally re-signed IPA while
+// its Keychain/App Group entitlements are not. Keep the capability decision
+// process-local: one failed optional native call must not keep retrying from
+// every foreground timer and eventually take down the authenticated surface.
+let nativeContextFaulted = false;
+/** The context bridge was marked unusable; any call is a no-op error. */
+class NativeContextUnavailableError extends Error {
+  constructor() {
+    super('Hermes iOS context is unavailable for this process (entitlements missing or bridge faulted)');
+    this.name = 'NativeContextUnavailableError';
+  }
+}
+
+function requireContextModule(): IOSContextNativeModule {
+  if (nativeContextFaulted || !nativeModule) {
+    throw new NativeContextUnavailableError();
+  }
+  return nativeModule;
+}
 export interface HermesNativeMapProviderStatus {
   activeProvider: 'amap' | 'mapkit';
   amapConfigured: boolean;
@@ -494,17 +513,20 @@ const nativeMapModule = isExpoGoParityBuild
   ? null
   : requireOptionalNativeModule<HermesStandardMapNativeModule>('HermesStandardMap');
 
-function requireContextModule(): IOSContextNativeModule {
-  if (!nativeModule) {
-    throw new Error('Hermes iOS context requires an iOS development or signed build.');
-  }
-  return nativeModule;
-}
-
 export const hasNativeIOSContext = Platform.OS === 'ios'
   && nativeModule !== null
   && !resignCompatibleBuild
   && !isExpoGoParityBuild;
+
+/** True while the optional native context bridge is both present and usable. */
+export function isNativeIOSContextAvailable(): boolean {
+  return hasNativeIOSContext && !nativeContextFaulted;
+}
+
+/** Disable only the optional native context for this process. */
+export function markNativeIOSContextUnavailable(): void {
+  nativeContextFaulted = true;
+}
 
 export const HermesIOSContext = {
   getCapabilities: () => requireContextModule().getCapabilities(),
@@ -787,6 +809,88 @@ export const HermesIOSContext = {
   subscribeVoiceState: (listener: (event: IOSVoiceState) => void) =>
     requireContextModule().addListener('onVoiceState', listener),
 };
+
+// Circuit-breaker wrapper: after `markNativeIOSContextUnavailable()` (a
+// re-signed IPA without Keychain/App Group entitlements, or one bridge fault),
+// every HermesIOSContext method must degrade to a safe no-op result instead
+// of throwing into JS. Unprotected call sites — button handlers, foreground
+// timers, voice toggles — would otherwise crash the authenticated surface.
+// The remote session is authoritative; local native capability loss must
+// never take the chat UI down.
+const NATIVE_CONTEXT_DEGRADED: Record<string, unknown> = {
+  getCapabilities: {},
+  getDeviceSnapshot: {},
+  getWatchSnapshot: {},
+  getPowerSnapshot: {},
+  getLocationAuthorizationDetails: {},
+  getMotionSnapshot: {},
+  getLocationMode: {},
+  getPendingEvents: { events: [], cursor: '' },
+  claimPendingEvents: { events: [], token: '' },
+  readPendingCommands: [],
+  getAuthorizationStatus: 'notDetermined',
+  getNotificationAuthorizationStatus: 'notDetermined',
+  getClipboardSnapshot: {},
+};
+// Subscribers must return an object with a no-op remove() so useEffect
+// cleanups (`transcript.remove()` / `state.remove()`) never crash on a
+// faulted bridge.
+const NATIVE_CONTEXT_NOOP_SUBSCRIBER = { remove: () => undefined };
+function nativeContextDegradedResult(methodName: string): unknown {
+  if (methodName.startsWith('subscribe')) return NATIVE_CONTEXT_NOOP_SUBSCRIBER;
+  const degraded = NATIVE_CONTEXT_DEGRADED[methodName];
+  if (degraded !== undefined) return degraded;
+  return null;
+}
+
+const HermesIOSContextMethods = HermesIOSContext as Record<string, (...args: unknown[]) => unknown>;
+
+export const HermesIOSContextSafe = new Proxy(HermesIOSContextMethods, {
+  get(target, property: string | symbol, receiver) {
+    const method = Reflect.get(target, property, receiver);
+    if (typeof method !== 'function') return method;
+    return (...args: unknown[]) => {
+      if (nativeContextFaulted) {
+        return nativeContextDegradedResult(String(property));
+      }
+      let result: unknown;
+      try {
+        result = method.apply(target, args);
+      } catch (error) {
+        // One bad sync call marks the bridge unusable for the rest of the
+        // process; subsequent calls return degraded results instead of
+        // re-throwing the same native failure everywhere.
+        if (error instanceof NativeContextUnavailableError) {
+          nativeContextFaulted = true;
+          return nativeContextDegradedResult(String(property));
+        }
+        throw error;
+      }
+      // Native bridges reject asynchronously. A rejected promise must also
+      // degrade instead of surfacing as an unhandled rejection that crashes
+      // the JS surface (re-signed IPA without Keychain/App Group support).
+      if (result instanceof Promise) {
+        return result.catch((error: unknown) => {
+          if (
+            error instanceof NativeContextUnavailableError
+            || (typeof error === 'object'
+              && error !== null
+              && (error as { name?: unknown }).name === 'NativeContextUnavailableError')
+          ) {
+            nativeContextFaulted = true;
+            return nativeContextDegradedResult(String(property));
+          }
+          throw error;
+        });
+      }
+      return result;
+    };
+  },
+});
+
+// Replace the exported object with the safe wrapper so existing call sites
+// keep their imports and stop throwing on a faulted bridge.
+Object.assign(HermesIOSContext, HermesIOSContextSafe);
 
 export interface IOSTodayPlace {
   arrivedAt: number;

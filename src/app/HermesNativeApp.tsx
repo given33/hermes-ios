@@ -1,8 +1,18 @@
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useRef, useState, type PropsWithChildren } from 'react';
+import {
+  Component,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ErrorInfo,
+  type PropsWithChildren,
+  type ReactNode,
+} from 'react';
 import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
+import { IOSPressable } from '../components/ios/IOSPressable';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { accountOwnerScope } from '../auth/account-identity';
 import { LoginScreen } from '../auth/LoginScreen';
@@ -42,7 +52,13 @@ const FRONTEND_PREVIEW = Platform.OS === 'web' && (
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();
   useEffect(() => {
-    startNativeFrameRateController();
+    try {
+      startNativeFrameRateController();
+    } catch {
+      // ProMotion tuning is optional. A native module from an externally
+      // re-signed IPA can be present without its runtime support; never let
+      // that optional controller prevent the authenticated app from mounting.
+    }
     if (Platform.OS !== 'web') {
       try {
         initializeTemporaryPlaintextFiles();
@@ -96,35 +112,93 @@ function NativeAuthRoot() {
   if (!client) return null;
   const ownerScope = accountOwnerScope(state.connection);
   return (
-    <ThemeProvider client={client}>
-      <ThemedNativeSurface>
-        <ThemedStatusBar />
-        <View
-          accessibilityLabel="Hermes authenticated content"
-          style={styles.nativeContent}
-        >
-          <IOSContextProvider
-            accountGeneration={state.connection.accountGeneration}
-            client={client}
-            deviceId={state.connection.deviceId || ''}
-            ownerScope={ownerScope}
+    <AuthenticatedContentBoundary resetKey={ownerScope}>
+      <ThemeProvider client={client}>
+        <ThemedNativeSurface>
+          <ThemedStatusBar />
+          <View
+            accessibilityLabel="Hermes authenticated content"
+            style={styles.nativeContent}
           >
-            <FrontendPreviewApp
-              account={{
-                deleteAccount,
-                logout,
-                username: state.connection.username,
-              }}
-              cacheOwner={ownerScope}
+            <IOSContextProvider
+              accountGeneration={state.connection.accountGeneration}
               client={client}
-              navigationTarget={navigationTarget}
-              notificationTarget={notificationTarget}
-            />
-          </IOSContextProvider>
-        </View>
-      </ThemedNativeSurface>
-    </ThemeProvider>
+              deviceId={state.connection.deviceId || ''}
+              ownerScope={ownerScope}
+            >
+              <FrontendPreviewApp
+                account={{
+                  deleteAccount,
+                  logout,
+                  username: state.connection.username,
+                }}
+                cacheOwner={ownerScope}
+                client={client}
+                navigationTarget={navigationTarget}
+                notificationTarget={notificationTarget}
+              />
+            </IOSContextProvider>
+          </View>
+        </ThemedNativeSurface>
+      </ThemeProvider>
+    </AuthenticatedContentBoundary>
   );
+}
+
+interface AuthenticatedContentBoundaryProps extends PropsWithChildren {
+  resetKey: string;
+}
+
+interface AuthenticatedContentBoundaryState {
+  error: Error | null;
+}
+
+/**
+ * A bad optional native view or a malformed server snapshot must not turn a
+ * valid authenticated session into a process-looking crash. Keep the error
+ * visible and recoverable until the next account/session boundary changes.
+ */
+class AuthenticatedContentBoundary extends Component<
+  AuthenticatedContentBoundaryProps,
+  AuthenticatedContentBoundaryState
+> {
+  state: AuthenticatedContentBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): AuthenticatedContentBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('Hermes authenticated surface failed', error, info.componentStack);
+  }
+
+  componentDidUpdate(previous: AuthenticatedContentBoundaryProps): void {
+    if (previous.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null });
+    }
+  }
+
+  render(): ReactNode {
+    if (!this.state.error) return this.props.children;
+    return (
+      <View accessibilityRole="alert" style={styles.contentError}>
+        <Text style={styles.contentErrorTitle}>Hermes 会话界面遇到错误</Text>
+        <Text style={styles.contentErrorText}>
+          本地原生能力或远端数据暂时不可用，账号连接仍然保留。请重试界面；如果问题持续，请重新打开应用。
+        </Text>
+        <Text selectable style={styles.contentErrorDetail}>
+          {this.state.error.message || 'Unknown authenticated surface error'}
+        </Text>
+        <IOSPressable
+          accessibilityRole="button"
+          onPress={() => this.setState({ error: null })}
+          style={styles.contentErrorButton}
+        >
+          <Text style={styles.contentErrorButtonText}>重试</Text>
+        </IOSPressable>
+      </View>
+    );
+  }
 }
 
 function useHermesDeepLinkTarget(
@@ -229,5 +303,39 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.72)',
     fontSize: 15,
     lineHeight: 22,
+  },
+  contentError: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 12,
+    padding: 32,
+  },
+  contentErrorTitle: {
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: '600',
+  },
+  contentErrorText: {
+    color: 'rgba(255, 255, 255, 0.72)',
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  contentErrorDetail: {
+    color: 'rgba(255, 255, 255, 0.48)',
+    fontFamily: 'monospace',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  contentErrorButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+  },
+  contentErrorButtonText: {
+    color: '#0e0e0e',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });
