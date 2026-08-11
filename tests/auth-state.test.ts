@@ -875,6 +875,16 @@ test('native auth gates the saved session behind the Face ID lock and keeps the 
   );
   assert.match(
     providerSource,
+    /runOptionalAuthEffect\(\(\) => verifyMobileHandshake\(client, mobileAuth\)\)/,
+    'a read-only handshake failure must not reject a valid mobile token',
+  );
+  assert.match(
+    providerSource,
+    /runOptionalAuthEffect\(\(\) => HermesIOSContext\.activateOwnerScope\(/,
+    'native entitlement failures must not reject remote authentication',
+  );
+  assert.match(
+    providerSource,
     /runOptionalAuthEffect\(\(\) => sharedConversationLocalStore\(\)\.activate/,
   );
   assert.match(providerSource, /HermesIOSContext\.activateOwnerScope\(/);

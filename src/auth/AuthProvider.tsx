@@ -130,7 +130,14 @@ async function activateNativeOwnerScope(
   accountGeneration: string,
 ): Promise<void> {
   if (!hasNativeIOSContext) return;
-  await HermesIOSContext.activateOwnerScope(ownerScope, accountGeneration);
+  // Remote authentication is authoritative. Native owner-scope activation
+  // provisions optional on-device capabilities (Keychain/App Group-backed
+  // collection and attachment vault); a missing entitlement in a re-signed
+  // or partially provisioned IPA must not erase a valid server session.
+  await runOptionalAuthEffect(() => HermesIOSContext.activateOwnerScope(
+    ownerScope,
+    accountGeneration,
+  ));
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {
@@ -345,7 +352,11 @@ export function AuthProvider({ children }: PropsWithChildren) {
             candidate.baseUrl,
             candidate.accessToken,
           );
-          await verifyMobileHandshake(client, mobileAuth);
+          // /auth/mobile/token already verified the credentials and returned
+          // a signed session. The read-only capability probe is deliberately
+          // best-effort so a proxy/native compatibility issue cannot reject
+          // an otherwise valid login.
+          await runOptionalAuthEffect(() => verifyMobileHandshake(client, mobileAuth));
         },
       },
     );
@@ -1008,7 +1019,7 @@ async function adoptSavedSession(
       },
       async verify(candidate) {
         const client = new HermesApiClient(candidate.baseUrl, candidate.accessToken);
-        await verifyMobileHandshake(client, mobileAuth);
+        await runOptionalAuthEffect(() => verifyMobileHandshake(client, mobileAuth));
       },
     },
   );
