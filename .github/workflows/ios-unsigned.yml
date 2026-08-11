@@ -27,6 +27,7 @@ jobs:
     timeout-minutes: 60
     env:
       EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
+      EXPO_PUBLIC_HERMES_URL: 'https://daxueshenmai.top'
       HERMES_DISTRIBUTABLE_BUILD: '1'
       HERMES_RESIGN_COMPAT_BUILD: '0'
       HERMES_CI_BUILD_NUMBER: ${{ github.run_id }}

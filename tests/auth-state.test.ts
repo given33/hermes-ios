@@ -862,6 +862,17 @@ test('native auth gates the saved session behind the Face ID lock and keeps the 
   assert.match(loginSource, /revealRememberedPassword/);
   assert.match(providerSource, /\/api\/mobile\/v1\/handshake/);
   assert.match(providerSource, /verifyMobileHandshake\(client, mobileAuth\)/);
+  const publicHandshakeProbe = providerSource.indexOf(
+    'assertMobileHandshake(await mobileAuth.getHandshake())',
+  );
+  const authenticatedHandshakeFallback = providerSource.indexOf(
+    "client.request<unknown>('/api/mobile/v1/handshake')",
+  );
+  assert.ok(publicHandshakeProbe >= 0, 'login must use the public Hermes handshake first');
+  assert.ok(
+    authenticatedHandshakeFallback > publicHandshakeProbe,
+    'authenticated handshake must remain a compatibility fallback only',
+  );
   assert.match(
     providerSource,
     /runOptionalAuthEffect\(\(\) => sharedConversationLocalStore\(\)\.activate/,

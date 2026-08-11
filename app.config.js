@@ -9,6 +9,9 @@ module.exports = () => {
     || ['development', 'preview', 'production'].includes(buildProfile);
   const frontendPreview = String(process.env.EXPO_PUBLIC_FRONTEND_PREVIEW || '').trim();
   const amapIOSAPIKey = String(process.env.HERMES_AMAP_IOS_API_KEY || '').trim();
+  const hermesUrl = String(
+    process.env.EXPO_PUBLIC_HERMES_URL || base.extra?.hermesUrl || 'https://daxueshenmai.top',
+  ).trim().replace(/\/$/, '');
   const expoProjectId = String(process.env.EXPO_PROJECT_ID || '').trim();
   const ciBuildNumber = String(process.env.HERMES_CI_BUILD_NUMBER || '').trim();
   const bundleIdentifier = String(base.ios.bundleIdentifier || '').trim();
@@ -48,6 +51,7 @@ module.exports = () => {
     plugins,
     extra: {
       ...base.extra,
+      hermesUrl,
       hermesExpoGoParity: expoGoParityBuild,
       hermesResignCompatible: resignCompatibleBuild,
       ...(expoProjectId

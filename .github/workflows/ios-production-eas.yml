@@ -75,6 +75,7 @@ jobs:
     timeout-minutes: 90
     env:
       EXPO_PUBLIC_FRONTEND_PREVIEW: '0'
+      EXPO_PUBLIC_HERMES_URL: 'https://daxueshenmai.top'
       HERMES_DISTRIBUTABLE_BUILD: '1'
       HERMES_AMAP_IOS_API_KEY: ${{ secrets.HERMES_AMAP_IOS_API_KEY }}
       EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

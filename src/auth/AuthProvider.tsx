@@ -909,32 +909,28 @@ async function verifyMobileHandshake(
   client: HermesApiClient,
   mobileAuth: MobileAuthApiClient,
 ): Promise<void> {
+  // Hermes Agent defines this endpoint as a public, read-only contract probe.
+  // Probe it without the freshly-issued bearer first. Sending the token as
+  // the first request is racy behind cookie-gated reverse proxies and mixed
+  // workers: the password exchange can succeed while the subsequent request
+  // is handled by a worker that has not observed the token session yet. That
+  // used to turn a valid password into the generic CONNECTION_ERROR screen.
+  let publicProbeError: unknown;
   try {
-    const response = await client.request<unknown>('/api/mobile/v1/handshake');
-    assertMobileHandshake(response);
+    assertMobileHandshake(await mobileAuth.getHandshake());
     return;
   } catch (error) {
-    // The backend deliberately exposes this endpoint as a public, read-only
-    // contract probe. Some reverse proxies still send a newly minted bearer
-    // through the cookie gate and answer 401/403 (often as a login redirect),
-    // which used to make correct credentials look invalid. Retry the same
-    // probe without Authorization in that narrow case; all other failures
-    // retain their existing, useful error classification.
-    const retryWithoutBearer = error instanceof HermesApiError
-      ? error.status === 401 || error.status === 403
-      : error instanceof Error
-        && /incompatible mobile handshake|invalid JSON/i.test(error.message);
-    if (!retryWithoutBearer) {
-      throw error;
-    }
-    try {
-      assertMobileHandshake(await mobileAuth.getHandshake());
-      return;
-    } catch {
-      // Keep the original authenticated-probe error. In particular, do not
-      // turn a malformed server response into a misleading password error.
-      throw error;
-    }
+    publicProbeError = error;
+  }
+
+  // A few older Hermes deployments accidentally gated the endpoint. Keep a
+  // compatibility fallback for those servers, but never require this second
+  // request on the normal path (and preserve the public-probe error if both
+  // forms fail so the UI reports the real contract/transport problem).
+  try {
+    assertMobileHandshake(await client.request<unknown>('/api/mobile/v1/handshake'));
+  } catch {
+    throw publicProbeError;
   }
 }
 
@@ -1091,6 +1087,12 @@ function authenticationErrorMessage(error: unknown): string {
   }
   if (error instanceof Error) {
     const message = error.message;
+    if (/invalid authentication (?:JSON|session|status)/i.test(message)) {
+      return 'Hermes 移动端认证接口返回格式不兼容，请确认后端移动端接口已部署后重试。';
+    }
+    if (/unable to save Hermes credentials|unable to update Hermes token session/i.test(message)) {
+      return '登录成功，但 iOS 安全存储不可用，请安装正式签名或重签兼容版 IPA 后重试。';
+    }
     if (/timed?\s*out|timeout/i.test(message)) {
       return '连接 Hermes 超时，请检查网络后重试。';
     }

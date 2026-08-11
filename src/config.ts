@@ -21,6 +21,9 @@ export function hermesOriginTransportError(origin: string): string | null {
   return null;
 }
 
+// The production workflows set this explicitly. Keep the checked-in origin
+// as a safe fallback for local Xcode/EAS invocations that omit the shell
+// variable; never inherit a developer machine URL in a distributable build.
 export const HERMES_ORIGIN =
   (process.env.EXPO_PUBLIC_HERMES_URL ?? 'https://daxueshenmai.top').replace(/\/$/, '');
 
