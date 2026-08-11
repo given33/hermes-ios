@@ -72,7 +72,7 @@ test('the app config derives parity for the unsigned re-sign workflow', () => {
   }
 });
 
-test('Expo Go uses the same preview surface as Expo Web for Studio routes', () => {
+test('Expo Go loads the native authenticated surface, not the Web fixture preview', () => {
   const previewMode = read('src/app/frontend-preview-mode.ts');
   const nativeApp = read('src/app/HermesNativeApp.tsx');
   const previewApp = read('src/studio/FrontendPreviewApp.tsx');
@@ -80,7 +80,9 @@ test('Expo Go uses the same preview surface as Expo Web for Studio routes', () =
   const groupView = read('src/studio/agent-group/AgentGroupChatView.tsx');
 
   assert.match(previewMode, /executionEnvironment === 'storeClient'/);
-  assert.match(previewMode, /Platform\.OS === 'web' \|\| isExpoGoRuntime/);
+  assert.match(previewMode, /Platform\.OS === 'web'/);
+  assert.doesNotMatch(previewMode, /Platform\.OS === 'web' \|\| isExpoGoRuntime/);
+  assert.match(nativeApp, /<AuthProvider>/);
   assert.match(nativeApp, /isFrontendPreviewRuntime/);
   assert.match(previewApp, /isFrontendPreviewRuntime/);
   assert.match(shell, /jsParityRoute[\s\S]*route\.routeId === 'workflows'/);

@@ -65,7 +65,7 @@ export function snapshotFromDetail(input: {
     room: input.room,
     agents: input.agents,
     members: input.members,
-    messages: sortMessages(input.messages),
+    messages: attachWorkspaceDiffs(sortMessages(input.messages)),
     typingNames: [],
     runningAgents: [],
     contextStatuses: {},
@@ -88,7 +88,7 @@ export function applyAgentGroupEvent(
   const next: HermesStudioRoomSnapshot = { ...snapshot, updatedAt: Date.now() };
   switch (event.type) {
     case 'message':
-      return { ...next, messages: upsertGroupMessage(next.messages, event.message) };
+      return { ...next, messages: attachWorkspaceDiffs(upsertGroupMessage(next.messages, event.message)) };
     case 'stream-start':
       return {
         ...next,
@@ -200,6 +200,36 @@ export function upsertGroupMessage(
   return sortMessages(next);
 }
 
+/**
+ * Hermes Studio persists workspace diffs as tool messages. The web client
+ * attaches them to the parent assistant message and removes the transport
+ * row; native rendering follows the same contract so a completed run shows
+ * the changed files instead of a raw JSON tool payload.
+ */
+export function attachWorkspaceDiffs(messages: HermesStudioGroupChatMessage[]): HermesStudioGroupChatMessage[] {
+  const hasWorkspaceDiff = messages.some((message) => (
+    (message.toolName || message.tool_name) === 'workspace_diff'
+  ));
+  if (!hasWorkspaceDiff) return messages;
+  const mapped = messages.map((message) => ({
+    ...message,
+    workspaceChanges: message.workspaceChanges ? [...message.workspaceChanges] : [],
+  }));
+  const assistantById = new Map(
+    mapped
+      .filter((message) => message.role === 'assistant')
+      .map((message) => [message.id, message]),
+  );
+  return mapped.filter((message) => {
+    if ((message.toolName || message.tool_name) !== 'workspace_diff') return true;
+    const payload = parseWorkspaceDiff(message.toolResult ?? message.content);
+    const parentId = payload?.parent_message_id?.trim() || '';
+    const parent = parentId ? assistantById.get(parentId) : undefined;
+    if (payload && parent) parent.workspaceChanges?.push(payload);
+    return !parent;
+  });
+}
+
 export function updateGroupMessage(
   messages: readonly HermesStudioGroupChatMessage[],
   id: string,
@@ -252,4 +282,48 @@ function sortMessages(messages: HermesStudioGroupChatMessage[]): HermesStudioGro
     const timestampDelta = left.timestamp - right.timestamp;
     return timestampDelta || left.id.localeCompare(right.id);
   });
+}
+
+function parseWorkspaceDiff(value: unknown): NonNullable<HermesStudioGroupChatMessage['workspaceChanges']>[number] | null {
+  const text = typeof value === 'string' ? value : (() => {
+    try { return JSON.stringify(value); } catch { return ''; }
+  })();
+  if (!text) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { parsed = value; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.kind !== 'workspace_diff' || typeof record.run_id !== 'string' || !Array.isArray(record.files)) return null;
+  return {
+    kind: typeof record.kind === 'string' ? record.kind : 'workspace_diff',
+    version: typeof record.version === 'number' ? record.version : 1,
+    room_id: typeof record.room_id === 'string' ? record.room_id : '',
+    session_id: typeof record.session_id === 'string' ? record.session_id : '',
+    run_id: record.run_id,
+    status: typeof record.status === 'string' ? record.status : 'completed',
+    change_id: typeof record.change_id === 'string' ? record.change_id : '',
+    workspace_basename: typeof record.workspace_basename === 'string' ? record.workspace_basename : '',
+    workspace: typeof record.workspace === 'string' ? record.workspace : undefined,
+    workspace_root: typeof record.workspace_root === 'string' ? record.workspace_root : undefined,
+    files_changed: typeof record.files_changed === 'number' ? record.files_changed : 0,
+    additions: typeof record.additions === 'number' ? record.additions : 0,
+    deletions: typeof record.deletions === 'number' ? record.deletions : 0,
+    truncated: record.truncated === true,
+    files: record.files.flatMap((file) => {
+      if (!file || typeof file !== 'object' || Array.isArray(file)) return [];
+      const item = file as Record<string, unknown>;
+      if (typeof item.path !== 'string') return [];
+      return [{
+        id: typeof item.id === 'number' || typeof item.id === 'string' ? item.id : item.path,
+        path: item.path,
+        change_type: typeof item.change_type === 'string' ? item.change_type : undefined,
+        additions: typeof item.additions === 'number' ? item.additions : 0,
+        deletions: typeof item.deletions === 'number' ? item.deletions : 0,
+        patch: item.patch === null ? null : typeof item.patch === 'string' ? item.patch : undefined,
+        binary: item.binary === true,
+        truncated: item.truncated === true,
+      }];
+    }),
+    parent_message_id: typeof record.parent_message_id === 'string' ? record.parent_message_id : undefined,
+  };
 }

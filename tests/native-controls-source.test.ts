@@ -222,5 +222,5 @@ test('local native effects always launch through a development client', () => {
   assert.ok(pluginNames.includes('expo-dev-client'));
   assert.equal(easConfig.build.development.developmentClient, true);
   assert.match(launchSources, /--dev-client/);
-  assert.doesNotMatch(launchSources, /--go(?:\s|$)/);
+  assert.match(packageJson.scripts['expo-go'], /expo start --go/);
 });

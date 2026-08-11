@@ -19,6 +19,7 @@ const FAILURE_LOG_INTERVAL_MS = 60_000;
 const HEALTHY_POLL_MS = 15_000;
 const DISCONNECTED_POLL_MS = 1_000;
 const EVENT_STREAM_CONNECTION_TIMEOUT_MS = 5_000;
+const EVENT_STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 interface HostedConversationStreamOptions {
   activeConversationId: string;
@@ -37,6 +38,13 @@ interface HostedConversationStreamOptions {
   cursorRef: MutableRefObject<Map<string, number>>;
   generation: ConversationSyncGeneration;
   hostedRunning: boolean;
+  /**
+   * Keep the official hosted-events stream warm for an existing conversation
+   * while it is idle.  A send can then reuse the already-authenticated SSE
+   * connection instead of waiting for enqueue ACK -> React effect -> TLS/SSE
+   * handshake before the first lifecycle event.
+   */
+  primeHostedStream?: boolean;
   loadConversation(
     conversationId: string,
     expectedGeneration: number,
@@ -57,11 +65,16 @@ export function useHostedConversationStream({
   cursorRef,
   generation,
   hostedRunning,
+  primeHostedStream = false,
   loadConversation,
   requestTimeoutMs,
 }: HostedConversationStreamOptions): void {
   useEffect(() => {
-    if (!cloudApi || !activeConversationId || !hostedRunning) return undefined;
+    if (
+      !cloudApi
+      || !activeConversationId
+      || (!hostedRunning && !primeHostedStream)
+    ) return undefined;
 
     let disposed = false;
     let streamActive = false;
@@ -71,6 +84,7 @@ export function useHostedConversationStream({
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectAttempt = 0;
     let lastFailureLogAt = 0;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
     const expectedAccountGeneration = accountGenerationFromOwnerScope(cacheOwner);
     let reconciliationQueue = Promise.resolve();
     const activeGeneration = generation.advanceActive();
@@ -119,6 +133,15 @@ export function useHostedConversationStream({
       }
       streamActive = true;
       streamController = new AbortController();
+      const armIdleWatchdog = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          streamHealthy = false;
+          streamController?.abort();
+          if (!pollTimer) pollTimer = setTimeout(() => void poll(), 0);
+        }, EVENT_STREAM_IDLE_TIMEOUT_MS);
+      };
+      armIdleWatchdog();
       void consumeHostedConversationEvents(
         cloudApi,
         activeConversationId,
@@ -169,6 +192,7 @@ export function useHostedConversationStream({
         },
         undefined,
         EVENT_STREAM_CONNECTION_TIMEOUT_MS,
+        armIdleWatchdog,
       ).catch((error: unknown) => {
         if (!streamController?.signal.aborted) {
           streamHealthy = false;
@@ -177,6 +201,8 @@ export function useHostedConversationStream({
           pollTimer = setTimeout(() => void poll(), 0);
         }
       }).finally(() => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = null;
         streamActive = false;
         streamController = null;
         if (lifecycleCurrent()) scheduleStream();
@@ -222,12 +248,14 @@ export function useHostedConversationStream({
       }
       streamHealthy = false;
       streamController?.abort();
+      if (idleTimer) clearTimeout(idleTimer);
     });
 
     startStream();
     return () => {
       disposed = true;
       streamController?.abort();
+      if (idleTimer) clearTimeout(idleTimer);
       appStateSubscription.remove();
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (pollTimer) clearTimeout(pollTimer);
@@ -243,6 +271,7 @@ export function useHostedConversationStream({
     cursorRef,
     generation,
     hostedRunning,
+    primeHostedStream,
     loadConversation,
     requestTimeoutMs,
   ]);

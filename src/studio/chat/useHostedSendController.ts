@@ -312,6 +312,13 @@ export function useHostedSendController({
     // Fence overlapping send/cancel callbacks while the first durable write
     // is in flight. User-visible optimistic state is committed afterwards.
     pendingTurnActiveRef.current = true;
+    // Surface the local send boundary immediately. Durable outbox persistence
+    // remains mandatory, but it must not hide the user's click behind an
+    // AsyncStorage queue. The same timestamp is used by the pending-phase
+    // clock so click -> enqueue -> SSE -> first thinking can be measured
+    // without pretending the durable write was the network start.
+    setSending(true);
+    updatePendingPhase('connecting', userMessageCreatedAt);
     const plannedAttachments = planPendingAttachments(
       cacheOwner,
       userMessageId,

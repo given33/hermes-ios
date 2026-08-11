@@ -33,6 +33,7 @@ import {
 } from './coding-pi-model';
 
 const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
+const CODING_EVENT_STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 export interface CodingPiController {
   activeSession: HermesCodingPiSession | null;
@@ -95,6 +96,7 @@ export function useCodingPiController({
   const [available, setAvailable] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
   const activeSessionIdRef = useRef(activeSessionId);
+  const sessionEpochRef = useRef(0);
   const eventSequenceRef = useRef(0);
   const notifyRef = useRef(notify);
   notifyRef.current = notify;
@@ -156,8 +158,13 @@ export function useCodingPiController({
 
   const loadSnapshot = useCallback(async (sessionId: string) => {
     if (!api || !sessionId || !enabled || fixtureMode) return;
+    const requestEpoch = sessionEpochRef.current;
     try {
-      applySnapshot(await api.getSession(profile, sessionId));
+      const nextSnapshot = await api.getSession(profile, sessionId);
+      // A slow snapshot from a previously selected Pi session must never
+      // overwrite the session currently visible on screen.
+      if (sessionEpochRef.current !== requestEpoch || activeSessionIdRef.current !== sessionId) return;
+      applySnapshot(nextSnapshot);
       // Pi defaults subagent streaming to off. Enable the full lifecycle/event
       // channel so Coding mode does not silently lose delegated work.
       await api.command(profile, sessionId, {
@@ -191,22 +198,35 @@ export function useCodingPiController({
 
   useEffect(() => {
     if (!api || !enabled || fixtureMode || !activeSessionId) return;
-    const abortController = new AbortController();
+    const effectAbortController = new AbortController();
     let disposed = false;
     let reconnectAttempt = 0;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const consume = async () => {
       while (!disposed) {
+        const streamController = new AbortController();
+        const onEffectAbort = () => streamController.abort();
+        effectAbortController.signal.addEventListener('abort', onEffectAbort, { once: true });
+        let idleExpired = false;
+        const armIdleWatchdog = () => {
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = setTimeout(() => {
+            idleExpired = true;
+            streamController.abort();
+          }, CODING_EVENT_STREAM_IDLE_TIMEOUT_MS);
+        };
         try {
           const response = await api.openEvents(
             profile,
             activeSessionId,
             eventSequenceRef.current,
-            abortController.signal,
+            streamController.signal,
           );
           if (!response.body) throw new Error('Coding event stream has no response body');
+          armIdleWatchdog();
           reconnectAttempt = 0;
-          await consumeEventStream(response.body, abortController.signal, (eventType, payload, sequence) => {
+          await consumeEventStream(response.body, streamController.signal, (eventType, payload, sequence) => {
             if (disposed) return;
             if (sequence !== undefined) eventSequenceRef.current = Math.max(eventSequenceRef.current, sequence);
             if (eventType === 'snapshot' && isCodingPiSnapshot(payload)) {
@@ -218,11 +238,16 @@ export function useCodingPiController({
               return;
             }
             applyPiFrame(payload);
-          });
+          }, armIdleWatchdog);
           if (disposed) return;
         } catch (nextError) {
-          if (disposed || isAbortError(nextError)) return;
+          if (disposed || effectAbortController.signal.aborted) return;
+          if (isAbortError(nextError) && !idleExpired) return;
           setError(errorMessage(nextError));
+        } finally {
+          effectAbortController.signal.removeEventListener('abort', onEffectAbort);
+          if (idleTimer) clearTimeout(idleTimer);
+          idleTimer = null;
         }
         if (disposed) return;
         const delay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)];
@@ -437,12 +462,14 @@ export function useCodingPiController({
     void consume();
     return () => {
       disposed = true;
-      abortController.abort();
+      effectAbortController.abort();
+      if (idleTimer) clearTimeout(idleTimer);
     };
   }, [activeSessionId, api, applySnapshot, enabled, fixtureMode, loadSnapshot, profile, sendHostFrame]);
 
   const selectSession = useCallback((sessionId: string) => {
     if (!sessionId || sessionId === activeSessionIdRef.current) return;
+    sessionEpochRef.current += 1;
     eventSequenceRef.current = 0;
     setSnapshot(null);
     setMessages([]);
@@ -462,6 +489,7 @@ export function useCodingPiController({
       const result = await api.createSession(profile, createInput);
       setSessions((current) => [result.session, ...current.filter((session) => session.id !== result.session.id)]);
       eventSequenceRef.current = 0;
+      sessionEpochRef.current += 1;
       setActiveSessionId(result.session.id);
       applySnapshot(result.snapshot);
       setError(null);
@@ -514,10 +542,11 @@ export function useCodingPiController({
     const normalized = message.trim();
     const sessionId = activeSessionIdRef.current;
     if (!normalized || !api || !enabled || fixtureMode || !sessionId) return;
+    const optimisticId = `optimistic-${Date.now()}`;
     setInput('');
     setError(null);
     setMessages((current) => [...current, {
-      id: `optimistic-${Date.now()}`,
+      id: optimisticId,
       role: 'user',
       text: normalized,
       timestamp: Date.now(),
@@ -530,12 +559,16 @@ export function useCodingPiController({
         setError(detail);
         notifyRef.current(detail);
         setStreaming(false);
+        setMessages((current) => current.filter((item) => item.id !== optimisticId));
+        setInput((current) => current || normalized);
       }
     } catch (nextError) {
       const detail = errorMessage(nextError);
       setError(detail);
       notifyRef.current(detail);
       setStreaming(false);
+      setMessages((current) => current.filter((item) => item.id !== optimisticId));
+      setInput((current) => current || normalized);
     }
   }, [api, enabled, fixtureMode, input, profile]);
 
@@ -621,9 +654,11 @@ async function consumeEventStream(
   body: ReadableStream<Uint8Array>,
   signal: AbortSignal,
   onFrame: (eventType: string, payload: HermesCodingPiJson, sequence?: number) => void,
+  onActivity?: () => void,
 ): Promise<void> {
   let buffer = '';
   for await (const decoded of decodeSseTextStream(body, signal)) {
+    onActivity?.();
     buffer += decoded;
     while (true) {
       const boundary = /\r?\n\r?\n/.exec(buffer);

@@ -1,13 +1,15 @@
 import { isRecord } from './chat-view-values';
 import type { HostedLifecycleEvent } from './hosted-conversation-events';
-import type { HermesChatTodo } from './chat-view-types';
+import type { HermesChatRoleStage, HermesChatTodo } from './chat-view-types';
 import {
+  avatarRoleFor,
   streamEventToActivity,
   type HermesChatActivity,
   type HermesChatViewMessage,
 } from './chat-view-model';
 
 export interface HostedLifecycleApplication {
+  cancelled: boolean;
   completed: boolean;
   failed: boolean;
   firstTokenAt?: number;
@@ -27,6 +29,7 @@ export function applyHostedLifecycleEvents(
 ): HostedLifecycleApplication {
   let nextMessages = messages;
   let completed = false;
+  let cancelled = false;
   let failed = false;
   let phase: HostedLifecycleApplication['phase'];
   let phaseStartedAt: number | undefined;
@@ -36,12 +39,48 @@ export function applyHostedLifecycleEvents(
   const notices: string[] = [];
 
   for (const event of events) {
-    if (event.role_stage.split(/[.:/]/, 1)[0] !== 'chat') continue;
+    // Hosted team events are emitted from the worker/reviewer/reporter
+    // stages as well as the user-facing chat stage.  They still belong to
+    // the same runtime turn and must not be dropped by the chat reducer.
+    // A terminal event is occasionally tagged with the synthetic `turn`
+    // stage, so accept that stage only for terminal turn lifecycle events.
+    const roleStage = event.role_stage.split(/[.:/]/, 1)[0].toLowerCase();
+    const eventTypeForStage = event.event_type.toLowerCase();
+    const acceptedRoleStage = roleStage === 'chat'
+      || roleStage === 'worker'
+      || roleStage === 'reviewer'
+      || roleStage === 'reporter'
+      || (roleStage === 'turn' && (
+        eventTypeForStage === 'turn.completed'
+        || eventTypeForStage === 'turn.cancelled'
+        || eventTypeForStage === 'turn.failed'
+        || eventTypeForStage === 'turn.cancel_requested'
+      ));
+    if (!acceptedRoleStage) continue;
     const eventType = event.event_type.toLowerCase();
     const occurredAt = positiveTimestamp(event.occurred_at) || Date.now();
     const payload = { ...event.payload };
     if (!stringValue(payload.entity_id) && event.entity_id) payload.entity_id = event.entity_id;
-    let message = liveMessageFor(nextMessages, event.turn_id, occurredAt, chinese);
+    const liveRoleStage = normalizeLiveRoleStage(roleStage);
+    const terminalTurnEvent = eventType === 'turn.completed'
+      || eventType === 'turn.cancelled'
+      || eventType === 'turn.failed';
+    const existingTurnMessage = terminalTurnEvent
+      ? nextMessages.find((candidate) => (
+        candidate.role === 'assistant'
+        && candidate.runtimeTurnId === event.turn_id
+      ))
+      : undefined;
+    let message = existingTurnMessage
+      || liveMessageFor(
+        nextMessages,
+        event.turn_id,
+        liveRoleStage,
+        event.role_stage,
+        payload,
+        occurredAt,
+        chinese,
+      );
     const sourceEventType = stringValue(payload.source_event_type).toLowerCase();
     const requestAccepted = sourceEventType === 'request.accepted'
       || (!sourceEventType && stringValue(payload.status).toLowerCase() === 'started');
@@ -225,7 +264,7 @@ export function applyHostedLifecycleEvents(
           // The `todo` tool result carries the full task list; refresh the
           // live todo panel from every completion event.
           todos: eventType === 'tool.complete' || eventType === 'tool.completed'
-            ? normalizeTodoList(payload.todos) ?? message.todos
+            ? normalizeTodoPayload(payload) ?? message.todos
             : message.todos,
           // Tool/command/subagent events are execution details, not model
           // output. The first-token clock is owned by reasoning/message deltas.
@@ -285,9 +324,14 @@ export function applyHostedLifecycleEvents(
         timingLabel: undefined,
         updatedAt: occurredAt,
       };
-    } else if (eventType === 'turn.completed' || eventType === 'turn.cancelled' || eventType === 'turn.failed') {
-      turnActive = true;
+    } else if (terminalTurnEvent) {
+      // A synthetic turn terminal is authoritative for every role bubble in
+      // the turn. Keep the reducer's activity flag terminal as well; the UI
+      // controller also checks completed/failed/cancelled, but other
+      // consumers use turnActive directly while reconciling a snapshot.
+      turnActive = false;
       completed = eventType === 'turn.completed';
+      cancelled = eventType === 'turn.cancelled';
       failed = eventType === 'turn.failed';
       const status = eventType === 'turn.completed'
         ? 'completed'
@@ -306,9 +350,30 @@ export function applyHostedLifecycleEvents(
       continue;
     }
     nextMessages = upsertLiveMessage(nextMessages, message);
+    if (terminalTurnEvent) {
+      // A team turn can have several live role bubbles. The synthetic turn
+      // terminal closes every bubble in that turn, not only whichever role
+      // emitted the terminal frame.
+      const terminalStatus = eventType === 'turn.completed'
+        ? 'completed'
+        : eventType === 'turn.cancelled' ? 'cancelled' : 'failed';
+      nextMessages = nextMessages.map((candidate) => (
+        candidate.role === 'assistant' && candidate.runtimeTurnId === event.turn_id
+          ? {
+              ...candidate,
+              activities: finishActivities(candidate.activities, terminalStatus, occurredAt),
+              completedAt: occurredAt,
+              status: terminalStatus,
+              timingLabel: undefined,
+              updatedAt: occurredAt,
+            }
+          : candidate
+      ));
+    }
   }
 
   return {
+    cancelled,
     completed,
     failed,
     firstTokenAt,
@@ -355,25 +420,72 @@ function officialFrontendNotice(
 function liveMessageFor(
   messages: readonly HermesChatViewMessage[],
   turnId: string,
+  roleStage: HermesChatRoleStage,
+  rawRoleStage: string,
+  payload: Record<string, unknown>,
   occurredAt: number,
   chinese: boolean,
 ): HermesChatViewMessage {
   return messages.find((message) => (
     message.role === 'assistant'
     && message.runtimeTurnId === turnId
-    && (message.roleStage || 'chat') === 'chat'
+    && (message.roleStage || 'chat') === roleStage
   )) || {
     activities: [],
-    avatarRole: 'hermes',
+    avatarRole: avatarRoleFor(stringValue(payload.profile), roleStage, false),
     content: '',
     createdAt: occurredAt,
-    id: `hosted-live:${turnId}:chat`,
-    name: 'Hermes Agent',
+    id: `hosted-live:${turnId}:${roleStage}`,
+    name: liveRoleName(roleStage, stringValue(payload.profile), chinese),
+    profile: stringValue(payload.profile) || undefined,
+    rawRoleStage,
     role: 'assistant',
-    roleLabel: chinese ? '对话' : 'Chat',
-    roleStage: 'chat',
+    roleLabel: liveRoleLabel(roleStage, chinese),
+    roleStage,
     runtimeTurnId: turnId,
   };
+}
+
+function normalizeLiveRoleStage(value: string): HermesChatRoleStage {
+  const normalized = value.toLowerCase();
+  if (normalized === 'worker' || normalized.startsWith('worker.')) return 'worker';
+  if (normalized === 'reviewer' || normalized.startsWith('reviewer.')) return 'reviewer';
+  if (normalized === 'reporter' || normalized.startsWith('reporter.')) return 'reporter';
+  return 'chat';
+}
+
+function liveRoleLabel(stage: HermesChatRoleStage, chinese: boolean): string {
+  if (chinese) {
+    return {
+      chat: 'Hermes Agent',
+      worker: '任务执行',
+      reviewer: '结果审核',
+      reporter: '最终汇报',
+      dispatcher: '任务调度',
+      supervisor: '流程监督',
+    }[stage];
+  }
+  return {
+    chat: 'Hermes Agent',
+    worker: 'Execution',
+    reviewer: 'Review',
+    reporter: 'Final report',
+    dispatcher: 'Task dispatch',
+    supervisor: 'Workflow supervision',
+  }[stage];
+}
+
+function liveRoleName(
+  stage: HermesChatRoleStage,
+  profile: string,
+  chinese: boolean,
+): string {
+  if (stage === 'chat') return 'Hermes Agent';
+  if (stage === 'worker' && /dbb3/i.test(profile)) return chinese ? 'DBB3 执行员' : 'DBB3 Worker';
+  if (stage === 'worker' && /pc|wsl|local|windows/i.test(profile)) {
+    return chinese ? 'PC/WSL 执行员' : 'PC/WSL Worker';
+  }
+  return liveRoleLabel(stage, chinese);
 }
 
 function upsertLiveMessage(
@@ -475,6 +587,7 @@ function stringValue(value: unknown): string {
 
 function normalizeTodoList(value: unknown): HermesChatTodo[] | null {
   if (!Array.isArray(value)) return null;
+  if (value.length === 0) return [];
   const items = value
     .map((entry): HermesChatTodo | null => {
       if (!isRecord(entry)) return null;
@@ -490,7 +603,45 @@ function normalizeTodoList(value: unknown): HermesChatTodo[] | null {
       return { id, title, status };
     })
     .filter((entry): entry is HermesChatTodo => entry !== null);
+  // An explicit empty list is a canonical clear signal. A non-empty list
+  // with no valid entries is malformed, not a clear instruction: preserve the
+  // last known plan instead of erasing it because an adapter returned junk.
   return items.length ? items : null;
+}
+
+/** Read the canonical todo-tool result envelope used by hosted events. */
+function normalizeTodoPayload(payload: Record<string, unknown>): HermesChatTodo[] | null {
+  if (Object.prototype.hasOwnProperty.call(payload, 'todos')) {
+    return normalizeTodoList(payload.todos);
+  }
+  for (const key of ['result', 'result_text']) {
+    if (!Object.prototype.hasOwnProperty.call(payload, key)) continue;
+    const parsed = parseTodoEnvelope(payload[key]);
+    if (parsed !== null) return normalizeTodoList(parsed);
+  }
+  return null;
+}
+
+function parseTodoEnvelope(value: unknown): unknown[] | null {
+  if (isRecord(value) && Array.isArray(value.todos)) return value.todos;
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (isRecord(parsed) && Array.isArray(parsed.todos)) return parsed.todos;
+  } catch {
+    // Some tool adapters prepend a short status line before JSON.
+    const start = value.indexOf('{');
+    const end = value.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try {
+        const parsed: unknown = JSON.parse(value.slice(start, end + 1));
+        if (isRecord(parsed) && Array.isArray(parsed.todos)) return parsed.todos;
+      } catch {
+        // Ignore malformed tool output and preserve the previous todo state.
+      }
+    }
+  }
+  return null;
 }
 
 function numericValue(value: unknown): number {

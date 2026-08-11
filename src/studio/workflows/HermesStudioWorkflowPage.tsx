@@ -2,6 +2,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { File as ExpoFile } from 'expo-file-system';
 import {
   CheckCircle2,
+  CalendarClock,
   ChevronLeft,
   CircleAlert,
   GitBranch,
@@ -43,6 +44,7 @@ import { StudioOfficialAvatar } from '../../components/studio/StudioOfficialAvat
 import { multiplyAlpha } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
 import { PreviewModal, PreviewText, PreviewToggle } from '../PreviewPrimitives';
+import { HermesStudioWorkflowSchedules } from './HermesStudioWorkflowSchedules';
 
 export interface HermesStudioWorkflowPageProps {
   client?: HermesApiClient;
@@ -137,6 +139,7 @@ export function HermesStudioWorkflowPage({
   const [importDocument, setImportDocument] = useState('');
   const [importing, setImporting] = useState(false);
   const [compactDetailOpen, setCompactDetailOpen] = useState(false);
+  const [schedulesOpen, setSchedulesOpen] = useState(false);
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedId) || null;
 
@@ -811,6 +814,14 @@ export function HermesStudioWorkflowPage({
                 >
                   <Trash2 color={tokens.colors.textTertiary} size={16} />
                 </IOSPressable>
+                <IOSPressable
+                  accessibilityLabel={isChinese ? '工作流定时调度' : 'Workflow schedules'}
+                  hitSlop={8}
+                  onPress={() => setSchedulesOpen(true)}
+                  style={styles.iconButton}
+                >
+                  <CalendarClock color={tokens.colors.textSecondary} size={16} />
+                </IOSPressable>
               </View>
 
               <View style={[styles.runtimeCard, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }]}> 
@@ -1253,6 +1264,16 @@ export function HermesStudioWorkflowPage({
           <NativeButton disabled={importing} loading={importing} onPress={() => { void confirmWorkflowImport(); }} prefix={<CheckCircle2 />} size="sm">{isChinese ? '确认导入' : 'Confirm import'}</NativeButton>
         </View>
       </PreviewModal>
+
+      <HermesStudioWorkflowSchedules
+        client={client}
+        isChinese={isChinese}
+        notify={notify}
+        onClose={() => setSchedulesOpen(false)}
+        open={schedulesOpen}
+        profile={profile}
+        workflow={selectedWorkflow}
+      />
 
       <ConfirmDialog
         cancelLabel={isChinese ? '取消' : 'Cancel'}

@@ -16,6 +16,8 @@ import {
   type HermesStudioRoomMember,
   type HermesStudioRoomSummaryAnchor,
   type HermesStudioRoomSummaryState,
+  type HermesStudioGroupChatMention,
+  type HermesStudioGroupWorkspaceDiffPayload,
   type HermesStudioWorkspaceFileContent,
   type HermesStudioWorkspaceFileListing,
 } from './types';
@@ -25,6 +27,7 @@ export interface HermesStudioRealtimeOptions {
   userName: string;
   description?: string;
   authUserId?: number;
+  inviteCode?: string;
 }
 
 export type HermesStudioGroupChatSocket = Socket;
@@ -96,6 +99,17 @@ export class HermesStudioGroupChatApi {
     });
   }
 
+  removeRoomMember(roomId: string, userId: string) {
+    return this.client.request<{ success: boolean; agents?: unknown[]; members?: unknown[] }>(
+      `/api/hermes/group-chat/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+    ).then((response) => ({
+      ...response,
+      agents: normalizeAgents(response.agents),
+      members: normalizeMembers(response.members),
+    }));
+  }
+
   clearRoomContext(roomId: string) {
     return this.client.request<{ success: boolean; room?: unknown }>(
       `/api/hermes/group-chat/rooms/${encodeURIComponent(roomId)}/clear-context`,
@@ -152,11 +166,26 @@ export class HermesStudioGroupChatApi {
     );
   }
 
+  downloadWorkspaceFile(roomId: string, path: string, options: { signal?: AbortSignal; download?: boolean } = {}) {
+    return this.client.download(
+      `/api/hermes/group-chat/rooms/${encodeURIComponent(roomId)}/workspace-file/content`,
+      {
+        query: { path, ...(options.download ? { download: '1' } : {}) },
+        signal: options.signal,
+      },
+    );
+  }
+
+  async readWorkspaceFileText(roomId: string, path: string, signal?: AbortSignal): Promise<{ content: string; size: number }> {
+    const blob = await this.downloadWorkspaceFile(roomId, path, { signal });
+    return { content: await blob.text(), size: blob.size };
+  }
+
   writeWorkspaceFile(roomId: string, path: string, content: string): Promise<void> {
     return this.client.request(
       `/api/hermes/group-chat/rooms/${encodeURIComponent(roomId)}/workspace-file/write`,
       {
-        method: 'POST',
+        method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, content }),
       },
@@ -178,7 +207,7 @@ export class HermesStudioGroupChatApi {
     return this.client.request(
       `/api/hermes/group-chat/rooms/${encodeURIComponent(roomId)}/workspace-file/delete`,
       {
-        method: 'POST',
+        method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path, recursive }),
       },
@@ -281,11 +310,11 @@ export class HermesStudioGroupChatApi {
         name: options.userName,
         description: options.description || '',
         ...(options.authUserId ? { authUserId: options.authUserId } : {}),
+        ...(options.inviteCode?.trim() ? { inviteCode: options.inviteCode.trim() } : {}),
       },
-      // The Studio auth middleware accepts the token in both the handshake
-      // payload (auth.token) and the query string; carrying both widens
-      // compatibility with front proxies that only forward query parameters.
-      query: { token },
+      // Keep bearer material in Socket.IO's handshake auth object.  Putting it
+      // in `query` leaks the token into URLs and proxy/access logs; the Hermes
+      // Studio official middleware reads `auth.token` directly.
       transports: ['websocket', 'polling'],
       reconnection: true,
       reconnectionAttempts: Infinity,
@@ -293,7 +322,7 @@ export class HermesStudioGroupChatApi {
       reconnectionDelayMax: 30_000,
       timeout: 30_000,
     });
-    socket.on('reconnect_attempt', () => {
+    socket.io.on('reconnect_attempt', () => {
       void this.client.getAccessTokenForRealtime()
         .then((nextToken) => {
           const currentAuth = isRecord(socket.auth) ? socket.auth : {};
@@ -340,6 +369,7 @@ export class HermesStudioGroupChatApi {
     id: string,
     content: string,
     attachments?: unknown[],
+    mentions?: HermesStudioGroupChatMention[],
   ): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!socket.connected) {
@@ -348,7 +378,13 @@ export class HermesStudioGroupChatApi {
       }
       socket.timeout(15_000).emit(
         'message',
-        { roomId, id, content, ...(attachments?.length ? { attachments } : {}) },
+        {
+          roomId,
+          id,
+          content,
+          ...(attachments?.length ? { attachments } : {}),
+          ...(mentions?.length ? { mentions } : {}),
+        },
         (error: Error | null, response: unknown) => {
           if (error) {
             reject(error);
@@ -419,6 +455,8 @@ function normalizeRoom(value: unknown): HermesStudioRoomInfo | null {
     name: stringValue(value.name, stringValue(value.id)),
     inviteCode: value.inviteCode === null ? null : stringValue(value.inviteCode) || null,
     canManage: typeof value.canManage === 'boolean' ? value.canManage : undefined,
+    canMentionAll: typeof value.canMentionAll === 'boolean' ? value.canMentionAll : undefined,
+    ownerMemberId: stringValue(value.ownerMemberId),
     summaryProfile: stringValue(value.summaryProfile),
     summaryProvider: stringValue(value.summaryProvider),
     summaryModel: stringValue(value.summaryModel),
@@ -426,6 +464,16 @@ function normalizeRoom(value: unknown): HermesStudioRoomInfo | null {
     summaryEveryTurns: numberValue(value.summaryEveryTurns, 20),
     totalTokens: value.totalTokens === undefined ? undefined : numberValue(value.totalTokens, 0),
     workspace: stringValue(value.workspace),
+    allowGuestAgents: value.allowGuestAgents === undefined ? undefined : numberValue(value.allowGuestAgents, 0),
+    guestAgentApproval: stringValue(value.guestAgentApproval),
+    maxGuestAgentsPerMember: value.maxGuestAgentsPerMember === undefined
+      ? undefined
+      : numberValue(value.maxGuestAgentsPerMember, 0),
+    allowRemoteWorkspaceAccess: value.allowRemoteWorkspaceAccess === undefined
+      ? undefined
+      : numberValue(value.allowRemoteWorkspaceAccess, 0),
+    createdAt: value.createdAt === undefined ? undefined : numberValue(value.createdAt, 0),
+    lastActiveAt: value.lastActiveAt === undefined ? undefined : numberValue(value.lastActiveAt, 0),
   };
 }
 
@@ -453,6 +501,12 @@ function normalizeAgent(value: unknown): HermesStudioRoomAgent | null {
     invited: typeof value.invited === 'boolean' || typeof value.invited === 'number'
       ? value.invited
       : undefined,
+    executorType: stringValue(value.executorType),
+    remoteOrigin: stringValue(value.remoteOrigin),
+    connectionStatus: stringValue(value.connectionStatus),
+    ownerMemberId: stringValue(value.ownerMemberId),
+    connectorId: stringValue(value.connectorId),
+    historical: typeof value.historical === 'boolean' ? value.historical : undefined,
   };
 }
 
@@ -477,6 +531,7 @@ function normalizeMember(value: unknown): HermesStudioRoomMember | null {
     description: stringValue(value.description),
     joinedAt: value.joinedAt === undefined ? undefined : numberValue(value.joinedAt, 0),
     avatar: stringValue(value.avatar),
+    connectionStatus: stringValue(value.connectionStatus),
   };
 }
 
@@ -495,8 +550,18 @@ export function normalizeGroupMessage(value: unknown, fallbackRoomId = ''): Herm
     roomId: stringValue(value.roomId, fallbackRoomId),
     senderId: stringValue(value.senderId),
     senderName: stringValue(value.senderName, 'Agent'),
+    senderType: stringValue(value.senderType),
+    senderAgentRecordId: stringValue(value.senderAgentRecordId),
+    senderAvatar: stringValue(value.senderAvatar),
+    senderAgentType: stringValue(value.senderAgentType),
+    senderAgentProfile: stringValue(value.senderAgentProfile),
+    senderAgentProvider: stringValue(value.senderAgentProvider),
+    senderAgentModel: stringValue(value.senderAgentModel),
+    senderAgentDescription: stringValue(value.senderAgentDescription),
+    senderOwnerMemberId: stringValue(value.senderOwnerMemberId),
     content: stringValue(value.content),
     timestamp: numberValue(value.timestamp, Date.now()),
+    persistedAt: value.persistedAt === undefined ? undefined : numberValue(value.persistedAt, 0),
     run_id: value.run_id === null ? null : stringValue(value.run_id) || null,
     role: stringValue(value.role),
     tool_call_id: value.tool_call_id === null ? null : stringValue(value.tool_call_id) || null,
@@ -506,13 +571,22 @@ export function normalizeGroupMessage(value: unknown, fallbackRoomId = ''): Herm
     reasoning: value.reasoning === null ? null : stringValue(value.reasoning) || null,
     reasoning_details: value.reasoning_details === null ? null : stringValue(value.reasoning_details) || null,
     reasoning_content: value.reasoning_content === null ? null : stringValue(value.reasoning_content) || null,
+    mentions: Array.isArray(value.mentions)
+      ? value.mentions.filter((mention): mention is HermesStudioGroupChatMention => (
+          isRecord(mention) && typeof mention.displayName === 'string'
+        )).map((mention) => ({
+          type: stringValue(mention.type, 'agent'),
+          participantId: stringValue(mention.participantId),
+          displayName: stringValue(mention.displayName),
+        }))
+      : undefined,
     isStreaming: value.isStreaming === true,
     toolName: stringValue(value.toolName),
     toolCallId: stringValue(value.toolCallId),
     toolArgs: value.toolArgs,
     toolPreview: stringValue(value.toolPreview),
     toolResult: value.toolResult,
-    toolStatus: value.toolStatus === 'running' || value.toolStatus === 'done' || value.toolStatus === 'error'
+    toolStatus: value.toolStatus === 'running' || value.toolStatus === 'done' || value.toolStatus === 'error' || value.toolStatus === 'interrupted'
       ? value.toolStatus
       : undefined,
     attachments: Array.isArray(value.attachments)
@@ -530,11 +604,48 @@ export function normalizeGroupMessage(value: unknown, fallbackRoomId = ''): Herm
         url: attachment.url,
       }))
       : undefined,
+    workspaceChanges: Array.isArray(value.workspaceChanges)
+      ? value.workspaceChanges.filter((change): change is HermesStudioGroupWorkspaceDiffPayload => (
+          isRecord(change) && typeof change.run_id === 'string' && Array.isArray(change.files)
+        )).map((change) => ({
+          kind: stringValue(change.kind, 'workspace_diff'),
+          version: numberValue(change.version, 1),
+          room_id: stringValue(change.room_id, stringValue(value.roomId, fallbackRoomId)),
+          session_id: stringValue(change.session_id),
+          run_id: stringValue(change.run_id),
+          status: stringValue(change.status, 'completed'),
+          change_id: stringValue(change.change_id),
+          workspace_basename: stringValue(change.workspace_basename),
+          workspace: stringValue(change.workspace),
+          workspace_root: stringValue(change.workspace_root),
+          files_changed: numberValue(change.files_changed, 0),
+          additions: numberValue(change.additions, 0),
+          deletions: numberValue(change.deletions, 0),
+          truncated: change.truncated === true,
+          files: (Array.isArray(change.files) ? change.files : []).flatMap((file) => {
+            if (!isRecord(file) || typeof file.path !== 'string') return [];
+            return [{
+              id: typeof file.id === 'number' || typeof file.id === 'string' ? file.id : file.path,
+              path: file.path,
+              change_type: stringValue(file.change_type),
+              additions: numberValue(file.additions, 0),
+              deletions: numberValue(file.deletions, 0),
+              patch: file.patch === null ? null : stringValue(file.patch),
+              binary: file.binary === true,
+              truncated: file.truncated === true,
+            }];
+          }),
+          parent_message_id: stringValue(change.parent_message_id),
+        }))
+      : undefined,
     runItems: Array.isArray(value.runItems)
       ? value.runItems.map((item) => normalizeGroupMessage(item, stringValue(value.roomId, fallbackRoomId)))
         .filter((item): item is HermesStudioGroupChatMessage => item !== null)
       : undefined,
     firstSeenAt: value.firstSeenAt === undefined ? undefined : numberValue(value.firstSeenAt, Date.now()),
+    deliveryStatus: value.deliveryStatus === 'pending' || value.deliveryStatus === 'sent' || value.deliveryStatus === 'failed'
+      ? value.deliveryStatus
+      : undefined,
   };
 }
 

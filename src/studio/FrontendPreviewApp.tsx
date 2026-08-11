@@ -519,9 +519,10 @@ function PreviewRoute({
     );
   }
   // Production/authenticated builds must never present fixture pages as live
-  // product data. Fixture *PreviewPage surfaces are restricted to the explicit
-  // frontend-preview packaging flag (manual Expo Go / design previews only).
-  const allowFixturePages = !client && (
+  // product data.  Keep fixtures web-only: Expo Go is a native runtime and
+  // must use the authenticated Hermes surface even if a preview env flag is
+  // accidentally present in its Metro bundle.
+  const allowFixturePages = Platform.OS === 'web' && !client && (
     process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
     || isFrontendPreviewRuntime
   );

@@ -190,7 +190,9 @@ function AgentGroupMessageItem({
   const agent = findAgent(agents, message);
   const isAgent = Boolean(agent) || message.role === 'assistant';
   const isSelf = message.senderId === userId || message.role === 'user';
-  const isError = message.finish_reason === 'error' || /^Error:\s*/i.test(message.content || '');
+  const isError = message.deliveryStatus === 'failed'
+    || message.finish_reason === 'error'
+    || /^Error:\s*/i.test(message.content || '');
   const [thinkingExpanded, setThinkingExpanded] = useState(Boolean(message.isStreaming && message.reasoning && !message.content));
   const [toolExpanded, setToolExpanded] = useState(false);
   const reasoning = message.reasoning || message.reasoning_content || '';
@@ -255,13 +257,16 @@ function AgentGroupMessageItem({
           ) : null}
           {message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
           {message.isStreaming && !message.content ? <StreamingDots color={tokens.colors.textTertiary} /> : null}
+          {message.workspaceChanges?.length ? <WorkspaceChanges isChinese={isChinese} changes={message.workspaceChanges} /> : null}
         </View>
         {!embedded ? (
           <View style={styles.messageMeta}>
             <IOSPressable accessibilityLabel={isChinese ? '复制群聊消息' : 'Copy group message'} onPress={() => { void copyMessage(); }} style={styles.metaButton}>
               <ClipboardIcon color={tokens.colors.textTertiary} size={13} />
             </IOSPressable>
-            <Text style={[styles.time, { color: tokens.colors.textTertiary }]}>{formatTimestamp(message.timestamp)}</Text>
+            <Text style={[styles.time, { color: message.deliveryStatus === 'failed' ? tokens.colors.destructive : tokens.colors.textTertiary }]}>
+              {message.deliveryStatus === 'failed' ? (isChinese ? '发送失败 · 可重试' : 'Failed to send · retry') : formatTimestamp(message.timestamp)}
+            </Text>
           </View>
         ) : null}
       </View>
@@ -312,6 +317,30 @@ function Attachments({ attachments }: { attachments: Array<{ id: string; name: s
           <Text style={[styles.attachmentSize, { color: tokens.colors.textTertiary }]}>{formatBytes(attachment.size)}</Text>
         </View>
       ))}
+    </View>
+  );
+}
+
+function WorkspaceChanges({
+  changes,
+  isChinese,
+}: {
+  changes: NonNullable<HermesStudioGroupChatMessage['workspaceChanges']>;
+  isChinese: boolean;
+}) {
+  const { tokens } = useTheme();
+  return (
+    <View style={[styles.workspaceChanges, { borderTopColor: tokens.colors.border }]}>
+      <Text style={[styles.workspaceChangesTitle, { color: tokens.colors.textSecondary }]}>🗂️ {isChinese ? '工作区变更' : 'Workspace changes'}</Text>
+      {changes.flatMap((change) => change.files.slice(0, 20).map((file) => (
+        <View key={`${change.change_id}:${String(file.id)}:${file.path}`} style={styles.workspaceChangeRow}>
+          <Text numberOfLines={1} style={[styles.workspaceChangePath, { color: tokens.colors.foreground }]}>{file.path}</Text>
+          <Text style={[styles.workspaceChangeMeta, { color: tokens.colors.textTertiary }]}>
+            {file.change_type || 'modified'} · +{file.additions} −{file.deletions}
+          </Text>
+        </View>
+      )))}
+      {changes.some((change) => change.truncated) ? <Text style={[styles.workspaceChangeMeta, { color: tokens.colors.textTertiary }]}>{isChinese ? '部分变更被服务端截断' : 'Some changes were truncated by the server'}</Text> : null}
     </View>
   );
 }
@@ -492,6 +521,11 @@ const styles = {
   attachmentFile: { alignItems: 'center' as const, borderRadius: 5, borderWidth: 1, flexDirection: 'row' as const, gap: 6, maxWidth: 220, minWidth: 140, paddingHorizontal: 9, paddingVertical: 8 },
   attachmentName: { flex: 1, fontSize: 11 },
   attachmentSize: { fontSize: 10 },
+  workspaceChanges: { borderTopWidth: 1, gap: 4, marginTop: 8, paddingTop: 7 },
+  workspaceChangesTitle: { fontSize: 10, fontWeight: '700' as const },
+  workspaceChangeRow: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 6 },
+  workspaceChangePath: { flex: 1, fontFamily: 'monospace', fontSize: 10 },
+  workspaceChangeMeta: { fontSize: 9 },
   toolLine: { alignItems: 'center' as const, borderRadius: 5, flexDirection: 'row' as const, gap: 6, maxWidth: '100%' as const, paddingHorizontal: 4, paddingVertical: 3 },
   toolName: { flexShrink: 0, fontFamily: 'monospace', fontSize: 11 },
   toolPreview: { flex: 1, fontSize: 11 },

@@ -31,7 +31,6 @@ export function useHermesStudioWorkflowHistory({
   const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
-    if (!enabled) return;
     if (!api) {
       setItems(fixtureMode ? fixtureHistory() : []);
       return;
@@ -54,8 +53,8 @@ export function useHermesStudioWorkflowHistory({
   }, [api, enabled, fixtureMode, profile]);
 
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    if (enabled) void refresh();
+  }, [enabled, refresh]);
 
   return { items, loading, refresh };
 }

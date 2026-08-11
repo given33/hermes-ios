@@ -10,6 +10,7 @@ import type { HermesApiClient } from '../../api/HermesApiClient';
 import { hermesStudioApiFor } from '../../api/hermes-api-registry';
 import type {
   HermesStudioGroupChatMessage,
+  HermesStudioGroupChatMention,
   HermesStudioGroupChatSocket,
   HermesStudioPendingApproval,
   HermesStudioRoomAgentInput,
@@ -52,6 +53,10 @@ export interface AgentGroupCreateRoomOptions {
     apiMode: string;
     everyTurns: number;
   };
+  allowGuestAgents?: number;
+  guestAgentApproval?: 'owner' | string;
+  maxGuestAgentsPerMember?: number;
+  allowRemoteWorkspaceAccess?: number;
 }
 
 export interface AgentGroupChatController {
@@ -67,7 +72,7 @@ export interface AgentGroupChatController {
   roomSnapshots: HermesStudioRoomSnapshot[];
   selectRoom(roomId: string): void;
   setDraft(roomId: string, value: string): void;
-  sendMessage(content?: string): Promise<void>;
+  sendMessage(content?: string, attachments?: unknown[], mentions?: HermesStudioGroupChatMention[]): Promise<void>;
   createRoom(name: string, profiles: string[], options?: AgentGroupCreateRoomOptions): Promise<void>;
   deleteRoom(roomId: string): Promise<void>;
   clearRoom(roomId: string): Promise<void>;
@@ -81,6 +86,7 @@ export interface AgentGroupChatController {
   addAgent(roomId: string, input: HermesStudioRoomAgentInput): Promise<void>;
   updateAgent(roomId: string, agentId: string, input: HermesStudioRoomAgentInput): Promise<void>;
   removeAgent(roomId: string, agentId: string): Promise<void>;
+  removeRoomMember(roomId: string, userId: string): Promise<void>;
   loadRoomSummary(roomId?: string): Promise<void>;
   updateRoomSummary(roomId: string, summary: string): Promise<void>;
   interruptAgent(roomId: string, agentName: string): Promise<void>;
@@ -92,6 +98,8 @@ export interface AgentGroupChatController {
   writeWorkspaceFile(roomId: string, path: string, content: string): Promise<void>;
   mkdirWorkspaceFile(roomId: string, path: string): Promise<void>;
   deleteWorkspaceFile(roomId: string, path: string, recursive?: boolean): Promise<void>;
+  downloadWorkspaceFile(roomId: string, path: string, download?: boolean): Promise<Blob | null>;
+  readWorkspaceFileText(roomId: string, path: string): Promise<{ content: string; size: number }>;
 }
 
 /**
@@ -133,6 +141,7 @@ export function useAgentGroupChatController({
     roomId: string,
     socket?: HermesStudioGroupChatSocket | null,
   ) => Promise<void>>(undefined);
+  const inviteCodeRef = useRef('');
 
   const bump = useCallback(() => {
     if (mountedRef.current) setRevision((value) => value + 1);
@@ -226,7 +235,12 @@ export function useAgentGroupChatController({
     };
     const onDisconnect = () => {
       setConnected(false);
-      for (const roomId of joinedRoomIdsRef.current) {
+      // Socket.IO room membership is connection-scoped.  A reconnect creates
+      // a new server-side socket, so every room must be joined again even if
+      // the local snapshot still knows that it was previously joined.
+      const joinedRoomIds = [...joinedRoomIdsRef.current];
+      joinedRoomIdsRef.current.clear();
+      for (const roomId of joinedRoomIds) {
         patchSnapshot(roomId, (snapshot) => ({ ...snapshot, connected: false }));
       }
     };
@@ -407,6 +421,7 @@ export function useAgentGroupChatController({
       userId: stableUserId,
       userName: identity.name,
       description: identity.description,
+      inviteCode: inviteCodeRef.current || undefined,
     }).then(async (socket) => {
       if (!mountedRef.current) {
         socket.disconnect();
@@ -516,13 +531,18 @@ export function useAgentGroupChatController({
     if (socket && studioApi) studioApi.groupChat.emitStopTyping(socket, roomId);
   }, [studioApi]);
 
-  const sendMessage = useCallback(async (requestedContent?: string) => {
+  const sendMessage = useCallback(async (
+    requestedContent?: string,
+    attachments?: unknown[],
+    mentions?: HermesStudioGroupChatMention[],
+  ) => {
     const roomId = activeRoomIdRef.current;
     const content = (requestedContent ?? draftsRef.current[roomId] ?? '').trim();
-    if (!roomId || !content) return;
+    if (!roomId || (!content && !attachments?.length)) return;
     emitStopTyping(roomId);
     const snapshot = snapshotsRef.current.get(roomId);
     if (!snapshot) return;
+    const previousDraft = draftsRef.current[roomId] ?? '';
     const id = `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const optimistic: HermesStudioGroupChatMessage = {
       id,
@@ -532,6 +552,7 @@ export function useAgentGroupChatController({
       content,
       timestamp: Date.now(),
       role: 'user',
+      deliveryStatus: 'pending',
     };
     patchSnapshot(roomId, (current) => ({
       ...current,
@@ -541,6 +562,10 @@ export function useAgentGroupChatController({
     }));
     setDraft(roomId, '');
     if (!studioApi) {
+      patchSnapshot(roomId, (current) => ({
+        ...current,
+        messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
+      }));
       notify(isChinese ? '预览模式：已加入 Agent 群聊时间线' : 'Preview: added to the Agent group timeline');
       return;
     }
@@ -548,10 +573,20 @@ export function useAgentGroupChatController({
       const socket = await connectSocket();
       await joinRoomOnSocket(roomId, socket);
       if (!socket) throw new Error('Hermes Studio group chat is unavailable');
-      await studioApi.groupChat.sendMessage(socket, roomId, id, content);
+      await studioApi.groupChat.sendMessage(socket, roomId, id, content, attachments, mentions);
+      patchSnapshot(roomId, (current) => ({
+        ...current,
+        messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
+      }));
     } catch (reason) {
-      patchSnapshot(roomId, (current) => ({ ...current, error: errorMessage(reason, isChinese) }));
-      notify(errorMessage(reason, isChinese));
+      const message = errorMessage(reason, isChinese);
+      patchSnapshot(roomId, (current) => ({
+        ...current,
+        messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'failed' }),
+        error: message,
+      }));
+      setDraft(roomId, previousDraft || content);
+      notify(message);
     }
   }, [connectSocket, emitStopTyping, identity.name, isChinese, joinRoomOnSocket, notify, patchSnapshot, setDraft, stableUserId, studioApi]);
 
@@ -575,6 +610,10 @@ export function useAgentGroupChatController({
         summaryModel: options.summary?.model || '',
         summaryApiMode: options.summary?.apiMode || 'chat_completions',
         summaryEveryTurns: options.summary?.everyTurns || 20,
+        allowGuestAgents: options.allowGuestAgents,
+        guestAgentApproval: options.guestAgentApproval,
+        maxGuestAgentsPerMember: options.maxGuestAgentsPerMember,
+        allowRemoteWorkspaceAccess: options.allowRemoteWorkspaceAccess,
       };
       const nextRooms = [...roomsRef.current, room];
       applyRoomList(nextRooms);
@@ -609,6 +648,10 @@ export function useAgentGroupChatController({
           everyTurns: 20,
         },
         workspace: options.workspace || '',
+        allowGuestAgents: options.allowGuestAgents,
+        guestAgentApproval: options.guestAgentApproval,
+        maxGuestAgentsPerMember: options.maxGuestAgentsPerMember,
+        allowRemoteWorkspaceAccess: options.allowRemoteWorkspaceAccess,
       });
       const nextRooms = [result.room, ...roomsRef.current.filter((room) => room.id !== result.room.id)];
       applyRoomList(nextRooms);
@@ -661,6 +704,7 @@ export function useAgentGroupChatController({
     const trimmedCode = code.trim();
     if (!trimmedCode || !studioApi) return;
     try {
+      inviteCodeRef.current = trimmedCode;
       const result = await studioApi.groupChat.joinRoomByCode(trimmedCode);
       applyRoomList([result.room, ...roomsRef.current.filter((room) => room.id !== result.room.id)]);
       if (!snapshotsRef.current.has(result.room.id)) snapshotsRef.current.set(result.room.id, emptyRoomSnapshot(result.room));
@@ -772,6 +816,23 @@ export function useAgentGroupChatController({
     }
   }, [isChinese, notify, patchSnapshot, studioApi]);
 
+  const removeRoomMember = useCallback(async (roomId: string, userId: string) => {
+    if (!studioApi) return;
+    try {
+      const result = await studioApi.groupChat.removeRoomMember(roomId, userId);
+      patchSnapshot(roomId, (snapshot) => ({
+        ...snapshot,
+        agents: result.agents.length ? result.agents : snapshot.agents,
+        members: result.members.length ? result.members : snapshot.members.filter((member) => member.userId !== userId),
+        updatedAt: Date.now(),
+      }));
+    } catch (reason) {
+      const message = errorMessage(reason, isChinese);
+      patchSnapshot(roomId, (snapshot) => ({ ...snapshot, error: message }));
+      notify(message);
+    }
+  }, [isChinese, notify, patchSnapshot, studioApi]);
+
   const loadRoomSummary = useCallback(async (requestedRoomId?: string) => {
     const roomId = requestedRoomId || activeRoomIdRef.current;
     if (!roomId || !studioApi) return;
@@ -854,6 +915,16 @@ export function useAgentGroupChatController({
   const deleteWorkspaceFile = useCallback(async (roomId: string, path: string, recursive = false): Promise<void> => {
     if (!studioApi) return;
     await studioApi.groupChat.deleteWorkspaceFile(roomId, path, recursive);
+  }, [studioApi]);
+
+  const downloadWorkspaceFile = useCallback(async (roomId: string, path: string, download = false): Promise<Blob | null> => {
+    if (!studioApi) return null;
+    return studioApi.groupChat.downloadWorkspaceFile(roomId, path, { download });
+  }, [studioApi]);
+
+  const readWorkspaceFileText = useCallback(async (roomId: string, path: string): Promise<{ content: string; size: number }> => {
+    if (!studioApi) return { content: '', size: 0 };
+    return studioApi.groupChat.readWorkspaceFileText(roomId, path);
   }, [studioApi]);
 
   const deleteRoom = useCallback(async (roomId: string) => {
@@ -961,6 +1032,7 @@ export function useAgentGroupChatController({
     addAgent,
     updateAgent,
     removeAgent,
+    removeRoomMember,
     loadRoomSummary,
     updateRoomSummary,
     interruptAgent,
@@ -972,6 +1044,8 @@ export function useAgentGroupChatController({
     writeWorkspaceFile,
     mkdirWorkspaceFile,
     deleteWorkspaceFile,
+    downloadWorkspaceFile,
+    readWorkspaceFileText,
   };
 }
 

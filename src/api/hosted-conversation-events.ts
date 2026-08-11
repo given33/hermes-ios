@@ -49,6 +49,7 @@ export async function consumeHostedConversationEvents(
   onEvent: (event: HostedConversationEventFrame) => void | Promise<void>,
   onMalformedFrame: (error: Error) => void = defaultMalformedFrameReporter,
   connectionTimeoutMs = 5_000,
+  onActivity?: () => void,
 ): Promise<number> {
   const expectedGeneration = expectedAccountGeneration.trim();
   if (!conversationId.trim() || !expectedGeneration) {
@@ -73,6 +74,10 @@ export async function consumeHostedConversationEvents(
     );
   };
   for await (const decoded of decodeSseTextStream(response.body, signal)) {
+    // Keepalive comments are ignored by the protocol parser, but they still
+    // prove that the SSE path is alive. The stream owner uses this hook to
+    // distinguish a quiet long-running task from a half-open connection.
+    onActivity?.();
     buffer += decoded;
     const parsed = await drainSseBuffer(
       buffer,

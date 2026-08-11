@@ -31,8 +31,13 @@ import { initializeTemporaryPlaintextFiles } from '../api/temporary-plaintext-fi
 
 // The preview is deliberately limited to the web dev shell. Native builds keep
 // the real authentication boundary even when Metro is running in development.
-const FRONTEND_PREVIEW = process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
-  || isFrontendPreviewRuntime;
+// Fixture mode is intentionally web-only.  An Expo Go bundle is still a
+// native Hermes client and must cross the real AuthProvider/official API
+// boundary even when a developer accidentally leaves the preview flag set.
+const FRONTEND_PREVIEW = Platform.OS === 'web' && (
+  process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
+  || isFrontendPreviewRuntime
+);
 
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();

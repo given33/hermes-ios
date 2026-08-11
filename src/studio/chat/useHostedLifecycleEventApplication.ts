@@ -63,7 +63,7 @@ export function useHostedLifecycleEventApplication({
     if (result.phase && (result.phase === 'reconnecting' || result.phaseStartedAt !== undefined)) {
       updatePendingPhase(result.phase, result.phaseStartedAt || Date.now());
     }
-    if (result.completed || result.failed) {
+    if (result.completed || result.failed || result.cancelled) {
       pendingTurnActiveRef.current = false;
       setHostedRunning(false);
       setSending(false);

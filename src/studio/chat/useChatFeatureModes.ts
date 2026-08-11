@@ -57,21 +57,33 @@ export function useChatFeatureModes({
     agentProfile: profile,
     cacheOwner,
     client,
-    enabled: true,
+    // Do not open the group Socket.IO channel while the user is in ordinary
+    // single-chat mode.  Apart from wasting radio/battery, the room joins and
+    // history requests compete with the official hosted enqueue/SSE path and
+    // make the click-to-thinking metric noisy.  The hook remains mounted so a
+    // mode switch can enable the real controller without conditionally calling
+    // React hooks.
+    enabled: fixtureMode || chatMode === 'agent-group',
     fixtureMode,
     isChinese,
     notify,
   });
   const workflowHistory = useHermesStudioWorkflowHistory({
     client,
-    enabled: true,
+    // Workflow history is an optional index, not part of the single-chat
+    // critical path.  It is explicitly refreshed from the history action;
+    // fixture mode keeps the preview deterministic.
+    enabled: fixtureMode,
     fixtureMode,
     profile,
   });
   const codingPiController = useCodingPiController({
     cacheOwner,
     client,
-    enabled: true,
+    // Pi performs config/session discovery (and may perform LAN discovery if
+    // its configured origin is unavailable).  Keep that work out of the
+    // normal single-chat mount and enable it only when Coding mode is active.
+    enabled: fixtureMode || chatMode === 'coding',
     fixtureMode,
     notify,
     profile,

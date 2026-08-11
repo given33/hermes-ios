@@ -596,6 +596,18 @@ export function ChatPreviewPage({
     cursorRef: hostedEventCursorRef,
     generation: conversationSyncGenerationRef.current,
     hostedRunning,
+    // Reuse the official hosted-events SSE for an idle, existing conversation
+    // so enqueue does not pay a second connection handshake on every turn.
+    // A freshly-created local conversation is marked pending in the durable
+    // outbox before its id becomes active; do not race its first /enqueue with
+    // a 404 stream open. The official enqueue route creates and pre-warms it.
+    primeHostedStream: Boolean(
+      activeConversationId
+      && !(
+        pendingChatSendRef.current?.conversationId === activeConversationId
+        && pendingChatSendRef.current.queuedItem?.conversationPending
+      )
+    ),
     loadConversation,
     requestTimeoutMs: HOSTED_TURN_REQUEST_TIMEOUT_MS,
   });

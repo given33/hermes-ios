@@ -5,6 +5,8 @@ export interface HermesStudioRoomInfo {
   name: string;
   inviteCode: string | null;
   canManage?: boolean;
+  canMentionAll?: boolean;
+  ownerMemberId?: string;
   summaryProfile?: string;
   summaryProvider?: string;
   summaryModel?: string;
@@ -12,6 +14,12 @@ export interface HermesStudioRoomInfo {
   summaryEveryTurns?: number;
   totalTokens?: number;
   workspace?: string;
+  allowGuestAgents?: number;
+  guestAgentApproval?: 'owner' | string;
+  maxGuestAgentsPerMember?: number;
+  allowRemoteWorkspaceAccess?: number;
+  createdAt?: number;
+  lastActiveAt?: number;
 }
 
 export interface HermesStudioRoomAgent {
@@ -28,6 +36,12 @@ export interface HermesStudioRoomAgent {
   description?: string;
   avatar?: string;
   invited?: number | boolean;
+  executorType?: 'server' | 'remote' | string;
+  remoteOrigin?: string;
+  connectionStatus?: 'online' | 'offline' | string;
+  ownerMemberId?: string;
+  connectorId?: string;
+  historical?: boolean;
 }
 
 export interface HermesStudioRoomSummaryConfig {
@@ -69,6 +83,43 @@ export interface HermesStudioRoomMember {
   description?: string;
   joinedAt?: number;
   avatar?: string;
+  connectionStatus?: 'online' | 'offline' | string;
+}
+
+export interface HermesStudioGroupChatMention {
+  type: 'agent' | 'all' | string;
+  participantId?: string;
+  displayName: string;
+}
+
+export interface HermesStudioGroupWorkspaceDiffFile {
+  id: string | number;
+  path: string;
+  change_type?: 'added' | 'modified' | 'deleted' | 'renamed' | string;
+  additions: number;
+  deletions: number;
+  patch?: string | null;
+  binary?: boolean;
+  truncated?: boolean;
+}
+
+export interface HermesStudioGroupWorkspaceDiffPayload {
+  kind: 'workspace_diff' | string;
+  version: number;
+  room_id: string;
+  session_id: string;
+  run_id: string;
+  status: 'completed' | 'failed' | 'aborted' | string;
+  change_id: string;
+  workspace_basename: string;
+  workspace?: string;
+  workspace_root?: string;
+  files_changed: number;
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+  files: HermesStudioGroupWorkspaceDiffFile[];
+  parent_message_id?: string;
 }
 
 export interface HermesStudioGroupChatMessage {
@@ -76,8 +127,18 @@ export interface HermesStudioGroupChatMessage {
   roomId: string;
   senderId: string;
   senderName: string;
+  senderType?: 'member' | 'agent' | string;
+  senderAgentRecordId?: string;
+  senderAvatar?: string;
+  senderAgentType?: HermesStudioAgentKind;
+  senderAgentProfile?: string;
+  senderAgentProvider?: string;
+  senderAgentModel?: string;
+  senderAgentDescription?: string;
+  senderOwnerMemberId?: string;
   content: string;
   timestamp: number;
+  persistedAt?: number;
   run_id?: string | null;
   role?: string;
   tool_call_id?: string | null;
@@ -87,16 +148,20 @@ export interface HermesStudioGroupChatMessage {
   reasoning?: string | null;
   reasoning_details?: string | null;
   reasoning_content?: string | null;
+  mentions?: HermesStudioGroupChatMention[];
   isStreaming?: boolean;
   toolName?: string;
   toolCallId?: string;
   toolArgs?: unknown;
   toolPreview?: string;
   toolResult?: unknown;
-  toolStatus?: 'running' | 'done' | 'error';
+  toolStatus?: 'running' | 'done' | 'error' | 'interrupted';
   attachments?: Array<{ id: string; name: string; type: string; size: number; url: string }>;
+  workspaceChanges?: HermesStudioGroupWorkspaceDiffPayload[];
   runItems?: HermesStudioGroupChatMessage[];
   firstSeenAt?: number;
+  /** Client-side delivery state for optimistic mobile messages. */
+  deliveryStatus?: 'pending' | 'sent' | 'failed';
 }
 
 export interface HermesStudioGroupChatJoinResult {
@@ -153,6 +218,10 @@ export interface HermesStudioCreateRoomInput {
     everyTurns: number;
   };
   workspace?: string;
+  allowGuestAgents?: number;
+  guestAgentApproval?: 'owner' | string;
+  maxGuestAgentsPerMember?: number;
+  allowRemoteWorkspaceAccess?: number;
 }
 
 export interface HermesStudioRoomAgentInput {
@@ -166,6 +235,7 @@ export interface HermesStudioRoomAgentInput {
   description?: string;
   avatar?: string;
   invited?: boolean;
+  ownerMemberId?: string;
 }
 
 export interface HermesStudioRoomSnapshot {
@@ -316,10 +386,41 @@ export interface HermesStudioWorkflowRunRecord {
   created_at: number;
   updated_at?: number;
   error: string | null;
+  trigger_source?: 'manual' | 'scheduled' | string;
+  scheduled_at?: number | null;
   node_sessions?: HermesStudioWorkflowRunNodeSession[];
   edge_evaluations?: HermesStudioWorkflowRunEdgeEvaluation[];
   loop_epochs?: HermesStudioWorkflowRunLoopEpoch[];
   compiled_loops?: unknown[];
+}
+
+export interface HermesStudioWorkflowScheduleRecord {
+  id: string;
+  workflow_id: string;
+  profile: string;
+  schedule: string;
+  timezone: string;
+  enabled: boolean;
+  input: string | null;
+  start_node_ids: string[];
+  timeout_ms: number | null;
+  concurrency_policy: 'skip' | string;
+  misfire_policy: 'skip' | string;
+  last_scheduled_at: number | null;
+  next_run_at: number | null;
+  last_run_id: string | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface HermesStudioWorkflowScheduleInput {
+  schedule: string;
+  timezone: string;
+  enabled?: boolean;
+  input?: string | null;
+  start_node_ids?: string[];
+  timeout_ms?: number | null;
 }
 
 export type HermesStudioWorkflowRuntimeState =
@@ -344,6 +445,7 @@ export interface HermesStudioWorkflowRuntimeStatus {
   error: string | null;
   nodeStatuses?: Record<string, HermesStudioWorkflowRuntimeState>;
   run?: HermesStudioWorkflowRunRecord | null;
+  pendingApprovals?: Array<{ nodeId: string; executionId: string }>;
 }
 
 export interface HermesStudioWorkflowHistoryItem {

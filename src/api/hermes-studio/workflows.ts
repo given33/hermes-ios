@@ -11,6 +11,8 @@ import {
   type HermesStudioWorkflowRunLoopEpoch,
   type HermesStudioWorkflowRunRecord,
   type HermesStudioWorkflowRunStatus,
+  type HermesStudioWorkflowScheduleRecord,
+  type HermesStudioWorkflowScheduleInput,
   type HermesStudioWorkflowViewport,
 } from './types';
 
@@ -179,6 +181,44 @@ export class HermesStudioWorkflowsApi {
       },
     );
   }
+
+  async listSchedules(id: string): Promise<HermesStudioWorkflowScheduleRecord[]> {
+    const response = await this.client.request<{ schedules?: unknown[] }>(
+      `/api/hermes/workflows/${encodeURIComponent(id)}/schedules`,
+    );
+    return (Array.isArray(response.schedules) ? response.schedules : [])
+      .map(normalizeWorkflowSchedule)
+      .filter((schedule): schedule is HermesStudioWorkflowScheduleRecord => schedule !== null);
+  }
+
+  createSchedule(id: string, input: HermesStudioWorkflowScheduleInput) {
+    return this.client.request<{ schedule: unknown }>(
+      `/api/hermes/workflows/${encodeURIComponent(id)}/schedules`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    ).then((response) => requiredWorkflowSchedule(response.schedule));
+  }
+
+  updateSchedule(id: string, scheduleId: string, input: Partial<HermesStudioWorkflowScheduleInput>) {
+    return this.client.request<{ schedule: unknown }>(
+      `/api/hermes/workflows/${encodeURIComponent(id)}/schedules/${encodeURIComponent(scheduleId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    ).then((response) => requiredWorkflowSchedule(response.schedule));
+  }
+
+  async deleteSchedule(id: string, scheduleId: string): Promise<void> {
+    await this.client.request(
+      `/api/hermes/workflows/${encodeURIComponent(id)}/schedules/${encodeURIComponent(scheduleId)}`,
+      { method: 'DELETE' },
+    );
+  }
 }
 
 function normalizeWorkflow(value: unknown): HermesStudioWorkflowRecord | null {
@@ -231,6 +271,37 @@ function normalizeNodeSession(value: unknown): HermesStudioWorkflowRunNodeSessio
     updated_at: numberValue(value.updated_at, Date.now()),
     error: value.error === null ? null : stringValue(value.error),
   };
+}
+
+function normalizeWorkflowSchedule(value: unknown): HermesStudioWorkflowScheduleRecord | null {
+  if (!isRecord(value) || !stringValue(value.id).trim()) return null;
+  return {
+    id: stringValue(value.id),
+    workflow_id: stringValue(value.workflow_id),
+    profile: stringValue(value.profile, 'default'),
+    schedule: stringValue(value.schedule),
+    timezone: stringValue(value.timezone, 'UTC'),
+    enabled: value.enabled !== false,
+    input: value.input === null ? null : stringValue(value.input),
+    start_node_ids: Array.isArray(value.start_node_ids)
+      ? value.start_node_ids.filter((id): id is string => typeof id === 'string')
+      : [],
+    timeout_ms: value.timeout_ms === null ? null : numberValue(value.timeout_ms, 0),
+    concurrency_policy: stringValue(value.concurrency_policy, 'skip'),
+    misfire_policy: stringValue(value.misfire_policy, 'skip'),
+    last_scheduled_at: value.last_scheduled_at === null ? null : numberValue(value.last_scheduled_at, 0),
+    next_run_at: value.next_run_at === null ? null : numberValue(value.next_run_at, 0),
+    last_run_id: value.last_run_id === null ? null : stringValue(value.last_run_id),
+    last_error: value.last_error === null ? null : stringValue(value.last_error),
+    created_at: numberValue(value.created_at, Date.now()),
+    updated_at: numberValue(value.updated_at, Date.now()),
+  };
+}
+
+function requiredWorkflowSchedule(value: unknown): HermesStudioWorkflowScheduleRecord {
+  const schedule = normalizeWorkflowSchedule(value);
+  if (!schedule) throw new Error('Hermes Studio returned an invalid workflow schedule');
+  return schedule;
 }
 
 function normalizeEdgeEvaluation(value: unknown): HermesStudioWorkflowRunEdgeEvaluation | null {
@@ -294,6 +365,8 @@ function normalizeWorkflowRun(value: unknown): HermesStudioWorkflowRunRecord | n
     created_at: numberValue(value.created_at, Date.now()),
     updated_at: value.updated_at === undefined ? undefined : numberValue(value.updated_at, Date.now()),
     error: value.error === null ? null : stringValue(value.error),
+    trigger_source: stringValue(value.trigger_source),
+    scheduled_at: value.scheduled_at === null ? null : numberValue(value.scheduled_at, 0),
     node_sessions: (Array.isArray(value.node_sessions) ? value.node_sessions : [])
       .map(normalizeNodeSession)
       .filter((session): session is HermesStudioWorkflowRunNodeSession => session !== null),

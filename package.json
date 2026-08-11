@@ -68,6 +68,7 @@
   },
   "scripts": {
     "start": "expo start --dev-client",
+    "expo-go": "expo start --go",
     "dev": "expo start --dev-client --tunnel",
     "android": "expo start --dev-client --android",
     "ios": "expo start --dev-client --ios",

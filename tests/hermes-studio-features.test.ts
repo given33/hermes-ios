@@ -8,6 +8,7 @@ import { HermesStudioGroupChatApi } from '../src/api/hermes-studio/group-chat';
 import { HermesStudioWorkflowsApi } from '../src/api/hermes-studio/workflows';
 import {
   applyAgentGroupEvent,
+  attachWorkspaceDiffs,
   emptyRoomSnapshot,
   snapshotFromDetail,
   upsertGroupMessage,
@@ -87,6 +88,44 @@ test('Hermes Studio room settings preserve latest config, summary, and workspace
   assert.match(calls[5]?.url || '', /workspace-files\/list$/);
 });
 
+test('Hermes Studio workspace mutations use the server write/delete methods', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const api = new HermesStudioGroupChatApi(testClient(calls, () => ({ success: true })));
+
+  await api.writeWorkspaceFile('room-1', 'notes.md', 'hello');
+  await api.deleteWorkspaceFile('room-1', 'notes.md', true);
+
+  assert.match(calls[0]?.url || '', /workspace-file\/write$/);
+  assert.equal(calls[0]?.init?.method, 'PUT');
+  assert.deepEqual(JSON.parse(String(calls[0]?.init?.body)), { path: 'notes.md', content: 'hello' });
+  assert.match(calls[1]?.url || '', /workspace-file\/delete$/);
+  assert.equal(calls[1]?.init?.method, 'DELETE');
+  assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), { path: 'notes.md', recursive: true });
+});
+
+test('Hermes Studio group and workflow clients include upstream membership and schedule contracts', async () => {
+  const groupSource = readFileSync(
+    fileURLToPath(new NodeURL('../src/api/hermes-studio/group-chat.ts', import.meta.url)),
+    'utf8',
+  );
+  assert.match(groupSource, /removeRoomMember/);
+  assert.match(groupSource, /workspace-file\/content/);
+  assert.match(groupSource, /inviteCode: options\.inviteCode/);
+
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const schedule = { id: 'schedule-1', workflow_id: 'wf-1', schedule: '@daily', timezone: 'UTC', enabled: true, input: null, start_node_ids: [], timeout_ms: null, concurrency_policy: 'skip', misfire_policy: 'skip', last_scheduled_at: null, next_run_at: null, last_run_id: null, last_error: null, created_at: 1, updated_at: 1 };
+  const api = new HermesStudioWorkflowsApi(testClient(calls, () => ({ schedules: [schedule], schedule })));
+  const schedules = await api.listSchedules('wf-1');
+  assert.equal(schedules[0]?.schedule, '@daily');
+  await api.createSchedule('wf-1', { schedule: '@daily', timezone: 'Asia/Shanghai', enabled: true });
+  await api.updateSchedule('wf-1', 'schedule-1', { enabled: false });
+  await api.deleteSchedule('wf-1', 'schedule-1');
+  assert.equal(calls[0]?.url, 'https://hermes.test/api/hermes/workflows/wf-1/schedules');
+  assert.equal(calls[1]?.init?.method, 'POST');
+  assert.equal(calls[2]?.init?.method, 'PATCH');
+  assert.equal(calls[3]?.init?.method, 'DELETE');
+});
+
 test('Hermes Studio workflow wrapper preserves latest update, run, approval, import, export, and stop routes', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const client = testClient(calls, (url) => url.includes('/approval') || url.includes('/import/cancel')
@@ -122,6 +161,17 @@ test('Hermes Studio workflow wrapper preserves latest update, run, approval, imp
   await api.cancelImport(preview.token, 'default');
   await api.stopRun('wf-1', 'run-1');
   assert.equal(calls.at(-1)?.url, 'https://hermes.test/api/hermes/workflows/wf-1/runs/run-1/stop');
+});
+
+test('Hermes Studio workflow socket replays subscriptions after Socket.IO reconnects', () => {
+  const source = readFileSync(
+    fileURLToPath(new NodeURL('../src/api/hermes-studio/workflow-socket.ts', import.meta.url)),
+    'utf8',
+  );
+  assert.match(source, /socket\.on\('connect'/);
+  assert.match(source, /replaySubscriptions\(socket\)/);
+  assert.match(source, /desiredSubscriptions/);
+  assert.match(source, /workflow\.status\.subscribe/);
 });
 
 test('Agent group event updates are room-scoped and stream deltas are idempotent', () => {
@@ -161,6 +211,15 @@ test('room snapshots merge REST history without dropping optimistic messages', (
   const merged = upsertGroupMessage(optimistic, base.messages[0]!);
   assert.deepEqual(merged.map((message) => message.id), ['one', 'two']);
   assert.equal(merged[1]?.content, 'new');
+});
+
+test('Agent group workspace diff tool rows attach to their assistant parent', () => {
+  const attached = attachWorkspaceDiffs([
+    { id: 'assistant-1', roomId: 'room', senderId: 'agent', senderName: 'Builder', content: 'Done', timestamp: 1, role: 'assistant' },
+    { id: 'tool-1', roomId: 'room', senderId: 'agent', senderName: 'Builder', content: JSON.stringify({ kind: 'workspace_diff', run_id: 'run-1', parent_message_id: 'assistant-1', files: [{ id: 1, path: 'README.md', additions: 2, deletions: 1 }] }), timestamp: 2, role: 'tool', tool_name: 'workspace_diff' },
+  ]);
+  assert.equal(attached.length, 1);
+  assert.equal(attached[0]?.workspaceChanges?.[0]?.files[0]?.path, 'README.md');
 });
 
 test('Agent group renderer stays separate from ordinary chat presentation', () => {

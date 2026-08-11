@@ -159,6 +159,85 @@ test('hosted lifecycle streams answer chunks into one stable assistant message',
   assert.equal(messageDurationMs(completed.messages[0], 9_999), 400);
 });
 
+test('hosted lifecycle accepts team-stage events and a turn-stage terminal event', () => {
+  const started = applyHostedLifecycleEvents([], [
+    { ...event(1, 'agent.started', { source_event_type: 'request.accepted' }), role_stage: 'worker' },
+    { ...event(2, 'message.delta', { text: 'Implementation complete. ' }), role_stage: 'reviewer' },
+    { ...event(3, 'message.delta', { text: 'Review passed.' }), role_stage: 'reporter' },
+  ], false);
+  const completed = applyHostedLifecycleEvents(started.messages, [
+    { ...event(4, 'turn.completed'), role_stage: 'turn' },
+  ], false);
+
+  assert.equal(completed.messages.length, 3);
+  assert.equal(completed.messages.find((message) => message.roleStage === 'worker')?.content, '');
+  assert.equal(completed.messages.find((message) => message.roleStage === 'reviewer')?.content, 'Implementation complete. ');
+  assert.equal(completed.messages.find((message) => message.roleStage === 'reporter')?.content, 'Review passed.');
+  assert.equal(completed.messages.every((message) => message.status === 'completed'), true);
+  assert.equal(completed.completed, true);
+  assert.equal(completed.turnActive, false);
+});
+
+test('turn cancellation is terminal so the hosted controller cannot stay running', () => {
+  const running = applyHostedLifecycleEvents([], [
+    event(1, 'message.delta', { text: 'partial' }),
+  ], false);
+  const cancelled = applyHostedLifecycleEvents(running.messages, [
+    { ...event(2, 'turn.cancelled'), role_stage: 'turn' },
+  ], false);
+
+  assert.equal(cancelled.cancelled, true);
+  assert.equal(cancelled.completed, false);
+  assert.equal(cancelled.failed, false);
+  assert.equal(cancelled.messages[0].status, 'cancelled');
+  assert.equal(cancelled.turnActive, false);
+});
+
+test('hosted lifecycle reads canonical todo result/result_text snapshots and clears todos', () => {
+  const withTodos = applyHostedLifecycleEvents([], [
+    event(1, 'tool.completed', {
+      entity_id: 'todo-1',
+      name: 'todo',
+      result: {
+        todos: [{ id: 'inspect', content: 'Inspect contract', status: 'in_progress' }],
+      },
+    }),
+  ], false);
+  const cleared = applyHostedLifecycleEvents(withTodos.messages, [
+    event(2, 'tool.complete', {
+      entity_id: 'todo-1',
+      name: 'todo',
+      result_text: '{"todos":[]}',
+    }),
+  ], false);
+
+  assert.deepEqual(withTodos.messages[0].todos, [
+    { id: 'inspect', title: 'Inspect contract', status: 'in_progress' },
+  ]);
+  assert.deepEqual(cleared.messages[0].todos, []);
+});
+
+test('malformed non-empty todo snapshots preserve the previous plan', () => {
+  const withTodos = applyHostedLifecycleEvents([], [
+    event(1, 'tool.completed', {
+      entity_id: 'todo-2',
+      name: 'todo',
+      todos: [{ id: 'keep', title: 'Keep this plan', status: 'pending' }],
+    }),
+  ], false);
+  const malformed = applyHostedLifecycleEvents(withTodos.messages, [
+    event(2, 'tool.completed', {
+      entity_id: 'todo-2',
+      name: 'todo',
+      todos: [{ nope: true }],
+    }),
+  ], false);
+
+  assert.deepEqual(malformed.messages[0].todos, [
+    { id: 'keep', title: 'Keep this plan', status: 'pending' },
+  ]);
+});
+
 test('interim answer text stays in the same streaming message', () => {
   const streamed = applyHostedLifecycleEvents([], [
     event(1, 'message.interim', { text: 'Early answer', already_streamed: true }),
