@@ -99,6 +99,8 @@ export interface HermesChatViewMessage {
   timingLabel?: string;
   /** Live agent todo list from the `todo` tool, refreshed on tool.complete. */
   todos?: HermesChatTodo[];
+  /** Context-window usage percent reported by the remote node (0-100+). */
+  contextUsedPercent?: number;
   updatedAt?: number;
 }
 

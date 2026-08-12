@@ -281,6 +281,7 @@ export function AgentGroupChatView({
               compact={compact}
               isChinese={isChinese}
               messages={activeRoom?.messages || []}
+              onQuickReply={(text) => { void controller.sendMessage(text); }}
               running={Boolean(activeRoom?.runningAgents.length)}
               safeAreaBottom={safeAreaBottom}
               showToolTrace={showToolTrace}

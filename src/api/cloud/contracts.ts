@@ -123,6 +123,7 @@ export interface CollaborationMessage {
   avatar?: string;
   avatar_symbol?: string;
   completed_at?: number | string;
+  context_used_percent?: number;
   status?: string;
   kind?: string;
   created_at?: number | string;

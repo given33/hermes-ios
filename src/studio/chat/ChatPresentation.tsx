@@ -273,6 +273,13 @@ export const UnifiedMessage = memo(function UnifiedMessage({
               {!isUser && message.roleStage !== 'chat' ? (
                 <Text numberOfLines={1} style={[styles.roleLabel, { color: tokens.colors.textTertiary }]}>{message.roleLabel}</Text>
               ) : null}
+              {!isUser && (message.rawRoleStage || '').toLowerCase().includes('rework') ? (
+                <View style={[styles.reworkBadge, { backgroundColor: multiplyAlpha('#D28B22', 0.14) }]}>
+                  <Text style={[styles.reworkBadgeText, { color: '#D28B22' }]}>
+                    {isChinese ? '重做中' : 'Redoing'}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           </View>
           {hasBubble ? <IOSContextMenu
@@ -660,46 +667,85 @@ export function AgentRoster({
   messages: ChatMessage[];
 }) {
   const { tokens } = useTheme();
+  const [openAgents, setOpenAgents] = useState<Set<string>>(() => new Set());
   const roster = useMemo(() => {
-    const seen = new Map<string, ChatActivity>();
+    // Group every subagent activity by identity (name or child session).
+    // Each group keeps the full activity timeline — tapping a row opens the
+    // agent's session window: its complete run, step by step.
+    const groups = new Map<string, ChatActivity[]>();
+    const names = new Map<string, string>();
     for (const message of messages) {
       for (const activity of message.activities || []) {
         if (activity.category !== 'subagent') continue;
         const key = activity.agentName
-          || activity.name
           || activity.id.split(':')[0]
+          || activity.name
           || activity.id;
-        const existing = seen.get(key);
-        if (!existing || (activity.completedAt || 0) >= (existing.completedAt || 0)) {
-          seen.set(key, activity);
-        }
+        if (activity.agentName) names.set(key, activity.agentName);
+        const list = groups.get(key) || [];
+        list.push(activity);
+        groups.set(key, list);
       }
     }
-    return Array.from(seen.values());
+    return Array.from(groups.entries()).map(([key, list]) => {
+      list.sort((a, b) => (a.startedAt || 0) - (b.startedAt || 0));
+      const latest = list[list.length - 1];
+      return { key, name: names.get(key) || latest.name || key, latest, list };
+    });
   }, [messages]);
   if (!roster.length) return null;
+  const toggle = (key: string) => {
+    setOpenAgents((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
   return (
     <View style={[styles.rosterPanel, { borderColor: multiplyAlpha(tokens.colors.textTertiary, 0.25) }]}>
       <Text style={[styles.subagentSummaryLabel, { color: tokens.colors.textTertiary }]}>
-        {isChinese ? '智能体名册' : 'Agent roster'}
+        {isChinese ? '智能体名册 · 点击查看运行过程' : 'Agent roster · tap for the run'}
       </Text>
-      {roster.map((activity) => {
-        const running = activityIsRunning(activity);
-        const failed = activity.status === 'failed' || activity.status === 'cancelled';
+      {roster.map(({ key, name, latest, list }) => {
+        const running = activityIsRunning(latest);
+        const failed = latest.status === 'failed' || latest.status === 'cancelled';
         const color = failed ? tokens.colors.destructive : running ? '#D28B22' : tokens.colors.success;
+        const open = openAgents.has(key);
         return (
-          <View key={activity.id} style={styles.rosterRow}>
-            <View style={[styles.rosterDot, { backgroundColor: color }]} />
-            <Text numberOfLines={1} style={[styles.rosterName, { color: tokens.colors.textSecondary }]}>
-              {activity.agentName || activity.name || (isChinese ? '子 Agent' : 'Subagent')}
-            </Text>
-            <Text numberOfLines={1} style={[styles.rosterState, { color }]}>
-              {failed
-                ? (isChinese ? '已终止' : 'dead')
-                : running
-                  ? (isChinese ? '运行中' : 'running')
-                  : (isChinese ? '已完成' : 'done')}
-            </Text>
+          <View key={key}>
+            <IOSPressable
+              accessibilityLabel={isChinese ? '查看子代理会话' : 'Open agent session'}
+              haptic="selection"
+              onPress={() => toggle(key)}
+              style={styles.rosterRow}
+            >
+              <View style={[styles.rosterDot, { backgroundColor: color }]} />
+              <Text numberOfLines={1} style={[styles.rosterName, { color: tokens.colors.textSecondary }]}>
+                {name}
+              </Text>
+              <Text numberOfLines={1} style={[styles.rosterState, { color }]}>
+                {failed
+                  ? (isChinese ? '已终止' : 'dead')
+                  : running
+                    ? (isChinese ? '运行中' : 'running')
+                    : (isChinese ? '已完成' : 'done')}
+              </Text>
+            </IOSPressable>
+            {open ? (
+              <View style={styles.rosterTimeline}>
+                {list.map((activity, index) => (
+                  <View key={activity.id} style={styles.rosterEventRow}>
+                    <Text style={[styles.rosterEventIndex, { color: tokens.colors.textTertiary }]}>
+                      {index + 1}
+                    </Text>
+                    <Text numberOfLines={2} style={[styles.rosterEventText, { color: tokens.colors.textTertiary }]}>
+                      {activityDetailLine(activity)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
           </View>
         );
       })}
@@ -707,14 +753,38 @@ export function AgentRoster({
   );
 }
 
-/** Context-window usage ring shown beside the composer (honest `—` placeholder). */
-export function ContextUsageRing({ isChinese }: { isChinese: boolean }) {
+/** One-line per subagent activity: what happened (tool/text/result). */
+function activityDetailLine(activity: ChatActivity): string {
+  const status = activity.status === 'running' ? '…' : activity.status === 'failed' ? '✗' : '✓';
+  const text = activity.output || activity.preview || activity.detail || activity.name;
+  return `${status} ${text.slice(0, 160)}`;
+}
+
+/** Context-window usage ring beside the composer. Shows the latest member's
+ *  reported context usage; honest `—` when no metric has arrived. */
+export function ContextUsageRing({
+  isChinese,
+  value,
+}: {
+  isChinese: boolean;
+  value?: number;
+}) {
   const { tokens } = useTheme();
+  const percent = typeof value === 'number' && value >= 0 ? value : null;
+  const color = percent === null
+    ? tokens.colors.textTertiary
+    : percent >= 85
+      ? tokens.colors.destructive
+      : percent >= 70
+        ? '#D28B22'
+        : tokens.colors.success;
   return (
-    <View style={[styles.contextRing, { borderColor: multiplyAlpha(tokens.colors.textTertiary, 0.4) }]}>
-      <Text style={[styles.contextRingText, { color: tokens.colors.textTertiary }]}>—</Text>
-      <Text style={[styles.contextRingLabel, { color: tokens.colors.textTertiary }]}>
-        {isChinese ? '上下文' : 'ctx'}
+    <View style={[styles.contextRing, { borderColor: multiplyAlpha(color, 0.5) }]}>
+      <Text style={[styles.contextRingText, { color }]}>
+        {percent === null ? '—' : `${percent}`}
+      </Text>
+      <Text style={[styles.contextRingLabel, { color }]}>
+        {isChinese ? '上下文%' : 'ctx%'}
       </Text>
     </View>
   );

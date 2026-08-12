@@ -93,7 +93,14 @@ export function ChatPageShell({
               <ChatMessageStream {...streamProps} />
               <ChatPlanDrawer isChinese={isChinese} plan={plan}>
                 <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
-                  <ContextUsageRing isChinese={isChinese} />
+                  <ContextUsageRing
+                    isChinese={isChinese}
+                    value={streamProps.messages
+                      .slice()
+                      .reverse()
+                      .find((message) => message.contextUsedPercent !== undefined)
+                      ?.contextUsedPercent}
+                  />
                 </View>
                 <Reanimated.View
                   style={[

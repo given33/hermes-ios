@@ -24,6 +24,7 @@ export interface AgentGroupMessageStreamProps {
   compact: boolean;
   isChinese: boolean;
   messages: HermesStudioGroupChatMessage[];
+  onQuickReply?(text: string): void;
   running: boolean;
   safeAreaBottom: number;
   showToolTrace?: boolean;
@@ -42,6 +43,7 @@ export function AgentGroupMessageStream({
   compact,
   isChinese,
   messages,
+  onQuickReply,
   running,
   safeAreaBottom,
   showToolTrace = true,
@@ -110,9 +112,9 @@ export function AgentGroupMessageStream({
         ) : displayMessages.map((message) => (
           <Fragment key={message.id}>
             {message.runItems?.length ? (
-              <AgentRunCard agents={agents} isChinese={isChinese} message={message} userId={userId} />
+              <AgentRunCard agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} userId={userId} />
             ) : (
-              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={message} userId={userId} />
+              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} userId={userId} />
             )}
             {summaryAnchorId && containsMessageId(message, summaryAnchorId) ? (
               <SummaryAnchorDivider isChinese={isChinese} />
@@ -136,15 +138,60 @@ export function AgentGroupMessageStream({
   );
 }
 
+function GroupChoiceOptions({
+  content,
+  isChinese,
+  onQuickReply,
+  tokens,
+}: {
+  content: string;
+  isChinese: boolean;
+  onQuickReply?(text: string): void;
+  tokens: ReturnType<typeof useTheme>['tokens'];
+}) {
+  const options = useMemo(() => {
+    if (!content || !content.includes('选项')) return [];
+    const found: { id: string; label: string }[] = [];
+    for (const line of content.split('\n')) {
+      const match = line.trim().match(/^([A-Za-z])[.、．:：]\s*(.+)$/);
+      if (!match) continue;
+      found.push({ id: match[1].toUpperCase(), label: match[2].trim().slice(0, 200) });
+      if (found.length >= 4) break;
+    }
+    return found.length >= 2 ? found : [];
+  }, [content]);
+  if (!options.length || !onQuickReply) return null;
+  return (
+    <View style={{ gap: 5, marginTop: 8 }}>
+      {options.map((option) => (
+        <IOSPressable
+          accessibilityLabel={option.label}
+          haptic="selection"
+          key={option.id}
+          onPress={() => onQuickReply(`${option.id}. ${option.label}`)}
+          style={[styles.choiceChip, { borderColor: multiplyAlpha(tokens.colors.primary, 0.4) }]}
+        >
+          <Text style={[styles.choiceChipKey, { color: tokens.colors.primary }]}>{option.id}</Text>
+          <Text numberOfLines={2} style={[styles.choiceChipLabel, { color: tokens.colors.textSecondary }]}>
+            {option.label}
+          </Text>
+        </IOSPressable>
+      ))}
+    </View>
+  );
+}
+
 function AgentRunCard({
   agents,
   isChinese,
   message,
+  onQuickReply,
   userId,
 }: {
   agents: HermesStudioRoomAgent[];
   isChinese: boolean;
   message: HermesStudioGroupChatMessage;
+  onQuickReply?(text: string): void;
   userId: string;
 }) {
   const { tokens } = useTheme();
@@ -178,12 +225,14 @@ function AgentGroupMessageItem({
   embedded = false,
   isChinese,
   message,
+  onQuickReply,
   userId,
 }: {
   agents: HermesStudioRoomAgent[];
   embedded?: boolean;
   isChinese: boolean;
   message: HermesStudioGroupChatMessage;
+  onQuickReply?(text: string): void;
   userId: string;
 }) {
   const { tokens } = useTheme();
@@ -256,6 +305,12 @@ function AgentGroupMessageItem({
             </View>
           ) : null}
           {message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
+          <GroupChoiceOptions
+            content={message.content}
+            isChinese={isChinese}
+            onQuickReply={onQuickReply}
+            tokens={tokens}
+          />
           {message.isStreaming && !message.content ? <StreamingDots color={tokens.colors.textTertiary} /> : null}
           {message.workspaceChanges?.length ? <WorkspaceChanges isChinese={isChinese} changes={message.workspaceChanges} /> : null}
         </View>
@@ -485,6 +540,10 @@ const markdownStyles = {
 };
 
 const styles = {
+  choiceChip: { alignItems: 'center' as const, borderRadius: 8, borderWidth: 1, flexDirection: 'row' as const, gap: 8, paddingHorizontal: 10, paddingVertical: 7 },
+  choiceChipKey: { fontSize: 12, fontWeight: '700' as const },
+  choiceChipLabel: { flex: 1, fontSize: 12 },
+
   root: { flex: 1, minHeight: 0 },
   list: { gap: 12, flexGrow: 1, paddingTop: 16 },
   emptyList: { justifyContent: 'center' as const },

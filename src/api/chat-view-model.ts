@@ -602,6 +602,7 @@ export function collaborationMessageToView(
       || undefined,
     completedAt: completedAt || undefined,
     content: message.content || '',
+    contextUsedPercent: numberValue(message.context_used_percent) || undefined,
     createdAt: createdAt || undefined,
     durationMs,
     firstTokenAt: timestampValue(meta.first_token_at) || undefined,
