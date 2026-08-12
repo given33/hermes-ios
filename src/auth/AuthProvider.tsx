@@ -21,7 +21,11 @@ import { sharedConversationLocalStore } from '../api/hermes-api-registry';
 import { purgeLocalAccountData } from '../api/local-account-purge';
 import { HERMES_ORIGIN } from '../config';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
-import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
+import {
+  HermesIOSContext,
+  hasNativeIOSContext,
+  markNativeIOSContextUnavailable,
+} from '../../modules/hermes-ios-context';
 import { AccessTokenController } from './access-token-controller';
 import {
   accountOwnerScope,
@@ -134,10 +138,16 @@ async function activateNativeOwnerScope(
   // provisions optional on-device capabilities (Keychain/App Group-backed
   // collection and attachment vault); a missing entitlement in a re-signed
   // or partially provisioned IPA must not erase a valid server session.
-  await runOptionalAuthEffect(() => HermesIOSContext.activateOwnerScope(
+  const activated = await runOptionalAuthEffect(() => HermesIOSContext.activateOwnerScope(
     ownerScope,
     accountGeneration,
   ));
+  if (!activated) {
+    // Do not let every authenticated provider/effect retry a bridge whose
+    // entitlements are already known to be unusable. Remote auth remains
+    // valid; only the optional on-device context is degraded for this run.
+    markNativeIOSContextUnavailable();
+  }
 }
 
 export function AuthProvider({ children }: PropsWithChildren) {

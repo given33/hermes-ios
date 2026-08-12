@@ -17,8 +17,9 @@ import * as ImagePicker from 'expo-image-picker';
 import {
   HermesIOSContext,
   HermesScreenTimeReportView,
-  hasNativeIOSContext,
   hasNativeScreenTimeReportView,
+  isNativeIOSContextAvailable,
+  markNativeIOSContextUnavailable,
   type IOSContextEvent as NativeIOSContextEvent,
 } from '../../modules/hermes-ios-context';
 import type { HermesApiClient } from '../api/HermesApiClient';
@@ -107,29 +108,41 @@ export function IOSContextProvider({
   const [permissionSnapshot, setPermissionSnapshot] = useState(initialIOSPermissionSnapshot);
   const [permissionAttempt, setPermissionAttempt] = useState(0);
   const [screenTimeReportRefresh, setScreenTimeReportRefresh] = useState(() => Date.now());
+  const nativeContextAvailableRef = useRef(isNativeIOSContextAvailable());
 
   const updatePermissionSnapshot = useCallback((snapshot: IOSPermissionSnapshot) => {
     permissionSnapshotRef.current = snapshot;
     setPermissionSnapshot(snapshot);
   }, []);
 
+  const disableNativeContext = useCallback(() => {
+    nativeContextAvailableRef.current = false;
+    markNativeIOSContextUnavailable();
+    permissionSettingsOpenedRef.current = false;
+    updatePermissionSnapshot(initialIOSPermissionSnapshot());
+  }, [updatePermissionSnapshot]);
+
   const permissionContext = useMemo<IOSPermissionContextValue>(() => ({
     openSettings: async () => {
-      if (hasNativeIOSContext) {
+      if (nativeContextAvailableRef.current) {
         permissionSettingsOpenedRef.current = true;
-        await HermesIOSContext.openDeviceSettings();
+        try {
+          await HermesIOSContext.openDeviceSettings();
+        } catch {
+          disableNativeContext();
+        }
       }
     },
     retry: () => setPermissionAttempt((value) => value + 1),
     snapshot: permissionSnapshot,
-  }), [permissionSnapshot]);
+  }), [disableNativeContext, permissionSnapshot]);
 
   useEffect(() => {
     apiRef.current = new IOSIntelligenceApi(client);
   }, [client]);
 
   const flushPendingEvents = useCallback(async (capture: IOSContextLifecycleCapture) => {
-    if (!hasNativeIOSContext || runningRef.current) return;
+    if (!nativeContextAvailableRef.current || runningRef.current) return;
     const runToken = Symbol('ios-event-flush');
     runningRef.current = runToken;
     const lifecycle = lifecycleRef.current;
@@ -169,7 +182,7 @@ export function IOSContextProvider({
   }, [deviceId, ownerScope]);
 
   const syncSnapshots = useCallback(async (capture: IOSContextLifecycleCapture) => {
-    if (!hasNativeIOSContext) return;
+    if (!nativeContextAvailableRef.current) return;
     const lifecycle = lifecycleRef.current;
     const now = Date.now();
     const monthAhead = now + 31 * 24 * 60 * 60_000;
@@ -217,7 +230,7 @@ export function IOSContextProvider({
   }, [deviceId, flushPendingEvents]);
 
   const executeCommands = useCallback(async (capture: IOSContextLifecycleCapture) => {
-    if (!hasNativeIOSContext
+    if (!nativeContextAvailableRef.current
       || !canStartIOSCollection(permissionSnapshotRef.current)
       || commandsRunningRef.current) return;
     const runToken = Symbol('ios-command-run');
@@ -401,7 +414,7 @@ export function IOSContextProvider({
   }, [accountGeneration, client, deviceId, flushPendingEvents, ownerScope]);
 
   useEffect(() => {
-    if (Platform.OS !== 'ios' || !hasNativeIOSContext || !deviceId.trim()) return undefined;
+    if (Platform.OS !== 'ios' || !nativeContextAvailableRef.current || !deviceId.trim()) return undefined;
     let active = true;
     const lifecycle = lifecycleRef.current;
     const capture = lifecycle.activate(ownerScope, accountGeneration);
@@ -513,15 +526,26 @@ export function IOSContextProvider({
       void syncSnapshots(capture).catch(() => undefined);
     };
 
-    void startCollectors().catch(() => undefined);
-    const eventSubscriptions = [
-      HermesIOSContext.subscribeLocation(scheduleEventSync),
-      HermesIOSContext.subscribeMotion(scheduleEventSync),
-      HermesIOSContext.subscribeVisit(synchronize),
-      HermesIOSContext.subscribeBackgroundWake((event) => {
-        void synchronizeFromBackgroundWake(event);
-      }),
-    ];
+    void startCollectors().catch(() => {
+      // A signed native module with mismatched entitlements is optional for
+      // remote chat. Stop its retry loop and leave the authenticated UI alive.
+      disableNativeContext();
+    });
+    const eventSubscriptions: Array<{ remove(): void }> = [];
+    if (nativeContextAvailableRef.current) {
+      try {
+        eventSubscriptions.push(
+          HermesIOSContext.subscribeLocation(scheduleEventSync),
+          HermesIOSContext.subscribeMotion(scheduleEventSync),
+          HermesIOSContext.subscribeVisit(synchronize),
+          HermesIOSContext.subscribeBackgroundWake((event) => {
+            void synchronizeFromBackgroundWake(event).catch(() => undefined);
+          }),
+        );
+      } catch {
+        disableNativeContext();
+      }
+    }
     const foregroundTimer = setInterval(() => {
       if (AppState.currentState === 'active') synchronize();
     }, FOREGROUND_SYNC_MS);
@@ -543,20 +567,31 @@ export function IOSContextProvider({
     });
 
     return () => {
-      void HermesIOSContext.setBackgroundRelayReady(
-        ownerScope,
-        accountGeneration,
-        false,
-      ).catch(() => undefined);
+      if (nativeContextAvailableRef.current) {
+        void HermesIOSContext.setBackgroundRelayReady(
+          ownerScope,
+          accountGeneration,
+          false,
+        ).catch(() => undefined);
+      }
       active = false;
       lifecycle.invalidate(capture);
       clearInterval(foregroundTimer);
       if (snapshotTimer) clearInterval(snapshotTimer);
       if (eventFlushTimer) clearTimeout(eventFlushTimer);
       appStateSubscription.remove();
-      eventSubscriptions.forEach((subscription) => subscription.remove());
+      eventSubscriptions.forEach((subscription) => {
+        try {
+          subscription.remove();
+        } catch {
+          // A partially registered optional bridge must not crash logout or
+          // account switching while the remote session is still valid.
+        }
+      });
       clearIOSPermissionRun(ownerScope);
-      void HermesIOSContext.stopMotionUpdates().catch(() => undefined);
+      if (nativeContextAvailableRef.current) {
+        void HermesIOSContext.stopMotionUpdates().catch(() => undefined);
+      }
       // Product boundary: while the process is alive (foreground or background,
       // including after logout / session expiry back to the login screen), Always
       // location keeps collecting so the agent can read the latest path without
@@ -575,6 +610,7 @@ export function IOSContextProvider({
     permissionAttempt,
     syncSnapshots,
     updatePermissionSnapshot,
+    disableNativeContext,
   ]);
 
   return (
@@ -582,7 +618,7 @@ export function IOSContextProvider({
       <SessionLockGate ownerScope={ownerScope}>
         {children}
         {Platform.OS === 'ios'
-          && hasNativeIOSContext
+          && nativeContextAvailableRef.current
           && hasNativeScreenTimeReportView
           && canCollectIOSPermission(permissionSnapshot, 'screenTime') ? (
           <OptionalNativeViewBoundary>
@@ -602,7 +638,7 @@ function SessionLockGate({ ownerScope, children }: PropsWithChildren<{ ownerScop
   const [locked, setLocked] = useState(false);
   const [busy, setBusy] = useState(false);
   const refresh = useCallback(async () => {
-    if (Platform.OS !== 'ios' || !hasNativeIOSContext) return;
+    if (Platform.OS !== 'ios' || !isNativeIOSContextAvailable()) return;
     try {
       await HermesIOSContext.configureSessionLock(ownerScope, true, 5);
       const status = await HermesIOSContext.getSessionLockStatus(ownerScope);
@@ -617,13 +653,17 @@ function SessionLockGate({ ownerScope, children }: PropsWithChildren<{ ownerScop
     void refresh();
     const subscription = AppState.addEventListener('change', (state) => {
       if (state === 'active') void refresh();
-      else if (Platform.OS === 'ios' && hasNativeIOSContext) setLocked(true);
+      else if (Platform.OS === 'ios' && isNativeIOSContextAvailable()) setLocked(true);
     });
     return () => subscription.remove();
   }, [refresh]);
 
   const unlock = useCallback(async () => {
     if (busy) return;
+    if (!isNativeIOSContextAvailable()) {
+      setLocked(false);
+      return;
+    }
     setBusy(true);
     try {
       await HermesIOSContext.unlockSession(ownerScope);

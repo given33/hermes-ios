@@ -1,6 +1,10 @@
 import { Directory as ExpoDirectory, Paths } from 'expo-file-system';
 
-import { HermesIOSContext, hasNativeIOSContext } from '../../modules/hermes-ios-context';
+import {
+  HermesIOSContext,
+  isNativeIOSContextAvailable,
+  markNativeIOSContextUnavailable,
+} from '../../modules/hermes-ios-context';
 
 // The encrypted outbox lives in Application Support on iOS because
 // UIFileSharingEnabled exposes everything under Documents in the Files app.
@@ -12,9 +16,20 @@ let cachedRootUri: string | null | undefined;
 
 function nativeOutboxRootUri(): string | null {
   if (cachedRootUri === undefined) {
-    cachedRootUri = hasNativeIOSContext
-      ? HermesIOSContext.getAttachmentOutboxRootUri()
-      : null;
+    if (!isNativeIOSContextAvailable()) {
+      cachedRootUri = null;
+    } else {
+      try {
+        cachedRootUri = HermesIOSContext.getAttachmentOutboxRootUri();
+      } catch {
+        // Attachment encryption is optional. If a re-signed bundle exposes
+        // the module but not its entitlements, use the durable JS fallback
+        // instead of crashing the chat surface during a draft/attachment
+        // action.
+        markNativeIOSContextUnavailable();
+        cachedRootUri = null;
+      }
+    }
   }
   return cachedRootUri;
 }

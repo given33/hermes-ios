@@ -34,6 +34,7 @@ import {
   formatMessageLocalTime,
   messageHasExecutionTiming,
   messageIsRunning,
+  type HermesChatActivity as ChatActivity,
   type HermesChatAttachment as StoredChatAttachment,
   type HermesChatViewMessage as ChatMessage,
 } from '../../api/chat-view-model';
@@ -50,6 +51,8 @@ import { ReasoningSection } from '../ReasoningSection';
 import { TodoSection } from './TodoSection';
 import { AnimatedChevron, WorkflowTimeline } from '../WorkflowTimeline';
 import {
+  activityElapsedLabel,
+  activityIsRunning,
   reasoningElapsedLabel,
   turnPhaseChip,
   turnTimingLine,
@@ -500,6 +503,76 @@ export function PendingDot({ delay }: { delay: number }) {
   return <Reanimated.View style={[styles.pendingDot, { backgroundColor: tokens.colors.primary }, animatedStyle]} />;
 }
 
+/**
+ * Full-width card for one delegated subagent (agent team member). Rendered
+ * alongside the parent role's message — same visual weight as the manager /
+ * worker cards — instead of being buried in the collapsible tool timeline.
+ */
+const SubagentCard = memo(function SubagentCard({
+  activity,
+  isChinese,
+  now,
+}: {
+  activity: ChatActivity;
+  isChinese: boolean;
+  now: number;
+}) {
+  const { tokens } = useTheme();
+  const running = activityIsRunning(activity);
+  const failed = activity.status === 'failed' || activity.status === 'cancelled';
+  const statusColor = failed
+    ? tokens.colors.destructive
+    : running
+      ? '#D28B22'
+      : tokens.colors.success;
+  const elapsed = activityElapsedLabel(activity, now);
+  const detail = activity.output || activity.detail || activity.preview || '';
+  return (
+    <View
+      style={[
+        styles.subagentCard,
+        {
+          backgroundColor: multiplyAlpha(statusColor, 0.05),
+          borderColor: multiplyAlpha(statusColor, 0.35),
+        },
+      ]}
+    >
+      <View style={styles.subagentHeader}>
+        <View style={[styles.subagentIcon, { backgroundColor: multiplyAlpha(statusColor, 0.14) }]}>
+          <Text style={{ fontSize: 11, lineHeight: 14 }}>
+            {running ? '🔬' : failed ? '⚠️' : '✅'}
+          </Text>
+        </View>
+        <Text numberOfLines={2} style={[styles.subagentName, { color: tokens.colors.textSecondary }]}>
+          {activity.name || (isChinese ? '子 Agent' : 'Subagent')}
+        </Text>
+        <Text style={[styles.subagentStatus, { color: statusColor }]}>
+          {activity.status === 'failed'
+            ? (isChinese ? '失败' : 'failed')
+            : activity.status === 'cancelled'
+              ? (isChinese ? '已取消' : 'cancelled')
+              : running
+                ? (isChinese ? '运行中' : 'running')
+                : (isChinese ? '完成' : 'done')}
+        </Text>
+        {elapsed ? (
+          <Text style={[styles.subagentTiming, { color: tokens.colors.textTertiary }]}>{elapsed}</Text>
+        ) : null}
+      </View>
+      {detail ? (
+        <>
+          <Text style={[styles.subagentSummaryLabel, { color: tokens.colors.textTertiary }]}>
+            {isChinese ? '子代理结果' : 'Subagent result'}
+          </Text>
+          <Text numberOfLines={4} style={[styles.subagentSummary, { color: tokens.colors.textSecondary }]}>
+            {detail}
+          </Text>
+        </>
+      ) : null}
+    </View>
+  );
+});
+
 const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   message,
   onInspectActivity,
@@ -517,8 +590,11 @@ const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   const reasoningActivities = activities.filter(
     (activity) => activity.category === 'reasoning',
   );
+  const subagentActivities = activities.filter(
+    (activity) => activity.category === 'subagent',
+  );
   const stepActivities = activities.filter(
-    (activity) => activity.category !== 'reasoning',
+    (activity) => activity.category !== 'reasoning' && activity.category !== 'subagent',
   );
   const reasoningText = reasoningActivities
     .map((activity) => activityDisplayContent(activity))
@@ -566,7 +642,7 @@ const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
       ) : null}
       {activities.length ? (
         <AnimatedChevron
-          color={tokens.colors.textSecondary}
+          color={tokens.colors.textTertiary}
           open={open}
           size={14}
         />
@@ -575,7 +651,19 @@ const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   );
   return (
     <View style={styles.activityGroup}>
-      {activities.length ? (
+      {subagentActivities.length ? (
+        <View style={styles.subagentCards}>
+          {subagentActivities.map((activity) => (
+            <SubagentCard
+              activity={activity}
+              isChinese={isChinese}
+              key={activity.id}
+              now={now}
+            />
+          ))}
+        </View>
+      ) : null}
+      {stepActivities.length || reasoningActivities.length ? (
         <IOSPressable
           accessibilityLabel={formatActivitySummary(message, isChinese, now)}
           haptic="selection"
