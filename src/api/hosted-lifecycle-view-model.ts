@@ -50,6 +50,10 @@ export function applyHostedLifecycleEvents(
       || roleStage === 'worker'
       || roleStage === 'reviewer'
       || roleStage === 'reporter'
+      || roleStage === 'supervisor'
+      || roleStage === 'manager'
+      || roleStage === 'dispatcher'
+      || roleStage === 'rework'
       || (roleStage === 'turn' && (
         eventTypeForStage === 'turn.completed'
         || eventTypeForStage === 'turn.cancelled'
@@ -235,6 +239,10 @@ export function applyHostedLifecycleEvents(
       || eventType === 'sudo.expire'
       || eventType === 'background.complete'
       || eventType === 'review.summary'
+      || eventType === 'awaiting.choice'
+      || eventType === 'supervisor.verdict'
+      || eventType === 'rework.started'
+      || eventType === 'rework.dispatched'
     ) {
       if (eventType === 'command.output' && sourceEventType === 'status.update') {
         continue;

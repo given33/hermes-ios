@@ -980,6 +980,9 @@ export function streamEventToActivity(
   const isCommand = eventType.startsWith('command.');
   const isBrowser = eventType === 'browser.progress';
   const isMoa = eventType.startsWith('moa.');
+  const isAwaiting = eventType === 'awaiting.choice';
+  const isSupervisorVerdict = eventType === 'supervisor.verdict';
+  const isRework = eventType === 'rework.started' || eventType === 'rework.dispatched';
   const isInteraction = [
     'approval.request',
     'clarify.request',
@@ -997,6 +1000,9 @@ export function streamEventToActivity(
     && !isMoa
     && !isInteraction
     && !isBackground
+    && !isAwaiting
+    && !isSupervisorVerdict
+    && !isRework
   ) return null;
   const toolName = stringValue(payload.tool_name)
     || stringValue(payload.tool)
@@ -1015,11 +1021,17 @@ export function streamEventToActivity(
         ? '网页浏览'
         : isMoa
           ? '多模型协作'
-          : isInteraction
-            ? interactionActivityName(eventType)
-            : isBackground
-              ? eventType === 'review.summary' ? '审查摘要' : '后台任务'
-              : toolName || '工具调用';
+          : isAwaiting
+            ? '需要你决定'
+            : isSupervisorVerdict
+              ? '监督检查'
+              : isRework
+                ? '返工'
+                : isInteraction
+                  ? interactionActivityName(eventType)
+                  : isBackground
+                    ? eventType === 'review.summary' ? '审查摘要' : '后台任务'
+                    : toolName || '工具调用';
   const status = eventType === 'tool.error' || eventType === 'tool.failed'
       || eventType === 'subagent.failed'
       || eventType === 'command.failed'
@@ -1035,6 +1047,10 @@ export function streamEventToActivity(
         || eventType === 'review.summary'
         || eventType === 'secret.expire'
         || eventType === 'sudo.expire'
+        || eventType === 'awaiting.choice'
+        || eventType === 'supervisor.verdict'
+        || eventType === 'rework.started'
+        || eventType === 'rework.dispatched'
       ? 'completed'
       : 'running';
   const durationMs = numberValue(payload.duration_ms)
@@ -1044,8 +1060,14 @@ export function streamEventToActivity(
   return {
     category: isSubagent || isMoa
       ? 'subagent'
-      : isBrowser
-        ? 'browser'
+      : isAwaiting
+        ? 'awaiting'
+        : isSupervisorVerdict
+          ? 'supervisor'
+          : isRework
+            ? 'rework'
+            : isBrowser
+              ? 'browser'
         : isInteraction || isBackground
           ? 'status'
       : isCommand
@@ -1091,11 +1113,29 @@ export function streamEventToActivity(
         ?? payload.description
         ?? moaProgressText(payload),
     ) || undefined,
-    preview: structuredText(payload.preview ?? payload.summary) || name,
+    preview: isRework
+      ? (eventType === 'rework.started' ? 'started' : 'dispatched')
+      : structuredText(payload.preview ?? payload.summary) || name,
     provider: stringValue(payload.provider) || undefined,
     startedAt: startedAt || undefined,
     status,
     toolName: toolName || name,
+    files: (Array.isArray(payload.files)
+      ? (payload.files as unknown[]).map((item) => stringValue(item)).filter(Boolean)
+      : []) as string[],
+    question: stringValue(payload.question) || undefined,
+    options: (Array.isArray(payload.options)
+      ? (payload.options as unknown[])
+        .filter(isRecord)
+        .map((item) => ({
+          id: stringValue(item.id),
+          label: stringValue(item.label) || stringValue(item.id) || '',
+        }))
+        .filter((item) => item.id && item.label)
+      : []) as { id: string; label: string }[],
+    severity: stringValue(payload.severity) || undefined,
+    agentName: stringValue(payload.agent_name) || undefined,
+    reworkRound: numberValue(payload.rework_round) || undefined,
   };
 }
 

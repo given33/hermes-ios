@@ -1,6 +1,6 @@
 import { ChevronDown } from 'lucide-react-native';
-import { Fragment, type RefObject, useEffect } from 'react';
-import { ScrollView, type ScrollViewProps, Text } from 'react-native';
+import { Fragment, type RefObject, useEffect, useMemo } from 'react';
+import { ScrollView, type ScrollViewProps, Text, View } from 'react-native';
 import Reanimated, { Easing, FadeIn } from 'react-native-reanimated';
 
 import {
@@ -17,6 +17,7 @@ import { TeamParticipantsStrip } from '../TeamParticipants';
 import {
   PendingMessage,
   UnifiedMessage,
+  TeamStatusBar,
 } from './ChatPresentation';
 import { CollaborationLiftNotice } from './ChatCollaborationPresentation';
 import { styles } from './chat-presentation-styles';
@@ -36,6 +37,7 @@ export interface ChatMessageStreamProps {
   onJumpToLatest(): void;
   onMentionMember(message: ChatMessage): void;
   onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
+  onRespondToChoice?(text: string): void;
   onScroll: ScrollViewProps['onScroll'];
   onToggleSpeech(message: ChatMessage): void;
   pendingPhase: PendingPhase;
@@ -63,6 +65,7 @@ export function ChatMessageStream({
   onJumpToLatest,
   onMentionMember,
   onOpenAttachment,
+  onRespondToChoice,
   onScroll,
   onToggleSpeech,
   pendingPhase,
@@ -92,6 +95,12 @@ export function ChatMessageStream({
     keepLatestVisible(false);
   }, [followVersion, keepLatestVisible]);
 
+  const userTurns = useMemo(
+    () => messages
+      .map((message, index) => ({ id: message.id, index, isUser: message.role === 'user' }))
+      .filter((item) => item.isUser),
+    [messages],
+  );
   return (
     <>
       <ScrollView
@@ -113,6 +122,9 @@ export function ChatMessageStream({
         showsVerticalScrollIndicator={false}
         style={styles.stream}
       >
+        {messages.length > 0 ? (
+          <TeamStatusBar isChinese={isChinese} messages={messages} />
+        ) : null}
         {messages.length === 0 ? (
           <Reanimated.View
             entering={FadeIn
@@ -147,6 +159,7 @@ export function ChatMessageStream({
               onInspectActivity={onInspectActivity}
               onMentionMember={onMentionMember}
               onOpenAttachment={onOpenAttachment}
+              onRespondToChoice={onRespondToChoice}
               onToggleSpeech={onToggleSpeech}
               speaking={speakingMessageId === message.id}
             />
@@ -172,6 +185,33 @@ export function ChatMessageStream({
         ) : null}
       </ScrollView>
 
+      {userTurns.length > 1 ? (
+        <View
+          pointerEvents="box-none"
+          style={{
+            bottom: 12,
+            gap: 3,
+            position: 'absolute',
+            right: 3,
+            top: 12,
+            width: 12,
+            alignItems: 'center',
+          }}
+        >
+          {userTurns.map((turn, position) => (
+            <View
+              key={turn.id}
+              style={{
+                borderRadius: 2,
+                height: Math.max(2, 14 / userTurns.length),
+                opacity: position === userTurns.length - 1 ? 0.9 : 0.35,
+                width: 3,
+                backgroundColor: tokens.colors.textTertiary,
+              }}
+            />
+          ))}
+        </View>
+      ) : null}
       {showScrollToBottom && !slashMenuOpen ? (
         <Reanimated.View
           entering={FadeIn.duration(IOS_MOTION.duration.control)}

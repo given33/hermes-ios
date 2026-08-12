@@ -42,6 +42,17 @@ export interface HermesChatActivity {
   startedAt?: number;
   status: HermesChatActivityStatus;
   toolName?: string;
+  /** Files this activity touched (read/write paths), for "+/- path" chips. */
+  files?: string[];
+  /** Awaiting-choice card: question + selectable options (A/B/C). */
+  question?: string;
+  options?: { id: string; label: string }[];
+  /** Supervisor verdict severity: pass | corrective. */
+  severity?: string;
+  /** Subagent display name (model-chosen Chinese job title). */
+  agentName?: string;
+  /** Rework round for rework state chips. */
+  reworkRound?: number;
 }
 
 export type HermesChatTodoStatus = 'cancelled' | 'completed' | 'in_progress' | 'pending';

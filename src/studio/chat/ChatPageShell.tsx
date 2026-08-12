@@ -10,6 +10,7 @@ import { CodingPiChatView } from '../coding-pi/CodingPiChatView';
 import { ChatComposer } from './ChatComposer';
 import { ChatHeader } from './ChatHeader';
 import { ChatMessageStream } from './ChatMessageStream';
+import { ContextUsageRing } from './ChatPresentation';
 import { ChatPlanDrawer } from './ChatPlanDrawer';
 import { ConversationHistory, styles } from './ChatPresentation';
 import type { ChatPlan } from './chat-plan-model';
@@ -91,6 +92,9 @@ export function ChatPageShell({
             <>
               <ChatMessageStream {...streamProps} />
               <ChatPlanDrawer isChinese={isChinese} plan={plan}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
+                  <ContextUsageRing isChinese={isChinese} />
+                </View>
                 <Reanimated.View
                   style={[
                     styles.composer,

@@ -852,6 +852,15 @@ export function ChatPreviewPage({
         },
         onMentionMember: mentionMember,
         onOpenAttachment: openStoredAttachment,
+        onRespondToChoice: (text) => {
+          // The awaiting member needs a decision: deliver the chosen
+          // option (or custom answer) through the hosted intervention
+          // channel, which steers the member back to work.
+          const awaitingProfile = messagesRef.current.find((message) => (
+            message.activities?.some((activity) => activity.category === 'awaiting')
+          ))?.profile || 'worker';
+          void sendIntervention(`@${awaitingProfile} 选择：${text}`);
+        },
         onScroll: handleStreamScroll,
         onToggleSpeech: toggleMessageSpeech,
         pendingPhase,
