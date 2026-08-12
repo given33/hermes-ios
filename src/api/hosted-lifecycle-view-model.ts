@@ -44,16 +44,21 @@ export function applyHostedLifecycleEvents(
     // the same runtime turn and must not be dropped by the chat reducer.
     // A terminal event is occasionally tagged with the synthetic `turn`
     // stage, so accept that stage only for terminal turn lifecycle events.
-    const roleStage = event.role_stage.split(/[.:/]/, 1)[0].toLowerCase();
+    const rawRoleStage = String(event.role_stage || 'chat');
+    const roleStage = rawRoleStage.split(/[.:/]/, 1)[0].toLowerCase() || 'chat';
     const eventTypeForStage = event.event_type.toLowerCase();
     const acceptedRoleStage = roleStage === 'chat'
       || roleStage === 'worker'
       || roleStage === 'reviewer'
       || roleStage === 'reporter'
       || roleStage === 'supervisor'
-      || roleStage === 'manager'
-      || roleStage === 'dispatcher'
       || roleStage === 'rework'
+      // Stage prefixes: manager_planning / dispatcher_* flow events carry a
+      // single-segment stage with no separator; accept any stage rooted in
+      // manager/dispatch so live planning events are not dropped until the
+      // next snapshot refresh.
+      || roleStage.startsWith('manager')
+      || roleStage.startsWith('dispatch')
       || (roleStage === 'turn' && (
         eventTypeForStage === 'turn.completed'
         || eventTypeForStage === 'turn.cancelled'
@@ -264,6 +269,12 @@ export function applyHostedLifecycleEvents(
                 : activity.output || existing.output,
               startedAt: existing.startedAt || activity.startedAt,
               toolName: activity.toolName === '命令' ? existing.toolName : activity.toolName,
+              files: activity.files || existing.files,
+              question: activity.question || existing.question,
+              options: activity.options || existing.options,
+              severity: activity.severity || existing.severity,
+              agentName: activity.agentName || existing.agentName,
+              reworkRound: activity.reworkRound ?? existing.reworkRound,
             }
           : activity;
         message = {

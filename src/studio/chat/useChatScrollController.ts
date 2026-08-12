@@ -41,6 +41,13 @@ export function useChatScrollController(safeAreaBottom: number) {
     }
   }, []);
 
+  const resumeStreamAutoFollow = useCallback(() => {
+    // Closing the activity panel (or focusing any in-stream input) re-arms
+    // auto-follow so streaming content keeps the latest message visible
+    // without requiring the user to tap "back to bottom" first.
+    autoFollowStreamRef.current = true;
+  }, []);
+
   const handleStreamScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
     const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
@@ -77,6 +84,7 @@ export function useChatScrollController(safeAreaBottom: number) {
     keyboardAvoidanceEnabled,
     keyboardRootStyle,
     pauseStreamAutoFollow,
+    resumeStreamAutoFollow,
     showScrollToBottom,
     streamRef,
   };

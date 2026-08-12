@@ -33,11 +33,13 @@ export interface ChatMessageStreamProps {
   isChinese: boolean;
   messages: ChatMessage[];
   onBranch(message: ChatMessage): void;
+  onChoiceInputFocus(): void;
+  onCloseActivity(): void;
   onInspectActivity(): void;
   onJumpToLatest(): void;
   onMentionMember(message: ChatMessage): void;
   onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
-  onRespondToChoice?(text: string): void;
+  onRespondToChoice?(activityId: string, text: string): void;
   onScroll: ScrollViewProps['onScroll'];
   onToggleSpeech(message: ChatMessage): void;
   pendingPhase: PendingPhase;
@@ -61,6 +63,8 @@ export function ChatMessageStream({
   keepLatestVisible,
   messages,
   onBranch,
+  onChoiceInputFocus,
+  onCloseActivity,
   onInspectActivity,
   onJumpToLatest,
   onMentionMember,
@@ -156,6 +160,8 @@ export function ChatMessageStream({
               isChinese={isChinese}
               message={message}
               onBranch={onBranch}
+              onChoiceInputFocus={onChoiceInputFocus}
+              onCloseActivity={onCloseActivity}
               onInspectActivity={onInspectActivity}
               onMentionMember={onMentionMember}
               onOpenAttachment={onOpenAttachment}

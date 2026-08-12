@@ -86,6 +86,8 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   isChinese,
   message,
   onBranch,
+  onChoiceInputFocus,
+  onCloseActivity,
   onOpenAttachment,
   onInspectActivity,
   onMentionMember,
@@ -97,10 +99,12 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   isChinese: boolean;
   message: ChatMessage;
   onBranch(message: ChatMessage): void;
+  onChoiceInputFocus(): void;
+  onCloseActivity(): void;
   onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
   onInspectActivity(): void;
   onMentionMember(message: ChatMessage): void;
-  onRespondToChoice?(text: string): void;
+  onRespondToChoice?(activityId: string, text: string): void;
   onToggleSpeech(message: ChatMessage): void;
   speaking: boolean;
 }) {
@@ -262,6 +266,8 @@ export const UnifiedMessage = memo(function UnifiedMessage({
             <RoleActivityGroup
               isChinese={isChinese}
               message={message}
+              onChoiceInputFocus={onChoiceInputFocus}
+              onCloseActivity={onCloseActivity}
               onInspectActivity={onInspectActivity}
               onRespondToChoice={onRespondToChoice}
             />
@@ -524,21 +530,23 @@ export function PendingDot({ delay }: { delay: number }) {
 const AwaitingChoiceCard = memo(function AwaitingChoiceCard({
   activity,
   isChinese,
+  onChoiceInputFocus,
   onRespondToChoice,
 }: {
   activity: ChatActivity;
   isChinese: boolean;
-  onRespondToChoice?(text: string): void;
+  onChoiceInputFocus(): void;
+  onRespondToChoice?(activityId: string, text: string): void;
 }) {
   const { tokens } = useTheme();
   const [custom, setCustom] = useState('');
   const [localAnswered, setLocalAnswered] = useState(false);
   const options = activity.options || [];
   const question = activity.question || activity.preview || activity.name;
-  const answered = localAnswered || (activity.status === 'completed' && !options.length);
+  const answered = localAnswered || activity.status === 'completed';
   const submitChoice = (text: string) => {
     setLocalAnswered(true);
-    onRespondToChoice?.(text);
+    onRespondToChoice?.(activity.id, text);
   };
   return (
     <View
@@ -583,6 +591,7 @@ const AwaitingChoiceCard = memo(function AwaitingChoiceCard({
         <View style={styles.choiceCustomRow}>
           <TextInput
             onChangeText={setCustom}
+            onFocus={onChoiceInputFocus}
             placeholder={isChinese ? '或输入你自己的回答…' : 'Or type your own answer…'}
             placeholderTextColor={tokens.colors.textTertiary}
             style={[styles.choiceCustomInput, { borderColor: multiplyAlpha(tokens.colors.primary, 0.3), color: tokens.colors.textSecondary }]}
@@ -677,8 +686,16 @@ export function AgentRoster({
     for (const message of messages) {
       for (const activity of message.activities || []) {
         if (activity.category !== 'subagent') continue;
+        // Persisted ids are `remote-subagent:{profile}:{index}:{goal}` —
+        // truncating at the first colon merges every historical subagent
+        // into one row. Keep the full id for those; live events group by
+        // their agentName.
+        const idSegments = activity.id.split(':');
+        const stableIdKey = idSegments[0] === 'remote-subagent'
+          ? activity.id
+          : idSegments[0] || activity.id;
         const key = activity.agentName
-          || activity.id.split(':')[0]
+          || stableIdKey
           || activity.name
           || activity.id;
         if (activity.agentName) names.set(key, activity.agentName);
@@ -809,18 +826,28 @@ export function TeamStatusBar({
     let awaitingCount = 0;
     let correctiveCount = 0;
     let subagentCount = 0;
+    // Attention counters (awaiting/corrective) are scoped to the live turn:
+    // historical verdicts and answered questions must not accumulate forever.
+    const currentTurnId = [...messages].reverse().find(
+      (message) => message.runtimeTurnId,
+    )?.runtimeTurnId;
     for (const message of messages) {
       if (message.role === 'user') continue;
+      const inCurrentTurn = !currentTurnId || message.runtimeTurnId === currentTurnId;
       if (message.status === 'running' || message.status === 'streaming') {
         workingCount += 1;
       } else if (message.status === 'completed') {
         doneCount += 1;
       }
       for (const activity of message.activities || []) {
-        if (activity.category === 'awaiting' && activity.status !== 'completed') {
+        if (activity.category === 'awaiting' && activity.status !== 'completed' && inCurrentTurn) {
           awaitingCount += 1;
         }
-        if (activity.category === 'supervisor' && activity.severity === 'corrective') {
+        if (
+          activity.category === 'supervisor'
+          && (activity.severity || '').toLowerCase() === 'corrective'
+          && inCurrentTurn
+        ) {
           correctiveCount += 1;
         }
         if (activity.category === 'subagent') {
@@ -836,7 +863,7 @@ export function TeamStatusBar({
       subagents: subagentCount,
     };
   }, [messages]);
-  if (!working && !done && !awaiting && !subagents) return null;
+  if (!working && !done && !awaiting && !subagents && !corrective) return null;
   const parts: string[] = [];
   if (working) parts.push(`${working} ${isChinese ? '成员干活' : 'working'}`);
   if (done) parts.push(`${done} ${isChinese ? '成员完成' : 'done'}`);
@@ -958,21 +985,80 @@ const SubagentCard = memo(function SubagentCard({
   );
 });
 
+// One module-level ticker serves every running activity group: N parallel
+// members must not spawn N intervals each re-rendering whole message groups.
+let sharedNowInterval: ReturnType<typeof setInterval> | null = null;
+let sharedNowSubscriberCount = 0;
+const sharedNowListeners = new Set<(now: number) => void>();
+
+function subscribeSharedNow(listener: (now: number) => void): () => void {
+  sharedNowListeners.add(listener);
+  sharedNowSubscriberCount += 1;
+  if (sharedNowInterval === null) {
+    sharedNowInterval = setInterval(() => {
+      const now = Date.now();
+      for (const current of sharedNowListeners) current(now);
+    }, 1_000);
+  }
+  return () => {
+    sharedNowListeners.delete(listener);
+    sharedNowSubscriberCount -= 1;
+    if (sharedNowSubscriberCount <= 0 && sharedNowInterval !== null) {
+      clearInterval(sharedNowInterval);
+      sharedNowInterval = null;
+    }
+  };
+}
+
+const TimingLabel = memo(function TimingLabel({
+  isChinese,
+  message,
+}: {
+  isChinese: boolean;
+  message: ChatMessage;
+}) {
+  const { tokens } = useTheme();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    return subscribeSharedNow(setNow);
+  }, []);
+  return (
+    <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.textSecondary }]}>
+      {turnTimingLine(message, isChinese, now)}
+    </Text>
+  );
+});
+
+/** One subscription per running group, one interval for the whole screen. */
+function useNowTicker(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    if (!active) return undefined;
+    return subscribeSharedNow(setNow);
+  }, [active]);
+  return now;
+}
+
 const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   message,
+  onChoiceInputFocus,
+  onCloseActivity,
   onInspectActivity,
   onRespondToChoice,
 }: {
   isChinese: boolean;
   message: ChatMessage;
+  onChoiceInputFocus(): void;
+  onCloseActivity(): void;
   onInspectActivity(): void;
-  onRespondToChoice?(text: string): void;
+  onRespondToChoice?(activityId: string, text: string): void;
 }) {
   const { tokens } = useTheme();
   const motion = useMotion();
   const [open, setOpen] = useState(false);
   const manualPinRef = useRef(false);
-  const [now, setNow] = useState(Date.now());
   const activities = message.activities || [];
   const reasoningActivities = activities.filter(
     (activity) => activity.category === 'reasoning',
@@ -1006,17 +1092,13 @@ const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
     (activity) => activity.status === 'queued' || activity.status === 'running',
   );
   const running = messageIsRunning(message);
+  const now = useNowTicker(running);
   // Live workflow display: while the turn runs the activity group stays
   // open so tool calls / searches appear in real time; once the turn ends it
   // collapses by default. A manual tap pins the state until the next turn.
   useEffect(() => {
     if (manualPinRef.current) return;
     setOpen(running);
-  }, [running]);
-  useEffect(() => {
-    if (!running) return undefined;
-    const interval = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(interval);
   }, [running]);
   const phase = turnPhaseChip(message, isChinese);
   const phaseColor = phase.tone === 'failed'
@@ -1034,9 +1116,7 @@ const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
           {phase.label}
         </Text>
       </View>
-      <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.textSecondary }]}>
-        {turnTimingLine(message, isChinese, now)}
-      </Text>
+      <TimingLabel isChinese={isChinese} message={message} />
       {stepActivities.length ? (
         <Text style={[styles.activityCount, { color: tokens.colors.textTertiary }]}>
           {isChinese ? `${stepActivities.length} 个工具调用` : `${stepActivities.length} tool calls`}
@@ -1060,6 +1140,7 @@ const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
               activity={activity}
               isChinese={isChinese}
               key={activity.id}
+              onChoiceInputFocus={onChoiceInputFocus}
               onRespondToChoice={onRespondToChoice}
             />
           ))}
@@ -1118,8 +1199,11 @@ const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
           haptic="selection"
           onPress={() => {
             manualPinRef.current = true;
-            onInspectActivity();
-            setOpen((current) => !current);
+            setOpen((current) => {
+              if (current) onCloseActivity();
+              else onInspectActivity();
+              return !current;
+            });
           }}
           style={styles.activitySummary}
         >

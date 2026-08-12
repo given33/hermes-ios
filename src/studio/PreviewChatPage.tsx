@@ -181,6 +181,7 @@ export function ChatPreviewPage({
     keyboardAvoidanceEnabled,
     keyboardRootStyle,
     pauseStreamAutoFollow,
+    resumeStreamAutoFollow,
     showScrollToBottom,
     streamRef,
   } = useChatScrollController(safeAreaBottom);
@@ -845,6 +846,13 @@ export function ChatPreviewPage({
         keepLatestVisible,
         messages: displayMessages,
         onBranch: branchFromMessage,
+        onChoiceInputFocus: () => {
+          // The in-stream answer input can be covered by the keyboard:
+          // re-arm auto-follow and force the latest messages visible.
+          autoFollowStreamRef.current = true;
+          keepLatestVisible(false, true);
+        },
+        onCloseActivity: resumeStreamAutoFollow,
         onInspectActivity: pauseStreamAutoFollow,
         onJumpToLatest: () => {
           autoFollowStreamRef.current = true;
@@ -852,14 +860,31 @@ export function ChatPreviewPage({
         },
         onMentionMember: mentionMember,
         onOpenAttachment: openStoredAttachment,
-        onRespondToChoice: (text) => {
+        onRespondToChoice: (activityId, text) => {
           // The awaiting member needs a decision: deliver the chosen
           // option (or custom answer) through the hosted intervention
-          // channel, which steers the member back to work.
-          const awaitingProfile = messagesRef.current.find((message) => (
-            message.activities?.some((activity) => activity.category === 'awaiting')
-          ))?.profile || 'worker';
-          void sendIntervention(`@${awaitingProfile} 选择：${text}`);
+          // channel, which steers the member back to work. Resolve the
+          // card's owner from the activity itself (agentName carries the
+          // awaiting member's profile) so multi-member turns answer the
+          // right worker.
+          const owner = messagesRef.current.find((message) => (
+            message.activities?.some((activity) => activity.id === activityId)
+          ));
+          const activity = owner?.activities?.find((item) => item.id === activityId);
+          const target = activity?.agentName || owner?.profile || '';
+          setMessages((current) => current.map((message) => (
+            message.activities?.some((item) => item.id === activityId)
+              ? {
+                ...message,
+                activities: message.activities.map((item) => (
+                  item.id === activityId
+                    ? { ...item, status: 'completed', completedAt: Date.now() }
+                    : item
+                )),
+              }
+              : message
+          )));
+          void sendIntervention(target ? `@${target} 选择：${text}` : `选择：${text}`);
         },
         onScroll: handleStreamScroll,
         onToggleSpeech: toggleMessageSpeech,

@@ -211,7 +211,11 @@ async function parseSseFrame(
     ) {
       throw new Error('Hermes hosted lifecycle event crossed its identity boundary');
     }
-    if (event.cursor <= previousEventCursor) {
+    // A replay may legitimately start with the already-consumed boundary
+    // event (cursor == the resume cursor). Only a regression below it is
+    // disorder; equal is idempotent and skipped by the consumer's cursor
+    // advance anyway.
+    if (event.cursor < previousEventCursor) {
       throw new Error('Hermes hosted lifecycle events are not strictly ordered');
     }
     previousEventCursor = event.cursor;

@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react';
+import { useMemo, type ComponentProps } from 'react';
 import { File, Image as ImageIcon } from 'lucide-react-native';
 import { Modal, View } from 'react-native';
 import Reanimated from 'react-native-reanimated';
@@ -69,6 +69,15 @@ export function ChatPageShell({
   showHistory,
   streamProps,
 }: ChatPageShellProps) {
+  // Latest context usage without allocating a reversed copy on every render.
+  const contextUsedPercent = useMemo(() => {
+    const { messages } = streamProps;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const value = messages[index].contextUsedPercent;
+      if (typeof value === 'number') return value;
+    }
+    return undefined;
+  }, [streamProps.messages]);
   return (
     <Reanimated.View
       style={[
@@ -95,11 +104,7 @@ export function ChatPageShell({
                 <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
                   <ContextUsageRing
                     isChinese={isChinese}
-                    value={streamProps.messages
-                      .slice()
-                      .reverse()
-                      .find((message) => message.contextUsedPercent !== undefined)
-                      ?.contextUsedPercent}
+                    value={contextUsedPercent}
                   />
                 </View>
                 <Reanimated.View

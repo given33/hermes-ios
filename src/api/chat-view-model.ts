@@ -602,7 +602,11 @@ export function collaborationMessageToView(
       || undefined,
     completedAt: completedAt || undefined,
     content: message.content || '',
-    contextUsedPercent: numberValue(message.context_used_percent) || undefined,
+    contextUsedPercent: (() => {
+      const raw = message.context_used_percent;
+      if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+      return undefined;
+    })(),
     createdAt: createdAt || undefined,
     durationMs,
     firstTokenAt: timestampValue(meta.first_token_at) || undefined,
@@ -1048,7 +1052,6 @@ export function streamEventToActivity(
         || eventType === 'review.summary'
         || eventType === 'secret.expire'
         || eventType === 'sudo.expire'
-        || eventType === 'awaiting.choice'
         || eventType === 'supervisor.verdict'
         || eventType === 'rework.started'
         || eventType === 'rework.dispatched'
@@ -1109,6 +1112,7 @@ export function streamEventToActivity(
         ?? payload.result_text
         ?? payload.result
         ?? payload.summary
+        ?? payload.display
         ?? payload.text
         ?? payload.message
         ?? payload.description
@@ -1116,7 +1120,7 @@ export function streamEventToActivity(
     ) || undefined,
     preview: isRework
       ? (eventType === 'rework.started' ? 'started' : 'dispatched')
-      : structuredText(payload.preview ?? payload.summary) || name,
+      : structuredText(payload.preview ?? payload.summary ?? payload.display) || name,
     provider: stringValue(payload.provider) || undefined,
     startedAt: startedAt || undefined,
     status,
@@ -1135,7 +1139,12 @@ export function streamEventToActivity(
         .filter((item) => item.id && item.label)
       : []) as { id: string; label: string }[],
     severity: stringValue(payload.severity) || undefined,
-    agentName: stringValue(payload.agent_name) || undefined,
+    // The awaiting.choice payload carries the member's profile; surface it
+    // as the agent name so multi-member targeting can resolve the right
+    // owner of the decision card.
+    agentName: (isAwaiting
+      ? stringValue(payload.profile)
+      : stringValue(payload.agent_name)) || undefined,
     reworkRound: numberValue(payload.rework_round) || undefined,
   };
 }
@@ -1311,6 +1320,22 @@ function activityFromRecord(
     startedAt: startedAt || undefined,
     status: normalizeStatus(item.status),
     toolName: toolName || undefined,
+    files: (Array.isArray(item.files)
+      ? (item.files as unknown[]).map((value) => stringValue(value)).filter(Boolean)
+      : []) as string[],
+    question: stringValue(item.question) || undefined,
+    options: (Array.isArray(item.options)
+      ? (item.options as unknown[])
+        .filter(isRecord)
+        .map((option) => ({
+          id: stringValue(option.id),
+          label: stringValue(option.label) || stringValue(option.id) || '',
+        }))
+        .filter((option) => option.id && option.label)
+      : []) as { id: string; label: string }[],
+    severity: stringValue(item.severity) || undefined,
+    agentName: stringValue(item.agent_name) || undefined,
+    reworkRound: numberValue(item.rework_round) || undefined,
   };
 }
 
@@ -1333,6 +1358,12 @@ function mergeActivity(
     provider: next.provider || current.provider,
     startedAt: next.startedAt || current.startedAt,
     toolName: next.toolName || current.toolName,
+    files: next.files || current.files,
+    question: next.question || current.question,
+    options: next.options || current.options,
+    severity: next.severity || current.severity,
+    agentName: next.agentName || current.agentName,
+    reworkRound: next.reworkRound ?? current.reworkRound,
   };
 }
 

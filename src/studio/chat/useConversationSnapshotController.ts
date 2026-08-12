@@ -40,7 +40,11 @@ import {
   latestChatRuntimeWaitingState,
 } from '../../api/chat-runtime-state';
 import type { PendingPhase } from './chat-types';
-import { sameChatMessages, sameOptimisticMessages } from './chat-domain';
+import {
+  mergeLiveMessagesIntoSnapshot,
+  sameChatMessages,
+  sameOptimisticMessages,
+} from './chat-domain';
 
 interface ConversationSnapshotControllerOptions {
   activeConversationIdRef: MutableRefObject<string>;
@@ -348,9 +352,14 @@ export function useConversationSnapshotController({
       optimisticMessagesRef.current = reconciledOptimistic.pending;
     }
     nextMessages = reconciledOptimistic.messages;
-    setMessages((current) => (
-      sameChatMessages(current, nextMessages) ? current : nextMessages
-    ));
+    setMessages((current) => {
+      // Fold live messages into the snapshot before replacing: live-only
+      // interactive cards (awaiting choice / supervisor verdict / rework)
+      // survive the swap, and persisted ids are adopted so React keys stay
+      // stable and messages do not remount mid-turn.
+      const merged = mergeLiveMessagesIntoSnapshot(nextMessages, current);
+      return sameChatMessages(current, merged) ? current : merged;
+    });
     activeHostedTurnIdRef.current = runningHostedTurnId;
     setActiveHostedTurnId(runningHostedTurnId);
     // Keep the stream alive while a durable enqueue is still awaiting server

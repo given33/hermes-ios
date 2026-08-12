@@ -58,6 +58,69 @@ export function sameChatMessages(
   return JSON.stringify(left) === JSON.stringify(right);
 }
 
+function liveMessageMergeKey(message: ChatMessage): string {
+  if (!message.runtimeTurnId || !message.roleStage) return '';
+  return `${message.runtimeTurnId}\u0000${message.roleStage}\u0000${message.profile || ''}`;
+}
+
+function mergeSnapshotMessage(
+  persisted: ChatMessage,
+  live: ChatMessage,
+): ChatMessage {
+  // Live activities win on shared ids (fresher tool/status updates);
+  // persisted-only activities fill the gaps, which is exactly what keeps
+  // awaiting/supervisor/rework cards alive across a snapshot replacement.
+  const liveIds = new Set((live.activities || []).map(({ id }) => id).filter(Boolean));
+  const extraPersisted = (persisted.activities || []).filter(
+    (activity) => !activity.id || !liveIds.has(activity.id),
+  );
+  return {
+    ...persisted,
+    ...live,
+    // Keep the persisted id: the React message key stays stable, so the
+    // live→durable handoff does not remount the message and replay its
+    // entering animation (visual flicker + open/manualPin state resets).
+    id: persisted.id,
+    activities: [...(live.activities || []), ...extraPersisted],
+  };
+}
+
+/**
+ * Fold live messages into an authoritative snapshot before it replaces the
+ * view, so a reconnect / poll / intervention snapshot does not drop live-only
+ * interactive cards (awaiting choice, supervisor verdict, rework chips) or
+ * flip message ids and remount the whole message list.
+ */
+export function mergeLiveMessagesIntoSnapshot(
+  persisted: readonly ChatMessage[],
+  live: readonly ChatMessage[],
+): ChatMessage[] {
+  const liveByKey = new Map<string, ChatMessage[]>();
+  for (const message of live) {
+    const key = liveMessageMergeKey(message);
+    if (!key) continue;
+    const bucket = liveByKey.get(key);
+    if (bucket) bucket.push(message);
+    else liveByKey.set(key, [message]);
+  }
+  if (!liveByKey.size) return [...persisted];
+  const consumed = new Set<string>();
+  const merged = persisted.map((message) => {
+    const key = liveMessageMergeKey(message);
+    if (!key) return message;
+    const bucket = liveByKey.get(key);
+    if (!bucket?.length) return message;
+    consumed.add(key);
+    return mergeSnapshotMessage(message, bucket[bucket.length - 1]);
+  });
+  const trailing: ChatMessage[] = [];
+  for (const [key, bucket] of liveByKey) {
+    if (consumed.has(key)) continue;
+    trailing.push(...bucket);
+  }
+  return trailing.length ? [...merged, ...trailing] : merged;
+}
+
 export function optimisticConversationTitle(
   messages: readonly CollaborationMessage[],
   chinese: boolean,

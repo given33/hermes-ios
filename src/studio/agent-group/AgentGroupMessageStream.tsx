@@ -82,13 +82,20 @@ export function AgentGroupMessageStream({
     setShowScrollToBottom(false);
   }, []);
 
+  // Auto-follow mirrors the main chat stream: streaming output keeps the
+  // latest message visible only while the user is near the bottom. Scrolling
+  // up to read history must not yank the view back down.
+  const autoFollowRef = useRef(true);
+
   useEffect(() => {
-    scrollToBottom(false);
+    if (autoFollowRef.current) scrollToBottom(false);
   }, [followVersion, scrollToBottom]);
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    setShowScrollToBottom(contentSize.height - (contentOffset.y + layoutMeasurement.height) > 180);
+    const distance = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    autoFollowRef.current = distance <= 72;
+    setShowScrollToBottom(distance > 180);
   }, []);
 
   return (
@@ -101,7 +108,9 @@ export function AgentGroupMessageStream({
         ]}
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => scrollToBottom(false)}
+        onContentSizeChange={() => {
+          if (autoFollowRef.current) scrollToBottom(false);
+        }}
         onScroll={onScroll}
         ref={scrollRef}
         scrollEventThrottle={16}
@@ -128,7 +137,10 @@ export function AgentGroupMessageStream({
       {showScrollToBottom ? (
         <IOSPressable
           accessibilityLabel={isChinese ? '回到最新群聊消息' : 'Jump to latest group message'}
-          onPress={() => scrollToBottom(true)}
+          onPress={() => {
+            autoFollowRef.current = true;
+            scrollToBottom(true);
+          }}
           style={[styles.scrollButton, { backgroundColor: tokens.colors.card, borderColor: multiplyAlpha(tokens.colors.primary, 0.25) }]}
         >
           <ChevronDown color={tokens.colors.primary} size={18} />
@@ -150,15 +162,27 @@ function GroupChoiceOptions({
   tokens: ReturnType<typeof useTheme>['tokens'];
 }) {
   const options = useMemo(() => {
-    if (!content || !content.includes('选项')) return [];
+    if (!content) return [];
     const found: { id: string; label: string }[] = [];
+    const seen = new Set<string>();
+    let sawOption = false;
     for (const line of content.split('\n')) {
-      const match = line.trim().match(/^([A-Za-z])[.、．:：]\s*(.+)$/);
-      if (!match) continue;
-      found.push({ id: match[1].toUpperCase(), label: match[2].trim().slice(0, 200) });
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      if (/^(选项|options?|choices?)\s*[:：]$/i.test(trimmed)) continue;
+      const match = trimmed.match(/^([A-Za-z]|\d{1,2})[.、．:：]\s*(.+)$/);
+      if (!match) {
+        if (sawOption) break;
+        continue;
+      }
+      const id = match[1].toUpperCase();
+      if (seen.has(id)) continue;
+      seen.add(id);
+      sawOption = true;
+      found.push({ id, label: match[2].trim().slice(0, 200) });
       if (found.length >= 4) break;
     }
-    return found.length >= 2 ? found : [];
+    return found;
   }, [content]);
   if (!options.length || !onQuickReply) return null;
   return (
