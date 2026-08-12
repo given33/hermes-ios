@@ -525,9 +525,14 @@ const AwaitingChoiceCard = memo(function AwaitingChoiceCard({
 }) {
   const { tokens } = useTheme();
   const [custom, setCustom] = useState('');
+  const [localAnswered, setLocalAnswered] = useState(false);
   const options = activity.options || [];
   const question = activity.question || activity.preview || activity.name;
-  const answered = activity.status === 'completed' && !options.length;
+  const answered = localAnswered || (activity.status === 'completed' && !options.length);
+  const submitChoice = (text: string) => {
+    setLocalAnswered(true);
+    onRespondToChoice?.(text);
+  };
   return (
     <View
       style={[
@@ -556,7 +561,7 @@ const AwaitingChoiceCard = memo(function AwaitingChoiceCard({
               accessibilityLabel={option.label}
               haptic="selection"
               key={option.id}
-              onPress={() => onRespondToChoice?.(`${option.id}. ${option.label}`)}
+              onPress={() => submitChoice(`${option.id}. ${option.label}`)}
               style={[styles.choiceOption, { borderColor: multiplyAlpha(tokens.colors.primary, 0.4) }]}
             >
               <Text style={[styles.choiceOptionKey, { color: tokens.colors.primary }]}>{option.id}</Text>
@@ -581,7 +586,7 @@ const AwaitingChoiceCard = memo(function AwaitingChoiceCard({
             disabled={!custom.trim()}
             onPress={() => {
               const text = custom.trim();
-              if (text) onRespondToChoice?.(text);
+              if (text) submitChoice(text);
             }}
             style={[styles.choiceCustomSend, { backgroundColor: custom.trim() ? tokens.colors.primary : tokens.colors.textDisabled }]}
           >
