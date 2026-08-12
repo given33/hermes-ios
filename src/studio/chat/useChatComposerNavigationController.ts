@@ -34,6 +34,24 @@ const LOCAL_SLASH_COMMANDS: readonly SlashCommandDescriptor[] = [
     en: 'Stop the active run',
     zh: '停止当前运行任务',
   },
+  {
+    command: '/plan',
+    usage: 'plan',
+    category: 'task',
+    requiresArgument: true,
+    requiresConfirmation: false,
+    en: 'Investigate and produce a plan without dispatching workers',
+    zh: '只调查并制定方案（不派发执行）',
+  },
+  {
+    command: '/goal',
+    usage: 'goal',
+    category: 'task',
+    requiresArgument: true,
+    requiresConfirmation: false,
+    en: 'Set the goal for this task as the highest priority',
+    zh: '明确任务目标（最高优先级）',
+  },
 ] as const;
 
 const COMMAND_TRANSLATIONS: Readonly<Record<string, string>> = {
@@ -43,6 +61,8 @@ const COMMAND_TRANSLATIONS: Readonly<Record<string, string>> = {
   '/sessions list': '列出可以恢复的会话',
   '/skills list': '列出已安装技能',
   '/status': '检查 Hermes 与工作节点状态',
+  '/plan': '只调查并制定方案（不派发执行）',
+  '/goal': '明确任务目标（最高优先级）',
 };
 
 function commandDescriptor(command: MobileConsoleCommand): SlashCommandDescriptor {
