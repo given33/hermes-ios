@@ -115,6 +115,14 @@ const pageShellSource = readFileSync(
   resolve(process.cwd(), 'src/studio/chat/ChatPageShell.tsx'),
   'utf8',
 );
+const previewComposerPropsSource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/preview-composer-props.ts'),
+  'utf8',
+);
+const roleActivitySource = readFileSync(
+  resolve(process.cwd(), 'src/studio/chat/chat-role-activity.tsx'),
+  'utf8',
+);
 // Chat is intentionally split into controller, presentation, and attachment
 // services. Contract assertions cover the whole production feature instead of
 // forcing every implementation detail back into one giant React component.
@@ -147,6 +155,8 @@ const source = [
   conversationActionsSource,
   deliveryCompositionSource,
   pageShellSource,
+  previewComposerPropsSource,
+  roleActivitySource,
 ].join('\n');
 
 test('workflow activity sits above the role row and uses the Hermes Studio collapsed summary', () => {
@@ -363,14 +373,20 @@ test('activity inspection pauses stream following and renders one primary body',
     resolve(process.cwd(), 'src/studio/ReasoningSection.tsx'),
     'utf8',
   );
+  const presentation = readFileSync(
+    resolve(process.cwd(), 'src/studio/chat/ChatPresentation.tsx'),
+    'utf8',
+  );
   assert.match(source, /autoFollowStreamRef/);
   assert.match(source, /onScroll: handleStreamScroll/);
-  assert.match(source, /onInspectActivity\(\);[\s\S]*setOpen/);
-  assert.match(source, /activityDisplayContent\(activity\)/);
-  assert.match(source, /<ReasoningSection/);
-  assert.match(source, /<WorkflowTimeline/);
+  assert.match(source, /onInspectActivity: pauseStreamAutoFollow/);
+  assert.match(roleActivitySource, /<ReasoningSection/);
+  assert.match(roleActivitySource, /<WorkflowTimeline/);
   // The per-step fold, primary argument, clamped output, and pinned
   // collapse state now live in the extracted timeline components.
+  assert.match(timeline, /onInspectActivity\(\);/);
+  assert.match(timeline, /setShowAll/);
+  assert.match(timeline, /activityDisplayContent\(activity\)/);
   assert.match(timeline, /activityPrimaryDetail\(activity\)/);
   assert.match(timeline, /clampActivityText/);
   assert.match(timeline, /timelineCollapseReducer/);

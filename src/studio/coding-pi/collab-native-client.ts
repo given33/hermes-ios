@@ -150,11 +150,14 @@ export interface CollabSubagentProgressPayload {
   [key: string]: unknown;
 }
 
+import type { HostedComponentLifecycle } from '../../api/hosted-runtime-types';
+
 export interface CollabSubagentLifecyclePayload {
   id: string;
   agent?: string;
   description?: string;
   status?: string;
+  lifecycle?: HostedComponentLifecycle;
   sessionFile?: string;
   parentToolCallId?: string;
   index?: number;

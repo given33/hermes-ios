@@ -53,6 +53,16 @@ export interface HermesChatActivity {
   agentName?: string;
   /** Rework round for rework state chips. */
   reworkRound?: number;
+  callId?: string;
+  parentCallId?: string;
+  presentationMeta?: {
+    view?: string;
+    title?: string;
+    summary?: string;
+    replayable?: boolean;
+    artifactRefs?: string[];
+    rendererVersion?: string;
+  };
 }
 
 export type HermesChatTodoStatus = 'cancelled' | 'completed' | 'in_progress' | 'pending';

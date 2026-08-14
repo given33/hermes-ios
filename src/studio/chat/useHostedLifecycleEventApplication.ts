@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, type MutableRefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 
 import type { HostedLifecycleEvent } from '../../api/hosted-conversation-events';
 import { applyHostedLifecycleEvents } from '../../api/hosted-lifecycle-view-model';
+import type { HostedRuntimeProjection } from '../../api/hosted-runtime-reducer';
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
 import type { PendingPhase } from './chat-types';
 
@@ -41,7 +42,17 @@ export function useHostedLifecycleEventApplication({
   updatePendingPhase,
 }: HostedLifecycleEventApplicationOptions) {
   const eventQueueRef = useRef<HostedLifecycleEvent[]>([]);
+  const runtimeRef = useRef<HostedRuntimeProjection | undefined>(undefined);
+  const [runtime, setRuntime] = useState<HostedRuntimeProjection | undefined>(undefined);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const reset = useCallback(() => {
+    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    flushTimerRef.current = null;
+    eventQueueRef.current = [];
+    runtimeRef.current = undefined;
+    setRuntime(undefined);
+  }, []);
 
   const flush = useCallback(() => {
     flushTimerRef.current = null;
@@ -49,7 +60,14 @@ export function useHostedLifecycleEventApplication({
     eventQueueRef.current = [];
     if (!events.length) return;
 
-    const result = applyHostedLifecycleEvents(messagesRef.current, events, isChinese);
+    const result = applyHostedLifecycleEvents(
+      messagesRef.current,
+      events,
+      isChinese,
+      runtimeRef.current,
+    );
+    runtimeRef.current = result.runtime;
+    setRuntime(result.runtime);
     setMessages(result.messages);
     for (const notice of result.notices) notify(notice);
     if (result.firstTokenAt && !firstTokenAtRef.current) {
@@ -104,11 +122,7 @@ export function useHostedLifecycleEventApplication({
     flushTimerRef.current = setTimeout(flush, HOSTED_EVENT_BATCH_WINDOW_MS);
   }, [flush]);
 
-  useEffect(() => () => {
-    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
-    flushTimerRef.current = null;
-    eventQueueRef.current = [];
-  }, [cacheOwner]);
+  useEffect(() => () => reset(), [cacheOwner, reset]);
 
-  return apply;
+  return Object.assign(apply, { reset, runtime });
 }

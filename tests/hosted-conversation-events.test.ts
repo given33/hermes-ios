@@ -282,6 +282,47 @@ test('canonical hosted events advance without repeating the full conversation sn
   }]);
 });
 
+test('hosted SSE rejects runtime metadata fields outside the protocol allowlist', async () => {
+  const event = {
+    event_id: 'evt-runtime-unknown',
+    cursor: 2,
+    account_generation: 'generation-1',
+    conversation_id: 'chat-1',
+    turn_id: 'turn-1',
+    role_stage: 'worker',
+    event_type: 'component.active',
+    sequence: 1,
+    occurred_at: 1,
+    idempotency_key: 'runtime-unknown',
+    payload: {},
+    runtime: { component_id: 'fiber:worker', raw_prompt: 'must-not-cross' },
+    schema_version: 'hermes.hosted-event.v1',
+  };
+  const api = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        `id: 2\nevent: conversation\ndata: ${JSON.stringify({
+          cursor: 2,
+          account_generation: 'generation-1',
+          events: [event],
+        })}\n\n`,
+      ]));
+    },
+  } as unknown as HermesCloudApi;
+  const reports: string[] = [];
+  const cursor = await consumeHostedConversationEvents(
+    api,
+    'chat-1',
+    1,
+    'generation-1',
+    new AbortController().signal,
+    () => undefined,
+    (error) => { reports.push(error.message); },
+  );
+  assert.equal(cursor, 1);
+  assert.match(reports[0] || '', /unsupported runtime field/);
+});
+
 test('cursor retention gaps require a recovery snapshot', async () => {
   const api = {
     openHostedConversationEvents() {

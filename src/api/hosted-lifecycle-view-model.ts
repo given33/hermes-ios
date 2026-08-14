@@ -1,5 +1,9 @@
 import { isRecord } from './chat-view-values';
 import type { HostedLifecycleEvent } from './hosted-conversation-events';
+import {
+  reduceHostedRuntimeEvents,
+  type HostedRuntimeProjection,
+} from './hosted-runtime-reducer';
 import type { HermesChatRoleStage, HermesChatTodo } from './chat-view-types';
 import {
   avatarRoleFor,
@@ -18,6 +22,7 @@ export interface HostedLifecycleApplication {
   phase?: 'executing' | 'reconnecting' | 'responding' | 'thinking';
   phaseStartedAt?: number;
   reconnectAttempt?: number;
+  runtime: HostedRuntimeProjection;
   turnActive: boolean;
 }
 
@@ -26,7 +31,9 @@ export function applyHostedLifecycleEvents(
   messages: HermesChatViewMessage[],
   events: readonly HostedLifecycleEvent[],
   chinese = true,
+  runtime?: HostedRuntimeProjection,
 ): HostedLifecycleApplication {
+  const runtimeProjection = reduceHostedRuntimeEvents(runtime, events);
   let nextMessages = messages;
   let completed = false;
   let cancelled = false;
@@ -401,6 +408,7 @@ export function applyHostedLifecycleEvents(
     phase,
     phaseStartedAt,
     reconnectAttempt,
+    runtime: runtimeProjection,
     turnActive,
   };
 }

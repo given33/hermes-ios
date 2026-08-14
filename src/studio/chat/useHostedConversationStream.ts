@@ -32,6 +32,7 @@ interface HostedConversationStreamOptions {
     deferCacheWrite?: boolean,
   ): void | Promise<void>;
   applyLifecycleEvents(events: readonly HostedLifecycleEvent[]): void | Promise<void>;
+  resetLifecycleRuntime?(): void;
   cacheOwner: string;
   cloudApi: HermesCloudApi | null;
   accountGenerationRef: MutableRefObject<Map<string, string>>;
@@ -68,6 +69,7 @@ export function useHostedConversationStream({
   primeHostedStream = false,
   loadConversation,
   requestTimeoutMs,
+  resetLifecycleRuntime,
 }: HostedConversationStreamOptions): void {
   useEffect(() => {
     if (
@@ -173,6 +175,7 @@ export function useHostedConversationStream({
               || activeConversationIdRef.current !== activeConversationId
             ) return;
             if (conversation) {
+              if (resetCursor || hasGap) resetLifecycleRuntime?.();
               await applyConversation({
                 ...conversation,
                 hosted_event_cursor: resetCursor

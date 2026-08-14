@@ -22,6 +22,7 @@ import {
 import { CollaborationLiftNotice } from './ChatCollaborationPresentation';
 import { styles } from './chat-presentation-styles';
 import type { PendingPhase } from './chat-types';
+import type { HostedRuntimeProjection } from '../../api/hosted-runtime-types';
 
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
 
@@ -40,11 +41,14 @@ export interface ChatMessageStreamProps {
   onMentionMember(message: ChatMessage): void;
   onOpenAttachment(attachment: StoredChatAttachment, share?: boolean): void;
   onRespondToChoice?(activityId: string, text: string): void;
+  onSteerSubagent?(subagentId: string, message: string): void;
+  onStopSubagent?(subagentId: string): void;
   onScroll: ScrollViewProps['onScroll'];
   onToggleSpeech(message: ChatMessage): void;
   pendingPhase: PendingPhase;
   pendingStartedAt: number;
   reconnectAttempt: number;
+  runtime?: HostedRuntimeProjection;
   safeAreaBottom: number;
   sending: boolean;
   showScrollToBottom: boolean;
@@ -70,11 +74,14 @@ export function ChatMessageStream({
   onMentionMember,
   onOpenAttachment,
   onRespondToChoice,
+  onSteerSubagent,
+  onStopSubagent,
   onScroll,
   onToggleSpeech,
   pendingPhase,
   pendingStartedAt,
   reconnectAttempt,
+  runtime,
   safeAreaBottom,
   sending,
   showScrollToBottom,
@@ -127,7 +134,14 @@ export function ChatMessageStream({
         style={styles.stream}
       >
         {messages.length > 0 ? (
-          <TeamStatusBar isChinese={isChinese} messages={messages} />
+          <TeamStatusBar
+            isChinese={isChinese}
+            messages={messages}
+            reconnectAttempt={reconnectAttempt}
+            runtime={runtime}
+            onSteerSubagent={onSteerSubagent}
+            onStopSubagent={onStopSubagent}
+          />
         ) : null}
         {messages.length === 0 ? (
           <Reanimated.View

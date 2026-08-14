@@ -13,6 +13,19 @@ class RecoverableHostedFrameError extends Error {
   readonly name = 'RecoverableHostedFrameError';
 }
 
+export interface HostedRuntimeMetadata {
+  component_id?: string;
+  parent_component_id?: string;
+  provider_refs: string[];
+  dependency_state: Record<string, unknown>;
+  lifecycle_state?: string;
+  effect_scope_id?: string;
+  plan_node_id?: string;
+  artifact_refs: string[];
+  contract_revision?: string;
+  policy_snapshot_hash?: string;
+}
+
 export interface HostedLifecycleEvent {
   event_id: string;
   cursor: number;
@@ -26,6 +39,7 @@ export interface HostedLifecycleEvent {
   occurred_at: number;
   idempotency_key: string;
   payload: Record<string, unknown>;
+  runtime?: HostedRuntimeMetadata;
   schema_version: typeof HOSTED_EVENT_SCHEMA_VERSION;
 }
 
@@ -277,6 +291,7 @@ function parseLifecycleEvents(value: unknown): HostedLifecycleEvent[] {
     const eventCursor = strictNonNegativeInteger(event.cursor);
     const sequence = strictNonNegativeInteger(event.sequence);
     const occurredAt = strictNonNegativeInteger(event.occurred_at);
+    const runtime = parseRuntimeMetadata(event.runtime);
     return {
       event_id: stringValue(event.event_id),
       cursor: eventCursor,
@@ -290,9 +305,73 @@ function parseLifecycleEvents(value: unknown): HostedLifecycleEvent[] {
       occurred_at: occurredAt,
       idempotency_key: stringValue(event.idempotency_key),
       payload: event.payload,
+      runtime,
       schema_version: HOSTED_EVENT_SCHEMA_VERSION,
     };
   });
+}
+
+function parseRuntimeMetadata(value: unknown): HostedRuntimeMetadata | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new RecoverableHostedFrameError(
+      'Hermes hosted event stream returned invalid runtime metadata',
+    );
+  }
+  const allowed = new Set([
+    'component_id',
+    'parent_component_id',
+    'provider_refs',
+    'dependency_state',
+    'lifecycle_state',
+    'effect_scope_id',
+    'plan_node_id',
+    'artifact_refs',
+    'contract_revision',
+    'policy_snapshot_hash',
+  ]);
+  const unknown = Object.keys(value).filter((key) => !allowed.has(key));
+  if (unknown.length) {
+    throw new RecoverableHostedFrameError(
+      `Hermes hosted event stream returned unsupported runtime field(s): ${unknown.join(', ')}`,
+    );
+  }
+  const stringField = (name: string): string | undefined => {
+    if (value[name] === undefined) return undefined;
+    if (typeof value[name] !== 'string') {
+      throw new RecoverableHostedFrameError(
+        `Hermes hosted event stream returned invalid runtime.${name}`,
+      );
+    }
+    return stringValue(value[name]) || undefined;
+  };
+  const listField = (name: 'provider_refs' | 'artifact_refs'): string[] => {
+    if (value[name] === undefined) return [];
+    if (!Array.isArray(value[name]) || value[name].some((item) => typeof item !== 'string')) {
+      throw new RecoverableHostedFrameError(
+        `Hermes hosted event stream returned invalid runtime.${name}`,
+      );
+    }
+    return value[name].map((item) => stringValue(item)).filter(Boolean).slice(0, 100);
+  };
+  const dependencyState = value.dependency_state;
+  if (dependencyState !== undefined && !isRecord(dependencyState)) {
+    throw new RecoverableHostedFrameError(
+      'Hermes hosted event stream returned invalid runtime.dependency_state',
+    );
+  }
+  return {
+    component_id: stringField('component_id'),
+    parent_component_id: stringField('parent_component_id'),
+    provider_refs: listField('provider_refs'),
+    dependency_state: dependencyState ? { ...dependencyState } : {},
+    lifecycle_state: stringField('lifecycle_state'),
+    effect_scope_id: stringField('effect_scope_id'),
+    plan_node_id: stringField('plan_node_id'),
+    artifact_refs: listField('artifact_refs'),
+    contract_revision: stringField('contract_revision'),
+    policy_snapshot_hash: stringField('policy_snapshot_hash'),
+  };
 }
 
 function preflightFrameIntegrity(

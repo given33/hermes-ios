@@ -32,6 +32,9 @@ export interface CodingPiActivity {
   /** Streaming tail emitted by Pi while a tool is still running. */
   partialResult?: unknown;
   intent?: string;
+  callId?: string;
+  parentCallId?: string;
+  presentationMeta?: Record<string, unknown>;
 }
 
 export function isRecord(value: unknown): value is HermesCodingPiJson {
@@ -201,6 +204,13 @@ export function snapshotActivities(snapshot: HermesCodingPiSnapshot): CodingPiAc
       result,
       status: failed ? 'error' : 'done',
       updatedAt: numberValue(result.timestamp) || existing.updatedAt || now,
+      callId: stringValue(result.callId, stringValue(result.call_id)) || existing.callId,
+      parentCallId: stringValue(result.parentCallId, stringValue(result.parent_call_id)) || existing.parentCallId,
+      presentationMeta: isRecord(result.presentationMeta)
+        ? result.presentationMeta
+        : isRecord(result.presentation_meta)
+          ? result.presentation_meta
+          : existing.presentationMeta,
     });
   }
 

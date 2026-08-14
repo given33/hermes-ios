@@ -61,6 +61,9 @@ import {
   useRelayCheckAction,
 } from './chat/useChatPageActions';
 import { useChatAttachmentLifecycle } from './chat/useChatAttachmentLifecycle';
+import { buildPreviewComposerProps } from './chat/preview-composer-props';
+import { createHostedSubagentControlActions } from './chat/hosted-subagent-controls';
+// OpenMinis/OpenMinis@9cf3a855 component boundary is preserved.
 const HOSTED_TURN_VISIBILITY_GRACE_MS = 20_000;
 const RECONNECT_MAX_ATTEMPTS = 5;
 const HOSTED_TURN_REQUEST_TIMEOUT_MS = 20_000;
@@ -572,7 +575,7 @@ export function ChatPreviewPage({
     replayDurableOutboxes,
   });
 
-  const applyLiveHostedEvents = useHostedLifecycleEventApplication({
+  const hostedLifecycleApplication = useHostedLifecycleEventApplication({
     cacheOwner,
     firstTokenAtRef,
     isChinese,
@@ -585,13 +588,19 @@ export function ChatPreviewPage({
     setSending,
     updatePendingPhase,
   });
-
+  const hostedSubagentControls = createHostedSubagentControlActions({
+    cloudApi,
+    conversationId: activeConversationIdRef.current || activeConversationId,
+    isChinese,
+    notify,
+    turnId: activeHostedTurnIdRef.current || hostedLifecycleApplication.runtime?.turnId || '',
+  });
   useHostedConversationStream({
     accountGenerationRef: hostedAccountGenerationRef,
     activeConversationId,
     activeConversationIdRef,
     applyConversation,
-    applyLifecycleEvents: applyLiveHostedEvents,
+    applyLifecycleEvents: hostedLifecycleApplication,
     cacheOwner,
     cloudApi,
     cursorRef: hostedEventCursorRef,
@@ -611,6 +620,7 @@ export function ChatPreviewPage({
     ),
     loadConversation,
     requestTimeoutMs: HOSTED_TURN_REQUEST_TIMEOUT_MS,
+    resetLifecycleRuntime: hostedLifecycleApplication.reset,
   });
 
   const {
@@ -709,10 +719,8 @@ export function ChatPreviewPage({
     setAttachmentsOpen,
     updateAttachments,
   });
-
   const chatFeatureModes = useChatFeatureModes({ activeConversationId, cacheOwner, client, conversations, deleteConversations, fixtureMode, isChinese, navigate, notify, profile, refreshConversationHistory, selectConversation });
   const { activeHistoryId, agentGroupController, chatMode, codingPiCollabController, codingPiController, deleteHistoryItems, historyConversations, refreshUnifiedHistory, selectHistoryItem, setChatMode } = chatFeatureModes;
-
   return (
     <>
       <ChatPageShell
@@ -730,76 +738,51 @@ export function ChatPreviewPage({
       backgroundColor={tokens.colors.background}
       compact={compact}
       composerKeyboardStyle={composerKeyboardStyle}
-      composerProps={{
-        actions: {
-          onCancelHostedTurn: () => { void cancelActiveHostedTurn(); },
-          onContentChange: (next) => {
-            const previous = contentRef.current;
-            if (isLargePaste(previous, next)) {
-              const conversationId = activeConversationIdRef.current;
-              try {
-                const prepared = appendLargePastedText(next);
-                if (!prepared) return;
-                if (
-                  contentRef.current !== previous
-                  || activeConversationIdRef.current !== conversationId
-                ) {
-                  cleanupAttachmentSources([prepared.attachment]);
-                  return;
-                }
-                updateAttachments((current) => [...current, prepared.attachment]);
-                contentRef.current = prepared.marker;
-                setContent(prepared.marker);
-                setSlashMenuOpen(false);
-              } catch (error) {
-                notify(serverFailure(error, isChinese));
-              }
-              return;
-            }
-            contentRef.current = next;
-            setContent(next);
-            setSlashMenuOpen(next.trimStart().startsWith('/'));
-          },
-          onFocus: () => {
-            keyboardAvoidanceEnabled.value = 1;
-            autoFollowStreamRef.current = true;
-            keepLatestVisible(false, true);
-          },
-          onOpenAttachmentPicker: openAttachmentPicker,
-          onPreviewAttachment: (attachment) => { void previewAttachment(attachment); },
-          onRemoveAttachment: removeAttachment,
-          onSelectSlashCommand: selectSlashCommand,
-          onSend: requestSend,
-          onShareAttachment: (attachment) => { void shareAttachment(attachment); },
-          onTakePhoto: () => { void pickPhoto(true); },
-          onCancelVoiceInput: () => { void cancelVoiceInput(); },
-          onStartVoiceInput: () => { void startVoiceInput(); },
-          onStopVoiceInput: () => { void stopVoiceInput(); },
-          onToggleReadRepliesAloud: toggleReadRepliesAloud,
-        },
-        inputRef: composerInputRef,
-        model: {
-          attachments,
-          canCancelHostedTurn,
-          canSend,
-          cancellingHostedTurn,
-          collaborationState,
-          content,
-          filteredSlashCommands,
-          hostedRunning,
-          inputFontSize,
-          isChinese,
-          pendingPhase,
-          readRepliesAloud,
-          reconnectAttempt,
-          sending,
-          slashMenuOpen,
-          voiceDurationMs,
-          voiceError,
-          voicePreview,
-          voiceState,
-        },
-      }}
+      composerProps={buildPreviewComposerProps({
+        activeConversationIdRef,
+        appendLargePastedText,
+        attachments,
+        autoFollowStreamRef,
+        canCancelHostedTurn,
+        canSend,
+        cancelActiveHostedTurn,
+        cancellingHostedTurn,
+        cleanupAttachmentSources,
+        collaborationState,
+        composerInputRef,
+        content,
+        contentRef,
+        filteredSlashCommands,
+        hostedRunning,
+        inputFontSize,
+        isChinese,
+        keepLatestVisible,
+        keyboardAvoidanceEnabled,
+        notify,
+        openAttachmentPicker,
+        pendingPhase,
+        pickPhoto,
+        previewAttachment,
+        readRepliesAloud,
+        reconnectAttempt,
+        removeAttachment,
+        requestSend,
+        selectSlashCommand,
+        sending,
+        setContent,
+        setSlashMenuOpen,
+        shareAttachment,
+        slashMenuOpen,
+        updateAttachments,
+        voiceDurationMs,
+        voiceError,
+        voicePreview,
+        voiceState,
+        cancelVoiceInput,
+        startVoiceInput,
+        stopVoiceInput,
+        toggleReadRepliesAloud,
+      })}
       headerProps={{
         chatMode,
         collaborationState,
@@ -886,11 +869,13 @@ export function ChatPreviewPage({
           )));
           void sendIntervention(target ? `@${target} 选择：${text}` : `选择：${text}`);
         },
+        ...hostedSubagentControls,
         onScroll: handleStreamScroll,
         onToggleSpeech: toggleMessageSpeech,
         pendingPhase,
         pendingStartedAt,
         reconnectAttempt,
+        runtime: hostedLifecycleApplication.runtime,
         safeAreaBottom,
         sending,
         showScrollToBottom,
@@ -911,6 +896,3 @@ export function ChatPreviewPage({
     </>
   );
 }
-
-// Component structure ported from OpenMinis AIChatView.inputBar at
-// OpenMinis/OpenMinis@9cf3a855. See THIRD_PARTY_NOTICES.md (GPL-3.0).

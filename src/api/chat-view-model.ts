@@ -1303,6 +1303,11 @@ function activityFromRecord(
     || stringValue(item.activity_id)
     || stringValue(item.tool_id)
     || stringValue(item.seq);
+  const rawPresentation = isRecord(item.presentation_meta)
+    ? item.presentation_meta
+    : isRecord(item.presentationMeta)
+      ? item.presentationMeta
+      : undefined;
   return {
     category,
     completedAt: completedAt || undefined,
@@ -1336,6 +1341,26 @@ function activityFromRecord(
     severity: stringValue(item.severity) || undefined,
     agentName: stringValue(item.agent_name) || undefined,
     reworkRound: numberValue(item.rework_round) || undefined,
+    callId: stringValue(item.call_id) || undefined,
+    parentCallId: stringValue(item.parent_call_id) || undefined,
+    presentationMeta: rawPresentation
+      ? {
+        view: stringValue(rawPresentation.view) || undefined,
+        title: stringValue(rawPresentation.title) || undefined,
+        summary: stringValue(rawPresentation.summary) || undefined,
+        replayable: typeof rawPresentation.replayable === 'boolean'
+          ? rawPresentation.replayable
+          : undefined,
+        artifactRefs: Array.isArray(rawPresentation.artifact_refs)
+          ? rawPresentation.artifact_refs.map((value) => stringValue(value)).filter(Boolean)
+          : Array.isArray(rawPresentation.artifactRefs)
+            ? rawPresentation.artifactRefs.map((value) => stringValue(value)).filter(Boolean)
+            : undefined,
+        rendererVersion: stringValue(rawPresentation.renderer_version)
+          || stringValue(rawPresentation.rendererVersion)
+          || undefined,
+      }
+      : undefined,
   };
 }
 
@@ -1364,6 +1389,9 @@ function mergeActivity(
     severity: next.severity || current.severity,
     agentName: next.agentName || current.agentName,
     reworkRound: next.reworkRound ?? current.reworkRound,
+    callId: next.callId || current.callId,
+    parentCallId: next.parentCallId || current.parentCallId,
+    presentationMeta: next.presentationMeta || current.presentationMeta,
   };
 }
 

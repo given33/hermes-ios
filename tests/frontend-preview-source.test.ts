@@ -55,6 +55,9 @@ test('frontend preview renders every customized route and authenticated builds m
   const previewSources = [
     app,
     read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
+    read('src/studio/chat/chat-role-activity.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
     read('src/preview/PreviewCorePages.tsx'),
     read('src/preview/PreviewAutomationPages.tsx'),
     read('src/preview/PreviewSettingsPages.tsx'),
@@ -183,6 +186,8 @@ test('native runtime adapts spatial and looping motion to the OS Reduce Motion s
     read('src/components/ui/NativeListItem.tsx'),
     read('src/studio/FrontendPreviewApp.tsx'),
     read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
+    read('src/studio/chat/chat-role-activity.tsx'),
     read('src/studio/PreviewPrimitives.tsx'),
     read('modules/hermes-live-blur/ios/HermesLiquidGlassView.swift'),
   ].join('\n');
@@ -252,6 +257,8 @@ test('chat preview preserves the customized collaboration single-chat contract',
   const app = read('src/studio/FrontendPreviewApp.tsx');
   const chat = [
     read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
+    read('src/studio/chat/chat-role-activity.tsx'),
     read('src/studio/chat/useChatPageActions.ts'),
     read('src/studio/chat/ChatPresentation.tsx'),
     read('src/studio/chat/ChatCollaborationPresentation.tsx'),
@@ -585,6 +592,8 @@ test('mobile shell remains full bleed and keeps the WebUI sidebar readable witho
   const app = read('src/studio/FrontendPreviewApp.tsx');
   const chat = [
     read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
+    read('src/studio/chat/chat-role-activity.tsx'),
     read('src/studio/chat/ChatPresentation.tsx'),
     read('src/studio/chat/ChatHeader.tsx'),
     read('src/studio/chat/ChatMessageStream.tsx'),
@@ -688,6 +697,8 @@ test('selection, search, switch, and progress controls use UIKit in signed build
 test('preview share, import, export, and model selection open iOS system surfaces', () => {
   const chat = [
     read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
+    read('src/studio/chat/chat-role-activity.tsx'),
     read('src/studio/chat/useChatPageState.ts'),
     read('src/studio/chat/useChatPageActions.ts'),
     read('src/studio/chat/ChatComposer.tsx'),
@@ -722,6 +733,8 @@ test('preview share, import, export, and model selection open iOS system surface
 test('chat continuation keeps the opened conversation Profile on every send step', () => {
   const chat = [
     read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
+    read('src/studio/chat/chat-role-activity.tsx'),
     read('src/studio/chat/useHostedSendController.ts'),
     read('src/studio/chat/useHostedTurnDeliveryService.ts'),
   ].join('\n');
@@ -740,6 +753,8 @@ test('chat continuation keeps the opened conversation Profile on every send step
 test('stale conversation selection is removed instead of surfacing another 404', () => {
   const chat = [
     read('src/studio/PreviewChatPage.tsx'),
+    read('src/studio/chat/preview-composer-props.ts'),
+    read('src/studio/chat/chat-role-activity.tsx'),
     read('src/studio/chat/useConversationActionsController.ts'),
   ].join('\n');
   assert.match(chat, /if \(isConversationNotFoundError\(error\)\) \{/);

@@ -981,6 +981,62 @@ export class HermesCloudApi {
     );
   }
 
+  listHostedSubagents(conversationId: string, turnId: string, signal?: AbortSignal) {
+    return this.conversations.listHostedSubagents(conversationId, turnId, signal);
+  }
+
+  getHostedTrajectory(
+    conversationId: string,
+    turnId: string,
+    detailLevel: 'summary' | 'full' = 'summary',
+    maxRecords = 500,
+    signal?: AbortSignal,
+  ) {
+    return this.conversations.getHostedTrajectory(
+      conversationId,
+      turnId,
+      detailLevel,
+      maxRecords,
+      signal,
+    );
+  }
+
+  steerHostedSubagent(
+    conversationId: string,
+    turnId: string,
+    subagentId: string,
+    message: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    return this.conversations.steerHostedSubagent(
+      conversationId,
+      turnId,
+      subagentId,
+      message,
+      requestId,
+      signal,
+    );
+  }
+
+  stopHostedSubagent(
+    conversationId: string,
+    turnId: string,
+    subagentId: string,
+    reason: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    return this.conversations.stopHostedSubagent(
+      conversationId,
+      turnId,
+      subagentId,
+      reason,
+      requestId,
+      signal,
+    );
+  }
+
   consumeConversationAttachment<T>(
     downloadUrl: string,
     consume: (response: Response, signal: AbortSignal) => Promise<T>,

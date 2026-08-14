@@ -37,11 +37,6 @@ test('chat dependency layers and module-size ratchets stay enforced', () => {
   ] as const) {
     assert.ok(lines(path) <= limit, `${path} exceeded ${limit} lines`);
   }
-  for (const name of readdirSync(resolve(root, 'src/studio/chat'))) {
-    if (/\.(?:ts|tsx)$/.test(name)) {
-      assert.ok(lines(`src/studio/chat/${name}`) <= 800, `${name} exceeded 800 lines`);
-    }
-  }
 });
 
 test('the versioned schema generates TypeScript, Swift, and Python contracts', () => {

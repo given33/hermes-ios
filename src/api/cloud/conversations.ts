@@ -305,6 +305,78 @@ export class HermesConversationsCloudApi {
     );
   }
 
+  listHostedSubagents(conversationId: string, turnId: string, signal?: AbortSignal) {
+    return this.transport.request<{
+      turn_id: string;
+      account_generation: string;
+      subagents: JsonRecord[];
+    }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}`
+      + `/hosted-turns/${encodeURIComponent(turnId)}/subagents`,
+      { signal },
+    );
+  }
+
+  getHostedTrajectory(
+    conversationId: string,
+    turnId: string,
+    detailLevel: 'summary' | 'full' = 'summary',
+    maxRecords = 500,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.request<{
+      turn_id: string;
+      account_generation: string;
+      trajectory: JsonRecord;
+    }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}`
+      + `/hosted-turns/${encodeURIComponent(turnId)}/trajectory`,
+      {
+        query: {
+          detailLevel,
+          maxRecords: String(Math.min(1_000, Math.max(50, Math.floor(maxRecords)))),
+        },
+        signal,
+      },
+    );
+  }
+
+  steerHostedSubagent(
+    conversationId: string,
+    turnId: string,
+    subagentId: string,
+    message: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.json<JsonRecord>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}`
+      + `/hosted-turns/${encodeURIComponent(turnId)}/subagents/`
+      + `${encodeURIComponent(subagentId)}/steer`,
+      'POST',
+      { message, request_id: requestId },
+      { signal },
+    );
+  }
+
+  stopHostedSubagent(
+    conversationId: string,
+    turnId: string,
+    subagentId: string,
+    reason: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.json<JsonRecord>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}`
+      + `/hosted-turns/${encodeURIComponent(turnId)}/subagents/`
+      + `${encodeURIComponent(subagentId)}/stop`,
+      'POST',
+      { reason, request_id: requestId },
+      { signal },
+    );
+  }
+
   async uploadConversationAttachment(
     conversationId: string,
     upload: NativeUpload,
