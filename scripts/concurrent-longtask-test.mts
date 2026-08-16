@@ -25,7 +25,7 @@ if (!Number.isFinite(MAX_SECONDS) || MAX_SECONDS < 30 || MAX_SECONDS > 3600) thr
 const BASE = "https://daxueshenmai.top";
 const auth = new MobileAuthApiClient(BASE);
 const session = await auth.login(user, password, {
-  id: "codex-concurrency",
+  id: `codex-concurrency-${Date.now()}`,
   name: "iPhone",
   model: "iPhone",
   osVersion: "iOS 18",
@@ -35,11 +35,22 @@ let currentSession = session;
 let client = new HermesApiClient(BASE, currentSession.accessToken);
 let cloud = new HermesCloudApi(client);
 
+// The mobile refresh token rotates on every use. When multiple pending
+// conversations hit 401 in the same poll, concurrent refreshes race and the
+// second one presents an already-rotated token -> "Invalid refresh token".
+// Serialize all refreshes through one promise chain.
+let refreshInFlight: Promise<void> | null = null;
 async function refreshSessionIfNeeded() {
-  const refreshed = await auth.refresh(currentSession.refreshToken);
-  currentSession = refreshed;
-  client = new HermesApiClient(BASE, currentSession.accessToken);
-  cloud = new HermesCloudApi(client);
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const refreshed = await auth.refresh(currentSession.refreshToken);
+    currentSession = refreshed;
+    client = new HermesApiClient(BASE, currentSession.accessToken);
+    cloud = new HermesCloudApi(client);
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
 }
 
 const now = Date.now();
