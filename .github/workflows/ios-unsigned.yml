@@ -182,6 +182,36 @@ jobs:
                       f"Main Release entitlement {key} mismatch: {entitlements.get(key)!r}"
                   )
           PY
+          # The Share Extension must reach the SAME keychain group as the main
+          # app (shared queue cipher) plus the hermes app group. The extension
+          # reads the group via its Info.plist HermesSharedKeychainAccessGroup.
+          APPEX_ENTITLEMENTS="$(find ios -name 'HermesShareExtension.entitlements' -print -quit)"
+          test -f "$APPEX_ENTITLEMENTS" || { echo 'Share Extension entitlements file not found under ios/.' >&2; exit 1; }
+          plutil -lint "$APPEX_ENTITLEMENTS"
+          python3 - "$APPEX_ENTITLEMENTS" <<'PY'
+          import plistlib
+          import sys
+
+          with open(sys.argv[1], "rb") as handle:
+              entitlements = plistlib.load(handle)
+          groups = entitlements.get("com.apple.security.application-groups") or []
+          if "group.app.sunstone1029.fig1171.hermes" not in groups:
+              raise SystemExit(f"Share Extension app group mismatch: {groups!r}")
+          keychain = entitlements.get("keychain-access-groups") or []
+          if "$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared" not in keychain:
+              raise SystemExit(
+                  f"Share Extension keychain-access-groups mismatch: {keychain!r}; "
+                  "the extension must share the main app's keychain group so the "
+                  "sealed trigger queue is readable by both processes"
+              )
+          PY
+          APPEX_INFO="$(dirname "$APPEX_ENTITLEMENTS")/Info.plist"
+          test -f "$APPEX_INFO" || { echo 'Share Extension Info.plist not found.' >&2; exit 1; }
+          plutil -lint "$APPEX_INFO"
+          plutil -extract HermesSharedKeychainAccessGroup raw -o - "$APPEX_INFO" | grep -q 'app.sunstone1029.fig1171.hermes.shared' || {
+            echo 'Share Extension Info.plist lacks HermesSharedKeychainAccessGroup.' >&2
+            exit 1
+          }
       - name: Verify native context autolinking
         run: node scripts/verify-ios-native-context.mjs --ios ios
       - name: Compile without code signing
