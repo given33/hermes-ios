@@ -1158,7 +1158,12 @@ export function useAgentGroupChatController({
     detailFingerprintRef.current.delete(roomId);
     if (fixtureMode) return;
     void refreshRoom(roomId);
-  }, [fixtureMode, refreshRoom]);
+    // Connect the REST+SSE wake bus on first room entry: typing presence,
+    // instant message delivery, and room_updated refresh signals ride it.
+    void connectSocket()
+      .then((socket) => (socket ? joinRoomOnSocket(roomId, socket) : undefined))
+      .catch(() => undefined);
+  }, [connectSocket, fixtureMode, joinRoomOnSocket, refreshRoom]);
 
   const setDraft = useCallback((roomId: string, value: string) => {
     draftsRef.current = { ...draftsRef.current, [roomId]: value };
@@ -1874,6 +1879,11 @@ export function useAgentGroupChatController({
       if (fixtureMode && !roomsRef.current.length) applyRoomList(fixtureRooms());
       const firstRoomId = activeRoomIdRef.current || roomsRef.current[0]?.id;
       if (firstRoomId) selectRoom(firstRoomId);
+      else if (roomsRef.current.length) {
+        // Rooms loaded but none selected: the bus still needs connecting so
+        // room_updated wakes drive the list refresh.
+        void connectSocket().catch(() => undefined);
+      }
     })();
   }, [applyRoomList, conversationDeleteReplayService, enabled, fixtureMode, hydrateCachedRooms, refresh, selectRoom]);
 
