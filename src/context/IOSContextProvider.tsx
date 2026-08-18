@@ -248,6 +248,8 @@ export function IOSContextProvider({
         api,
         capture.signal,
         () => flushPendingEvents(capture),
+        ownerScope,
+        accountGeneration,
       );
       const storedCommands = (await runCurrent(
         () => HermesIOSContext.readPendingCommands(),
@@ -431,7 +433,13 @@ export function IOSContextProvider({
       if (agentTriggersRunning || !current()) return;
       agentTriggersRunning = true;
       try {
-        await drainPendingAgentTriggers(runCurrent, cloud, ownerScope, deviceId);
+        await drainPendingAgentTriggers(
+          runCurrent,
+          cloud,
+          ownerScope,
+          accountGeneration,
+          deviceId,
+        );
       } finally {
         agentTriggersRunning = false;
       }
@@ -1531,10 +1539,17 @@ async function drainPendingTaskControls(
   api: IOSIntelligenceApi,
   signal: AbortSignal,
   flushPendingEvents: () => Promise<void>,
+  ownerScope: string,
+  accountGeneration: string,
 ): Promise<void> {
   const controls = await runCurrent(() => HermesIOSContext.readPendingTaskControls());
   for (const control of controls.slice(0, 20)) {
     const requestId = typeof control.requestID === 'string' ? control.requestID : '';
+    if (requestId && !queuedIntentMatchesOwner(control, ownerScope, accountGeneration)) {
+      // Never execute an unbound or stale control under the current account.
+      await runCurrent(() => HermesIOSContext.consumePendingTaskControl(requestId)).catch(() => false);
+      continue;
+    }
     const taskID = typeof control.taskID === 'string' ? control.taskID : '';
     const action = control.action === 'cancel'
       || control.action === 'retry'
@@ -1542,7 +1557,12 @@ async function drainPendingTaskControls(
       || control.action === 'resume'
       ? control.action
       : null;
-    if (!requestId || !taskID || !action) continue;
+    if (!requestId || !taskID || !action) {
+      if (requestId) {
+        await runCurrent(() => HermesIOSContext.consumePendingTaskControl(requestId)).catch(() => false);
+      }
+      continue;
+    }
     try {
       await runCurrent(() => api.controlRuntimeTask(taskID, {
         action,
@@ -1568,11 +1588,18 @@ async function drainPendingAgentTriggers(
   runCurrent: <T>(operation: () => Promise<T>) => Promise<T>,
   cloud: HermesCloudApi,
   ownerScope: string,
+  accountGeneration: string,
   deviceId: string,
 ): Promise<void> {
   const pending = await runCurrent(() => HermesIOSContext.readPendingAgentTriggers());
   for (const trigger of pending.slice(0, 10)) {
     const requestID = typeof trigger.requestID === 'string' ? trigger.requestID.trim() : '';
+    if (requestID && !queuedIntentMatchesOwner(trigger, ownerScope, accountGeneration)) {
+      // A queue item from a previous account (or an old unscoped build) is
+      // consumed and dropped; it must never reuse its sessionID in this one.
+      await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID)).catch(() => false);
+      continue;
+    }
     const kind = typeof trigger.kind === 'string' ? trigger.kind.trim().toLowerCase() : '';
     const rawContent = typeof trigger.content === 'string' ? trigger.content.trim() : '';
     const sessionID = typeof trigger.sessionID === 'string' ? trigger.sessionID.trim() : '';
@@ -1722,6 +1749,26 @@ async function drainPendingAgentTriggers(
     }));
     await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
   }
+}
+
+function queuedIntentMatchesOwner(
+  value: Record<string, unknown>,
+  ownerScope: string,
+  accountGeneration: string,
+): boolean {
+  const queuedOwner = typeof value.ownerScope === 'string'
+    ? value.ownerScope
+    : typeof value.owner_scope === 'string'
+      ? value.owner_scope
+      : '';
+  const queuedGeneration = typeof value.accountGeneration === 'string'
+    ? value.accountGeneration
+    : typeof value.account_generation === 'string'
+      ? value.account_generation
+      : '';
+  return Boolean(ownerScope && accountGeneration)
+    && queuedOwner === ownerScope
+    && queuedGeneration === accountGeneration;
 }
 
 function permissionForCommand(key: string): IOSPermissionKey | null {

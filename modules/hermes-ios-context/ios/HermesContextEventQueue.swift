@@ -54,6 +54,19 @@ final class HermesContextEventQueue {
     }
   }
 
+  /// Identity used to fence App Intent and shortcut requests.  These values
+  /// are read from the same serialized relay state as context events, so an
+  /// extension cannot accidentally attach a request to a stale JS session.
+  var currentOwnerIdentity: HermesOwnerIdentity {
+    ioQueue.sync {
+      let state = loadRelayStateUnlocked()
+      return HermesOwnerIdentity(
+        ownerScope: state["ownerScope"] as? String ?? "",
+        accountGeneration: state["serverAccountGeneration"] as? String ?? ""
+      )
+    }
+  }
+
   var hasCurrentOwner: Bool {
     ioQueue.sync {
       let scope = loadRelayStateUnlocked()["ownerScope"] as? String ?? ""
@@ -906,6 +919,15 @@ struct HermesOwnerScopeDeletionResult {
   let accountGeneration: String
   let lifecycleEpoch: Int
   let outcome: HermesOwnerScopeDeletionOutcome
+}
+
+struct HermesOwnerIdentity: Equatable {
+  let ownerScope: String
+  let accountGeneration: String
+
+  var isBound: Bool {
+    !ownerScope.isEmpty && !accountGeneration.isEmpty
+  }
 }
 
 enum HermesOwnerScopeDeletionOutcome: Equatable {

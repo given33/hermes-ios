@@ -679,6 +679,7 @@ test('native relay covers durable cursors, background services, health, watch, n
     'removePendingCommand',
     'readPendingTaskControls',
     'consumePendingTaskControl',
+    'clearPendingTaskControls',
     'setOwnerScope',
     'activateOwnerScope',
     'deleteOwnerScope',
@@ -842,6 +843,13 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(appIntents, /func pending()/);
   assert.match(appIntents, /func consume\(requestID: String\)/);
   assert.match(appIntents, /allowedActions/);
+  assert.match(appIntents, /AES\.GCM\.seal/);
+  assert.match(appIntents, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(appIntents, /HermesSharedKeychainAccessGroup/);
+  assert.match(appIntents, /"ownerScope": identity\.ownerScope/);
+  assert.match(appIntents, /"accountGeneration": identity\.accountGeneration/);
+  assert.match(appIntents, /discardMismatched\(ownerScope: String, accountGeneration: String\)/);
+  assert.doesNotMatch(appIntents, /defaults\.set\(Array\(entries\.suffix\(50\)\), forKey: key\)/);
   assert.match(appIntents, /HermesVoiceCaptureIntent/);
   assert.match(read('ios/HermesVoiceService.swift'), /startAgentCapture/);
   assert.match(read('ios/HermesVoiceService.swift'), /kind: "voice-capture"/);
@@ -871,7 +879,7 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
     'requestHealthWriteAuthorization', 'writeHealthSampleForCommand', 'writeHealthSamplesForCommand', 'deleteHealthSamplesForCommand',
     'startAgentVoiceCapture', 'configureSessionLock', 'getSessionLockStatus', 'unlockSession', 'lockSession',
     'getDiagnosticsStatus', 'startDiagnostics', 'stopDiagnostics', 'openURL', 'openURLForCommand',
-    'readPendingAgentTriggers', 'consumePendingAgentTrigger',
+    'readPendingAgentTriggers', 'consumePendingAgentTrigger', 'clearPendingAgentTriggers',
     'getMediaSnapshot', 'controlMedia', 'getBluetoothState', 'scanBluetooth',
     'getHomeKitSnapshot', 'setHomeKitValue', 'startNFCReader', 'scanQRCode', 'getNativeActionCapabilities',
   ]) {
@@ -895,6 +903,9 @@ test('native action bridge exposes contact, photo, media, radio, and HomeKit bou
   assert.match(read('ios/HermesAppIntents.swift'), /HermesSummarizeMeetingIntent/);
   assert.match(read('ios/HermesAppIntents.swift'), /HermesClipboardToEmailIntent/);
   assert.match(provider, /drainPendingAgentTriggers/);
+  assert.match(provider, /queuedIntentMatchesOwner/);
+  assert.match(provider, /queuedOwner === ownerScope/);
+  assert.match(provider, /queuedGeneration === accountGeneration/);
   assert.match(provider, /agentTriggersRunning/);
   assert.match(provider, /ios-calendar:\(create\|list\|calendars\|freebusy\|update\|delete\)/);
   assert.match(provider, /ios-reminders:\(create\|list\|update\|complete\|delete\)/);

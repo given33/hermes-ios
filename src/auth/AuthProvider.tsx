@@ -774,6 +774,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
     if (operationGeneration === null) return;
     try {
       await runOptionalAuthEffect(clearAccountNotificationsBeforeAuthExit);
+      // App Intent and Live Activity queues contain account-bound session IDs
+      // and prompts.  Logout must discard them before another account can be
+      // activated on this device.
+      await runOptionalAuthEffect(async () => {
+        if (!hasNativeIOSContext) return;
+        await HermesIOSContext.clearPendingAgentTriggers?.();
+        await HermesIOSContext.clearPendingTaskControls?.();
+      });
       if (state.status === 'authenticated') {
         const connection = state.connection;
         const logoutClient = new HermesApiClient(

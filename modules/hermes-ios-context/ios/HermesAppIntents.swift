@@ -1,11 +1,87 @@
 import AppIntents
+import CryptoKit
 import Foundation
+import Security
 import UIKit
+
+/// App Intents can run in an extension process.  Their durable payload is
+/// therefore encrypted with a device-only Keychain key before it reaches the
+/// shared UserDefaults container.
+private enum HermesIntentQueueCipher {
+  private static let service = "app.hermes.intent-queue"
+  private static let account = "payload-key-v1"
+
+  static func seal(_ entries: [[String: Any]]) -> Data? {
+    guard JSONSerialization.isValidJSONObject(entries),
+          let clear = try? JSONSerialization.data(withJSONObject: entries),
+          let encrypted = try? AES.GCM.seal(clear, using: key()),
+          let combined = encrypted.combined else { return nil }
+    return combined
+  }
+
+  static func open(_ envelope: Data) -> [[String: Any]] {
+    guard let clear = try? AES.GCM.open(
+      AES.GCM.SealedBox(combined: envelope),
+      using: key()
+    ),
+    let value = try? JSONSerialization.jsonObject(with: clear),
+    let entries = value as? [[String: Any]] else { return [] }
+    return entries
+  }
+
+  private static func key() throws -> SymmetricKey {
+    if let existing = readKey(), existing.count == 32 {
+      return SymmetricKey(data: existing)
+    }
+    var bytes = Data(count: 32)
+    let randomStatus = bytes.withUnsafeMutableBytes { buffer in
+      SecRandomCopyBytes(kSecRandomDefault, 32, buffer.baseAddress!)
+    }
+    guard randomStatus == errSecSuccess else { throw HermesIntentQueueError.keyUnavailable }
+    var insert = keySelector()
+    insert[kSecValueData as String] = bytes
+    insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    let status = SecItemAdd(insert as CFDictionary, nil)
+    if status == errSecDuplicateItem, let existing = readKey(), existing.count == 32 {
+      return SymmetricKey(data: existing)
+    }
+    guard status == errSecSuccess else { throw HermesIntentQueueError.keyUnavailable }
+    return SymmetricKey(data: bytes)
+  }
+
+  private static func readKey() -> Data? {
+    var query = keySelector()
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+    query[kSecReturnData as String] = true
+    var result: CFTypeRef?
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+    return result as? Data
+  }
+
+  private static func keySelector() -> [String: Any] {
+    var selector: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+    ]
+    if let accessGroup = Bundle.main.object(forInfoDictionaryKey: "HermesSharedKeychainAccessGroup") as? String,
+       !accessGroup.isEmpty,
+       !accessGroup.contains("$(") {
+      selector[kSecAttrAccessGroup as String] = accessGroup
+    }
+    return selector
+  }
+}
+
+private enum HermesIntentQueueError: Error {
+  case keyUnavailable
+}
 
 final class HermesAgentTriggerStore {
   static let shared = HermesAgentTriggerStore()
   static let appGroup = "group.app.sunstone1029.fig1171.hermes"
-  private let key = "agent-trigger-inbox-v1"
+  private let key = "agent-trigger-inbox-v2"
+  private let legacyKey = "agent-trigger-inbox-v1"
   private let lock = NSLock()
 
   private init() {}
@@ -28,22 +104,26 @@ final class HermesAgentTriggerStore {
     guard allowed.contains(normalizedKind), (!normalizedContent.isEmpty || !attachments.isEmpty), normalizedContent.count <= 20_000 else {
       return nil
     }
+    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
+    guard identity.isBound else { return nil }
     let requestID = UUID().uuidString.lowercased()
     lock.lock()
     defer { lock.unlock() }
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-    var entries = defaults.array(forKey: key) as? [[String: Any]] ?? []
+    var entries = readEntries(defaults)
     var entry: [String: Any] = [
       "content": normalizedContent,
       "createdAt": Date().timeIntervalSince1970 * 1000,
       "kind": normalizedKind,
       "requestID": requestID,
+      "ownerScope": identity.ownerScope,
+      "accountGeneration": identity.accountGeneration,
     ]
     if let sessionID, !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { entry["sessionID"] = String(sessionID.prefix(256)) }
     if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { entry["model"] = String(model.prefix(128)) }
     if !attachments.isEmpty { entry["attachments"] = Array(attachments.prefix(10)) }
     entries.append(entry)
-    defaults.set(Array(entries.suffix(50)), forKey: key)
+    guard writeEntries(Array(entries.suffix(50)), defaults: defaults) else { return nil }
     return requestID
   }
 
@@ -51,7 +131,7 @@ final class HermesAgentTriggerStore {
     lock.lock()
     defer { lock.unlock() }
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-    return defaults.array(forKey: key) as? [[String: Any]] ?? []
+    return readEntries(defaults)
   }
 
   @discardableResult
@@ -61,10 +141,44 @@ final class HermesAgentTriggerStore {
     lock.lock()
     defer { lock.unlock() }
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-    let entries = defaults.array(forKey: key) as? [[String: Any]] ?? []
+    let entries = readEntries(defaults)
     let remaining = entries.filter { ($0["requestID"] as? String) != normalized }
     guard remaining.count != entries.count else { return false }
-    defaults.set(remaining, forKey: key)
+    return writeEntries(remaining, defaults: defaults)
+  }
+
+  func discardMismatched(ownerScope: String, accountGeneration: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
+    let entries = readEntries(defaults)
+    let matching = entries.filter {
+      ($0["ownerScope"] as? String) == ownerScope
+        && ($0["accountGeneration"] as? String) == accountGeneration
+    }
+    if matching.count != entries.count { _ = writeEntries(matching, defaults: defaults) }
+  }
+
+  func clear() {
+    lock.lock()
+    defer { lock.unlock() }
+    let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
+    defaults.removeObject(forKey: key)
+    defaults.removeObject(forKey: legacyKey)
+  }
+
+  private func readEntries(_ defaults: UserDefaults) -> [[String: Any]] {
+    // Plaintext v1 payloads are intentionally discarded during migration.
+    defaults.removeObject(forKey: legacyKey)
+    guard let envelope = defaults.data(forKey: key) else { return [] }
+    return HermesIntentQueueCipher.open(envelope)
+  }
+
+  @discardableResult
+  private func writeEntries(_ entries: [[String: Any]], defaults: UserDefaults) -> Bool {
+    guard let envelope = HermesIntentQueueCipher.seal(entries) else { return false }
+    defaults.set(envelope, forKey: key)
+    defaults.synchronize()
     return true
   }
 }
@@ -76,7 +190,8 @@ final class HermesAgentTriggerStore {
 final class HermesTaskControlStore {
   static let shared = HermesTaskControlStore()
   private let lock = NSLock()
-  private let key = "app.hermes.pending-task-controls"
+  private let key = "app.hermes.pending-task-controls-v2"
+  private let legacyKey = "app.hermes.pending-task-controls"
   private let allowedActions: Set<String> = ["pause", "resume", "cancel", "retry"]
 
   private init() {}
@@ -88,10 +203,12 @@ final class HermesTaskControlStore {
     guard !normalizedID.isEmpty, normalizedID.count <= 256,
           !normalizedID.contains("/"), !normalizedID.contains("\\"),
           allowedActions.contains(normalizedAction) else { return nil }
+    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
+    guard identity.isBound else { return nil }
     let requestID = UUID().uuidString.lowercased()
     lock.lock()
     defer { lock.unlock() }
-    var requests = UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []
+    var requests = readEntries()
     requests.removeAll {
       ($0["taskID"] as? String) == normalizedID
         && ($0["action"] as? String) == normalizedAction
@@ -101,16 +218,17 @@ final class HermesTaskControlStore {
       "createdAt": Date().timeIntervalSince1970 * 1000,
       "requestID": requestID,
       "taskID": normalizedID,
+      "ownerScope": identity.ownerScope,
+      "accountGeneration": identity.accountGeneration,
     ])
-    UserDefaults.standard.set(Array(requests.suffix(50)), forKey: key)
-    UserDefaults.standard.synchronize()
+    guard writeEntries(Array(requests.suffix(50))) else { return nil }
     return requestID
   }
 
   func pending() -> [[String: Any]] {
     lock.lock()
     defer { lock.unlock() }
-    return UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []
+    return readEntries()
   }
 
   @discardableResult
@@ -119,10 +237,40 @@ final class HermesTaskControlStore {
     guard !normalized.isEmpty else { return false }
     lock.lock()
     defer { lock.unlock() }
-    let requests = UserDefaults.standard.array(forKey: key) as? [[String: Any]] ?? []
+    let requests = readEntries()
     let remaining = requests.filter { ($0["requestID"] as? String) != normalized }
     guard remaining.count != requests.count else { return false }
-    UserDefaults.standard.set(remaining, forKey: key)
+    return writeEntries(remaining)
+  }
+
+  func discardMismatched(ownerScope: String, accountGeneration: String) {
+    lock.lock()
+    defer { lock.unlock() }
+    let requests = readEntries()
+    let matching = requests.filter {
+      ($0["ownerScope"] as? String) == ownerScope
+        && ($0["accountGeneration"] as? String) == accountGeneration
+    }
+    if matching.count != requests.count { _ = writeEntries(matching) }
+  }
+
+  func clear() {
+    lock.lock()
+    defer { lock.unlock() }
+    UserDefaults.standard.removeObject(forKey: key)
+    UserDefaults.standard.removeObject(forKey: legacyKey)
+  }
+
+  private func readEntries() -> [[String: Any]] {
+    UserDefaults.standard.removeObject(forKey: legacyKey)
+    guard let envelope = UserDefaults.standard.data(forKey: key) else { return [] }
+    return HermesIntentQueueCipher.open(envelope)
+  }
+
+  @discardableResult
+  private func writeEntries(_ entries: [[String: Any]]) -> Bool {
+    guard let envelope = HermesIntentQueueCipher.seal(entries) else { return false }
+    UserDefaults.standard.set(envelope, forKey: key)
     UserDefaults.standard.synchronize()
     return true
   }

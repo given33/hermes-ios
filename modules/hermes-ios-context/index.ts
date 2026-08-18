@@ -267,6 +267,7 @@ export interface IOSContextNativeModule {
   removePendingCommand(id: string): Promise<void>;
   readPendingTaskControls?(): Promise<Array<Record<string, unknown>>>;
   consumePendingTaskControl?(requestId: string): Promise<boolean>;
+  clearPendingTaskControls?(): Promise<boolean>;
   requestHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthSummary(start: number, end: number): Promise<IOSHealthSummary>;
@@ -406,6 +407,7 @@ export interface IOSContextNativeModule {
   openURLForCommand(commandId: string, url: string): Promise<Record<string, unknown>>;
   readPendingAgentTriggers(): Promise<Array<Record<string, unknown>>>;
   consumePendingAgentTrigger(requestId: string): Promise<boolean>;
+  clearPendingAgentTriggers?(): Promise<boolean>;
   getAgentShareAttachmentRootUri?(): string | null;
   deleteAgentShareAttachment?(filename: string): Promise<boolean>;
   getNativeActionCapabilities?(): Array<Record<string, unknown>>;
@@ -618,6 +620,8 @@ export const HermesIOSContext = {
   readPendingTaskControls: () => requireContextModule().readPendingTaskControls?.() ?? Promise.resolve([]),
   consumePendingTaskControl: (requestId: string) =>
     requireContextModule().consumePendingTaskControl?.(requestId) ?? Promise.resolve(false),
+  clearPendingTaskControls: () =>
+    requireContextModule().clearPendingTaskControls?.() ?? Promise.resolve(false),
   requestHealthAuthorization: () => requireContextModule().requestHealthAuthorization(),
   getHealthAuthorization: () => requireContextModule().getHealthAuthorization(),
   getHealthSummary: (start: number, end: number) =>
@@ -734,6 +738,8 @@ export const HermesIOSContext = {
   readPendingAgentTriggers: () => requireContextModule().readPendingAgentTriggers(),
   consumePendingAgentTrigger: (requestId: string) =>
     requireContextModule().consumePendingAgentTrigger(requestId),
+  clearPendingAgentTriggers: () =>
+    requireContextModule().clearPendingAgentTriggers?.() ?? Promise.resolve(false),
   getAgentShareAttachmentRootUri: (): string | null => {
     const module = requireContextModule();
     return typeof module.getAgentShareAttachmentRootUri === 'function'

@@ -75,11 +75,11 @@ export class ConversationCacheRepository {
     // A cold-start reader must not capture the pre-write index while another
     // facade is still persisting a newer transcript for this owner.
     await awaitConversationStorageWrites(normalizedOwner);
-    await Promise.allSettled([
-      previousCacheKey(normalizedOwner),
-      legacyEncodedCacheKey(normalizedOwner),
-      legacyHashedCacheKey(normalizedOwner),
-    ].map((key) => this.storage.removeItem(key)));
+    // v1/v2 were account-keyed snapshots before the v4 sharded layout. Read
+    // and validate them before touching the old keys. A successful v4 write
+    // is the commit point; cleanup is best-effort and therefore cannot make
+    // an otherwise usable offline history disappear.
+    const legacyFallback = await this.migrateLegacySnapshot(normalizedOwner);
     const epoch = this.state.stampEpochs.get(normalizedOwner) || 0;
     const index = parseCacheIndex(
       await this.storage.getItem(cacheKey(normalizedOwner)),
@@ -121,7 +121,67 @@ export class ConversationCacheRepository {
     return parseBlobSnapshot(
       await this.storage.getItem(blobCacheKey(normalizedOwner)),
       normalizedOwner,
-    );
+    ) || legacyFallback;
+  }
+
+  /**
+   * Migrate the account-scoped v1/v2 snapshots exactly once. Legacy v1 had
+   * both an encoded-owner key and a hash key; the payload owner is mandatory
+   * for both so a hash collision can never make one account consume another's
+   * transcript. Old keys are removed only after the v4 index write succeeds.
+   */
+  private async migrateLegacySnapshot(owner: string): Promise<ConversationCacheSnapshot | null> {
+    let fallback: ConversationCacheSnapshot | null = null;
+    await enqueueConversationStorageMaintenance(owner, async () => {
+      const currentIndex = parseCacheIndex(
+        await this.storage.getItem(cacheKey(owner)),
+        owner,
+      );
+      const legacyKeys = [
+        previousCacheKey(owner),
+        legacyEncodedCacheKey(owner),
+        legacyHashedCacheKey(owner),
+      ];
+      const entries = await Promise.all(legacyKeys.map(async (key) => ({
+        key,
+        raw: await this.storage.getItem(key),
+      })));
+      const valid = entries.flatMap(({ key, raw }) => {
+        const version = key.startsWith(`${PREVIOUS_CACHE_PREFIX}.`) ? 2 : 1;
+        const snapshot = parseLegacySnapshot(raw, owner, version);
+        return snapshot ? [{ key, snapshot }] : [];
+      });
+
+      // A valid v4 index is already authoritative. We can discard only
+      // validated legacy records for this owner; a colliding hash key with a
+      // different/malformed payload is intentionally left for its owner.
+      if (currentIndex) {
+        await Promise.allSettled(valid.map(({ key }) => this.storage.removeItem(key)));
+        return;
+      }
+      if (!valid.length) return;
+
+      fallback = mergeLegacySnapshots(valid.map(({ snapshot }) => snapshot), owner);
+      try {
+        await this.persistSnapshot(
+          owner,
+          fallback.conversations,
+          fallback.activeConversationId,
+        );
+      } catch {
+        // Keep the validated legacy snapshot readable while a storage write
+        // is temporarily unavailable. Crucially, no old key is removed here.
+        return;
+      }
+
+      const migratedIndex = parseCacheIndex(
+        await this.storage.getItem(cacheKey(owner)),
+        owner,
+      );
+      if (!migratedIndex) return;
+      await Promise.allSettled(valid.map(({ key }) => this.storage.removeItem(key)));
+    });
+    return fallback;
   }
 
   async write(
@@ -594,6 +654,67 @@ function parseBlobSnapshot(raw: string | null, owner: string): ConversationCache
   } catch {
     return null;
   }
+}
+
+function parseLegacySnapshot(
+  raw: string | null,
+  owner: string,
+  version: 1 | 2,
+): ConversationCacheSnapshot | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (!isRecord(value) || value.version !== version) return null;
+    if (normalizeOwner(value.owner) !== owner || !Array.isArray(value.conversations)) return null;
+    const conversations = value.conversations.flatMap(normalizeConversation);
+    // A non-empty legacy array that normalizes to no rows is corruption, not
+    // an empty account. Keeping the source key lets a later build retry a
+    // safer migration instead of silently deleting the only copy.
+    if (value.conversations.length > 0 && conversations.length === 0) return null;
+    return {
+      version: CONVERSATION_CACHE_VERSION,
+      owner,
+      activeConversationId: stringValue(value.activeConversationId),
+      conversations,
+      syncedAt: numberValue(value.syncedAt),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function mergeLegacySnapshots(
+  snapshots: readonly ConversationCacheSnapshot[],
+  owner: string,
+): ConversationCacheSnapshot {
+  // Newer schema/revision wins ties, while distinct rows from the encoded and
+  // hashed v1 keys are retained instead of silently dropping local history.
+  const ordered = [...snapshots].sort((left, right) => (
+    left.version - right.version || left.syncedAt - right.syncedAt
+  ));
+  const conversationsById = new Map<string, SingleConversation>();
+  for (const snapshot of ordered) {
+    for (const conversation of snapshot.conversations) {
+      const existing = conversationsById.get(conversation.id);
+      conversationsById.set(
+        conversation.id,
+        existing ? mergeConcurrentConversation(existing, conversation) : cloneCachedConversation(conversation),
+      );
+    }
+  }
+  const conversations = [...conversationsById.values()].sort(
+    (left, right) => timestampNumber(right.updated_at) - timestampNumber(left.updated_at),
+  );
+  const newest = [...ordered].reverse().find((snapshot) => (
+    snapshot.activeConversationId && conversationsById.has(snapshot.activeConversationId)
+  ));
+  return {
+    version: CONVERSATION_CACHE_VERSION,
+    owner,
+    activeConversationId: newest?.activeConversationId || conversations[0]?.id || '',
+    conversations,
+    syncedAt: Math.max(0, ...snapshots.map((snapshot) => snapshot.syncedAt)),
+  };
 }
 
 function conversationRevisionStamp(conversation: SingleConversation): string {

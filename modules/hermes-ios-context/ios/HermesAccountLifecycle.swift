@@ -14,6 +14,15 @@ enum HermesAccountLifecycle {
       ownerScope,
       accountGeneration: accountGeneration
     )
+    let activeIdentity = HermesContextEventQueue.shared.currentOwnerIdentity
+    HermesAgentTriggerStore.shared.discardMismatched(
+      ownerScope: activeIdentity.ownerScope,
+      accountGeneration: activeIdentity.accountGeneration
+    )
+    HermesTaskControlStore.shared.discardMismatched(
+      ownerScope: activeIdentity.ownerScope,
+      accountGeneration: activeIdentity.accountGeneration
+    )
     HermesIOSContextAppDelegateSubscriber.resetForegroundSessionForCurrentOwnerIfActive()
     if let token = HermesContextEventQueue.shared.currentCollectorGenerationToken() {
       HermesLocationService.shared.activateAccountGeneration(token)
@@ -66,6 +75,12 @@ enum HermesAccountLifecycle {
       requestedAt: requestedAt
     )
     guard deletion.deletedWasCurrent else { return deletion }
+
+    // App Intents and Live Activity controls are account-scoped durable work.
+    // Delete them with the owner boundary so a later login cannot replay an
+    // old session ID under a new account.
+    HermesAgentTriggerStore.shared.clear()
+    HermesTaskControlStore.shared.clear()
 
     HermesLocationService.shared.resetAccountState()
     HermesMotionService.shared.resetAccountState()

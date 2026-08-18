@@ -267,7 +267,7 @@ test('local account keys remain isolated for owners that collide under the legac
   assert.equal((await store.read(ownerB))?.conversations[0].id, 'collision-b');
 });
 
-test('v1 and v2 conversation caches are deleted and ignored after the clean schema bump', async () => {
+test('v1 and v2 conversation caches migrate before legacy keys are cleaned', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
   const owner = 'legacy-owner';
@@ -296,8 +296,21 @@ test('v1 and v2 conversation caches are deleted and ignored after the clean sche
     syncedAt: 20,
   }));
 
-  assert.equal(await store.read(owner), null);
-  assert.equal(storage.values.size, 0);
+  const migrated = await store.read(owner);
+  assert.deepEqual(
+    migrated?.conversations.map((item) => item.id).sort(),
+    ['e2e-contamination', 'legacy-chat'],
+  );
+  assert.equal(migrated?.activeConversationId, 'e2e-contamination');
+  assert.equal(storage.values.has(`hermes.native.conversations.v1.${(hash >>> 0).toString(16)}`), false);
+  assert.equal(storage.values.has(`hermes.native.conversations.v2.${encodedOwner}`), false);
+  // The v4 index and conversation rows are now the offline source of truth.
+  assert.ok(storage.values.size >= 2);
+  const reopened = new ConversationLocalStore(storage);
+  assert.deepEqual(
+    (await reopened.read(owner))?.conversations.map((item) => item.id).sort(),
+    ['e2e-contamination', 'legacy-chat'],
+  );
 });
 
 test('legacy cleanup failure never blocks the clean cache or subsequent cloud sync', async () => {

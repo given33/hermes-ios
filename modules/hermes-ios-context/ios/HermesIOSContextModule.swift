@@ -435,6 +435,15 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("setOwnerScope") { (scope: String, accountGeneration: String) in
       self.eventQueue.setOwnerScope(scope, accountGeneration: accountGeneration)
+      let activeIdentity = self.eventQueue.currentOwnerIdentity
+      HermesAgentTriggerStore.shared.discardMismatched(
+        ownerScope: activeIdentity.ownerScope,
+        accountGeneration: activeIdentity.accountGeneration
+      )
+      HermesTaskControlStore.shared.discardMismatched(
+        ownerScope: activeIdentity.ownerScope,
+        accountGeneration: activeIdentity.accountGeneration
+      )
       Self.setFileProviderOwnerScope(scope)
       HermesPermissionCollectionGate.shared.prepare(ownerScope: scope)
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
@@ -1115,6 +1124,11 @@ public final class HermesIOSContextModule: Module {
       HermesAgentTriggerStore.shared.consume(requestID: requestID)
     }.runOnQueue(.main)
 
+    AsyncFunction("clearPendingAgentTriggers") { () -> Bool in
+      HermesAgentTriggerStore.shared.clear()
+      return true
+    }.runOnQueue(.main)
+
     Function("getAgentShareAttachmentRootUri") { () -> String? in
       HermesAgentTriggerStore.shareAttachmentRoot?.absoluteString
     }
@@ -1140,6 +1154,11 @@ public final class HermesIOSContextModule: Module {
 
     AsyncFunction("consumePendingTaskControl") { (requestID: String) -> Bool in
       HermesTaskControlStore.shared.consume(requestID: requestID)
+    }
+
+    AsyncFunction("clearPendingTaskControls") { () -> Bool in
+      HermesTaskControlStore.shared.clear()
+      return true
     }
   }
 
