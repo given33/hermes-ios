@@ -1,9 +1,5 @@
 import {
-  Check,
   ChevronLeft,
-  Eraser,
-  FolderOpen,
-  MessageSquare,
   Plus,
   RefreshCw,
   Settings2,
@@ -33,8 +29,6 @@ import { useTheme } from '../../design/ThemeProvider';
 import { PreviewModal, PreviewText } from '../PreviewPrimitives';
 import { latestRoomPreview, roomHasRunningWork } from './agent-group-model';
 import { AgentGroupMessageStream } from './AgentGroupMessageStream';
-import { AgentGroupRoomSettingsModal } from './AgentGroupRoomSettingsModal';
-import { AgentGroupWorkspacePanel } from './AgentGroupWorkspacePanel';
 import type { AgentGroupChatController } from './useAgentGroupChatController';
 
 export interface AgentGroupChatViewProps {
@@ -66,15 +60,6 @@ export function AgentGroupChatView({
   const [deleteRoomId, setDeleteRoomId] = useState<string | null>(null);
   const [roomName, setRoomName] = useState('');
   const [profilesInput, setProfilesInput] = useState('default');
-  const [inviteCode, setInviteCode] = useState('');
-  const [workspace, setWorkspace] = useState('');
-  const [summaryProfile, setSummaryProfile] = useState('default');
-  const [summaryProvider, setSummaryProvider] = useState('');
-  const [summaryModel, setSummaryModel] = useState('');
-  const [summaryApiMode, setSummaryApiMode] = useState('chat_completions');
-  const [summaryEveryTurns, setSummaryEveryTurns] = useState('20');
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [inputSettingsOpen, setInputSettingsOpen] = useState(false);
   const [showToolTrace, setShowToolTrace] = useState(true);
   const activeRoom = controller.activeRoom;
@@ -217,26 +202,6 @@ export function AgentGroupChatView({
               <Text style={[styles.connectionText, { color: controller.connected ? tokens.colors.success : tokens.colors.textTertiary }]}>
                 {controller.connected ? (isChinese ? '实时' : 'Live') : (isChinese ? '重连中' : 'Reconnecting')}
               </Text>
-              {activeRoom?.room.canManage !== false ? (
-                <IOSPressable
-                  accessibilityLabel={isChinese ? '打开 Agent 房间设置' : 'Open Agent room settings'}
-                  hitSlop={7}
-                  onPress={() => setSettingsOpen(true)}
-                  style={styles.iconButton}
-                >
-                  <Settings2 color={tokens.colors.textSecondary} size={15} />
-                </IOSPressable>
-              ) : null}
-              {activeRoom?.room.workspace ? (
-                <IOSPressable
-                  accessibilityLabel={isChinese ? '打开 Agent 工作区' : 'Open Agent workspace'}
-                  hitSlop={7}
-                  onPress={() => setWorkspaceOpen((current) => !current)}
-                  style={[styles.iconButton, workspaceOpen && { backgroundColor: multiplyAlpha(tokens.colors.primary, 0.12) }]}
-                >
-                  <FolderOpen color={tokens.colors.textSecondary} size={15} />
-                </IOSPressable>
-              ) : null}
               {activeRoom?.runningAgents.length ? (
                 <IOSPressable
                   accessibilityLabel={isChinese ? '停止 Agent 输出' : 'Stop Agent output'}
@@ -298,32 +263,6 @@ export function AgentGroupChatView({
                 {activeRoom.runningAgents.join(', ')} {isChinese ? '正在执行任务' : 'running a task'}
               </Text>
             ) : null}
-            {activeRoom?.pendingApprovals.map((approval) => (
-              <View key={approval.approvalId} style={[styles.approvalPanel, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.warning }]}> 
-                <View style={styles.approvalHeading}>
-                  <MessageSquare color={tokens.colors.warning} size={15} />
-                  <Text style={[styles.approvalTitle, { color: tokens.colors.foreground }]}>
-                    {isChinese ? `${approval.agentName} 请求授权` : `${approval.agentName} requests approval`}
-                  </Text>
-                </View>
-                <Text style={[styles.approvalDescription, { color: tokens.colors.textSecondary }]}>
-                  {approval.description || approval.command}
-                </Text>
-                <View style={styles.approvalButtons}>
-                  {approval.choices.map((choice) => (
-                    <NativeButton
-                      ghost={choice === 'deny'}
-                      key={choice}
-                      onPress={() => { void controller.respondApproval(activeRoom.room.id, approval.approvalId, choice); }}
-                      prefix={choice === 'deny' ? undefined : <Check />}
-                      size="sm"
-                    >
-                      {approvalChoiceLabel(choice, isChinese)}
-                    </NativeButton>
-                  ))}
-                </View>
-              </View>
-            ))}
           </View>
 
           {mentionCandidates.length ? (
@@ -379,29 +318,10 @@ export function AgentGroupChatView({
               <Send color={tokens.colors.primaryForeground} size={17} />
             </IOSPressable>
           </View>
-          {workspaceOpen && activeRoom?.room.workspace ? (
-            <AgentGroupWorkspacePanel
-              compact={compact}
-              controller={controller}
-              isChinese={isChinese}
-              onClose={() => setWorkspaceOpen(false)}
-              roomId={activeRoom.room.id}
-              workspace={activeRoom.room.workspace}
-            />
-          ) : null}
         </View>
       </View>
 
       <View style={[styles.bottomActions, { backgroundColor: tokens.colors.background, paddingLeft: 12 + safeAreaLeft }]}> 
-        <NativeButton
-          disabled={!activeRoom}
-          ghost
-          onPress={() => activeRoom && void controller.clearRoom(activeRoom.room.id)}
-          prefix={<Eraser />}
-          size="sm"
-        >
-          {isChinese ? '清空上下文' : 'Clear context'}
-        </NativeButton>
         <NativeButton
           disabled={!activeRoom}
           ghost
@@ -436,87 +356,18 @@ export function AgentGroupChatView({
           style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
           value={profilesInput}
         />
-        <TextInput
-          onChangeText={setInviteCode}
-          placeholder={isChinese ? '邀请码（可选）' : 'Invite code (optional)'}
-          placeholderTextColor={tokens.colors.textTertiary}
-          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
-          value={inviteCode}
-        />
-        <TextInput
-          onChangeText={setWorkspace}
-          placeholder={isChinese ? '工作区路径（可选）' : 'Workspace path (optional)'}
-          placeholderTextColor={tokens.colors.textTertiary}
-          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
-          value={workspace}
-        />
-        <TextInput
-          onChangeText={setSummaryProvider}
-          placeholder={isChinese ? '摘要 Provider' : 'Summary provider'}
-          placeholderTextColor={tokens.colors.textTertiary}
-          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
-          value={summaryProvider}
-        />
-        <TextInput
-          onChangeText={setSummaryModel}
-          placeholder={isChinese ? '摘要 Model' : 'Summary model'}
-          placeholderTextColor={tokens.colors.textTertiary}
-          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
-          value={summaryModel}
-        />
-        <TextInput
-          onChangeText={setSummaryProfile}
-          placeholder={isChinese ? '摘要 Profile' : 'Summary profile'}
-          placeholderTextColor={tokens.colors.textTertiary}
-          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
-          value={summaryProfile}
-        />
-        <TextInput
-          onChangeText={setSummaryApiMode}
-          placeholder={isChinese ? '摘要 API 模式' : 'Summary API mode'}
-          placeholderTextColor={tokens.colors.textTertiary}
-          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
-          value={summaryApiMode}
-        />
-        <TextInput
-          keyboardType="number-pad"
-          onChangeText={setSummaryEveryTurns}
-          placeholder={isChinese ? '每多少轮压缩' : 'Summarize every turns'}
-          placeholderTextColor={tokens.colors.textTertiary}
-          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
-          value={summaryEveryTurns}
-        />
         <NativeButton
           disabled={!roomName.trim() || controller.creating}
           onPress={() => {
-            void controller.createRoom(roomName, profilesInput.split(','), {
-              inviteCode: inviteCode.trim() || undefined,
-              workspace: workspace.trim() || undefined,
-              summary: {
-                profile: summaryProfile.trim() || 'default',
-                provider: summaryProvider.trim(),
-                model: summaryModel.trim(),
-                apiMode: summaryApiMode.trim() || 'chat_completions',
-                everyTurns: Math.max(1, Number(summaryEveryTurns) || 20),
-              },
-            });
+            void controller.createRoom(roomName, profilesInput.split(','));
             setCreateOpen(false);
             setRoomName('');
-            setInviteCode('');
-            setWorkspace('');
           }}
           prefix={<Plus />}
         >
           {isChinese ? '创建房间' : 'Create room'}
         </NativeButton>
       </PreviewModal>
-
-      <AgentGroupRoomSettingsModal
-        controller={controller}
-        isChinese={isChinese}
-        onClose={() => setSettingsOpen(false)}
-        open={settingsOpen}
-      />
 
       <PreviewModal
         onClose={() => setInputSettingsOpen(false)}
@@ -592,11 +443,6 @@ const styles = {
   messageStream: { flex: 1, minHeight: 0 },
   typingText: { fontSize: 10, paddingLeft: 32 },
   runningText: { fontSize: 10, fontWeight: '600' as const, paddingLeft: 32 },
-  approvalPanel: { borderRadius: 10, borderWidth: 1, gap: 7, marginHorizontal: 12, marginVertical: 8, padding: 10 },
-  approvalHeading: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 6 },
-  approvalTitle: { fontSize: 12, fontWeight: '700' as const },
-  approvalDescription: { fontSize: 11, lineHeight: 16 },
-  approvalButtons: { alignItems: 'center' as const, flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 6 },
   composer: { alignItems: 'flex-end' as const, borderTopWidth: 1, flexDirection: 'row' as const, gap: 8, paddingHorizontal: 10, paddingTop: 9 },
   input: { borderRadius: 10, borderWidth: 1, flex: 1, fontSize: 13, lineHeight: 19, maxHeight: 110, minHeight: 42, paddingHorizontal: 11, paddingVertical: 9 },
   sendButton: { alignItems: 'center' as const, borderRadius: 10, height: 42, justifyContent: 'center' as const, width: 42 },
@@ -615,13 +461,6 @@ const styles = {
   toggleButton: { alignItems: 'center' as const, borderRadius: 999, minWidth: 44, paddingHorizontal: 8, paddingVertical: 5 },
   toggleButtonText: { fontSize: 10, fontWeight: '800' as const },
 };
-
-function approvalChoiceLabel(choice: 'once' | 'session' | 'always' | 'deny', isChinese: boolean): string {
-  if (choice === 'once') return isChinese ? '允许一次' : 'Allow once';
-  if (choice === 'session') return isChinese ? '允许本次会话' : 'Allow session';
-  if (choice === 'always') return isChinese ? '始终允许' : 'Always allow';
-  return isChinese ? '拒绝' : 'Deny';
-}
 
 function mentionOptions(agents: Array<{ name: string }>, draft: string): string[] {
   const match = draft.match(/(?:^|\s)@([^\s]*)$/);

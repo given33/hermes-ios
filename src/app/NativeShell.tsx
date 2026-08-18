@@ -302,7 +302,10 @@ export function NativeShell({
     Math.max(220, layout.width - 96),
   );
   const drawerExtent = state.mode === 'compact' && referenceCompactSidebar
-    ? compactSidebarWidth
+    // Keep the panel's usable content width stable on landscape iPhones. The
+    // drawer is measured from the physical left edge, so the leading safe
+    // area must be part of its extent rather than stealing space from rows.
+    ? compactSidebarWidth + insets.left
     : SHELL_METRICS.sidebarWidth + insets.left;
   const visibleSidebarWidth = state.mode === 'compact' && referenceCompactSidebar
     ? compactSidebarWidth
@@ -799,6 +802,7 @@ function Sidebar({
         locale={locale}
         navigate={navigate}
         onClose={closeMobile}
+        sidebarBackground={sidebarBackground}
         slotContext={slotContext}
         slots={slots}
       />
@@ -918,6 +922,7 @@ function ExpoReferenceSidebar({
   locale,
   navigate,
   onClose,
+  sidebarBackground,
   slotContext,
   slots,
 }: {
@@ -927,6 +932,7 @@ function ExpoReferenceSidebar({
   locale: NativeRouteLocale;
   navigate(path: string): void;
   onClose(): void;
+  sidebarBackground: string;
   slotContext: NativeShellSlotContext;
   slots?: NativeShellSlots;
 }) {
@@ -948,6 +954,7 @@ function ExpoReferenceSidebar({
           // bar and the footer content clears the home indicator, while the
           // panel background itself extends edge-to-edge so no safe-area
           // divider line is visible at top or bottom.
+          paddingLeft: insets.left,
           paddingTop: insets.top,
           paddingBottom: insets.bottom,
         },
@@ -962,12 +969,20 @@ function ExpoReferenceSidebar({
         decelerationRate="normal"
         scrollEventThrottle={8}
         showsVerticalScrollIndicator={false}
+        stickyHeaderIndices={[0]}
         style={styles.referenceSidebarScroll}
       >
-        <View style={styles.referenceSidebarHeader}>
+        <View
+          style={[
+            styles.referenceSidebarHeader,
+            { backgroundColor: sidebarBackground },
+          ]}
+        >
           <View style={styles.referenceSidebarBrand}>
             <StudioOfficialAvatar size={24} />
             <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.82}
               numberOfLines={1}
               style={[
                 styles.referenceSidebarTitle,
@@ -1397,6 +1412,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 18,
     position: 'relative',
+    zIndex: 1,
   },
   referenceSidebarBrand: {
     alignItems: 'center',
@@ -1437,7 +1453,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 30,
+    minHeight: 44,
     paddingHorizontal: 18,
   },
   referenceSidebarGroupLabel: {
@@ -1454,7 +1470,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    minHeight: 40,
+    minHeight: 52,
     paddingHorizontal: 18,
   },
   referenceSidebarRowLabel: {

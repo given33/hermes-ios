@@ -149,10 +149,15 @@ export class HermesManagementCloudApi {
   }
 
   getSystem() {
+    // Managed-node monitoring is an optional relay.  Older Hermes servers (and
+    // a temporarily unavailable relay) may not expose it, but that must not
+    // make the local /status and /system/stats snapshots disappear together.
     return Promise.all([
       this.transport.request<JsonRecord>('/api/status'),
       this.transport.request<JsonRecord>('/api/system/stats'),
-      this.transport.request<JsonRecord>('/api/managed-nodes/status'),
+      this.transport
+        .request<JsonRecord>('/api/managed-nodes/status')
+        .catch(() => emptyManagedNodesSnapshot()),
     ]).then(([status, stats, managedNodes]) => ({ managedNodes, status, stats }));
   }
 
@@ -177,4 +182,12 @@ export class HermesManagementCloudApi {
   rescanAchievements() {
     return this.transport.request<JsonRecord>(`${ACHIEVEMENTS}/rescan`, { method: 'POST' });
   }
+}
+
+function emptyManagedNodesSnapshot(): JsonRecord {
+  return {
+    configured: false,
+    nodes: [],
+    sources: [],
+  };
 }

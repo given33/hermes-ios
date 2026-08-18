@@ -7,9 +7,23 @@ import {
 } from 'react';
 
 import type { HermesApiClient } from '../../api/HermesApiClient';
-import { hermesStudioApiFor } from '../../api/hermes-api-registry';
+import type {
+  CollaborationMessage,
+  SingleConversation,
+} from '../../api/HermesCloudApi';
+import {
+  hermesStudioApiFor,
+  sharedConversationLocalStore,
+} from '../../api/hermes-api-registry';
+import { createConversationDeleteReplayService } from '../../api/conversation-local-store';
+import {
+  captureConversationDeletionRevision,
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../../api/conversation-storage-coordinator';
 import type {
   HermesStudioGroupChatMessage,
+  HermesStudioGroupChatJoinResult,
   HermesStudioGroupChatMention,
   HermesStudioGroupChatSocket,
   HermesStudioPendingApproval,
@@ -22,11 +36,22 @@ import type {
   HermesStudioWorkspaceFileContent,
   HermesStudioWorkspaceFileListing,
 } from '../../api/hermes-studio';
-import { isRecord, normalizeGroupMessage, numberValue, stringValue } from '../../api/hermes-studio';
+import {
+  isRecord,
+  normalizeGroupMessage,
+  normalizeRoomAgent,
+  numberValue,
+  stringValue,
+} from '../../api/hermes-studio';
 import {
   addUnique,
   applyAgentGroupEvent,
   emptyRoomSnapshot,
+  attachWorkspaceDiffs,
+  mergeCachedRoomSnapshot,
+  mergeRoomHistoryMessages,
+  roomActivityTimestamp,
+  sortRoomInfosByActivity,
   snapshotFromDetail,
   upsertGroupMessage,
 } from './agent-group-model';
@@ -36,6 +61,7 @@ const MOBILE_GROUP_USER_ID_PREFIX = 'hermes-mobile-group-user';
 export interface AgentGroupChatControllerProps {
   agentProfile?: string;
   cacheOwner: string;
+  cacheRevision?: string;
   client?: HermesApiClient;
   enabled: boolean;
   fixtureMode?: boolean;
@@ -76,7 +102,7 @@ export interface AgentGroupChatController {
   createRoom(name: string, profiles: string[], options?: AgentGroupCreateRoomOptions): Promise<void>;
   deleteRoom(roomId: string): Promise<void>;
   clearRoom(roomId: string): Promise<void>;
-  refresh(): Promise<void>;
+  refresh(forceNetwork?: boolean): Promise<void>;
   refreshRoom(roomId?: string): Promise<void>;
   cloneRoom(roomId: string, name: string, inviteCode?: string): Promise<void>;
   joinRoomByCode(code: string): Promise<void>;
@@ -110,6 +136,7 @@ export interface AgentGroupChatController {
 export function useAgentGroupChatController({
   agentProfile = 'default',
   cacheOwner,
+  cacheRevision = '',
   client,
   enabled,
   fixtureMode = false,
@@ -117,6 +144,10 @@ export function useAgentGroupChatController({
   notify,
 }: AgentGroupChatControllerProps): AgentGroupChatController {
   const studioApi = useMemo(() => client ? hermesStudioApiFor(client) : null, [client]);
+  const localStore = useMemo(
+    () => cacheOwner ? sharedConversationLocalStore() : null,
+    [cacheOwner],
+  );
   const [rooms, setRooms] = useState<HermesStudioRoomInfo[]>([]);
   const [activeRoomId, setActiveRoomId] = useState('');
   const [revision, setRevision] = useState(0);
@@ -142,6 +173,48 @@ export function useAgentGroupChatController({
     socket?: HermesStudioGroupChatSocket | null,
   ) => Promise<void>>(undefined);
   const inviteCodeRef = useRef('');
+  const detailFingerprintRef = useRef(new Map<string, string>());
+  const detailInFlightRef = useRef(new Set<string>());
+  const roomHistoryCompleteRef = useRef(new Set<string>());
+  const roomHistoryCountRef = useRef(new Map<string, number>());
+  const roomHistoryNextOffsetRef = useRef(new Map<string, number>());
+  // A room's linked conversation is the durable local tombstone. Keep the
+  // IDs in memory as well so an unrelated room-list refresh cannot resurrect
+  // a room while its cloud delete is waiting for retry.
+  const pendingRoomConversationIdsRef = useRef(new Set<string>());
+  const pendingRoomDeletionRevisionRef = useRef(0);
+  const roomLifecycleRevisionRef = useRef(new Map<string, number>());
+  const hydratedRoomOwnerRef = useRef('');
+  const persistedRoomFingerprintRef = useRef(new Map<string, string>());
+  const roomPersistenceQueueRef = useRef(new Map<string, Promise<void>>());
+
+  const conversationDeleteReplayService = useMemo(() => (
+    studioApi && localStore && cacheOwner
+      ? createConversationDeleteReplayService({
+          cacheOwner,
+          activeConversationId: '',
+          deleteRemote: async (item) => {
+            if (item.kind !== 'room') {
+              // The Agent controller owns only room tombstones. Ordinary
+              // conversation/session rows are replayed by the app-level
+              // chat route, so this worker must never claim them.
+              throw new Error('Unsupported Agent room deletion kind');
+            }
+            if (!studioApi) throw new Error('Agent room deletion transport is unavailable');
+            const roomId = item.remoteId || (item.conversationId.startsWith('chat_room_')
+              ? `room_${item.conversationId.slice('chat_room_'.length)}`
+              : item.conversationId);
+            await studioApi.groupChat.deleteRoom(roomId);
+          },
+          isAlreadyDeleted: (error) => isAlreadyDeletedRemote(error),
+          isRetryable: () => true,
+          outbox: localStore,
+          retryDelayMs: 60_000,
+          workerId: 'agent-group:conversation-delete',
+          kinds: ['room'],
+        })
+      : null
+  ), [agentProfile, cacheOwner, localStore, studioApi]);
 
   const bump = useCallback(() => {
     if (mountedRef.current) setRevision((value) => value + 1);
@@ -180,31 +253,190 @@ export function useAgentGroupChatController({
   );
 
   const applyRoomList = useCallback((nextRooms: HermesStudioRoomInfo[]) => {
-    roomsRef.current = nextRooms;
-    setRooms(nextRooms);
-    const roomIds = new Set(nextRooms.map((room) => room.id));
-    for (const room of nextRooms) {
+    const visibleRooms = nextRooms.filter((room) => {
+      const conversationId = room.conversationId?.trim();
+      const syntheticConversationId = `chat_room_${room.id.replace(/^room_/, '')}`;
+      return !pendingRoomConversationIdsRef.current.has(room.id)
+        && !pendingRoomConversationIdsRef.current.has(syntheticConversationId)
+        && (!conversationId || !pendingRoomConversationIdsRef.current.has(conversationId));
+    });
+    const orderedRooms = sortRoomInfosByActivity(visibleRooms, snapshotsRef.current);
+    roomsRef.current = orderedRooms;
+    setRooms(orderedRooms);
+    const roomIds = new Set(orderedRooms.map((room) => room.id));
+    for (const room of orderedRooms) {
       const existing = snapshotsRef.current.get(room.id);
-      if (existing) setSnapshot(room.id, { ...existing, room, updatedAt: Date.now() });
+      if (existing) {
+        // Room-list polling is not activity. Preserve the previous local
+        // timestamp and only advance it when the server (or a loaded message)
+        // reports newer durable activity.
+        const activityAt = roomActivityTimestamp(room, existing.messages);
+        setSnapshot(room.id, {
+          ...existing,
+          room,
+          updatedAt: Math.max(existing.updatedAt || 0, activityAt) || Date.now(),
+        });
+      }
       else snapshotsRef.current.set(room.id, emptyRoomSnapshot(room));
     }
     for (const roomId of snapshotsRef.current.keys()) {
-      if (!roomIds.has(roomId)) snapshotsRef.current.delete(roomId);
+      if (!roomIds.has(roomId)) {
+        snapshotsRef.current.delete(roomId);
+        roomHistoryCompleteRef.current.delete(roomId);
+        roomHistoryCountRef.current.delete(roomId);
+        roomHistoryNextOffsetRef.current.delete(roomId);
+      }
     }
     if (!activeRoomIdRef.current || !roomIds.has(activeRoomIdRef.current)) {
-      const nextActive = nextRooms[0]?.id || '';
+      const nextActive = orderedRooms[0]?.id || '';
       activeRoomIdRef.current = nextActive;
       setActiveRoomId(nextActive);
     }
     bump();
   }, [bump, setSnapshot]);
 
-  const applyJoin = useCallback((result: {
-    roomId: string;
-    roomName: string;
-    members: HermesStudioRoomMember[];
-    messages: HermesStudioGroupChatMessage[];
-  }) => {
+  const hydrateCachedRooms = useCallback(async () => {
+    const hydrationKey = cacheOwner + ':' + cacheRevision;
+    if (!localStore || !cacheOwner || hydratedRoomOwnerRef.current === hydrationKey) return;
+    const readRevision = pendingRoomDeletionRevisionRef.current;
+    const cached = await localStore.read(cacheOwner).catch(() => null);
+    let pending: ReadonlySet<string>;
+    try {
+      pending = await localStore.readPendingConversationDeletionIds(cacheOwner);
+    } catch {
+      return;
+    }
+    if (!mountedRef.current || !cached) return;
+    let latestPending: ReadonlySet<string>;
+    try {
+      latestPending = await localStore.readPendingConversationDeletionIds(cacheOwner);
+    } catch {
+      return;
+    }
+    pending = latestPending;
+    pendingRoomConversationIdsRef.current = pendingRoomDeletionRevisionRef.current === readRevision
+      ? new Set(pending)
+      : new Set([...pendingRoomConversationIdsRef.current, ...pending]);
+    hydratedRoomOwnerRef.current = hydrationKey;
+    const projections = cached.conversations
+      .filter((conversation) => (
+        (conversation.source === 'collaboration_room' || conversation.id.startsWith('chat_room_'))
+        && !pendingRoomConversationIdsRef.current.has(conversation.id)
+      ))
+      .map(cachedRoomProjection)
+      .filter((projection): projection is CachedRoomProjection => projection !== null);
+    if (!projections.length) return;
+    const cachedIds = new Set(projections.map(({ room }) => room.id));
+    applyRoomList([
+      ...projections.map(({ room }) => room),
+      ...roomsRef.current.filter((room) => !cachedIds.has(room.id)),
+    ]);
+    for (const projection of projections) {
+      if (projection.historyComplete) {
+        roomHistoryCompleteRef.current.add(projection.room.id);
+        roomHistoryNextOffsetRef.current.delete(projection.room.id);
+      } else if (projection.nextOffset > 0) {
+        roomHistoryCompleteRef.current.delete(projection.room.id);
+        roomHistoryNextOffsetRef.current.set(projection.room.id, projection.nextOffset);
+      }
+      const existing = snapshotsRef.current.get(projection.room.id);
+      // A summary row can hydrate before the background sync downloads the
+      // full room transcript. Always merge the newer cache projection so the
+      // room grows from that summary instead of remaining stuck at one row;
+      // mergeCachedRoomSnapshot keeps optimistic/live messages in memory.
+      setSnapshot(
+        projection.room.id,
+        mergeCachedRoomSnapshot(projection.snapshot, existing),
+      );
+    }
+  }, [applyRoomList, cacheOwner, cacheRevision, localStore, setSnapshot]);
+
+  const persistRoomSnapshot = useCallback(async (snapshot: HermesStudioRoomSnapshot) => {
+    const linkedConversationId = snapshot.room.conversationId?.trim() || '';
+    const conversationId = linkedConversationId
+      || `chat_room_${snapshot.room.id.replace(/^room_/, '')}`;
+    if (!localStore || !cacheOwner) return;
+    const liveRoom = roomsRef.current.find(({ id }) => id === snapshot.room.id);
+    if (
+      !liveRoom
+      || (linkedConversationId && liveRoom.conversationId?.trim() !== linkedConversationId)
+      || pendingRoomConversationIdsRef.current.has(conversationId)
+    ) return;
+    const fingerprint = roomTranscriptFingerprint(
+      snapshot,
+      roomHistoryCompleteRef.current.has(snapshot.room.id),
+      roomHistoryNextOffsetRef.current.get(snapshot.room.id) || 0,
+    );
+    if (persistedRoomFingerprintRef.current.get(conversationId) === fingerprint) return;
+    const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    const deletionRevision = captureConversationDeletionRevision(cacheOwner);
+    let pending: ReadonlySet<string>;
+    try {
+      pending = await localStore.readPendingConversationDeletionIds(cacheOwner);
+    } catch {
+      return;
+    }
+    if (
+      pending.has(conversationId)
+      || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+    ) return;
+    const cached = await localStore.read(cacheOwner);
+    if (
+      !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+    ) return;
+    const currentRoom = roomsRef.current.find(({ id }) => id === snapshot.room.id);
+    if (
+      !currentRoom
+      || (linkedConversationId
+        ? currentRoom.conversationId?.trim() !== linkedConversationId
+        : currentRoom.id !== snapshot.room.id)
+      || pendingRoomConversationIdsRef.current.has(conversationId)
+      || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+    ) return;
+    const existing = cached?.conversations.find(({ id }) => id === conversationId);
+    const conversation = cachedConversationFromRoomSnapshot(
+      snapshot,
+      existing,
+      agentProfile,
+      roomHistoryCompleteRef.current.has(snapshot.room.id),
+      roomHistoryNextOffsetRef.current.get(snapshot.room.id),
+    );
+    await localStore.upsert(
+      cacheOwner,
+      conversation,
+      cached?.activeConversationId || '',
+      ownerEpoch,
+      deletionRevision,
+    );
+    if (
+      isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      && captureConversationDeletionRevision(cacheOwner) === deletionRevision
+    ) {
+      persistedRoomFingerprintRef.current.set(conversationId, fingerprint);
+    }
+  }, [agentProfile, cacheOwner, localStore]);
+
+  const queueRoomSnapshotPersistence = useCallback((snapshot: HermesStudioRoomSnapshot) => {
+    const key = snapshot.room.conversationId?.trim()
+      || `chat_room_${snapshot.room.id.replace(/^room_/, '')}`;
+    const previous = roomPersistenceQueueRef.current.get(key) || Promise.resolve();
+    const task = previous.catch(() => undefined).then(() => persistRoomSnapshot(snapshot));
+    roomPersistenceQueueRef.current.set(key, task);
+    void task.finally(() => {
+      if (roomPersistenceQueueRef.current.get(key) === task) {
+        roomPersistenceQueueRef.current.delete(key);
+      }
+    }).catch(() => undefined);
+  }, [persistRoomSnapshot]);
+
+  const persistCurrentRoom = useCallback((roomId: string) => {
+    const snapshot = snapshotsRef.current.get(roomId);
+    if (snapshot) queueRoomSnapshotPersistence(snapshot);
+  }, [queueRoomSnapshotPersistence]);
+
+  const applyJoin = useCallback((result: HermesStudioGroupChatJoinResult) => {
     const roomId = result.roomId;
     const current = snapshotsRef.current.get(roomId);
     if (!current) return;
@@ -212,17 +444,33 @@ export function useAgentGroupChatController({
       (messages, message) => upsertGroupMessage(messages, message),
       current.messages,
     );
+    const nextContextStatuses = result.contextStatuses?.reduce<Record<string, string>>((statuses, entry) => {
+      if (entry.agentName) statuses[entry.agentName] = entry.status;
+      return statuses;
+    }, {}) ?? current.contextStatuses;
+    const nextRunningAgents = Object.entries(nextContextStatuses)
+      .filter(([, status]) => status !== 'ready' && status !== 'idle' && status !== 'error')
+      .map(([name]) => name);
+    const nextTypingNames = (result.typingUsers || [])
+      .filter((entry) => entry.userId !== stableUserId)
+      .map((entry) => entry.userName)
+      .filter(Boolean);
     setSnapshot(roomId, {
       ...current,
       room: { ...current.room, name: result.roomName || current.room.name },
-      members: result.members.length ? result.members : current.members,
-      messages: mergedMessages,
+      ...(result.agents ? { agents: result.agents } : {}),
+      members: result.members,
+      messages: attachWorkspaceDiffs(mergedMessages),
+      typingNames: nextTypingNames,
+      runningAgents: nextRunningAgents,
+      contextStatuses: nextContextStatuses,
+      ...(result.pendingApprovals ? { pendingApprovals: result.pendingApprovals } : {}),
       connected: Boolean(socketRef.current?.connected),
       loading: false,
       error: null,
       updatedAt: Date.now(),
     });
-  }, [setSnapshot]);
+  }, [setSnapshot, stableUserId]);
 
   const attachSocketListeners = useCallback((socket: HermesStudioGroupChatSocket) => {
     const onConnect = () => {
@@ -330,6 +578,27 @@ export function useAgentGroupChatController({
       const members = normalizeMembersPayload(payload.members);
       if (roomId && Array.isArray(payload.members)) applyEvent({ type: 'members-updated', roomId, members });
     };
+    const onAgentsUpdated = (payload: unknown) => {
+      if (!isRecord(payload)) return;
+      const roomId = stringValue(payload.roomId);
+      if (!roomId || !Array.isArray(payload.agents)) return;
+      const agents = payload.agents
+        .map((agent) => normalizeRoomAgent(agent))
+        .filter((agent): agent is NonNullable<ReturnType<typeof normalizeRoomAgent>> => agent !== null);
+      patchSnapshot(roomId, (snapshot) => ({ ...snapshot, agents, updatedAt: Date.now() }));
+    };
+    const onMemberKicked = (payload: unknown) => {
+      if (!isRecord(payload)) return;
+      const roomId = stringValue(payload.roomId);
+      if (!roomId) return;
+      joinedRoomIdsRef.current.delete(roomId);
+      patchSnapshot(roomId, (snapshot) => ({
+        ...snapshot,
+        connected: false,
+        error: isChinese ? '你已被移出此 Agent 房间' : 'You were removed from this Agent room',
+        updatedAt: Date.now(),
+      }));
+    };
     const onSummaryUpdated = (payload: unknown) => {
       const summary = normalizeSummaryPayload(payload);
       if (summary) applyEvent({ type: 'summary-updated', summary });
@@ -385,11 +654,17 @@ export function useAgentGroupChatController({
     socket.on('member_joined', onMembersUpdated);
     socket.on('member_left', onMembersUpdated);
     socket.on('member_updated', onMembersUpdated);
+    socket.on('agents_updated', onAgentsUpdated);
+    socket.on('member_kicked', onMemberKicked);
     socket.on('room_summary_updated', onSummaryUpdated);
     socket.on('approval.requested', onApprovalRequested);
     socket.on('approval.resolved', onApprovalResolved);
     socket.on('room_updated', onRoomUpdated);
     socket.on('room_cleared', onRoomCleared);
+    // `connectRealtime()` starts the socket before returning.  A local or
+    // low-latency server can therefore emit `connect` before these listeners
+    // are attached; synchronize the already-connected state explicitly.
+    if (socket.connected) onConnect();
   }, [applyEvent, isChinese, patchSnapshot, stableUserId]);
 
   const waitForConnection = useCallback((socket: HermesStudioGroupChatSocket): Promise<void> => {
@@ -446,7 +721,10 @@ export function useAgentGroupChatController({
     if (pending) return pending;
     const promise = (async () => {
       await waitForConnection(target);
-      const result = await studioApi.groupChat.joinRoom(target, roomId, identity);
+      const result = await studioApi.groupChat.joinRoom(target, roomId, {
+        ...identity,
+        inviteCode: inviteCodeRef.current || undefined,
+      });
       joinedRoomIdsRef.current.add(roomId);
       applyJoin(result);
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, connected: true, loading: false }));
@@ -465,55 +743,225 @@ export function useAgentGroupChatController({
     return promise;
   }, [applyJoin, identity, isChinese, patchSnapshot, studioApi, waitForConnection]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (forceNetwork = false) => {
+    // Surface downloaded room transcripts before the first network response;
+    // the REST list is authoritative when it succeeds, while a failed list
+    // leaves these local rooms available for offline switching.
+    await hydrateCachedRooms();
+    if (!enabled && !forceNetwork) return;
     if (!studioApi) {
       if (fixtureMode && !roomsRef.current.length) applyRoomList(fixtureRooms());
       return;
     }
+    await conversationDeleteReplayService?.replay().catch(() => undefined);
     const generation = ++bootstrapGenerationRef.current;
     setLoading(true);
     try {
-      const nextRooms = await studioApi.groupChat.listRooms();
+      const readRevision = pendingRoomDeletionRevisionRef.current;
+      const [listedRooms, pendingDeletionIds] = await Promise.all([
+        studioApi.groupChat.listRooms(),
+        localStore && cacheOwner
+          ? localStore.readPendingConversationDeletionIds(cacheOwner)
+          : Promise.resolve(new Set<string>()),
+      ]);
+      const latestPendingDeletionIds = localStore && cacheOwner
+        ? await localStore.readPendingConversationDeletionIds(cacheOwner)
+        : pendingDeletionIds;
+      pendingRoomConversationIdsRef.current = pendingRoomDeletionRevisionRef.current === readRevision
+        ? new Set(latestPendingDeletionIds)
+        : new Set([
+            ...pendingRoomConversationIdsRef.current,
+            ...pendingDeletionIds,
+            ...latestPendingDeletionIds,
+          ]);
+      const nextRooms = listedRooms.filter((room) => {
+        const conversationId = room.conversationId?.trim();
+        const syntheticConversationId = `chat_room_${room.id.replace(/^room_/, '')}`;
+        return !pendingRoomConversationIdsRef.current.has(room.id)
+          && !pendingRoomConversationIdsRef.current.has(syntheticConversationId)
+          && (!conversationId || !pendingRoomConversationIdsRef.current.has(conversationId));
+      });
       if (generation !== bootstrapGenerationRef.current || !mountedRef.current) return;
+      for (const room of nextRooms) {
+        const previous = roomsRef.current.find((candidate) => candidate.id === room.id);
+        if (previous && roomStateFingerprint(previous) !== roomStateFingerprint(room)) {
+          detailFingerprintRef.current.delete(room.id);
+          if ((room.messageCount || 0) < (previous.messageCount || 0)) {
+            roomHistoryCompleteRef.current.delete(room.id);
+            roomHistoryCountRef.current.delete(room.id);
+            roomHistoryNextOffsetRef.current.delete(room.id);
+          }
+        }
+      }
       applyRoomList(nextRooms);
+      setConnected(true);
       setError(null);
     } catch (reason) {
       if (generation === bootstrapGenerationRef.current && mountedRef.current) {
+        setConnected(false);
         setError(errorMessage(reason, isChinese));
       }
     } finally {
       if (generation === bootstrapGenerationRef.current && mountedRef.current) setLoading(false);
     }
-  }, [applyRoomList, fixtureMode, isChinese, studioApi]);
+  }, [applyRoomList, cacheOwner, conversationDeleteReplayService, enabled, fixtureMode, hydrateCachedRooms, isChinese, localStore, studioApi]);
 
   const refreshRoom = useCallback(async (requestedRoomId?: string) => {
     const roomId = requestedRoomId || activeRoomIdRef.current;
     if (!roomId) return;
     if (!studioApi) return;
-    patchSnapshot(roomId, (snapshot) => ({ ...snapshot, loading: true, error: null }));
+    const roomRevision = roomLifecycleRevisionRef.current.get(roomId) || 0;
+    const listedRoom = roomsRef.current.find((room) => room.id === roomId);
+    const listedFingerprint = listedRoom ? roomStateFingerprint(listedRoom) : '';
+    if (
+      listedFingerprint
+      && detailFingerprintRef.current.get(roomId) === listedFingerprint
+      && roomHistoryCompleteRef.current.has(roomId)
+    ) {
+      return;
+    }
+    if (detailInFlightRef.current.has(roomId)) return;
+    detailInFlightRef.current.add(roomId);
+    patchSnapshot(roomId, (snapshot) => ({ ...snapshot, loading: snapshot.messages.length === 0, error: null }));
     try {
-      const [detail, summaryResult] = await Promise.all([
-        studioApi.groupChat.getRoomDetail(roomId, { limit: 150 }),
+      const [initialDetail, summaryResult] = await Promise.all([
+        studioApi.groupChat.getRoomDetail(roomId, {
+          offset: (() => {
+            const known = snapshotsRef.current.get(roomId)?.messages.length || 0;
+            const total = listedRoom?.messageCount || 0;
+            const pendingOffset = roomHistoryNextOffsetRef.current.get(roomId);
+            if (!roomHistoryCompleteRef.current.has(roomId)) {
+              // A one-row cache summary is the newest message, not prefix
+              // offset 0. Only resume from a server offset recorded by an
+              // earlier bounded drain; otherwise start at the beginning.
+              return Math.max(0, pendingOffset ?? 0);
+            }
+            if (total === 0 || known > total) return 0;
+            return Math.max(0, known - 1);
+          })(),
+          limit: 150,
+        }),
         studioApi.groupChat.getRoomSummary(roomId).catch(() => null),
       ]);
-      if (!mountedRef.current) return;
-      setSnapshot(roomId, snapshotFromDetail({
-        ...detail,
-        connected: Boolean(socketRef.current?.connected),
+      if (
+        !mountedRef.current
+        || (roomLifecycleRevisionRef.current.get(roomId) || 0) !== roomRevision
+        || !roomsRef.current.some((room) => room.id === roomId)
+      ) return;
+      let detail = initialDetail;
+      let pagedDetail = initialDetail;
+      const initialOffset = detail.offset || 0;
+      const historyWasComplete = roomHistoryCompleteRef.current.has(roomId);
+      let nextOffset = initialOffset + detail.messages.length;
+      let pageCount = 1;
+      // Newer collaboration servers expose offset/limit/has_more. Drain the
+      // older pages only on the initial load; steady-state polling requests a
+      // bounded tail and merges it with the cached transcript.
+      while (detail.hasMore && pageCount < 100 && detail.messages.length > 0) {
+        const page = await studioApi.groupChat.getRoomDetail(roomId, {
+          offset: nextOffset,
+          limit: 150,
+        });
+        if (
+          !mountedRef.current
+          || (roomLifecycleRevisionRef.current.get(roomId) || 0) !== roomRevision
+          || !roomsRef.current.some((room) => room.id === roomId)
+        ) return;
+        if (!page.messages.length) break;
+        pagedDetail = {
+          ...page,
+          room: page.room,
+          agents: page.agents.length ? page.agents : pagedDetail.agents,
+          members: page.members.length ? page.members : pagedDetail.members,
+          messages: mergeRoomHistoryMessages(pagedDetail.messages, page.messages),
+          total: Math.max(pagedDetail.total || 0, page.total || 0),
+          offset: initialOffset,
+          limit: page.limit || pagedDetail.limit,
+          hasMore: page.hasMore,
+        };
+        nextOffset += page.messages.length;
+        pageCount += 1;
+        detail = page;
+      }
+      const restored = snapshotFromDetail({
+        ...pagedDetail,
+        // Collaboration rooms are REST + polling on the current backend. A
+        // successful detail response is the authoritative liveness signal;
+        // leaving this tied to the retired Socket.IO handle made a healthy
+        // room render as "Reconnecting" forever.
+        connected: true,
         summary: summaryResult?.summary || null,
         summaryAnchor: summaryResult?.anchor || null,
-      }));
-      const socket = await connectSocket();
-      await joinRoomOnSocket(roomId, socket);
+      });
+      setConnected(true);
+      const restoredFingerprint = roomStateFingerprint(restored.room);
+      if (restoredFingerprint) detailFingerprintRef.current.set(roomId, restoredFingerprint);
+      const listed = roomsRef.current.find((room) => room.id === roomId);
+      if (listed && restoredFingerprint && roomStateFingerprint(listed) !== restoredFingerprint) {
+        applyRoomList(roomsRef.current.map((room) => room.id === roomId ? restored.room : room));
+      }
+      // A realtime message (or an optimistic local send) can arrive while the
+      // REST history request is in flight. Merge the live snapshot into the
+      // restored history before publishing it so switching/refreshing a room
+      // cannot make a just-arrived model reply disappear.
+      const current = snapshotsRef.current.get(roomId);
+      const messages = mergeRoomHistoryMessages(
+        restored.messages,
+        current?.messages || [],
+      );
+      const totalMessages = Math.max(
+        pagedDetail.total || 0,
+        restored.room.messageCount || 0,
+        messages.length,
+      );
+      roomHistoryCountRef.current.set(roomId, totalMessages);
+      if (!pagedDetail.hasMore && (historyWasComplete || initialOffset === 0 || messages.length >= totalMessages)) {
+        roomHistoryCompleteRef.current.add(roomId);
+        roomHistoryNextOffsetRef.current.delete(roomId);
+      } else if (pagedDetail.hasMore) {
+        // A bounded drain may need more than one poll for a very large room.
+        // Retain the server offset so the next pass continues instead of
+        // downloading the same first 15,000 messages forever.
+        roomHistoryCompleteRef.current.delete(roomId);
+        roomHistoryNextOffsetRef.current.set(roomId, nextOffset);
+      }
+      const nextSnapshot: HermesStudioRoomSnapshot = {
+        ...restored,
+        messages: attachWorkspaceDiffs(messages),
+        // In REST mode the room projection is authoritative for runtime state.
+        // Empty arrays/objects are valid values, so using `||` here would keep
+        // stale state or overwrite the freshly derived hosted-turn status with
+        // the empty defaults from the previous snapshot.
+        typingNames: socketRef.current ? (current?.typingNames || restored.typingNames) : restored.typingNames,
+        runningAgents: restored.runningAgents,
+        contextStatuses: restored.contextStatuses,
+        pendingApprovals: socketRef.current
+          ? (current?.pendingApprovals || restored.pendingApprovals)
+          : restored.pendingApprovals,
+        updatedAt: Math.max(
+          restored.updatedAt || 0,
+          current?.updatedAt || 0,
+          roomActivityTimestamp(restored.room, messages),
+        ),
+      };
+      setSnapshot(roomId, nextSnapshot);
+      // Rendering never waits for disk. Once this REST detail is on screen,
+      // persist the normalized transcript so the same room can be opened on
+      // the next offline launch.
+      queueRoomSnapshotPersistence(nextSnapshot);
     } catch (reason) {
+      if (mountedRef.current) setConnected(false);
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, loading: false, error: errorMessage(reason, isChinese) }));
+    } finally {
+      detailInFlightRef.current.delete(roomId);
     }
-  }, [connectSocket, isChinese, joinRoomOnSocket, patchSnapshot, setSnapshot, studioApi]);
+  }, [applyRoomList, isChinese, patchSnapshot, queueRoomSnapshotPersistence, setSnapshot, studioApi]);
 
   const selectRoom = useCallback((roomId: string) => {
     if (!roomId || !roomsRef.current.some((room) => room.id === roomId)) return;
     activeRoomIdRef.current = roomId;
     setActiveRoomId(roomId);
+    detailFingerprintRef.current.delete(roomId);
     if (fixtureMode) return;
     void refreshRoom(roomId);
   }, [fixtureMode, refreshRoom]);
@@ -527,9 +975,7 @@ export function useAgentGroupChatController({
     const timer = typingTimersRef.current.get(roomId);
     if (timer) clearTimeout(timer);
     typingTimersRef.current.delete(roomId);
-    const socket = socketRef.current;
-    if (socket && studioApi) studioApi.groupChat.emitStopTyping(socket, roomId);
-  }, [studioApi]);
+  }, []);
 
   const sendMessage = useCallback(async (
     requestedContent?: string,
@@ -560,24 +1006,26 @@ export function useAgentGroupChatController({
       error: null,
       updatedAt: Date.now(),
     }));
+    persistCurrentRoom(roomId);
     setDraft(roomId, '');
     if (!studioApi) {
       patchSnapshot(roomId, (current) => ({
         ...current,
         messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
       }));
+      persistCurrentRoom(roomId);
       notify(isChinese ? '预览模式：已加入 Agent 群聊时间线' : 'Preview: added to the Agent group timeline');
       return;
     }
+    detailFingerprintRef.current.delete(roomId);
     try {
-      const socket = await connectSocket();
-      await joinRoomOnSocket(roomId, socket);
-      if (!socket) throw new Error('Hermes Studio group chat is unavailable');
-      await studioApi.groupChat.sendMessage(socket, roomId, id, content, attachments, mentions);
+      const profiles = snapshot.agents.map((agent) => agent.profile).filter(Boolean);
+      await studioApi.groupChat.sendRoomMessage(roomId, id, content, profiles);
       patchSnapshot(roomId, (current) => ({
         ...current,
         messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
       }));
+      persistCurrentRoom(roomId);
     } catch (reason) {
       const message = errorMessage(reason, isChinese);
       patchSnapshot(roomId, (current) => ({
@@ -585,10 +1033,11 @@ export function useAgentGroupChatController({
         messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'failed' }),
         error: message,
       }));
+      persistCurrentRoom(roomId);
       setDraft(roomId, previousDraft || content);
       notify(message);
     }
-  }, [connectSocket, emitStopTyping, identity.name, isChinese, joinRoomOnSocket, notify, patchSnapshot, setDraft, stableUserId, studioApi]);
+  }, [emitStopTyping, identity.name, isChinese, notify, patchSnapshot, persistCurrentRoom, setDraft, stableUserId, studioApi]);
 
   const createRoom = useCallback(async (
     name: string,
@@ -634,19 +1083,30 @@ export function useAgentGroupChatController({
     }
     setCreating(true);
     try {
+      // The upstream route treats `summary` as an all-or-nothing config.  The
+      // mobile create form intentionally leaves provider/model blank until a
+      // user opts into summaries, so omit the field instead of sending an
+      // invalid `{ provider: '', model: '' }` payload (which the server rejects
+      // with 400).
+      const requestedSummary = options.summary;
+      const summary = requestedSummary
+        && requestedSummary.profile.trim()
+        && requestedSummary.provider.trim()
+        && requestedSummary.model.trim()
+        ? {
+            ...requestedSummary,
+            profile: requestedSummary.profile.trim(),
+            provider: requestedSummary.provider.trim(),
+            model: requestedSummary.model.trim(),
+          }
+        : undefined;
       const result = await studioApi.groupChat.createRoom({
         name: trimmedName,
         inviteCode: options.inviteCode || generateInviteCode(),
         memberName: identity.name,
         memberDescription: identity.description,
         agents: normalizedProfiles.map((profile) => ({ agent: 'hermes', profile })),
-        summary: options.summary || {
-          profile: agentProfile,
-          provider: '',
-          model: '',
-          apiMode: 'chat_completions',
-          everyTurns: 20,
-        },
+        summary,
         workspace: options.workspace || '',
         allowGuestAgents: options.allowGuestAgents,
         guestAgentApproval: options.guestAgentApproval,
@@ -862,11 +1322,9 @@ export function useAgentGroupChatController({
 
   const interruptAgent = useCallback(async (roomId: string, agentName: string) => {
     if (!studioApi) return;
-    const socket = await connectSocket();
-    await joinRoomOnSocket(roomId, socket);
-    if (!socket) throw new Error('Hermes Studio group chat is unavailable');
-    await studioApi.groupChat.interruptAgent(socket, roomId, agentName);
-  }, [connectSocket, joinRoomOnSocket, studioApi]);
+    await studioApi.groupChat.interruptAgentByName(roomId, agentName);
+    await refreshRoom(roomId);
+  }, [refreshRoom, studioApi]);
 
   const respondApproval = useCallback(async (
     roomId: string,
@@ -874,23 +1332,15 @@ export function useAgentGroupChatController({
     choice: HermesStudioPendingApproval['choices'][number],
   ) => {
     if (!studioApi) return;
-    const socket = await connectSocket();
-    await joinRoomOnSocket(roomId, socket);
-    if (!socket) throw new Error('Hermes Studio group chat is unavailable');
-    await studioApi.groupChat.respondApproval(socket, { roomId, approvalId, choice });
+    await studioApi.groupChat.respondApprovalRest(roomId, approvalId, choice);
     applyEvent({ type: 'approval-resolved', roomId, approvalId });
-  }, [applyEvent, connectSocket, joinRoomOnSocket, studioApi]);
+  }, [applyEvent, studioApi]);
 
   const emitTyping = useCallback((roomId: string) => {
-    if (!studioApi) return;
     const previous = typingTimersRef.current.get(roomId);
     if (previous) clearTimeout(previous);
-    void connectSocket().then((socket) => {
-      if (!socket) return;
-      studioApi.groupChat.emitTyping(socket, roomId);
-      typingTimersRef.current.set(roomId, setTimeout(() => emitStopTyping(roomId), 4_000));
-    }).catch(() => undefined);
-  }, [connectSocket, emitStopTyping, studioApi]);
+    typingTimersRef.current.set(roomId, setTimeout(() => emitStopTyping(roomId), 4_000));
+  }, [emitStopTyping]);
 
   const listWorkspaceFiles = useCallback(async (roomId: string, path = ''): Promise<HermesStudioWorkspaceFileListing> => {
     if (!studioApi) return { entries: [], path };
@@ -927,22 +1377,136 @@ export function useAgentGroupChatController({
     return studioApi.groupChat.readWorkspaceFileText(roomId, path);
   }, [studioApi]);
 
+  const removeRoomFromState = useCallback((roomId: string) => {
+    roomLifecycleRevisionRef.current.set(
+      roomId,
+      (roomLifecycleRevisionRef.current.get(roomId) || 0) + 1,
+    );
+    const currentRoom = roomsRef.current.find((room) => room.id === roomId);
+    const conversationId = currentRoom?.conversationId?.trim()
+      || `chat_room_${roomId.replace(/^room_/, '')}`;
+    persistedRoomFingerprintRef.current.delete(conversationId);
+    joinedRoomIdsRef.current.delete(roomId);
+    snapshotsRef.current.delete(roomId);
+    detailFingerprintRef.current.delete(roomId);
+    detailInFlightRef.current.delete(roomId);
+    roomHistoryCompleteRef.current.delete(roomId);
+    roomHistoryCountRef.current.delete(roomId);
+    roomHistoryNextOffsetRef.current.delete(roomId);
+    applyRoomList(roomsRef.current.filter((room) => room.id !== roomId));
+  }, [applyRoomList]);
+
   const deleteRoom = useCallback(async (roomId: string) => {
-    if (!studioApi) {
-      applyRoomList(roomsRef.current.filter((room) => room.id !== roomId));
+    const room = roomsRef.current.find((candidate) => candidate.id === roomId);
+    const conversationId = room?.conversationId?.trim() || '';
+    if (conversationId && localStore && cacheOwner) {
+      pendingRoomDeletionRevisionRef.current += 1;
+      pendingRoomConversationIdsRef.current.add(conversationId);
+      const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+      try {
+        const queued = await localStore.stageConversationDeletion(
+          cacheOwner,
+          {
+            conversationId,
+            // DELETE /rooms/{id} also removes the linked SingleConversation
+            // on the backend; keeping one room tombstone avoids ambiguity
+            // with offline synthetic chat_room_* identities.
+            kind: 'room',
+            remoteId: roomId,
+            profile: agentProfile,
+            queuedAt: Date.now(),
+          },
+          '',
+          ownerEpoch,
+        );
+        if (!queued) throw new Error('Local Agent room history deletion was not committed');
+        // The room index and chat history disappear immediately. The replay
+        // service then deletes the linked single conversation; the backend
+        // removes the room index as part of that operation.
+        removeRoomFromState(roomId);
+        await conversationDeleteReplayService?.replay(ownerEpoch).catch(() => undefined);
+      } catch (reason) {
+        const message = errorMessage(reason, isChinese);
+        let committed = false;
+        try {
+          committed = (await localStore.readPendingConversationDeletionIds(cacheOwner)).has(conversationId);
+        } catch {
+          // Keep the room visible when storage cannot be inspected. A later
+          // refresh will reconcile the durable outbox before filtering it.
+        }
+        if (committed) {
+          // enqueue may have committed before cache pruning failed. Continue
+          // the local-first contract and let the durable replay finish it.
+          removeRoomFromState(roomId);
+          void conversationDeleteReplayService?.replay(ownerEpoch).catch(() => undefined);
+        } else {
+          // No durable intent exists, so do not leave an in-memory tombstone
+          // that would make a failed delete silently hide the room forever.
+          pendingRoomConversationIdsRef.current.delete(conversationId);
+          pendingRoomDeletionRevisionRef.current += 1;
+        }
+        setError(message);
+        notify(message);
+      }
       return;
     }
+
+    // Legacy rooms may not have a linked SingleConversation yet. Use a
+    // synthetic cache identity in the same durable outbox, and let replay
+    // issue the room DELETE after the local row has been pruned.
+    if (localStore && cacheOwner) {
+      const syntheticConversationId = `chat_room_${roomId.replace(/^room_/, '')}`;
+      pendingRoomDeletionRevisionRef.current += 1;
+      pendingRoomConversationIdsRef.current.add(syntheticConversationId);
+      const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+      try {
+        const queued = await localStore.stageConversationDeletion(
+          cacheOwner,
+          {
+            conversationId: syntheticConversationId,
+            kind: 'room',
+            remoteId: roomId,
+            profile: agentProfile,
+            queuedAt: Date.now(),
+          },
+          '',
+          ownerEpoch,
+        );
+        if (!queued) throw new Error('Local Agent room deletion was not committed');
+        removeRoomFromState(roomId);
+        await conversationDeleteReplayService?.replay(ownerEpoch).catch(() => undefined);
+      } catch (reason) {
+        const message = errorMessage(reason, isChinese);
+        let committed = false;
+        try {
+          committed = (await localStore.readPendingConversationDeletionIds(cacheOwner)).has(syntheticConversationId);
+        } catch {
+          // Leave the visible room in place when storage cannot be inspected.
+        }
+        if (committed) {
+          removeRoomFromState(roomId);
+          void conversationDeleteReplayService?.replay(ownerEpoch).catch(() => undefined);
+        } else {
+          pendingRoomConversationIdsRef.current.delete(syntheticConversationId);
+          pendingRoomDeletionRevisionRef.current += 1;
+        }
+        setError(message);
+        notify(message);
+      }
+      return;
+    }
+
+    // Degraded shells without a local store retain the old best-effort path.
+    removeRoomFromState(roomId);
+    if (!studioApi) return;
     try {
       await studioApi.groupChat.deleteRoom(roomId);
-      joinedRoomIdsRef.current.delete(roomId);
-      snapshotsRef.current.delete(roomId);
-      applyRoomList(roomsRef.current.filter((room) => room.id !== roomId));
     } catch (reason) {
       const message = errorMessage(reason, isChinese);
       setError(message);
       notify(message);
     }
-  }, [applyRoomList, isChinese, notify, studioApi]);
+  }, [agentProfile, cacheOwner, conversationDeleteReplayService, isChinese, localStore, notify, removeRoomFromState, studioApi]);
 
   const clearRoom = useCallback(async (roomId: string) => {
     if (!studioApi) {
@@ -972,6 +1536,15 @@ export function useAgentGroupChatController({
       connectPromiseRef.current = null;
       joinedRoomIdsRef.current.clear();
       joinPromisesRef.current.clear();
+      hydratedRoomOwnerRef.current = '';
+      pendingRoomConversationIdsRef.current.clear();
+      pendingRoomDeletionRevisionRef.current = 0;
+      roomLifecycleRevisionRef.current.clear();
+      persistedRoomFingerprintRef.current.clear();
+      roomHistoryCompleteRef.current.clear();
+      roomHistoryCountRef.current.clear();
+      roomHistoryNextOffsetRef.current.clear();
+      roomPersistenceQueueRef.current.clear();
       for (const timer of typingTimersRef.current.values()) clearTimeout(timer);
       typingTimersRef.current.clear();
       if (socket) {
@@ -982,23 +1555,47 @@ export function useAgentGroupChatController({
   }, [cacheOwner, client]);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      // Keep downloaded collaboration transcripts available in the unified
+      // history even before the user switches into the Studio mode. This is
+      // local-only hydration; it does not open a network channel.
+      void hydrateCachedRooms();
+      // Deletion replay is independent of the visible mode. A room removed
+      // from the unified history must still reach the cloud while the user is
+      // browsing ordinary chat or a native route.
+      void conversationDeleteReplayService?.replay().catch(() => undefined);
+      return;
+    }
     void (async () => {
       await refresh();
       if (!mountedRef.current) return;
       if (fixtureMode && !roomsRef.current.length) applyRoomList(fixtureRooms());
       const firstRoomId = activeRoomIdRef.current || roomsRef.current[0]?.id;
       if (firstRoomId) selectRoom(firstRoomId);
-      if (studioApi) {
-        try {
-          const socket = await connectSocket();
-          for (const room of roomsRef.current) await joinRoomOnSocket(room.id, socket);
-        } catch (reason) {
-          if (mountedRef.current) setError(errorMessage(reason, isChinese));
-        }
-      }
     })();
-  }, [applyRoomList, connectSocket, enabled, fixtureMode, isChinese, joinRoomOnSocket, refresh, selectRoom, studioApi]);
+  }, [applyRoomList, conversationDeleteReplayService, enabled, fixtureMode, hydrateCachedRooms, refresh, selectRoom]);
+
+  // The collaboration plugin exposes REST snapshots and hosted-turn state,
+  // not a Socket.IO namespace. Poll the active room while Studio is visible so
+  // assistant replies become visible as soon as the backend workflow appends
+  // them to the linked conversation.
+  useEffect(() => {
+    if (!enabled || fixtureMode || !studioApi) return;
+    let pollCount = 0;
+    const timer = setInterval(() => {
+      pollCount += 1;
+      void (async () => {
+        // The room list is a small projection and carries message/turn
+        // revisions. Refresh it periodically; only fetch the full transcript
+        // when that fingerprint changes, avoiding repeated O(n) downloads for
+        // an idle room while still noticing replies and running turns.
+        if (pollCount % 6 === 0) await refresh();
+        const roomId = activeRoomIdRef.current;
+        if (roomId) await refreshRoom(roomId);
+      })();
+    }, 2_500);
+    return () => clearInterval(timer);
+  }, [enabled, fixtureMode, refresh, refreshRoom, studioApi]);
 
   const activeRoom = snapshotsRef.current.get(activeRoomId) || null;
   const roomSnapshots = rooms.map((room) => snapshotsRef.current.get(room.id)).filter(
@@ -1047,6 +1644,214 @@ export function useAgentGroupChatController({
     downloadWorkspaceFile,
     readWorkspaceFileText,
   };
+}
+
+function roomTranscriptFingerprint(
+  snapshot: HermesStudioRoomSnapshot,
+  historyComplete = false,
+  nextOffset = 0,
+): string {
+  return JSON.stringify([
+    snapshot.room.conversationId || '',
+    roomStateFingerprint(snapshot.room),
+    historyComplete,
+    Math.max(0, nextOffset),
+    snapshot.agents.map((agent) => [
+      agent.id,
+      agent.profile,
+      agent.provider || '',
+      agent.model || '',
+      agent.name,
+    ]),
+    snapshot.messages.map((message) => [
+      message.id,
+      message.timestamp,
+      message.persistedAt || 0,
+      message.isStreaming === true,
+      message.deliveryStatus || '',
+      message.content,
+    ]),
+  ]);
+}
+
+function cachedConversationFromRoomSnapshot(
+  snapshot: HermesStudioRoomSnapshot,
+  existing: SingleConversation | undefined,
+  fallbackProfile: string,
+  historyComplete: boolean,
+  nextOffset?: number,
+): SingleConversation {
+  const room = snapshot.room;
+  const profile = room.profiles?.[0]?.trim()
+    || existing?.profile?.trim()
+    || fallbackProfile.trim()
+    || 'default';
+  const messages = snapshot.messages.map(cachedMessageFromGroup);
+  const updatedAt = Math.max(
+    snapshot.updatedAt || 0,
+    roomActivityTimestamp(room, snapshot.messages),
+  );
+  return {
+    ...existing,
+    id: room.conversationId || existing?.id || `chat_room_${room.id.replace(/^room_/, '')}`,
+    profile,
+    title: room.name.trim() || existing?.title || 'Agent room',
+    messages,
+    source: 'collaboration_room',
+    room_id: room.id,
+    message_count: Math.max(room.messageCount || 0, messages.length),
+    hosted_turns: room.hostedTurns || existing?.hosted_turns,
+    room_agents: snapshot.agents.length
+      ? snapshot.agents.map((agent) => ({
+          id: agent.id,
+          room_id: agent.roomId || room.id,
+          agent_id: agent.agentId,
+          agent: agent.agent,
+          profile: agent.profile,
+          provider: agent.provider,
+          model: agent.model,
+          name: agent.name,
+          description: agent.description,
+        }))
+      : existing?.room_agents,
+    room_history_complete: historyComplete,
+    room_history_next_offset: historyComplete ? undefined : Math.max(0, nextOffset || 0),
+    created_at: room.createdAt || existing?.created_at,
+    updated_at: updatedAt || existing?.updated_at || Date.now(),
+    preview: [...messages].reverse().find(({ content }) => content.trim())?.content.slice(0, 160)
+      || existing?.preview,
+  };
+}
+
+function cachedMessageFromGroup(message: HermesStudioGroupChatMessage): CollaborationMessage {
+  const role = message.role === 'user' ? 'user' : 'assistant';
+  const timestamp = numberValue(message.persistedAt, numberValue(message.timestamp, Date.now()));
+  return {
+    id: message.id,
+    role,
+    name: message.senderName,
+    content: message.content,
+    created_at: message.timestamp,
+    updated_at: timestamp,
+    sender_id: message.senderId,
+    sender_name: message.senderName,
+    profile: message.senderAgentProfile,
+    provider: message.senderAgentProvider,
+    model: message.senderAgentModel,
+    status: message.deliveryStatus === 'failed'
+      ? 'failed'
+      : message.isStreaming
+        ? 'running'
+        : 'completed',
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+    meta: {
+      ...(message.run_id ? { runtime_turn_id: message.run_id } : {}),
+      ...(message.reasoning ? { reasoning: message.reasoning } : {}),
+      ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+      ...(message.toolName || message.tool_name
+        ? { tool_name: message.toolName || message.tool_name }
+        : {}),
+      ...(message.toolCallId || message.tool_call_id
+        ? { tool_call_id: message.toolCallId || message.tool_call_id }
+        : {}),
+      ...(message.toolArgs !== undefined ? { tool_args: message.toolArgs } : {}),
+      ...(message.toolResult !== undefined ? { tool_result: message.toolResult } : {}),
+      ...(message.toolStatus ? { tool_status: message.toolStatus } : {}),
+      room_id: message.roomId,
+    },
+  };
+}
+
+interface CachedRoomProjection {
+  historyComplete: boolean;
+  nextOffset: number;
+  room: HermesStudioRoomInfo;
+  snapshot: HermesStudioRoomSnapshot;
+}
+
+function cachedRoomProjection(conversation: SingleConversation): CachedRoomProjection | null {
+  const conversationId = conversation.id.trim();
+  if (!conversationId) return null;
+  const explicitRoomId = conversation.room_id?.trim();
+  const derivedRoomId = conversationId.startsWith('chat_room_')
+    ? `room_${conversationId.slice('chat_room_'.length)}`
+    : '';
+  const roomId = explicitRoomId || derivedRoomId;
+  if (!roomId) return null;
+  const messages = conversation.messages
+    .map((message) => normalizeGroupMessage(message, roomId))
+    .filter((message): message is HermesStudioGroupChatMessage => message !== null);
+  const latestMessageAt = messages.reduce(
+    (latest, message) => Math.max(latest, numberValue(message.timestamp, 0)),
+    0,
+  );
+  const createdAt = numberValue(conversation.created_at, 0);
+  const lastActiveAt = Math.max(
+    numberValue(conversation.updated_at, 0),
+    latestMessageAt,
+    createdAt,
+  );
+  const profile = conversation.profile.trim();
+  const room: HermesStudioRoomInfo = {
+    id: roomId,
+    name: conversation.title.trim() || 'Agent room',
+    inviteCode: null,
+    profiles: profile ? [profile] : [],
+    messageCount: Math.max(numberValue(conversation.message_count, 0), messages.length),
+    conversationId,
+    hostedTurns: isRecord(conversation.hosted_turns)
+      ? conversation.hosted_turns as Record<string, Record<string, unknown>>
+      : {},
+    canManage: true,
+    createdAt: createdAt || undefined,
+    lastActiveAt: lastActiveAt || undefined,
+  };
+  const agents = (conversation.room_agents || conversation.participants || [])
+    .map((agent) => normalizeRoomAgent({ ...agent, roomId }))
+    .filter((agent): agent is NonNullable<ReturnType<typeof normalizeRoomAgent>> => agent !== null);
+  const fallbackAgents = agents.length
+    ? agents
+    : room.profiles?.map((profile, index) => normalizeRoomAgent({
+        id: roomId + '-agent-' + index,
+        roomId,
+        agentId: roomId + '-agent-' + index,
+        agent: 'hermes',
+        profile,
+        name: profile,
+      })).filter((agent): agent is NonNullable<ReturnType<typeof normalizeRoomAgent>> => agent !== null) || [];
+  return {
+    historyComplete: conversation.room_history_complete === true,
+    nextOffset: Math.max(0, numberValue(conversation.room_history_next_offset, 0)),
+    room,
+    snapshot: snapshotFromDetail({
+      room,
+      agents: fallbackAgents,
+      members: [],
+      messages,
+      connected: false,
+    }),
+  };
+}
+
+function roomStateFingerprint(room: HermesStudioRoomInfo): string {
+  const turns = Object.entries(room.hostedTurns || {})
+    .map(([id, turn]) => [
+      id,
+      stringValue(turn.status, stringValue(turn.state)),
+      numberValue(turn.updated_at ?? turn.updatedAt ?? turn.started_at ?? turn.created_at, 0),
+    ])
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0])));
+  // A REST room projection normally includes message_count and hosted_turns.
+  // Return an empty fingerprint for legacy fixtures with none of those
+  // revision signals so they continue to refresh rather than becoming stale.
+  if (room.messageCount === undefined && room.lastActiveAt === undefined && !turns.length) return '';
+  return JSON.stringify([room.messageCount ?? 0, room.lastActiveAt ?? 0, turns]);
+}
+
+function isAlreadyDeletedRemote(error: unknown): boolean {
+  if (!isRecord(error)) return false;
+  const status = Number(error.status ?? error.statusCode);
+  return status === 404 || status === 410;
 }
 
 function stableHash(value: string): string {

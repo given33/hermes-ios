@@ -269,6 +269,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
     read('src/studio/chat/ChatPlanDrawer.tsx'),
     read('src/studio/chat/ChatPageShell.tsx'),
     read('src/studio/chat/chat-plan-model.ts'),
+    read('src/api/chat-todo-model.ts'),
     read('src/studio/chat/ConversationHistory.tsx'),
     read('src/studio/chat/ChatModelToolsDrawer.tsx'),
     read('src/studio/chat/chat-presentation-styles.ts'),
@@ -370,8 +371,11 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.doesNotMatch(chat, /Gesture\.Pan\(\)/);
   assert.doesNotMatch(chat, /const drawerWidth = width/);
   assert.match(chat, /\{completed\}\/\{total\}/);
-  assert.match(chat, /activity\.toolName, activity\.name/);
-  assert.match(chat, /'cancelled',\s*'completed',\s*'in_progress',\s*'pending'/s);
+  assert.match(chat, /todoItemsFromActivity/);
+  assert.match(chat, /TODO_STATUS_ALIASES/);
+  assert.match(chat, /cancelled: 'cancelled'/);
+  assert.match(chat, /in_progress: 'in_progress'/);
+  assert.match(chat, /pending: 'pending'/);
   assert.match(chat, /OpenMinis\/OpenMinis@9cf3a855/);
   assert.match(chat, /styles\.gatewayStatusLabel/);
   assert.match(chat, /styles\.gatewayStatusVersion/);

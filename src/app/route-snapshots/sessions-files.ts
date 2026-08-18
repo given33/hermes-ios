@@ -8,7 +8,9 @@ import { HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION } from '../swiftui-route-contract
 import type {
   AccountFileEntry,
   ConversationSessionState,
+  SingleConversation,
 } from '../../api/HermesCloudApi';
+import { conversationSessionSummary } from '../../api/HermesCloudApi';
 import {
   formatBytes,
   formatTimestamp,
@@ -58,6 +60,23 @@ export function createHermesSwiftUISessionsSnapshot(
     sessions: sessionsSnapshot(source, localizer),
     sessionContext: sessionState ? sessionContextSnapshot(sessionState) : undefined,
   };
+}
+
+/** Project the owner-scoped device cache without exposing Studio room rows. */
+export function createHermesSwiftUISessionsSnapshotFromConversations(
+  conversations: readonly SingleConversation[],
+  pendingDeletionIds: ReadonlySet<string>,
+  locale: HermesRouteLocaleInput = 'zh',
+  sessionState?: ConversationSessionState,
+): HermesSwiftUIRouteSnapshot {
+  const sessions = conversations
+    .filter((conversation) => (
+      !pendingDeletionIds.has(conversation.id)
+      && conversation.source !== 'collaboration_room'
+      && !conversation.id.startsWith('chat_room_')
+    ))
+    .map(conversationSessionSummary);
+  return createHermesSwiftUISessionsSnapshot({ sessions, sessionState }, locale);
 }
 
 function sessionContextSnapshot(

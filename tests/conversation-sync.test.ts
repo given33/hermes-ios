@@ -16,6 +16,7 @@ import {
 } from '../src/api/HermesCloudApi';
 import {
   ConversationLocalStore,
+  isCompleteConversation,
   mergeCachedConversationUpdate,
   mergeDownloadedConversations,
   reconcileConversationCache,
@@ -1297,6 +1298,39 @@ test('a detail 404 removes the stale summary and selects the next live conversat
   assert.deepEqual(restored?.conversations.map(({ id }) => id), ['survivor']);
 });
 
+test('a transient detail failure keeps the previously downloaded transcript usable offline', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|detail-retry@example.test';
+  const cached = conversation('retryable', 100, [
+    { id: 'm-1', role: 'user', name: 'You', content: '完整本地消息 1' },
+    { id: 'm-2', role: 'assistant', name: 'Hermes', content: '完整本地消息 2' },
+  ]);
+  await store.write(owner, [cached], cached.id);
+  const api = {
+    async getUnifiedConversations() {
+      return {
+        conversations: [conversation('retryable', 200, [
+          { id: 'summary', role: 'assistant', name: 'Hermes', content: '云端末条' },
+        ], 3)],
+      };
+    },
+    async getConversation() {
+      throw Object.assign(new Error('temporary detail outage'), { status: 503 });
+    },
+  } as unknown as HermesCloudApi;
+
+  const synchronized = await synchronizeConversationCache(api, store, owner);
+  const restored = await store.read(owner);
+  const row = synchronized.conversations.find(({ id }) => id === 'retryable');
+  const persisted = restored?.conversations.find(({ id }) => id === 'retryable');
+
+  assert.deepEqual(row?.messages.map(({ id }) => id), ['m-1', 'm-2']);
+  assert.equal(row && isCompleteConversation(row), true);
+  assert.deepEqual(persisted?.messages.map(({ id }) => id), ['m-1', 'm-2']);
+  assert.equal(persisted && isCompleteConversation(persisted), true);
+});
+
 test('a slower stale synchronization cannot overwrite a newer device snapshot', async () => {
   const storage = new MemoryStorage();
   const store = new ConversationLocalStore(storage);
@@ -1626,6 +1660,76 @@ test('concurrent cache merge respects authoritative deletions and keeps unseen a
     ['keep', 'optimistic'],
   );
   assert.equal(restored!.conversations[0].message_count, 2);
+});
+
+test('a stale full-cache write cannot resurrect a staged local deletion', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|tombstone-write@example.test';
+  const store = new ConversationLocalStore(storage);
+  const doomed = conversation('doomed', 100, []);
+  const survivor = conversation('survivor', 90, []);
+  await store.write(owner, [doomed, survivor], survivor.id);
+  await store.stageConversationDeletion(owner, {
+    conversationId: doomed.id,
+    kind: 'conversation',
+    queuedAt: 200,
+  }, survivor.id);
+
+  await store.write(owner, [doomed, survivor], doomed.id);
+
+  const restored = await store.read(owner);
+  assert.deepEqual(restored?.conversations.map(({ id }) => id), [survivor.id]);
+  assert.equal(restored?.activeConversationId, survivor.id);
+});
+
+test('single-room upsert preserves conversations created after a stale read', async () => {
+  const storage = new MemoryStorage();
+  const owner = 'https://example.test|room-upsert@example.test';
+  const roomStore = new ConversationLocalStore(storage);
+  const chatStore = new ConversationLocalStore(storage);
+  const room = {
+    ...conversation('chat_room_room-1', 100, [{
+      id: 'room-user',
+      role: 'user',
+      name: 'You',
+      content: '房间请求',
+      created_at: 100,
+    }]),
+    source: 'collaboration_room' as const,
+    room_id: 'room-1',
+  };
+  await roomStore.write(owner, [room], room.id);
+  const stale = await roomStore.read(owner);
+  await chatStore.write(owner, [
+    room,
+    conversation('ordinary-new', 200, []),
+  ], 'ordinary-new');
+
+  await roomStore.upsert(owner, {
+    ...room,
+    updated_at: 300,
+    message_count: 2,
+    messages: [
+      ...room.messages,
+      {
+        id: 'room-reply',
+        role: 'assistant',
+        name: 'Hermes',
+        content: '房间回复',
+        created_at: 300,
+      },
+    ],
+  }, stale?.activeConversationId || room.id);
+
+  const restored = await roomStore.read(owner);
+  assert.deepEqual(
+    restored?.conversations.map(({ id }) => id).sort(),
+    ['chat_room_room-1', 'ordinary-new'],
+  );
+  assert.equal(
+    restored?.conversations.find(({ id }) => id === room.id)?.messages.length,
+    2,
+  );
 });
 
 test('pending turn reconciliation rejects substring collisions and accepts exact metadata', async () => {

@@ -50,6 +50,8 @@ export interface ChatMessageStreamProps {
   reconnectAttempt: number;
   runtime?: HostedRuntimeProjection;
   safeAreaBottom: number;
+  safeAreaLeft?: number;
+  safeAreaRight?: number;
   sending: boolean;
   showScrollToBottom: boolean;
   slashMenuOpen: boolean;
@@ -83,6 +85,8 @@ export function ChatMessageStream({
   reconnectAttempt,
   runtime,
   safeAreaBottom,
+  safeAreaLeft = 0,
+  safeAreaRight = 0,
   sending,
   showScrollToBottom,
   slashMenuOpen,
@@ -119,7 +123,8 @@ export function ChatMessageStream({
           styles.streamContent,
           {
             paddingBottom: 22,
-            paddingHorizontal: compact ? 12 : 20,
+            paddingLeft: (compact ? 12 : 20) + safeAreaLeft,
+            paddingRight: (compact ? 12 : 20) + safeAreaRight,
           },
           messages.length === 0 && styles.emptyStream,
         ]}

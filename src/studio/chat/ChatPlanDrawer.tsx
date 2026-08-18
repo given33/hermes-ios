@@ -34,10 +34,14 @@ export function ChatPlanDrawer({
   children,
   isChinese,
   plan,
+  safeAreaLeft = 0,
+  safeAreaRight = 0,
 }: {
   children: ReactNode;
   isChinese: boolean;
   plan: ChatPlan | null;
+  safeAreaLeft?: number;
+  safeAreaRight?: number;
 }) {
   const { tokens } = useTheme();
   const [open, setOpen] = useState(false);
@@ -55,6 +59,7 @@ export function ChatPlanDrawer({
         onPress={() => setOpen((current) => !current)}
         style={[
           planStyles.header,
+          { marginLeft: safeAreaLeft, marginRight: safeAreaRight },
           {
             backgroundColor: tokens.colors.card,
             borderColor: tokens.colors.border,
@@ -78,6 +83,7 @@ export function ChatPlanDrawer({
         <View
           style={[
             planStyles.content,
+            { marginLeft: safeAreaLeft, marginRight: safeAreaRight },
             {
               backgroundColor: tokens.colors.foregroundLayer,
               borderColor: tokens.colors.border,

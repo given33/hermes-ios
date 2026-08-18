@@ -287,7 +287,9 @@ export function ContextUsageRing({
   value?: number;
 }) {
   const { tokens } = useTheme();
-  const percent = typeof value === 'number' && value >= 0 ? value : null;
+  const percent = typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.min(100, Math.round(value))
+    : null;
   const color = percent === null
     ? tokens.colors.textTertiary
     : percent >= 85
@@ -296,12 +298,18 @@ export function ContextUsageRing({
         ? '#D28B22'
         : tokens.colors.success;
   return (
-    <View style={[styles.contextRing, { borderColor: multiplyAlpha(color, 0.5) }]}>
+    <View
+      accessible
+      accessibilityLabel={percent === null
+        ? (isChinese ? '上下文使用率未知' : 'Context usage unavailable')
+        : (isChinese ? `上下文使用率 ${percent}%` : `Context usage ${percent}%`)}
+      style={[styles.contextRing, { borderColor: multiplyAlpha(color, 0.5) }]}
+    >
       <Text style={[styles.contextRingText, { color }]}>
-        {percent === null ? '—' : `${percent}`}
+        {percent === null ? '—' : `${percent}%`}
       </Text>
       <Text style={[styles.contextRingLabel, { color }]}>
-        {isChinese ? '上下文%' : 'ctx%'}
+        {isChinese ? '上下文' : 'ctx'}
       </Text>
     </View>
   );

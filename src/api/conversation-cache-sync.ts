@@ -20,6 +20,7 @@ import {
 export interface ConversationCacheSyncPort {
   beginSynchronization(owner: string): number;
   read(owner: string): Promise<ConversationCacheSnapshot | null>;
+  readPendingConversationDeletionIds?(owner: string): Promise<ReadonlySet<string>>;
   writeSynchronized(
     owner: string,
     generation: number,
@@ -31,8 +32,10 @@ export interface ConversationCacheSyncPort {
 export function reconcileConversationCache(
   local: readonly SingleConversation[],
   remote: readonly SingleConversation[],
+  preserveLocalOnly = false,
 ): ConversationCacheReconciliation {
   const localById = new Map(local.map((conversation) => [conversation.id, conversation]));
+  const remoteIds = new Set(remote.map(({ id }) => id));
   const downloadIds: string[] = [];
   const conversations = remote.map((summary) => {
     if (isOfficialPlaceholder(summary)) return cloneCachedConversation(summary);
@@ -41,8 +44,32 @@ export function reconcileConversationCache(
       return cloneCachedConversation(cached);
     }
     downloadIds.push(summary.id);
+    // Keep a complete device transcript attached to the lightweight summary
+    // while the detail request is in flight. A transient timeout must not
+    // downgrade an already-downloaded conversation to its last-message row;
+    // a successful detail response still replaces this fallback authoritatively.
+    if (cached && isCompleteConversation(cached)) {
+      return cloneCachedConversation({
+        ...summary,
+        messages: cached.messages,
+        // Keep the local count while the remote detail is unavailable. Using
+        // the newer remote count here would make `isCompleteConversation`
+        // reject the still-valid local transcript on an offline reopen.
+        message_count: Math.max(numberValue(cached.message_count), cached.messages.length),
+      });
+    }
     return cloneCachedConversation(summary);
   });
+  if (preserveLocalOnly) {
+    conversations.push(
+      ...local
+        .filter(({ id }) => !remoteIds.has(id))
+        .map(cloneCachedConversation),
+    );
+    conversations.sort((left, right) => (
+      timestampNumber(right.updated_at) - timestampNumber(left.updated_at)
+    ));
+  }
   return { conversations, downloadIds };
 }
 
@@ -156,9 +183,17 @@ export async function synchronizeConversationCache(
   const generation = store.beginSynchronization(owner);
   const cached = await store.read(owner);
   const remote = await api.getUnifiedConversations(profile);
+  const pendingDeletionIds = await store.readPendingConversationDeletionIds?.(owner)
+    || new Set<string>();
+  // A process can die after the durable delete intent is written but before
+  // the row-level cache prune finishes. Filter both sides before reconciliation
+  // so preserveLocalOnly cannot resurrect that tombstoned row on restart.
+  const localConversations = (cached?.conversations || [])
+    .filter(({ id }) => !pendingDeletionIds.has(id));
   const reconciliation = reconcileConversationCache(
-    cached?.conversations || [],
-    remote.conversations,
+    localConversations,
+    remote.conversations.filter(({ id }) => !pendingDeletionIds.has(id)),
+    true,
   );
   const missingIds = new Set<string>();
   const downloaded = await mapWithConcurrency(
@@ -172,7 +207,10 @@ export async function synchronizeConversationCache(
           missingIds.add(id);
           return null;
         }
-        throw error;
+        // Keep the summary-plus-local-transcript fallback in the index. The
+        // next refresh will retry this detail without destroying offline
+        // history or making an otherwise usable cache appear incomplete.
+        return null;
       }
     },
   );
@@ -228,7 +266,12 @@ function sameRevision(left: SingleConversation, right: SingleConversation): bool
 }
 
 function isNotFoundError(error: unknown): boolean {
-  return isRecord(error) && (error.status === 404 || error.statusCode === 404);
+  return isRecord(error) && (
+    error.status === 404
+    || error.status === 410
+    || error.statusCode === 404
+    || error.statusCode === 410
+  );
 }
 
 function isOfficialPlaceholder(conversation: SingleConversation): boolean {

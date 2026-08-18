@@ -152,7 +152,12 @@ export const UnifiedMessage = memo(function UnifiedMessage({
       {metadata}
     </Text>
   ) : null;
-  const hasBubble = Boolean(isUser || message.content.trim() || message.attachments?.length);
+  const hasBubble = Boolean(
+    isUser
+      || message.content.trim()
+      || message.attachments?.length
+      || message.todos?.length,
+  );
   const messageBody = (
     <View
       style={[

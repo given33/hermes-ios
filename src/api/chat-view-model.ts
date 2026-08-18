@@ -41,6 +41,7 @@ import {
   isChatRuntimeStatusActivity,
   latestChatRuntimeWaitingState,
 } from './chat-runtime-state';
+import { parseTodoItems, todoItemsFromActivity } from './chat-todo-model';
 
 export type {
   ConversationCollaborationState,
@@ -496,6 +497,13 @@ export function collaborationMessageToView(
   const runtimeSessionId = stringValue(meta.runtime_session_id);
   const runtimeMessageId = numberValue(meta.runtime_message_id);
   const mappedActivities = mapActivities(message, meta);
+  const todos = latestTodoSnapshot(mappedActivities)
+    || parseTodoItems(
+      meta.todos
+        ?? meta.todo
+        ?? meta.todo_list
+        ?? (message as unknown as Record<string, unknown>).todos,
+    );
   const createdAt = timestampValue(message.created_at)
     || timestampValue(message.timestamp)
     || timestampValue(meta.created_at);
@@ -601,10 +609,17 @@ export function collaborationMessageToView(
       || stringValue(meta.avatar_url)
       || undefined,
     completedAt: completedAt || undefined,
-    content: message.content || '',
+    content: visibleMessageContent(message, meta),
     contextUsedPercent: (() => {
-      const raw = message.context_used_percent;
+      const raw = message.context_used_percent
+        ?? meta.context_used_percent
+        ?? meta.context_percent
+        ?? meta.context_usage_percent;
       if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+      if (typeof raw === 'string' && raw.trim() && Number.isFinite(Number(raw))) {
+        const parsed = Number(raw);
+        if (parsed >= 0) return parsed;
+      }
       return undefined;
     })(),
     createdAt: createdAt || undefined,
@@ -637,8 +652,70 @@ export function collaborationMessageToView(
     startedAt: startedAt || undefined,
     status,
     timingLabel: timingLabel || undefined,
+    todos: todos || undefined,
     updatedAt: updatedAt || undefined,
   };
+}
+
+/**
+ * Older hosted snapshots put the final answer in metadata while leaving the
+ * top-level content empty. Resolve those shapes before the renderer decides
+ * whether a message has a bubble; otherwise the model did answer, but the iOS
+ * surface renders only its timing/activity chrome.
+ */
+function visibleMessageContent(message: CollaborationMessage, meta: JsonRecord): string {
+  const direct = stringValue(message.content);
+  if (direct) return direct;
+  const source = message as unknown as Record<string, unknown>;
+  for (const value of [
+    meta.content,
+    meta.final_report,
+    meta.reply,
+    meta.response,
+    meta.output,
+    meta.result,
+    meta.answer,
+    meta.text,
+    source.output,
+    source.result,
+    source.response,
+  ]) {
+    const text = nestedMessageText(value, 0);
+    if (text) return text;
+  }
+  return '';
+}
+
+function nestedMessageText(value: unknown, depth: number): string {
+  if (depth > 3 || value === null || value === undefined) return '';
+  if (typeof value === 'string') return value.trim();
+  // Status flags and counters are common alongside legacy final-report
+  // fields. They are metadata, not model prose; rendering them made an empty
+  // assistant reply appear as a literal "false" or "0" bubble.
+  if (typeof value === 'number' || typeof value === 'boolean') return '';
+  if (Array.isArray(value)) return structuredText(value).trim();
+  if (!isRecord(value)) return '';
+  for (const key of ['content', 'text', 'message', 'reply', 'response', 'final_report', 'output', 'result', 'answer']) {
+    const nested = nestedMessageText(value[key], depth + 1);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+function latestTodoSnapshot(
+  activities?: readonly HermesChatActivity[],
+): HermesChatTodo[] | null {
+  if (!activities?.length) return null;
+  const snapshots = activities.flatMap((activity) => {
+    const todos = todoItemsFromActivity(activity);
+    if (!todos) return [];
+    return [{
+      todos,
+      timestamp: activity.completedAt || activity.startedAt || 0,
+    }];
+  });
+  snapshots.sort((left, right) => right.timestamp - left.timestamp);
+  return snapshots[0]?.todos || null;
 }
 
 function mapMessageAttachments(value: unknown): HermesChatAttachment[] {

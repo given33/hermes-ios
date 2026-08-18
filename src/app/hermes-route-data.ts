@@ -21,6 +21,7 @@ import {
 } from './route-snapshots/support';
 import {
   createHermesSwiftUISessionsSnapshot,
+  createHermesSwiftUISessionsSnapshotFromConversations,
   filesSnapshot,
   sessionsSnapshot,
 } from './route-snapshots/sessions-files';
@@ -56,7 +57,10 @@ import {
 import { systemSnapshot } from './route-snapshots/system';
 
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
-export { createHermesSwiftUISessionsSnapshot } from './route-snapshots/sessions-files';
+export {
+  createHermesSwiftUISessionsSnapshot,
+  createHermesSwiftUISessionsSnapshotFromConversations,
+} from './route-snapshots/sessions-files';
 export { decodeModelSelection, encodeModelSelection } from './route-snapshots/model-selection';
 
 export async function loadHermesSwiftUIRouteSnapshot(

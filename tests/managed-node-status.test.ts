@@ -70,8 +70,51 @@ test('aggregate recovery reports explicit DBB3 and WSL target failures', () => {
 test('invalid, explicitly stale, and far-future observations fail closed', () => {
   assert.equal(isFreshObservation({ observed_at: 'invalid' }, now), false);
   assert.equal(isFreshObservation({ fresh: false, observed_at: '2026-07-18T09:59:59Z' }, now), false);
+  assert.equal(isFreshObservation({ fresh: 'false', observed_at: '2026-07-18T09:59:59Z' }, now), false);
   assert.equal(isFreshObservation({ observed_at: '2026-07-18T10:00:31Z' }, now), false);
   assert.equal(isFreshObservation({ observed_at: '2026-07-18T10:00:30Z' }, now), true);
+});
+
+test('managed relay timestamps accept Unix seconds and native camel-case aliases', () => {
+  const nowSeconds = Math.floor(now / 1000);
+  assert.equal(isFreshObservation({ observed_at: nowSeconds - 30 }, now), true);
+  assert.equal(isFreshObservation({ observed_at: String(nowSeconds - 30) }, now), true);
+  assert.deepEqual(
+    managedNodeGatewayStatuses({
+      nodes: [{
+        id: 'DBB3',
+        label: 'DBB3',
+        online: 'true',
+        gateway_state: 'healthy',
+        observedAt: nowSeconds - 5,
+      }],
+    }, now).map(({ id, state }) => ({ id, state })),
+    [{ id: 'dbb3', state: 'online' }, { id: 'wsl', state: 'offline' }],
+  );
+  assert.deepEqual(
+    managedNodeGatewayStatuses({
+      managedNodes: [{
+        nodeId: 'wsl',
+        displayName: 'WSL',
+        isOnline: true,
+        gatewayState: 'ready',
+        checkedAt: nowSeconds - 5,
+      }],
+    }, now).map(({ id, state }) => ({ id, state })),
+    [{ id: 'dbb3', state: 'offline' }, { id: 'wsl', state: 'online' }],
+  );
+});
+
+test('recovery target states are matched case-insensitively across contract aliases', () => {
+  assert.deepEqual(
+    managedNodeGatewayStatuses({
+      sources: [{
+        id: 'relay',
+        recovery_state: { targetStates: { DBB3: { state: 'healthy' }, WSL: { online: true } } },
+      }],
+    }).map(({ id, state }) => ({ id, state })),
+    [{ id: 'dbb3', state: 'online' }, { id: 'wsl', state: 'online' }],
+  );
 });
 
 test('system route data expires when polling stops or a node observation ages out', () => {

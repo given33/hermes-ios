@@ -653,6 +653,7 @@ export function ChatPreviewPage({
     localStore,
     notify,
     openConversation,
+    replayDurableOutboxes,
     optimisticMessagesByConversationRef,
     optimisticMessagesRef,
     optimisticPendingByConversationRef,

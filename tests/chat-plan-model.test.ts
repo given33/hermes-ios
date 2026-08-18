@@ -79,6 +79,17 @@ test('todo JSON with an appended persistence hint still parses', () => {
   assert.equal(plan?.total, 1);
 });
 
+test('todo plans accept title/text fields and normalized status aliases', () => {
+  const plan = latestChatPlan([message({
+    output: '```json\n{"todos":[{"id":"one","title":"检查发布包","status":"done"},{"id":"two","text":"上传构建","status":"waiting"}]}\n```',
+  }, 4_500)]);
+
+  assert.deepEqual(plan?.items, [
+    { id: 'one', content: '检查发布包', status: 'completed' },
+    { id: 'two', content: '上传构建', status: 'pending' },
+  ]);
+});
+
 test('non-todo tool activities never create a plan', () => {
   assert.equal(latestChatPlan([message({
     name: 'terminal',

@@ -8,8 +8,12 @@ import {
 } from 'react';
 
 import { hasNativeIOSContext } from '../../../modules/hermes-ios-context';
-import type { ConversationLocalStore } from '../../api/conversation-local-store';
+import {
+  createConversationDeleteReplayService,
+  type ConversationLocalStore,
+} from '../../api/conversation-local-store';
 import type {
+  ConversationDeleteOutboxItem,
   HostedInterventionOutboxItem,
   HostedTurnOutboxItem,
   OptimisticPendingTurn,
@@ -19,7 +23,10 @@ import {
   captureConversationStorageEpoch,
   isConversationStorageEpochCurrent,
 } from '../../api/conversation-storage-coordinator';
-import type { HermesCloudApi } from '../../api/HermesCloudApi';
+import {
+  parseOfficialConversationPlaceholderId,
+  type HermesCloudApi,
+} from '../../api/HermesCloudApi';
 import {
   HOSTED_TURN_RETRY_DELAY_MS,
   HostedTurnDeliveryClaimRegistry,
@@ -38,7 +45,7 @@ import {
   cleanupPendingAttachments,
   pendingChatSendFromOutbox,
 } from './chat-attachments';
-import { serverFailure } from './chat-domain';
+import { isConversationNotFoundError, serverFailure } from './chat-domain';
 import {
   HostedTurnCancelledDuringDelivery,
   type ChatAttachment,
@@ -569,14 +576,51 @@ export function useHostedOutboxReplayController({
     setMessages,
   ]);
 
+  const conversationDeleteReplayService = useMemo(() => (
+    localStore && cloudApi && cacheOwner
+      ? createConversationDeleteReplayService({
+          activeConversationId: () => activeConversationIdRef.current,
+          cacheOwner,
+          deleteRemote: async (item) => {
+            if (item.kind === 'session') {
+              const placeholder = parseOfficialConversationPlaceholderId(item.conversationId);
+              const sessionId = placeholder?.sessionId
+                || (item.conversationId.startsWith('official:')
+                  ? item.conversationId.slice('official:'.length)
+                  : item.conversationId);
+              const result = await cloudApi.deleteSession(
+                sessionId,
+                item.profile || placeholder?.profile || profile,
+              );
+              if (result?.ok === false) throw new Error('Remote session deletion was not accepted');
+              return;
+            }
+            const result = await cloudApi.deleteConversation(item.conversationId);
+            if (result?.ok === false) throw new Error('Remote conversation deletion was not accepted');
+          },
+          describeError: (error) => serverFailure(error, isChinese),
+          isAlreadyDeleted: isConversationNotFoundError,
+          // A local delete is already committed. Keep retrying the remote
+          // acknowledgement across launches instead of exposing a half-deleted
+          // history row after one transient network failure.
+          isRetryable: () => true,
+          outbox: localStore,
+          kinds: ['conversation', 'session'] satisfies readonly ConversationDeleteOutboxItem['kind'][],
+          retryDelayMs: 60_000,
+          workerId: `${replayWorkerIdRef.current}:conversation-delete`,
+        })
+      : null
+  ), [activeConversationIdRef, cacheOwner, cloudApi, isChinese, localStore, profile]);
+
   const replayDurableOutboxes = useCallback(async () => {
     const expectedOwnerEpoch = captureConversationStorageEpoch(cacheOwner);
     if (!isConversationStorageEpochCurrent(cacheOwner, expectedOwnerEpoch)) return;
     await Promise.all([
       replayPendingEnqueues(expectedOwnerEpoch),
       interventionReplayService?.replay(expectedOwnerEpoch),
+      conversationDeleteReplayService?.replay(expectedOwnerEpoch),
     ]);
-  }, [cacheOwner, interventionReplayService, replayPendingEnqueues]);
+  }, [cacheOwner, conversationDeleteReplayService, interventionReplayService, replayPendingEnqueues]);
 
   return {
     acceptPendingOutboxItem,

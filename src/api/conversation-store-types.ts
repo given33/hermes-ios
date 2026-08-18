@@ -18,6 +18,27 @@ export interface ConversationCacheReconciliation {
   downloadIds: string[];
 }
 
+/**
+ * A conversation/session deletion that has been applied locally but still
+ * needs to be acknowledged by the remote service.  The row is intentionally
+ * small: it contains only the remote identity and enough retry metadata for
+ * a later foreground replay.
+ */
+export interface ConversationDeleteOutboxItem {
+  attempts?: number;
+  conversationId: string;
+  kind: 'conversation' | 'session' | 'room';
+  lastError?: string;
+  leaseExpiresAt?: number;
+  leaseOwner?: string;
+  leaseToken?: string;
+  nextAttemptAt?: number;
+  profile?: string;
+  /** Remote room identity when the local tombstone uses a synthetic row id. */
+  remoteId?: string;
+  queuedAt: number;
+}
+
 export interface HostedTurnOutboxItem {
   attempts?: number;
   cancelledAt?: number;

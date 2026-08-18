@@ -6,6 +6,8 @@ import {
 } from '../../api/HermesCloudApi';
 import type { OptimisticConversationLedgerItem } from '../../api/conversation-local-store';
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
+import type { HermesChatActivity, HermesChatAttachment } from '../../api/chat-view-types';
+import { isTerminalStatus } from '../../api/chat-view-timing';
 
 export function chatMessageToCollaborationMessage(message: ChatMessage): CollaborationMessage {
   return {
@@ -70,19 +72,114 @@ function mergeSnapshotMessage(
   // Live activities win on shared ids (fresher tool/status updates);
   // persisted-only activities fill the gaps, which is exactly what keeps
   // awaiting/supervisor/rework cards alive across a snapshot replacement.
-  const liveIds = new Set((live.activities || []).map(({ id }) => id).filter(Boolean));
-  const extraPersisted = (persisted.activities || []).filter(
-    (activity) => !activity.id || !liveIds.has(activity.id),
+  const persistedActivities = new Map(
+    (persisted.activities || []).filter(({ id }) => id).map((activity) => [activity.id, activity]),
   );
-  return {
+  const liveIds = new Set((live.activities || []).map(({ id }) => id).filter(Boolean));
+  const activities = [
+    ...(live.activities || []).map((activity) => {
+      const durable = activity.id ? persistedActivities.get(activity.id) : undefined;
+      return durable ? mergeSnapshotActivity(durable, activity) : activity;
+    }),
+    ...(persisted.activities || []).filter(
+      (activity) => !activity.id || !liveIds.has(activity.id),
+    ),
+  ];
+  const persistedIsTerminal = isTerminalStatus(persisted.status || '');
+  const persistedWithReasoning = persisted as ChatMessage & { reasoning?: string };
+  const liveWithReasoning = live as ChatMessage & { reasoning?: string };
+  const merged: ChatMessage = {
     ...persisted,
     ...live,
     // Keep the persisted id: the React message key stays stable, so the
     // live→durable handoff does not remount the message and replay its
     // entering animation (visual flicker + open/manualPin state resets).
     id: persisted.id,
-    activities: [...(live.activities || []), ...extraPersisted],
+    content: richerText(persisted.content, live.content, persistedIsTerminal),
+    activities,
+    attachments: mergeSnapshotAttachments(persisted.attachments, live.attachments),
   };
+  const reasoning = richerOptionalText(
+    persistedWithReasoning.reasoning,
+    liveWithReasoning.reasoning,
+  );
+  if (reasoning !== undefined) {
+    (merged as ChatMessage & { reasoning?: string }).reasoning = reasoning;
+  }
+  if (!persistedIsTerminal) return merged;
+  return {
+    ...merged,
+    completedAt: persisted.completedAt,
+    durationMs: persisted.durationMs,
+    status: persisted.status,
+    timingLabel: persisted.timingLabel,
+    updatedAt: persisted.updatedAt,
+  };
+}
+
+function mergeSnapshotActivity(
+  persisted: HermesChatActivity,
+  live: HermesChatActivity,
+): HermesChatActivity {
+  const merged = {
+    ...persisted,
+    ...live,
+    detail: richerOptionalText(persisted.detail, live.detail),
+    input: richerOptionalText(persisted.input, live.input),
+    output: richerOptionalText(persisted.output, live.output),
+    preview: richerText(persisted.preview, live.preview, isTerminalStatus(persisted.status)),
+  };
+  if (!isTerminalStatus(persisted.status)) return merged;
+  return {
+    ...merged,
+    completedAt: persisted.completedAt,
+    duration: persisted.duration,
+    durationMs: persisted.durationMs,
+    error: persisted.error,
+    status: persisted.status,
+  };
+}
+
+function mergeSnapshotAttachments(
+  persisted: readonly HermesChatAttachment[] | undefined,
+  live: readonly HermesChatAttachment[] | undefined,
+): HermesChatAttachment[] | undefined {
+  const merged = [...(persisted || [])];
+  const indexes = new Map(merged.map((attachment, index) => [attachment.id, index]));
+  for (const attachment of live || []) {
+    const index = indexes.get(attachment.id);
+    if (index === undefined) {
+      indexes.set(attachment.id, merged.length);
+      merged.push(attachment);
+    } else {
+      const durable = merged[index];
+      merged[index] = {
+        ...durable,
+        ...attachment,
+        downloadUrl: attachment.downloadUrl || durable.downloadUrl,
+        name: attachment.name || durable.name,
+      };
+    }
+  }
+  return merged.length ? merged : undefined;
+}
+
+function richerOptionalText(
+  persisted: string | undefined,
+  live: string | undefined,
+): string | undefined {
+  if (persisted === undefined) return live;
+  if (live === undefined) return persisted;
+  return richerText(persisted, live);
+}
+
+function richerText(persisted: string, live: string, preferPersistedOnTie = false): string {
+  const persistedLength = persisted.trim().length;
+  const liveLength = live.trim().length;
+  if (persistedLength > liveLength || (preferPersistedOnTie && persistedLength === liveLength)) {
+    return persisted;
+  }
+  return live;
 }
 
 /**
@@ -216,7 +313,15 @@ export function resolveConversationId(
 }
 
 export function isConversationNotFoundError(error: unknown): boolean {
-  return isRecord(error) && (error.status === 404 || error.statusCode === 404);
+  // DELETE endpoints commonly use 410 once a record has already been
+  // purged. Treat it like 404 so a replayed local-first delete can converge
+  // instead of retrying a tombstone forever.
+  return isRecord(error) && (
+    error.status === 404
+    || error.status === 410
+    || error.statusCode === 404
+    || error.statusCode === 410
+  );
 }
 
 export async function mapWithConcurrency<T, R>(

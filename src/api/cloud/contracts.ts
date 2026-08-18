@@ -151,11 +151,18 @@ export interface SingleConversation {
   profile: string;
   title: string;
   messages: CollaborationMessage[];
+  /** Origin metadata used to avoid showing Agent-room transcripts twice. */
+  source?: string;
+  room_id?: string;
   message_count?: number;
   runtime_sessions?: Record<string, string>;
   runtime_runs?: Record<string, JsonRecord>;
   hosted_turns?: Record<string, JsonRecord>;
   participants?: JsonRecord[];
+  room_agents?: JsonRecord[];
+  /** Studio transcript pagination checkpoint persisted for offline resume. */
+  room_history_complete?: boolean;
+  room_history_next_offset?: number;
   event_cursor?: number;
   hosted_event_cursor?: number;
   hosted_event_min_cursor?: number;

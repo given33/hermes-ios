@@ -16,7 +16,11 @@ import {
   captureConversationStorageEpoch,
   isConversationStorageEpochCurrent,
 } from '../../api/conversation-storage-coordinator';
-import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
+import {
+  parseOfficialConversationPlaceholderId,
+  type HermesCloudApi,
+  type SingleConversation,
+} from '../../api/HermesCloudApi';
 import {
   conversationRunningHostedTurnId,
   type ConversationCollaborationState,
@@ -65,6 +69,7 @@ interface ConversationActionsControllerOptions {
   localStore: ConversationLocalStore | null;
   notify(message: string): void;
   openConversation(conversationId: string, generation: number): Promise<unknown>;
+  replayDurableOutboxes?(): Promise<unknown>;
   optimisticMessagesByConversationRef: MutableRefObject<Map<string, ChatMessage[]>>;
   optimisticMessagesRef: MutableRefObject<ChatMessage[]>;
   optimisticPendingByConversationRef: MutableRefObject<Map<string, OptimisticPendingTurn>>;
@@ -115,6 +120,7 @@ export function useConversationActionsController({
   localStore,
   notify,
   openConversation,
+  replayDurableOutboxes,
   optimisticMessagesByConversationRef,
   optimisticMessagesRef,
   optimisticPendingByConversationRef,
@@ -357,7 +363,10 @@ export function useConversationActionsController({
   };
 
   const selectConversation = async (conversationId: string) => {
-    if (!conversationId || conversationId === activeConversationIdRef.current) return;
+    // Re-selecting the current id is meaningful when the user is switching
+    // back from Studio/Coding mode: those surfaces keep their own view state,
+    // while the single-chat transcript must be re-applied to the main shell.
+    if (!conversationId) return;
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     if (
@@ -425,37 +434,71 @@ export function useConversationActionsController({
       await cancelActiveHostedTurn();
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     }
+    conversationSyncGenerationRef.current.advanceIndex();
+    if (requestedIds.includes(activeConversationIdRef.current)) {
+      conversationSyncGenerationRef.current.advanceActive();
+    }
 
-    const successfulIds: string[] = [];
+    const stagedIds: string[] = [];
     const failedIds: string[] = [];
-    if (cloudApi) {
+    if (localStore && cacheOwner) {
+      for (const id of requestedIds) {
+        try {
+          const conversation = conversationIndexRef.current.find((item) => item.id === id);
+          const staged = await localStore.stageConversationDeletion(
+            cacheOwner,
+            {
+              conversationId: id,
+              kind: id.startsWith('official:') ? 'session' : 'conversation',
+              profile: conversation?.profile || profile,
+              queuedAt: Date.now(),
+            },
+            activeConversationIdRef.current,
+            ownerEpoch,
+          );
+          if (staged) stagedIds.push(id);
+          else failedIds.push(id);
+        } catch {
+          // Storage can fail for one record (quota, a stale owner epoch, or a
+          // native bridge interruption). Continue staging the rest so a
+          // single bad row cannot leave the user's delete action half-applied.
+          failedIds.push(id);
+        }
+      }
+    } else if (cloudApi) {
+      // A cloud client without a local store is only possible in a degraded
+      // fixture/legacy shell. Preserve the old best-effort behavior there.
       for (const id of requestedIds) {
         try {
           const conversation = conversationIndexRef.current.find((item) => item.id === id);
           if (id.startsWith('official:')) {
-            await cloudApi.deleteSession(id, conversation?.profile || profile);
+            const placeholder = parseOfficialConversationPlaceholderId(id);
+            const result = await cloudApi.deleteSession(
+              placeholder?.sessionId || conversation?.official_session_id || id,
+              conversation?.profile || profile,
+            );
+            if (result?.ok === false) throw new Error('Remote session deletion was not accepted');
           } else {
-            await cloudApi.deleteConversation(id);
+            const result = await cloudApi.deleteConversation(id);
+            if (result?.ok === false) throw new Error('Remote conversation deletion was not accepted');
           }
-          successfulIds.push(id);
+          stagedIds.push(id);
         } catch {
           failedIds.push(id);
         }
       }
-    } else {
-      successfulIds.push(...requestedIds);
     }
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
-    if (!successfulIds.length) {
-      notify(isChinese ? '删除会话失败' : 'Unable to delete conversations');
+    if (!stagedIds.length) {
+      notify(isChinese ? '本地删除失败，未修改云端数据' : 'Local delete failed; cloud data was not changed');
       return;
     }
 
-    const deleted = new Set(successfulIds);
+    const deleted = new Set(stagedIds);
     const remaining = conversationIndexRef.current.filter(({ id }) => !deleted.has(id));
     const activeDeleted = deleted.has(activeConversationIdRef.current);
     const fallbackId = activeDeleted ? (remaining[0]?.id || '') : activeConversationIdRef.current;
-    for (const id of successfulIds) {
+    for (const id of stagedIds) {
       optimisticMessagesByConversationRef.current.delete(id);
       optimisticPendingByConversationRef.current.delete(id);
       collaborationStateByConversationRef.current.delete(id);
@@ -483,14 +526,17 @@ export function useConversationActionsController({
         setMessages([]);
       }
     }
+    if (cloudApi && localStore && replayDurableOutboxes) {
+      await replayDurableOutboxes().catch(() => undefined);
+    }
     if (failedIds.length) {
       notify(isChinese
-        ? `已删除 ${successfulIds.length} 个会话，${failedIds.length} 个删除失败`
-        : `Deleted ${successfulIds.length}; ${failedIds.length} failed`);
+        ? `已在本地删除 ${stagedIds.length} 个会话，${failedIds.length} 个未进入云端队列`
+        : `Deleted ${stagedIds.length} locally; ${failedIds.length} were not queued`);
     } else {
       notify(isChinese
-        ? `已删除 ${successfulIds.length} 个会话`
-        : `Deleted ${successfulIds.length} conversation${successfulIds.length === 1 ? '' : 's'}`);
+        ? `已在本地删除 ${stagedIds.length} 个会话，云端删除已提交`
+        : `Deleted ${stagedIds.length} locally; cloud deletion queued`);
     }
   };
 

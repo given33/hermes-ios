@@ -18,6 +18,7 @@ import type {
 import { replaceCachedConversationSnapshot } from '../../api/conversation-local-store';
 import { reconcileConversationSessionEntries } from '../../api/conversation-session-entries';
 import {
+  captureConversationDeletionRevision,
   captureConversationStorageEpoch,
   isConversationStorageEpochCurrent,
 } from '../../api/conversation-storage-coordinator';
@@ -134,16 +135,21 @@ export function useConversationSnapshotController({
     conversations: readonly SingleConversation[],
     activeId: string,
     expectedEpoch = captureConversationStorageEpoch(cacheOwner),
+    expectedDeletionRevision = captureConversationDeletionRevision(cacheOwner),
   ): Promise<void> => {
     if (
       !localStore
       || !cacheOwner
       || !isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)
+      || captureConversationDeletionRevision(cacheOwner) !== expectedDeletionRevision
     ) return Promise.resolve();
     cacheWriteRef.current = cacheWriteRef.current
       .catch(() => undefined)
       .then(() => {
-        if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
+        if (
+          !isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)
+          || captureConversationDeletionRevision(cacheOwner) !== expectedDeletionRevision
+        ) return;
         return localStore.write(cacheOwner, conversations, activeId, expectedEpoch);
       });
     return cacheWriteRef.current;
@@ -156,6 +162,7 @@ export function useConversationSnapshotController({
     deferCacheWrite = false,
   ) => {
     if (!isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)) return;
+    const deletionRevision = captureConversationDeletionRevision(cacheOwner);
     const next = [...conversations];
     conversationIndexRef.current = next;
     setConversations(next);
@@ -164,11 +171,11 @@ export function useConversationSnapshotController({
       // Serializing a long conversation into device storage on this call
       // blocks native fetch callbacks and makes the first token look slow.
       setTimeout(() => {
-        void persistConversationCache(next, activeId, expectedEpoch);
+        void persistConversationCache(next, activeId, expectedEpoch, deletionRevision);
       }, 0);
       return;
     }
-    await persistConversationCache(next, activeId, expectedEpoch);
+    await persistConversationCache(next, activeId, expectedEpoch, deletionRevision);
   }, [activeConversationIdRef, cacheOwner, conversationIndexRef, persistConversationCache, setConversations]);
 
   const applyConversation = useCallback(async (
@@ -419,6 +426,7 @@ export function useConversationSnapshotController({
   ) => {
     if (!cloudApi || !conversationId) return null;
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    const deletionRevision = captureConversationDeletionRevision(cacheOwner);
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return null;
     const previousEntryState = sessionEntryStateRef.current.get(conversationId) || {
       cursor: 0,
@@ -433,7 +441,10 @@ export function useConversationSnapshotController({
         signal,
       ).catch(() => null),
     ]);
-    if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+    if (
+      captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+      || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+    ) {
       return result.conversation;
     }
     let conversation = result.conversation;
@@ -462,7 +473,10 @@ export function useConversationSnapshotController({
         2_000,
         signal,
       );
-      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return conversation;
+      if (
+        captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+        || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      ) return conversation;
     }
     if (entries) {
       conversation = reconcileConversationSessionEntries(conversation, entries);
@@ -472,8 +486,11 @@ export function useConversationSnapshotController({
       });
     }
     if (
-      expectedGeneration
-      && !conversationSyncGenerationRef.current.isActiveCurrent(expectedGeneration)
+      captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+      || (
+        expectedGeneration
+        && !conversationSyncGenerationRef.current.isActiveCurrent(expectedGeneration)
+      )
     ) {
       return conversation;
     }

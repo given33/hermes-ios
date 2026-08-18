@@ -5,9 +5,32 @@ import type { HermesCloudApi } from '../src/api/HermesCloudApi';
 import {
   decodeModelSelection,
   encodeModelSelection,
+  createHermesSwiftUISessionsSnapshotFromConversations,
   loadHermesSwiftUIRouteSnapshot,
   performHermesSwiftUIRouteAction,
 } from '../src/app/hermes-route-data';
+
+test('cached session projection filters local tombstones and Studio room transcripts', () => {
+  const conversation = (id: string, source?: 'collaboration_room') => ({
+    id,
+    messages: [{ id: `${id}-message`, role: 'assistant' as const, name: 'Hermes', content: id }],
+    message_count: 1,
+    profile: 'default',
+    source,
+    title: id,
+    updated_at: 100,
+  });
+  const snapshot = createHermesSwiftUISessionsSnapshotFromConversations([
+    conversation('ordinary'),
+    conversation('pending-delete'),
+    conversation('studio-source', 'collaboration_room'),
+    conversation('chat_room_legacy'),
+  ], new Set(['pending-delete']), 'en');
+
+  assert.deepEqual(snapshot.sessions?.map(({ id }) => id), ['ordinary']);
+  assert.equal(snapshot.sessions?.[0]?.title, 'ordinary');
+  assert.equal(snapshot.sessions?.[0]?.detail, '1 messages · 0 tool calls');
+});
 
 test('session snapshots are derived from the current server response', async () => {
   const api = {
@@ -769,6 +792,41 @@ test('snapshot labels and action messages follow the caller locale', async () =>
 
   assert.deepEqual(saved, { message: 'Model configuration saved', reload: true });
   assert.deepEqual(tested, { message: 'Connection succeeded (HTTP 200, 84 ms)' });
+});
+
+test('system snapshots share managed-node aliases with the sidebar status', async () => {
+  const checkedAt = Math.floor((Date.now() - 1_000) / 1_000);
+  const api = {
+    loadRoute: async () => ({
+      managedNodes: {
+        configured: 'true',
+        items: [{
+          nodeId: 'DBB3',
+          displayName: 'DBB3 Relay',
+          online: 'true',
+          gatewayState: 'healthy',
+          checkedAt,
+          metricsAvailable: 'true',
+          gatewayVersion: 'v2.0.0',
+          telemetry: {
+            cpuPercent: '18',
+            memoryPercent: '42',
+            diskPercent: '27',
+          },
+        }],
+      },
+      status: {},
+      stats: {},
+    }),
+  } as unknown as HermesCloudApi;
+
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'system', 'default');
+
+  assert.equal(snapshot.system?.gatewayOnline, true);
+  assert.equal(snapshot.system?.nodes[0]?.id, 'dbb3');
+  assert.equal(snapshot.system?.nodes[0]?.label, 'DBB3 Relay');
+  assert.equal(snapshot.system?.nodes[0]?.cpu, 18);
+  assert.equal(snapshot.system?.nodes[0]?.version, 'v2.0.0');
 });
 
 test('native managed-resource rollback submits one idempotent server intent', async () => {

@@ -9,6 +9,7 @@ import {
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
 import { AsyncSingleFlight } from '../../api/async-single-flight';
 import { withAbortableDeadline } from '../../api/async-deadline';
+import { filterConversationDeletionTombstones } from '../../api/conversation-delete-outbox';
 import {
   isCompleteConversation,
   mergeDownloadedConversations,
@@ -20,6 +21,7 @@ import {
 } from '../../api/conversation-local-store';
 import type { ConversationSyncGeneration } from '../../api/conversation-sync-generation';
 import {
+  captureConversationDeletionRevision,
   captureConversationStorageEpoch,
   isConversationStorageEpochCurrent,
 } from '../../api/conversation-storage-coordinator';
@@ -127,10 +129,15 @@ export function useConversationIndexController({
   ) => {
     if (!conversationId) return null;
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    const deletionRevision = captureConversationDeletionRevision(cacheOwner);
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return null;
     const cached = conversationIndexRef.current.find(({ id }) => id === conversationId);
     if (!cloudApi) {
       if (!cached || !isCompleteConversation(cached)) return null;
+      if (
+        captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+        || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      ) return null;
       if (
         expectedGeneration
         && !conversationSyncGenerationRef.current.isActiveCurrent(expectedGeneration)
@@ -147,8 +154,11 @@ export function useConversationIndexController({
         placeholder?.profile || profile,
         placeholder?.title || '',
       );
-      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
-        return result.conversation;
+      if (
+        captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+        || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      ) {
+        return null;
       }
       if (
         expectedGeneration
@@ -165,6 +175,10 @@ export function useConversationIndexController({
       return result.conversation;
     }
     if (cached && isCompleteConversation(cached)) {
+      if (
+        captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+        || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      ) return null;
       if (
         expectedGeneration
         && !conversationSyncGenerationRef.current.isActiveCurrent(expectedGeneration)
@@ -190,25 +204,34 @@ export function useConversationIndexController({
     signal?: AbortSignal,
   ) => {
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+    const deletionRevision = captureConversationDeletionRevision(cacheOwner);
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     const indexGeneration = conversationSyncGenerationRef.current.advanceIndex();
     const syncGeneration = conversationSyncGenerationRef.current.active();
     let localConversations = conversationIndexRef.current;
     let rememberedId = activeConversationIdRef.current;
+    let pendingDeletionIds = new Set<string>();
     const shouldHydrateCache = Boolean(
       localStore && cacheOwner && hydratedCacheOwnerRef.current !== cacheOwner,
     );
     if (localStore && cacheOwner) {
-      const [cached, optimisticLedgers, pendingInterventions] = await Promise.all([
+      const [cached, optimisticLedgers, pendingInterventions, pendingDeletions] = await Promise.all([
         shouldHydrateCache ? localStore.read(cacheOwner) : Promise.resolve(null),
         localStore.readOptimisticConversations(cacheOwner),
         localStore.readPendingInterventions(cacheOwner),
+        localStore.readPendingConversationDeletionIds(cacheOwner),
       ]);
+      pendingDeletionIds = pendingDeletions;
       if (
         !conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)
+        || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
         || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
       ) return;
       if (shouldHydrateCache) hydratedCacheOwnerRef.current = cacheOwner;
+      for (const conversationId of pendingDeletionIds) {
+        optimisticMessagesByConversationRef.current.delete(conversationId);
+        optimisticPendingByConversationRef.current.delete(conversationId);
+      }
       const liveOptimisticLedgers = [
         ...optimisticMessagesByConversationRef.current.entries(),
       ].map(([conversationId, liveMessages]) => {
@@ -235,7 +258,7 @@ export function useConversationIndexController({
       const mergedOptimisticLedgers = mergeOptimisticConversationLedgers(
         persistedOptimisticLedgers,
         liveOptimisticLedgers,
-      );
+      ).filter((entry) => !pendingDeletionIds.has(entry.conversationId));
       optimisticMessagesByConversationRef.current = new Map(
         mergedOptimisticLedgers.map((entry) => [
           entry.conversationId,
@@ -253,31 +276,38 @@ export function useConversationIndexController({
         )),
       );
       if (cached) {
-        localConversations = mergeOptimisticConversationSummaries(
-          cached.conversations,
-          mergedOptimisticLedgers,
-          profile,
-          isChinese,
+        localConversations = filterConversationDeletionTombstones(
+          mergeOptimisticConversationSummaries(
+            cached.conversations,
+            mergedOptimisticLedgers,
+            profile,
+            isChinese,
+          ),
+          pendingDeletionIds,
         );
         rememberedId = cached.activeConversationId;
         conversationIndexRef.current = localConversations;
         setConversations(localConversations);
+        const localChatConversations = localConversations.filter(isOrdinaryChatConversation);
         const immediateId = resolveConversationId(
-          preferredId || rememberedId || localConversations[0]?.id || '',
-          localConversations,
+          preferredId || rememberedId || localChatConversations[0]?.id || '',
+          localChatConversations,
         );
         const immediate = localConversations.find(({ id }) => id === immediateId);
         if (immediate && isCompleteConversation(immediate)) {
           applyConversation(immediate, ownerEpoch, false, true);
         }
       } else if (shouldHydrateCache && mergedOptimisticLedgers.length) {
-        localConversations = mergeOptimisticConversationSummaries(
-          [],
-          mergedOptimisticLedgers,
-          profile,
-          isChinese,
+        localConversations = filterConversationDeletionTombstones(
+          mergeOptimisticConversationSummaries(
+            [],
+            mergedOptimisticLedgers,
+            profile,
+            isChinese,
+          ),
+          pendingDeletionIds,
         );
-        rememberedId = localConversations[0]?.id || '';
+        rememberedId = localConversations.find(isOrdinaryChatConversation)?.id || '';
         conversationIndexRef.current = localConversations;
         setConversations(localConversations);
         const immediate = localConversations[0];
@@ -294,7 +324,9 @@ export function useConversationIndexController({
         const merged = new Map(
           fixtureHistory.map((conversation) => [conversation.id, conversation]),
         );
-        for (const conversation of localConversations) merged.set(conversation.id, conversation);
+        for (const conversation of filterConversationDeletionTombstones(localConversations, pendingDeletionIds)) {
+          merged.set(conversation.id, conversation);
+        }
         localConversations = [...merged.values()].sort(
           (left, right) => (right.updated_at || 0) - (left.updated_at || 0),
         );
@@ -302,8 +334,8 @@ export function useConversationIndexController({
         setConversations(localConversations);
       }
       const activeId = resolveConversationId(
-        preferredId || rememberedId || localConversations[0]?.id || '',
-        localConversations,
+        preferredId || rememberedId || localConversations.find(isOrdinaryChatConversation)?.id || '',
+        localConversations.filter(isOrdinaryChatConversation),
       );
       const active = localConversations.find(({ id }) => id === activeId);
       if (active) {
@@ -323,9 +355,18 @@ export function useConversationIndexController({
     const result = await cloudApi.getUnifiedConversations(profile, signal);
     if (
       !conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)
+      || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
       || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
     ) return;
-    const reconciliation = reconcileConversationCache(localConversations, result.conversations);
+    const remoteConversations = filterConversationDeletionTombstones(
+      result.conversations,
+      pendingDeletionIds,
+    );
+    const reconciliation = reconcileConversationCache(
+      localConversations,
+      remoteConversations,
+      true,
+    );
     const optimisticSummaries = [...optimisticMessagesByConversationRef.current.entries()].map(
       ([conversationId, optimisticMessages]) => ({
         conversationId,
@@ -336,12 +377,15 @@ export function useConversationIndexController({
         ),
       }),
     );
-    const selectableConversations = mergeOptimisticConversationSummaries(
-      reconciliation.conversations,
-      optimisticSummaries,
-      profile,
-      isChinese,
-    );
+    const selectableConversations = filterConversationDeletionTombstones(
+      mergeOptimisticConversationSummaries(
+        reconciliation.conversations,
+        optimisticSummaries,
+        profile,
+        isChinese,
+      ),
+      pendingDeletionIds,
+    ).filter(isOrdinaryChatConversation);
     const requestedActiveId = resolveConversationId(
       preferredId
         || activeConversationIdRef.current
@@ -350,10 +394,31 @@ export function useConversationIndexController({
         || '',
       selectableConversations,
     );
+    if (reconciliation.downloadIds.length) {
+      // Publish and persist the lightweight index before downloading every
+      // changed transcript. A fresh install gets an immediately usable
+      // history rail, while the bounded detail pass below completes the
+      // durable on-device copy without blocking one conversation on another.
+      const provisional = filterConversationDeletionTombstones(
+        mergeOptimisticConversationSummaries(
+          reconciliation.conversations,
+          optimisticSummaries,
+          profile,
+          isChinese,
+        ),
+        pendingDeletionIds,
+      );
+      await commitConversationIndex(provisional, requestedActiveId, ownerEpoch);
+      if (
+        !conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)
+        || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+        || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      ) return;
+    }
     const missingIds = new Set<string>();
     const downloaded = await mapWithConcurrency(
-      reconciliation.downloadIds.filter((id) => id === requestedActiveId),
-      1,
+      reconciliation.downloadIds,
+      3,
       async (id) => {
         try {
           return (await cloudApi.getConversation(id, signal)).conversation;
@@ -362,26 +427,34 @@ export function useConversationIndexController({
             missingIds.add(id);
             return null;
           }
-          throw error;
+          // Keep the persisted summary and continue downloading the rest of
+          // the account. The next index refresh retries only rows whose
+          // fingerprint still differs from a complete local transcript.
+          return null;
         }
       },
     );
     if (
       !conversationSyncGenerationRef.current.isIndexCurrent(indexGeneration)
+      || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
       || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
     ) return;
-    const synchronized = mergeOptimisticConversationSummaries(
-      mergeDownloadedConversations(
-        reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
-        downloaded.filter((conversation): conversation is SingleConversation => conversation !== null),
+    const synchronized = filterConversationDeletionTombstones(
+      mergeOptimisticConversationSummaries(
+        mergeDownloadedConversations(
+          reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
+          downloaded.filter((conversation): conversation is SingleConversation => conversation !== null),
+        ),
+        optimisticSummaries,
+        profile,
+        isChinese,
       ),
-      optimisticSummaries,
-      profile,
-      isChinese,
+      pendingDeletionIds,
     );
+    const synchronizedChatConversations = synchronized.filter(isOrdinaryChatConversation);
     const activeId = resolveConversationId(
-      requestedActiveId || synchronized[0]?.id || '',
-      synchronized,
+      requestedActiveId || synchronizedChatConversations[0]?.id || '',
+      synchronizedChatConversations,
     );
     commitConversationIndex(synchronized, activeId, ownerEpoch);
     if (!activeId) {
@@ -481,4 +554,9 @@ export function useConversationIndexController({
     refreshConversationIndex,
     resetHydration,
   };
+}
+
+function isOrdinaryChatConversation(conversation: SingleConversation): boolean {
+  return conversation.source !== 'collaboration_room'
+    && !conversation.id.startsWith('chat_room_');
 }

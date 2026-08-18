@@ -143,6 +143,81 @@ test('collaboration lift state follows persisted route and workflow progress', (
   })), 'active');
 });
 
+test('model replies survive legacy snapshots that keep the answer in metadata', () => {
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      content: '',
+      id: 'legacy-answer',
+      meta: {
+        final_report: { text: '模型最终回复已恢复。' },
+        role_stage: 'chat',
+      },
+      name: 'default',
+      role: 'assistant',
+      status: 'completed',
+    }],
+  }));
+
+  assert.equal(message.content, '模型最终回复已恢复。');
+});
+
+test('non-text legacy metadata never becomes a visible model reply', () => {
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      content: '',
+      id: 'metadata-flags-only',
+      meta: { final_report: false, reply: 0 },
+      name: 'Hermes',
+      role: 'assistant',
+    }],
+  }));
+
+  assert.equal(message.content, '');
+});
+
+test('todo snapshots are projected onto chat messages with legacy labels normalized', () => {
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      activities: [{
+        id: 'todo-activity',
+        name: 'todo.update',
+        output: JSON.stringify({
+          todos: [
+            { id: 'done', title: '已完成步骤', status: 'done' },
+            { id: 'running', text: '当前步骤', status: 'in-progress' },
+          ],
+        }),
+        status: 'completed',
+      }],
+      content: '',
+      id: 'todo-message',
+      name: 'default',
+      role: 'assistant',
+      status: 'completed',
+    }],
+  }));
+
+  assert.deepEqual(message.todos, [
+    { id: 'done', title: '已完成步骤', status: 'completed' },
+    { id: 'running', title: '当前步骤', status: 'in_progress' },
+  ]);
+});
+
+test('context usage accepts metadata values for the compact composer control', () => {
+  const [message] = conversationMessagesToView(conversation({
+    messages: [{
+      content: '回复',
+      id: 'context-message',
+      meta: { context_percent: '87' },
+      name: 'default',
+      role: 'assistant',
+      status: 'completed',
+    }],
+  }));
+
+  assert.equal(message.contextUsedPercent, 87);
+});
+
 test('a lone failed workflow role stays in ordinary chat instead of lifting a group', () => {
   const failed = conversation({
     messages: [{

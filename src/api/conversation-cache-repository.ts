@@ -1,4 +1,5 @@
 import type { SingleConversation } from './HermesCloudApi';
+import { readConversationDeleteIds } from './conversation-delete-outbox';
 import type {
   ConversationCacheSnapshot,
   ConversationStorageAdapter,
@@ -14,7 +15,9 @@ import {
 } from './conversation-storage-primitives';
 import {
   advanceConversationSynchronization,
+  awaitConversationStorageWrites,
   captureConversationStorageEpoch,
+  captureConversationDeletionRevision,
   enqueueConversationStorageMaintenance,
   enqueueConversationStorageWrite,
   hasPendingConversationStorageWrite,
@@ -69,6 +72,9 @@ export class ConversationCacheRepository {
   async read(owner: string): Promise<ConversationCacheSnapshot | null> {
     const normalizedOwner = normalizeOwner(owner);
     if (!normalizedOwner) return null;
+    // A cold-start reader must not capture the pre-write index while another
+    // facade is still persisting a newer transcript for this owner.
+    await awaitConversationStorageWrites(normalizedOwner);
     await Promise.allSettled([
       previousCacheKey(normalizedOwner),
       legacyEncodedCacheKey(normalizedOwner),
@@ -135,6 +141,95 @@ export class ConversationCacheRepository {
       cloned,
       activeConversationId,
     ), epoch);
+  }
+
+  /** Update one row inside the owner queue without replacing a stale index. */
+  async upsert(
+    owner: string,
+    conversation: SingleConversation,
+    activeConversationId = '',
+    expectedEpoch?: number,
+    expectedDeletionRevision?: number,
+  ): Promise<void> {
+    const normalizedOwner = normalizeOwner(owner);
+    if (!normalizedOwner) return;
+    const epoch = expectedEpoch ?? captureConversationStorageEpoch(normalizedOwner);
+    if (
+      !isConversationStorageEpochCurrent(normalizedOwner, epoch)
+      || (
+        expectedDeletionRevision !== undefined
+        && captureConversationDeletionRevision(normalizedOwner) !== expectedDeletionRevision
+      )
+    ) return;
+    advanceConversationSynchronization(normalizedOwner);
+    await enqueueConversationStorageWrite(normalizedOwner, async () => {
+      if (
+        expectedDeletionRevision !== undefined
+        && captureConversationDeletionRevision(normalizedOwner) !== expectedDeletionRevision
+      ) return;
+      const current = await this.readSnapshotForMutation(normalizedOwner);
+      const existing = current?.conversations.find(({ id }) => id === conversation.id);
+      const nextConversation = existing
+        ? mergeConcurrentConversation(existing, conversation)
+        : cloneCachedConversation(conversation);
+      const conversations = [
+        nextConversation,
+        ...(current?.conversations || []).filter(({ id }) => id !== conversation.id),
+      ];
+      await this.persistSnapshot(
+        normalizedOwner,
+        conversations,
+        current?.activeConversationId || activeConversationId,
+      );
+    }, epoch);
+  }
+
+  /**
+   * Remove conversations from the device cache without waiting for the cloud.
+   * The mutation is serialized with ordinary cache writes, so an in-flight
+   * refresh cannot reinsert a row after the local delete has committed.
+   */
+  async remove(
+    owner: string,
+    conversationIds: readonly string[],
+    activeConversationId = '',
+    expectedEpoch?: number,
+  ): Promise<ConversationCacheSnapshot | null> {
+    const normalizedOwner = normalizeOwner(owner);
+    const ids = new Set(conversationIds.map(stringValue).filter(Boolean));
+    if (!normalizedOwner || !ids.size) return this.read(normalizedOwner);
+    const epoch = expectedEpoch ?? captureConversationStorageEpoch(normalizedOwner);
+    if (!isConversationStorageEpochCurrent(normalizedOwner, epoch)) return null;
+    advanceConversationSynchronization(normalizedOwner);
+    let removed: ConversationCacheSnapshot | null = null;
+    await enqueueConversationStorageWrite(normalizedOwner, async () => {
+      const current = await this.readSnapshotForMutation(normalizedOwner);
+      if (!current) return;
+      const existingIds = current.conversations.map(({ id }) => id);
+      const conversations = current.conversations.filter(({ id }) => !ids.has(id));
+      const requestedActive = stringValue(activeConversationId);
+      const nextActive = ids.has(current.activeConversationId)
+        ? (conversations.some(({ id }) => id === requestedActive)
+          ? requestedActive
+          : conversations[0]?.id || '')
+        : current.activeConversationId;
+      await this.persistSnapshot(normalizedOwner, conversations, nextActive);
+      // `persistSnapshot` can only remove rows observed by its stamp map. A
+      // cold process may not have observed the index yet, so explicitly clean
+      // every row that was present in the mutation snapshot as well.
+      const remainingIds = new Set(conversations.map(({ id }) => id));
+      await Promise.all(existingIds
+        .filter((id) => !remainingIds.has(id))
+        .map((id) => this.storage.removeItem(rowKey(normalizedOwner, id))));
+      removed = {
+        version: CONVERSATION_CACHE_VERSION,
+        owner: normalizedOwner,
+        activeConversationId: nextActive,
+        conversations: conversations.map(cloneCachedConversation),
+        syncedAt: Date.now(),
+      };
+    }, epoch);
+    return removed;
   }
 
   beginSynchronization(owner: string): number {
@@ -231,13 +326,18 @@ export class ConversationCacheRepository {
     conversations: readonly SingleConversation[],
     activeConversationId: string,
   ): Promise<void> {
+    const pendingIds = await readConversationDeleteIds(this.storage, owner);
+    const visibleConversations = conversations.filter(({ id }) => !pendingIds.has(id));
+    const visibleActiveId = pendingIds.has(activeConversationId)
+      ? visibleConversations[0]?.id || ''
+      : activeConversationId;
     this.bumpStampEpoch(owner);
     const stamps = this.sharedRowStamps(owner);
     const observed = this.ownerObservedRowStamps(owner);
     const observedRows = this.ownerObservedRows(owner);
     const currentIds = new Set<string>();
     let rowsChanged = false;
-    for (const requestedConversation of conversations) {
+    for (const requestedConversation of visibleConversations) {
       currentIds.add(requestedConversation.id);
       const sharedStamp = stamps.get(requestedConversation.id);
       const observedStamp = observed.get(requestedConversation.id);
@@ -272,20 +372,20 @@ export class ConversationCacheRepository {
       observed.set(conversation.id, stamp);
       observedRows.set(conversation.id, cloneCachedConversation(conversation));
     }
-    const requestedIds = conversations.map(({ id }) => id);
+    const requestedIds = visibleConversations.map(({ id }) => id);
     const currentIndex = parseCacheIndex(
       await this.storage.getItem(cacheKey(owner)),
       owner,
     );
     const indexChanged = !currentIndex
-      || currentIndex.activeConversationId !== activeConversationId
+      || currentIndex.activeConversationId !== visibleActiveId
       || currentIndex.conversationIds.length !== requestedIds.length
       || currentIndex.conversationIds.some((id, index) => id !== requestedIds[index]);
     if (rowsChanged || indexChanged) {
       await this.storage.setItem(cacheKey(owner), JSON.stringify({
         version: CONVERSATION_CACHE_VERSION,
         owner,
-        activeConversationId,
+        activeConversationId: visibleActiveId,
         conversationIds: requestedIds,
         syncedAt: Date.now(),
       }));
@@ -305,6 +405,34 @@ export class ConversationCacheRepository {
         // v4 reads never consult the blob once the index exists.
       }
     }
+  }
+
+  /** Read the current v4/blob snapshot while already inside the owner queue. */
+  private async readSnapshotForMutation(owner: string): Promise<ConversationCacheSnapshot | null> {
+    const index = parseCacheIndex(
+      await this.storage.getItem(cacheKey(owner)),
+      owner,
+    );
+    if (index) {
+      const rows = await Promise.all(index.conversationIds.map(async (id) => parseCacheRow(
+        await this.storage.getItem(rowKey(owner, id)),
+        owner,
+        id,
+      )));
+      return {
+        version: CONVERSATION_CACHE_VERSION,
+        owner,
+        activeConversationId: index.activeConversationId,
+        conversations: rows.filter(
+          (conversation): conversation is SingleConversation => conversation !== null,
+        ),
+        syncedAt: index.syncedAt,
+      };
+    }
+    return parseBlobSnapshot(
+      await this.storage.getItem(blobCacheKey(owner)),
+      owner,
+    );
   }
 }
 
@@ -383,6 +511,12 @@ export function cloneCachedConversation(conversation: SingleConversation): Singl
       : {}),
     ...(conversation.runtime_runs ? { runtime_runs: { ...conversation.runtime_runs } } : {}),
     ...(conversation.hosted_turns ? { hosted_turns: { ...conversation.hosted_turns } } : {}),
+    ...(conversation.participants
+      ? { participants: conversation.participants.map((participant) => ({ ...participant })) }
+      : {}),
+    ...(conversation.room_agents
+      ? { room_agents: conversation.room_agents.map((agent) => ({ ...agent })) }
+      : {}),
   };
 }
 

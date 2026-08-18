@@ -185,9 +185,28 @@ export function FrontendPreviewApp({
     ) => {
       if (!active || requestVersion !== systemRequestVersion.current) return;
       lastSystemSuccessAt.current = Date.now();
-      managedNodesSnapshot.current = system.managedNodes;
+      // `/api/managed-nodes/status` is an optional relay. Keep the last
+      // observed node records when a healthy status/stats response arrives
+      // without node observations, otherwise the sidebar flashes offline on
+      // every relay hiccup.
+      const managedNodeRecords = Array.isArray(system.managedNodes.nodes)
+        ? system.managedNodes.nodes
+        : Array.isArray(system.managedNodes.items)
+          ? system.managedNodes.items
+          : [];
+      const managedRecoverySources = Array.isArray(system.managedNodes.sources)
+        ? system.managedNodes.sources
+        : [];
+      if (
+        managedNodeRecords.length
+        || managedRecoverySources.length
+        || system.managedNodes.configured === true
+        || !Object.keys(managedNodesSnapshot.current).length
+      ) {
+        managedNodesSnapshot.current = system.managedNodes;
+      }
       setSystemSummary(systemSummaryFromStatus(system.status));
-      setGatewayStatuses(managedNodeGatewayStatuses(system.managedNodes));
+      setGatewayStatuses(managedNodeGatewayStatuses(managedNodesSnapshot.current));
     };
     const expireStaleSystemStatus = () => {
       if (!active) return;
@@ -202,8 +221,8 @@ export function FrontendPreviewApp({
       }
     };
     const initialRequestVersion = ++systemRequestVersion.current;
-    void Promise.all([api.getProfiles(), api.getSystem()])
-      .then(([profiles, system]) => {
+    void api.getProfiles()
+      .then((profiles) => {
         if (!active) return;
         const choices = profiles.profiles.flatMap((entry): ProfileChoice[] => {
           const name = stringField(entry, 'name');
@@ -215,11 +234,13 @@ export function FrontendPreviewApp({
         if (activeProfile && choices.some((choice) => choice.name === activeProfile)) {
           setProfile(activeProfile);
         }
-        applySystem(system, initialRequestVersion);
       })
       .catch((error) => {
         if (active) notify(serverActionError(error, locale));
       });
+    void api.getSystem()
+      .then((system) => applySystem(system, initialRequestVersion))
+      .catch(() => expireStaleSystemStatus());
     const interval = setInterval(() => {
       expireStaleSystemStatus();
       const requestVersion = ++systemRequestVersion.current;

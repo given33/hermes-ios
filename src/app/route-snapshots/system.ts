@@ -1,5 +1,5 @@
 import type { HermesSwiftUISystemSnapshot } from '../swiftui-route-contract';
-import { isFreshObservation } from '../../api/managed-node-status';
+import { managedNodeGatewayStatuses } from '../../api/managed-node-status';
 import {
   formatBytes,
   formatDuration,
@@ -14,37 +14,47 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
   const status = isRecord(root.status) ? root.status : {};
   const stats = isRecord(root.stats) ? root.stats : {};
   const managed = isRecord(root.managedNodes) ? root.managedNodes : {};
-  const managedConfigured = managed.configured === true;
-  const managedNodes = Array.isArray(managed.nodes) ? managed.nodes.filter(isRecord) : [];
+  const managedConfigured = booleanValue(managed.configured) === true;
+  const managedNodesValue = managed.nodes ?? managed.items ?? managed.managed_nodes ?? managed.managedNodes;
+  const managedNodes = Array.isArray(managedNodesValue) ? managedNodesValue.filter(isRecord) : [];
+  const gatewayStatuses = new Map(
+    managedNodeGatewayStatuses(managed).map((node) => [node.id, node]),
+  );
   const nodeSnapshots = managedNodes.map((node) => {
-    const metrics = isRecord(node.metrics) ? node.metrics : {};
-    const memoryTotal = numberValue(metrics.memory_total_bytes);
-    const memoryAvailable = numberValue(metrics.memory_available_bytes);
-    const gatewayState = stringValue(node.gateway_state);
-    const metricsAvailable = node.metrics_available === true;
-    const recoveryState = stringValue(node.recovery_state);
-    const gatewayOnline = isFreshObservation(node)
-      && node.online === true
-      && ['active', 'online', 'ready', 'running'].includes(gatewayState.toLowerCase());
+    const metrics = isRecord(node.metrics)
+      ? node.metrics
+      : isRecord(node.telemetry)
+        ? node.telemetry
+        : {};
+    const id = firstString(node, ['id', 'node_id', 'nodeId']).toLowerCase();
+    const normalizedGateway = gatewayStatuses.get(id);
+    const memoryTotal = firstNumber(metrics, ['memory_total_bytes', 'memoryTotalBytes']);
+    const memoryAvailable = firstNumber(metrics, ['memory_available_bytes', 'memoryAvailableBytes']);
+    const gatewayState = firstString(node, ['gateway_state', 'gatewayState', 'state', 'status']);
+    const metricsAvailable = booleanValue(
+      node.metrics_available ?? node.metricsAvailable,
+    ) === true;
+    const recoveryState = firstString(node, ['recovery_state', 'recoveryState']);
+    const gatewayOnline = normalizedGateway?.state === 'online';
     return {
-      id: stringValue(node.id),
-      label: stringValue(node.label) || stringValue(node.id),
-      cpu: metricsAvailable ? numberValue(metrics.cpu_percent) : 0,
-      memory: metricsAvailable ? numberValue(metrics.memory_percent) : 0,
-      disk: metricsAvailable ? numberValue(metrics.disk_percent) : 0,
+      id,
+      label: firstString(node, ['label', 'display_name', 'displayName', 'name']) || id.toUpperCase(),
+      cpu: metricsAvailable ? firstNumber(metrics, ['cpu_percent', 'cpuPercent']) : 0,
+      memory: metricsAvailable ? firstNumber(metrics, ['memory_percent', 'memoryPercent']) : 0,
+      disk: metricsAvailable ? firstNumber(metrics, ['disk_percent', 'diskPercent']) : 0,
       memoryLabel: metricsAvailable
         ? formatBytes(Math.max(0, memoryTotal - memoryAvailable))
         : '-',
       uptimeLabel: metricsAvailable
-        ? formatDuration(numberValue(metrics.uptime_seconds), localizer)
+        ? formatDuration(firstNumber(metrics, ['uptime_seconds', 'uptimeSeconds']), localizer)
         : '-',
-      activeTasks: String(node.active_tasks ?? '-'),
+      activeTasks: String(node.active_tasks ?? node.activeTasks ?? '-'),
       gatewayOnline,
       metricsAvailable,
-      gatewayState,
-      version: stringValue(node.version) || stringValue(node.gateway_version),
-      observedAt: stringValue(node.observed_at),
-      metricsSource: stringValue(node.metrics_source),
+      gatewayState: gatewayState || normalizedGateway?.state || '',
+      version: firstString(node, ['version', 'gateway_version', 'gatewayVersion']),
+      observedAt: stringish(node.observed_at ?? node.observedAt),
+      metricsSource: firstString(node, ['metrics_source', 'metricsSource']),
       recoveryState,
     };
   }).filter((node) => node.id);
@@ -70,14 +80,51 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
     // an unavailable observation. Never let the older aggregate status flag
     // turn a missing DBB3/WSL heartbeat back into "online".
     gatewayOnline: primaryNode?.gatewayOnline ?? (managedConfigured ? false : Boolean(
-      status.online
-        ?? status.gateway_online
-        ?? status.gateway_running
-        ?? gateway.running
-        ?? status.running,
+      booleanValue(
+        status.online
+          ?? status.gateway_online
+          ?? status.gatewayOnline
+          ?? status.gateway_running
+          ?? status.gatewayRunning
+          ?? gateway.running
+          ?? status.running,
+      ),
     )),
     metricsAvailable: primaryNode?.metricsAvailable ?? !managedConfigured,
     nodes: nodeSnapshots,
     operationMessage: stringValue(root.operation_message) || undefined,
   };
+}
+
+function firstString(record: Record<string, unknown>, keys: readonly string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function firstNumber(record: Record<string, unknown>, keys: readonly string[]): number {
+  for (const key of keys) {
+    const value = record[key];
+    const parsed = typeof value === 'number' ? value : Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value === 1 ? true : value === 0 ? false : undefined;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['true', 'yes', '1', 'online', 'running', 'active', 'healthy', 'ok'].includes(normalized)) return true;
+  if (['false', 'no', '0', 'offline', 'failed', 'error'].includes(normalized)) return false;
+  return undefined;
+}
+
+function stringish(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '';
 }

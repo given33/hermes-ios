@@ -177,6 +177,30 @@ test('sidebar uses one opaque safe-area surface, full-width hit targets, and no 
   assert.match(routes, /id: 'plugins', path: '\/plugins', visibleInSidebar: false/);
 });
 
+test('compact reference sidebar preserves usable width, readable branding, and touch targets', () => {
+  const source = read('src/app/NativeShell.tsx');
+  const referenceSidebar = source.slice(
+    source.indexOf('function ExpoReferenceSidebar'),
+    source.indexOf('function ShellNavigationItem'),
+  );
+  const groupHeaderStyle = source.slice(
+    source.indexOf('referenceSidebarGroupHeader: {'),
+    source.indexOf('referenceSidebarGroupLabel: {'),
+  );
+  const rowStyle = source.slice(
+    source.indexOf('referenceSidebarRow: {'),
+    source.indexOf('referenceSidebarRowLabel: {'),
+  );
+
+  assert.match(source, /\? compactSidebarWidth \+ insets\.left/);
+  assert.match(referenceSidebar, /paddingLeft: insets\.left/);
+  assert.match(referenceSidebar, /stickyHeaderIndices=\{\[0\]\}/);
+  assert.match(referenceSidebar, /adjustsFontSizeToFit/);
+  assert.match(referenceSidebar, /minimumFontScale=\{0\.82\}/);
+  assert.match(groupHeaderStyle, /minHeight: 44/);
+  assert.match(rowStyle, /minHeight: 52/);
+});
+
 test('navigation actions dismiss the keyboard before changing routes or opening the sidebar', () => {
   const source = read('src/app/NativeShell.tsx');
 

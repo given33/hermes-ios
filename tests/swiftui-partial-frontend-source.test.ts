@@ -493,6 +493,37 @@ test('SwiftUI collaboration keeps its draft and stable request until durable ack
   assert.match(store, /hermes\.native\.collaboration-room-outbox\.v1/);
 });
 
+test('SwiftUI session deletion commits locally before durable cloud replay', () => {
+  const controller = read('src/app/useHermesSwiftUIRouteData.ts');
+  const sessionsProjection = read('src/app/route-snapshots/sessions-files.ts');
+  const stage = controller.indexOf('const queued = await localStore.stageConversationDeletion(');
+  const legacyCloudAction = controller.indexOf(
+    'const result = await performHermesSwiftUIRouteAction(api, event, profile, locale);',
+  );
+  const replay = controller.indexOf('await conversationDeleteReplayService?.replay()');
+  const synchronize = controller.indexOf('await synchronizeConversationCache(');
+  const localRead = controller.indexOf('localStore.read(cacheOwner)');
+  const tombstoneRead = controller.indexOf(
+    'localStore.readPendingConversationDeletionIds(cacheOwner)',
+  );
+  const localPublish = controller.indexOf(
+    'setDataJson(encodeHermesSwiftUIRouteSnapshot(localSnapshot))',
+  );
+
+  assert.ok(stage >= 0 && stage < legacyCloudAction);
+  assert.ok(replay >= 0 && replay < synchronize);
+  assert.ok(localRead >= 0 && localRead < replay);
+  assert.ok(tombstoneRead >= 0 && tombstoneRead < replay);
+  assert.ok(localPublish >= 0 && localPublish < synchronize);
+  assert.match(controller, /removeSessionFromRouteSnapshot\(current, conversationId\)/);
+  assert.match(controller, /kind: conversationId\.startsWith\('official:'\) \? 'session' : 'conversation'/);
+  assert.match(controller, /isAlreadyDeletedRemote/);
+  assert.match(controller, /result\?\.ok === false/);
+  assert.match(sessionsProjection, /conversation\.source !== 'collaboration_room'/);
+  assert.match(sessionsProjection, /!conversation\.id\.startsWith\('chat_room_'\)/);
+  assert.match(controller, /createHermesSwiftUISessionsSnapshotFromConversations/);
+});
+
 test('SwiftUI route navigation control is only rendered for the compact drawer shell', () => {
   const bridge = read('modules/hermes-ios-controls/index.ts');
   const native = read(

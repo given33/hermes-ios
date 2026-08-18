@@ -2,6 +2,7 @@ const writeChains = new Map<string, Promise<void>>();
 const synchronizationGenerations = new Map<string, number>();
 const synchronizationEpochs = new Map<string, Map<number, number>>();
 const lifecycleEpochs = new Map<string, number>();
+const deletionRevisions = new Map<string, number>();
 const blockedOwners = new Set<string>();
 export const CONVERSATION_STORAGE_WRITE_TIMEOUT_MS = 30_000;
 
@@ -95,6 +96,16 @@ function advanceLifecycleEpoch(owner: string): number {
 /** Capture the authenticated account lifecycle that owns an async operation. */
 export function captureConversationStorageEpoch(owner: string): number {
   return lifecycleEpochs.get(owner) || 0;
+}
+
+export function advanceConversationDeletionRevision(owner: string): number {
+  const next = captureConversationDeletionRevision(owner) + 1;
+  deletionRevisions.set(owner, next);
+  return next;
+}
+
+export function captureConversationDeletionRevision(owner: string): number {
+  return deletionRevisions.get(owner) || 0;
 }
 
 /** Final CAS used before an old async response mutates UI or durable state. */

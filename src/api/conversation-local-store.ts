@@ -7,6 +7,7 @@ import type {
 import type {
   CollaborationRoomOutboxItem,
   ConversationCacheSnapshot,
+  ConversationDeleteOutboxItem,
   ConversationStorageAdapter,
   HostedInterventionOutboxItem,
   HostedTurnOutboxItem,
@@ -22,6 +23,10 @@ import {
   legacyRoomOutboxKey,
   roomOutboxKey,
 } from './conversation-room-outbox';
+import {
+  ConversationDeleteOutboxRepository,
+  conversationDeleteOutboxKey,
+} from './conversation-delete-outbox';
 import {
   OptimisticConversationLedgerRepository,
   optimisticLedgerKey,
@@ -55,11 +60,11 @@ import {
   type ConversationDraft,
   type ConversationDraftAttachment,
 } from './conversation-draft-repository';
-
 export type {
   CollaborationRoomOutboxItem,
   ConversationCacheReconciliation,
   ConversationCacheSnapshot,
+  ConversationDeleteOutboxItem,
   ConversationStorageAdapter,
   HostedInterventionOutboxItem,
   HostedTurnOutboxItem,
@@ -79,9 +84,11 @@ export {
   replaceCachedConversationSnapshot,
   synchronizeConversationCache,
 } from './conversation-cache-sync';
-
+export { createConversationDeleteReplayService } from './conversation-delete-replay';
+export { filterConversationDeletionTombstones, selectReadyConversationDeleteOutboxItems } from './conversation-delete-outbox';
 export class ConversationLocalStore {
   private readonly cache: ConversationCacheRepository;
+  private readonly deleteOutbox: ConversationDeleteOutboxRepository;
   private readonly roomOutbox: CollaborationRoomOutboxRepository;
   private readonly optimisticLedger: OptimisticConversationLedgerRepository;
   private readonly interventionOutbox: HostedInterventionOutboxRepository;
@@ -90,6 +97,10 @@ export class ConversationLocalStore {
 
   constructor(private readonly storage: ConversationStorageAdapter = AsyncStorage) {
     this.cache = new ConversationCacheRepository(storage);
+    this.deleteOutbox = new ConversationDeleteOutboxRepository(
+      storage,
+      enqueueConversationStorageWrite,
+    );
     this.roomOutbox = new CollaborationRoomOutboxRepository(
       storage,
       enqueueConversationStorageWrite,
@@ -124,7 +135,7 @@ export class ConversationLocalStore {
   ): Promise<void> {
     return this.cache.write(owner, conversations, activeConversationId, expectedEpoch);
   }
-
+  async upsert(owner: string, conversation: SingleConversation, activeConversationId = '', expectedEpoch?: number, expectedDeletionRevision?: number) { return this.cache.upsert(owner, conversation, activeConversationId, expectedEpoch, expectedDeletionRevision); }
   beginSynchronization(owner: string): number {
     return this.cache.beginSynchronization(owner);
   }
@@ -145,6 +156,37 @@ export class ConversationLocalStore {
 
   async readPendingEnqueues(owner: string): Promise<HostedTurnOutboxItem[]> {
     return this.hostedTurnOutbox.read(owner);
+  }
+
+  async readPendingConversationDeletions(owner: string) { return this.deleteOutbox.read(owner); }
+  async readPendingConversationDeletionIds(owner: string) {
+    return new Set((await this.deleteOutbox.read(owner)).map(({ conversationId }) => conversationId));
+  }
+  async queueConversationDeletion(owner: string, item: ConversationDeleteOutboxItem, expectedOwnerEpoch?: number) {
+    return this.deleteOutbox.enqueue(owner, item, expectedOwnerEpoch);
+  }
+  async claimReadyConversationDeletions(owner: string, workerId: string, now = Date.now(), leaseMs = 60_000, limit = 8, expectedOwnerEpoch?: number, kinds?: readonly ConversationDeleteOutboxItem['kind'][]) {
+    return this.deleteOutbox.claimReady(owner, workerId, now, leaseMs, limit, expectedOwnerEpoch, kinds);
+  }
+  async retryConversationDeletion(owner: string, item: ConversationDeleteOutboxItem, error: string, nextAttemptAt: number, expectedOwnerEpoch?: number) {
+    return this.deleteOutbox.markRetry(owner, item, error, nextAttemptAt, expectedOwnerEpoch);
+  }
+  async removeCompletedConversationDeletion(owner: string, item: ConversationDeleteOutboxItem, expectedOwnerEpoch?: number) {
+    return this.deleteOutbox.removeIfLeaseOwned(owner, item, expectedOwnerEpoch);
+  }
+  async releaseConversationDeletionLease(owner: string, item: ConversationDeleteOutboxItem, expectedOwnerEpoch?: number) {
+    return this.deleteOutbox.releaseLease(owner, item, expectedOwnerEpoch);
+  }
+  async removeConversationDeletion(owner: string, conversationId: string, kind: ConversationDeleteOutboxItem['kind'] = 'conversation', expectedOwnerEpoch?: number) {
+    return this.deleteOutbox.remove(owner, conversationId, kind, expectedOwnerEpoch);
+  }
+  async stageConversationDeletion(owner: string, item: ConversationDeleteOutboxItem, activeConversationId = '', expectedOwnerEpoch?: number) {
+    const queued = await this.deleteOutbox.enqueue(owner, item, expectedOwnerEpoch);
+    if (queued) await this.cache.remove(owner, [queued.conversationId], activeConversationId, expectedOwnerEpoch);
+    return queued;
+  }
+  async removeConversationsLocally(owner: string, conversationIds: readonly string[], activeConversationId = '', expectedOwnerEpoch?: number) {
+    return this.cache.remove(owner, conversationIds, activeConversationId, expectedOwnerEpoch);
   }
 
   async claimReadyPendingEnqueues(
@@ -469,6 +511,7 @@ export class ConversationLocalStore {
       legacyHostedTurnOutboxKey(normalizedOwner),
       roomOutboxKey(normalizedOwner),
       legacyRoomOutboxKey(normalizedOwner),
+      conversationDeleteOutboxKey(normalizedOwner),
       interventionOutboxKey(normalizedOwner),
       optimisticLedgerKey(normalizedOwner),
       conversationDraftsKey(normalizedOwner),

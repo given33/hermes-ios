@@ -16,6 +16,10 @@ import { ConversationHistory, styles } from './ChatPresentation';
 import type { ChatPlan } from './chat-plan-model';
 
 type HistoryProps = ComponentProps<typeof ConversationHistory>;
+type StreamProps = Omit<
+  ComponentProps<typeof ChatMessageStream>,
+  'safeAreaLeft' | 'safeAreaRight'
+>;
 
 interface ChatPageShellProps {
   attachmentsOpen: boolean;
@@ -40,7 +44,7 @@ interface ChatPageShellProps {
   safeAreaLeft: number;
   safeAreaRight: number;
   showHistory: boolean;
-  streamProps: ComponentProps<typeof ChatMessageStream>;
+  streamProps: StreamProps;
 }
 
 /** Pure chat layout. Network, persistence and state-machine work stays in hooks. */
@@ -99,9 +103,23 @@ export function ChatPageShell({
             <CodingPiChatView {...codingPiChatProps} />
           ) : (
             <>
-              <ChatMessageStream {...streamProps} />
-              <ChatPlanDrawer isChinese={isChinese} plan={plan}>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 6 }}>
+              <ChatMessageStream
+                {...streamProps}
+                safeAreaLeft={safeAreaLeft}
+                safeAreaRight={safeAreaRight}
+              />
+              <ChatPlanDrawer
+                isChinese={isChinese}
+                plan={plan}
+                safeAreaLeft={safeAreaLeft}
+                safeAreaRight={safeAreaRight}
+              >
+                <View
+                  style={[
+                    styles.contextUsageRow,
+                    { paddingRight: (compact ? 4 : 8) + safeAreaRight },
+                  ]}
+                >
                   <ContextUsageRing
                     isChinese={isChinese}
                     value={contextUsedPercent}

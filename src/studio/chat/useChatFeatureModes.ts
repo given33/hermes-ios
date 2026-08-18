@@ -2,7 +2,11 @@ import { useCallback, useMemo, useState } from 'react';
 
 import type { HermesApiClient } from '../../api/HermesApiClient';
 import type { SingleConversation } from '../../api/HermesCloudApi';
-import { latestRoomPreview, roomHasRunningWork } from '../agent-group/agent-group-model';
+import {
+  latestRoomPreview,
+  roomHasRunningWork,
+  sortRoomInfosByActivity,
+} from '../agent-group/agent-group-model';
 import { useAgentGroupChatController } from '../agent-group/useAgentGroupChatController';
 import type { ConversationHistoryItem } from './ConversationHistory';
 import type { ChatMode } from './ChatHeader';
@@ -53,9 +57,22 @@ export function useChatFeatureModes({
   selectConversation(id: string): Promise<void> | void;
 }): ChatFeatureModes {
   const [chatMode, setChatMode] = useState<ChatMode>('single');
+  const agentRoomCacheRevision = useMemo(() => conversations
+    .filter((conversation) => (
+      conversation.source === 'collaboration_room'
+      || conversation.id.startsWith('chat_room_')
+    ))
+    .map((conversation) => [
+      conversation.id,
+      conversation.updated_at || 0,
+      conversation.message_count || 0,
+      conversation.messages.length,
+    ].join(':'))
+    .join('|'), [conversations]);
   const agentGroupController = useAgentGroupChatController({
     agentProfile: profile,
     cacheOwner,
+    cacheRevision: agentRoomCacheRevision,
     client,
     // Do not open the group Socket.IO channel while the user is in ordinary
     // single-chat mode.  Apart from wasting radio/battery, the room joins and
@@ -93,13 +110,27 @@ export function useChatFeatureModes({
   });
 
   const historyConversations = useMemo<ConversationHistoryItem[]>(() => {
-    const chatItems = conversations.map((conversation) => ({
+    const roomConversationIds = new Set(
+      agentGroupController.rooms
+        .map((room) => room.conversationId)
+        .filter((id): id is string => Boolean(id)),
+    );
+    const chatItems = conversations
+      .filter((conversation) => (
+        conversation.source !== 'collaboration_room'
+        && !roomConversationIds.has(conversation.id)
+        && !conversation.id.startsWith('chat_room_')
+      ))
+      .map((conversation) => ({
       ...conversation,
       historyKind: 'chat' as const,
       sourceId: conversation.id,
-    }));
-    const groupItems = agentGroupController.rooms.map((room) => {
-      const snapshot = agentGroupController.roomSnapshots.find((item) => item.room.id === room.id);
+      }));
+    const roomSnapshots = new Map(
+      agentGroupController.roomSnapshots.map((snapshot) => [snapshot.room.id, snapshot]),
+    );
+    const groupItems = sortRoomInfosByActivity(agentGroupController.rooms, roomSnapshots).map((room) => {
+      const snapshot = roomSnapshots.get(room.id);
       return {
         id: `agent-group:${room.id}`,
         title: room.name,
@@ -154,7 +185,7 @@ export function useChatFeatureModes({
 
   const refreshUnifiedHistory = useCallback(() => {
     refreshConversationHistory();
-    void agentGroupController.refresh();
+    void agentGroupController.refresh(true);
     void workflowHistory.refresh();
     void codingPiController.refresh();
   }, [agentGroupController, codingPiController, refreshConversationHistory, workflowHistory]);

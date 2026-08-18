@@ -4,6 +4,11 @@ export interface HermesStudioRoomInfo {
   id: string;
   name: string;
   inviteCode: string | null;
+  /** Collaboration plugin roster (the backend calls these profiles). */
+  profiles?: string[];
+  messageCount?: number;
+  conversationId?: string;
+  hostedTurns?: Record<string, Record<string, unknown>>;
   canManage?: boolean;
   canMentionAll?: boolean;
   ownerMemberId?: string;
@@ -169,7 +174,17 @@ export interface HermesStudioGroupChatJoinResult {
   roomName: string;
   members: HermesStudioRoomMember[];
   messages: HermesStudioGroupChatMessage[];
+  agents?: HermesStudioRoomAgent[];
   rooms: string[];
+  total?: number;
+  offset?: number;
+  limit?: number;
+  hasMore?: boolean;
+  typingUsers?: Array<{ userId: string; userName: string }>;
+  contextStatuses?: Array<{ agentName: string; status: string }>;
+  pendingApprovals?: HermesStudioPendingApproval[];
+  pendingClarifies?: unknown[];
+  agentLinkToken?: string;
 }
 
 export interface HermesStudioGroupChatRoomDetail {

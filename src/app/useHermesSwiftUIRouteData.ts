@@ -6,12 +6,16 @@ import { withAbortableDeadline } from '../api/async-deadline';
 import { expireSystemRouteData } from '../api/managed-node-status';
 import { consumeManagedResourceEvents } from '../api/managed-resource-events';
 import {
-  conversationSessionSummary,
   createCollaborationRoomRequestId,
   createWorkflowStartRequestId,
+  parseOfficialConversationPlaceholderId,
   type HermesCloudApi,
 } from '../api/HermesCloudApi';
-import { synchronizeConversationCache } from '../api/conversation-local-store';
+import {
+  createConversationDeleteReplayService,
+  synchronizeConversationCache,
+} from '../api/conversation-local-store';
+import { captureConversationStorageEpoch } from '../api/conversation-storage-coordinator';
 import {
   hermesCloudApiFor,
   sharedConversationLocalStore,
@@ -29,7 +33,7 @@ import {
   encodeModelSelection,
   loadHermesSwiftUIRouteSnapshot,
   performHermesSwiftUIRouteAction,
-  createHermesSwiftUISessionsSnapshot,
+  createHermesSwiftUISessionsSnapshotFromConversations,
 } from './hermes-route-data';
 import {
   initialRouteRefreshDelay,
@@ -94,13 +98,51 @@ export function useHermesSwiftUIRouteData({
     () => cacheOwner ? sharedConversationLocalStore() : null,
     [cacheOwner],
   );
+  const selectedItemId = useRef('');
+  const conversationDeleteReplayService = useMemo(() => (
+    api && localStore && cacheOwner
+      ? createConversationDeleteReplayService({
+          activeConversationId: () => selectedItemId.current,
+          cacheOwner,
+          deleteRemote: async (item) => {
+            if (item.kind === 'session') {
+              const placeholder = parseOfficialConversationPlaceholderId(item.conversationId);
+              const sessionId = placeholder?.sessionId
+                || (item.conversationId.startsWith('official:')
+                  ? item.conversationId.slice('official:'.length)
+                  : item.conversationId);
+              const result = await api.deleteSession(
+                sessionId,
+                item.profile || placeholder?.profile || profile,
+              );
+              if (result?.ok === false) {
+                throw new Error('Remote session deletion was not accepted');
+              }
+              return;
+            }
+            const result = await api.deleteConversation(item.conversationId);
+            if (result?.ok === false) {
+              throw new Error('Remote conversation deletion was not accepted');
+            }
+          },
+          describeError: (error) => serverErrorMessage(error, locale),
+          isAlreadyDeleted: isAlreadyDeletedRemote,
+          // The local tombstone is the committed user action. Keep it until
+          // the server acknowledges it, including while this route is open.
+          isRetryable: () => true,
+          outbox: localStore,
+          kinds: ['conversation', 'session'],
+          retryDelayMs: 60_000,
+          workerId: `swiftui-route:${routeId}`,
+        })
+      : null
+  ), [api, cacheOwner, localStore, locale, profile, routeId]);
   const workflowStartFlights = useMemo(
     () => new WorkflowStartSingleFlight(),
     [cacheOwner, client, profile],
   );
   const requestVersion = useRef(0);
   const lastSuccessfulReloadAt = useRef(0);
-  const selectedItemId = useRef('');
   const acknowledgedRoomRequestId = useRef('');
   const collaborationReplay = useRef<Promise<string> | null>(null);
   const operationRef = useRef<HermesSwiftUIRouteOperationSnapshot | undefined>(undefined);
@@ -160,6 +202,24 @@ export function useHermesSwiftUIRouteData({
     if (!api) return;
     const version = ++requestVersion.current;
     try {
+      if (routeId === 'sessions' && localStore && cacheOwner) {
+        const [cached, pendingIds] = await Promise.all([
+          localStore.read(cacheOwner),
+          localStore.readPendingConversationDeletionIds(cacheOwner),
+        ]);
+        if (version !== requestVersion.current) return;
+        if (cached) {
+          const localSnapshot = createHermesSwiftUISessionsSnapshotFromConversations(
+            cached.conversations,
+            pendingIds,
+            locale,
+          );
+          // Publish downloaded history before any network operation. A later
+          // sync replaces it, while an offline failure leaves it intact.
+          setDataJson(encodeHermesSwiftUIRouteSnapshot(localSnapshot));
+        }
+      }
+      await conversationDeleteReplayService?.replay().catch(() => undefined);
       await replayPendingCollaborationMessages().catch(() => undefined);
       let snapshot: HermesSwiftUIRouteSnapshot;
       if (routeId === 'sessions' && localStore && cacheOwner) {
@@ -169,15 +229,25 @@ export function useHermesSwiftUIRouteData({
           cacheOwner,
           profile,
         );
-        const sessions = synchronized.conversations.map(conversationSessionSummary);
+        const synchronizedPendingDeletionIds = await localStore.readPendingConversationDeletionIds(
+          cacheOwner,
+        );
+        const synchronizedSnapshot = createHermesSwiftUISessionsSnapshotFromConversations(
+          synchronized.conversations,
+          synchronizedPendingDeletionIds,
+          locale,
+        );
+        const sessions = synchronizedSnapshot.sessions || [];
         const selectedId = selectedItemId.current;
         const selected = sessions.find(({ id }) => id === selectedId);
         const sessionState = selected && !selectedId.startsWith('official:')
           ? await api.getConversationSessionState(selectedId, selected?.profile || profile)
           : undefined;
-        snapshot = createHermesSwiftUISessionsSnapshot(
-          { sessions, sessionState },
+        snapshot = createHermesSwiftUISessionsSnapshotFromConversations(
+          synchronized.conversations,
+          synchronizedPendingDeletionIds,
           locale,
+          sessionState,
         );
       } else {
         snapshot = await loadHermesSwiftUIRouteSnapshot(
@@ -226,6 +296,7 @@ export function useHermesSwiftUIRouteData({
   }, [
     api,
     cacheOwner,
+    conversationDeleteReplayService,
     localStore,
     locale,
     notify,
@@ -515,25 +586,54 @@ export function useHermesSwiftUIRouteData({
         await reload();
         return;
       }
+      if (
+        event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete
+        && event.payload.id
+        && localStore
+        && cacheOwner
+      ) {
+        const conversationId = event.payload.id.trim();
+        if (!conversationId) return;
+        const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+        const cached = await localStore.read(cacheOwner);
+        const conversation = cached?.conversations.find(({ id }) => id === conversationId);
+        const queued = await localStore.stageConversationDeletion(
+          cacheOwner,
+          {
+            conversationId,
+            kind: conversationId.startsWith('official:') ? 'session' : 'conversation',
+            profile: conversation?.profile || event.payload.fields?.profile || profile,
+            queuedAt: Date.now(),
+          },
+          cached?.activeConversationId || selectedItemId.current,
+          ownerEpoch,
+        );
+        if (!queued) {
+          throw new Error(locale === 'zh' ? '本地会话删除未提交' : 'Local session deletion was not committed');
+        }
+        if (selectedItemId.current === conversationId) selectedItemId.current = '';
+        // The native list must react immediately even when the network is
+        // offline; the persistent tombstone prevents a later sync from
+        // reintroducing this row.
+        setDataJson((current) => removeSessionFromRouteSnapshot(current, conversationId));
+        await conversationDeleteReplayService?.replay(ownerEpoch).catch(() => undefined);
+        await reload();
+        return;
+      }
       const result = await performHermesSwiftUIRouteAction(api, event, profile, locale);
       if (
         localStore
         && cacheOwner
-        && (
-          event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete
-          || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename
-        )
+        && event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename
       ) {
         const cached = await localStore.read(cacheOwner);
         if (cached) {
           const value = event.payload.value?.trim() || event.payload.name?.trim() || '';
-          const conversations = event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete
-            ? cached.conversations.filter(({ id }) => id !== event.payload.id)
-            : cached.conversations.map((conversation) => (
-                conversation.id === event.payload.id && value
-                  ? { ...conversation, title: value, updated_at: Date.now() }
-                  : conversation
-              ));
+          const conversations = cached.conversations.map((conversation) => (
+            conversation.id === event.payload.id && value
+              ? { ...conversation, title: value, updated_at: Date.now() }
+              : conversation
+          ));
           const activeId = conversations.some(({ id }) => id === cached.activeConversationId)
             ? cached.activeConversationId
             : conversations[0]?.id || '';
@@ -574,6 +674,7 @@ export function useHermesSwiftUIRouteData({
   }, [
     api,
     cacheOwner,
+    conversationDeleteReplayService,
     localStore,
     locale,
     notify,
@@ -679,4 +780,38 @@ function isPermanentRoomSendError(error: unknown): boolean {
     && error.status >= 400
     && error.status < 500
     && ![401, 408, 429].includes(error.status);
+}
+
+function isAlreadyDeletedRemote(error: unknown): boolean {
+  if (error instanceof HermesApiError) return error.status === 404 || error.status === 410;
+  if (!isJsonRecord(error)) return false;
+  const status = Number(error.status ?? error.statusCode);
+  return status === 404 || status === 410;
+}
+
+function removeSessionFromRouteSnapshot(dataJson: string, conversationId: string): string {
+  try {
+    const source: unknown = JSON.parse(dataJson);
+    if (!isJsonRecord(source) || !Array.isArray(source.sessions)) return dataJson;
+    const next: Record<string, unknown> = {
+      ...source,
+      sessions: source.sessions.filter((item) => (
+        !isJsonRecord(item) || item.id !== conversationId
+      )),
+    };
+    const context = source.sessionContext;
+    if (
+      isJsonRecord(context)
+      && (context.conversationId === conversationId || context.sessionId === conversationId)
+    ) {
+      delete next.sessionContext;
+    }
+    return JSON.stringify(next);
+  } catch {
+    return dataJson;
+  }
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
