@@ -10,11 +10,9 @@ import { useTheme } from '../../design/ThemeProvider';
 
 export interface AgentHubPageProps {
   client?: HermesApiClient | null;
-  compact?: boolean;
   isChinese?: boolean;
   locale?: string;
   notify?(message: string): void;
-  onOpenNavigation?(): void;
   profile: string;
 }
 
@@ -53,24 +51,28 @@ export function AgentHubPage({
   const chinese = isChinese ?? (locale ?? 'zh') === 'zh';
   const { tokens } = useTheme();
   const [runs, setRuns] = useState<HubRunRow[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const cloud = useMemo(() => (client ? hermesCloudApiFor(client) : null), [client]);
   const mounted = useRef(true);
+  // Monotonic request sequence: a slow response that lands after a newer one
+  // is dropped instead of overwriting fresher data.
+  const requestSeq = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options: { silent?: boolean } = {}) => {
     if (!cloud) return;
-    setLoading(true);
+    const seq = ++requestSeq.current;
+    if (!options.silent) setRefreshing(true);
     try {
       const response = await cloud.getRuntimeRuns(profile) as Record<string, unknown>;
+      if (!mounted.current || seq !== requestSeq.current) return;
       const rows = (Array.isArray(response?.runs) ? response.runs : []) as Record<string, unknown>[];
-      if (!mounted.current) return;
       setRuns(rows.map((entry) => ({
         id: String(entry.id ?? ''),
         title: String(entry.title ?? entry.source_run_id ?? ''),
@@ -91,9 +93,13 @@ export function AgentHubPage({
       })));
       setError(null);
     } catch (reason) {
-      if (mounted.current) setError(String((reason as Error)?.message || reason));
+      if (mounted.current && seq === requestSeq.current) {
+        setError(String((reason as Error)?.message || reason));
+      }
     } finally {
-      if (mounted.current) setLoading(false);
+      if (mounted.current && seq === requestSeq.current && !options.silent) {
+        setRefreshing(false);
+      }
     }
   }, [cloud, profile]);
 
@@ -102,7 +108,8 @@ export function AgentHubPage({
   const hasActive = runs.some((run) => !TERMINAL_STATES.has(run.state.toLowerCase()));
   useEffect(() => {
     if (!hasActive) return;
-    const timer = setInterval(() => { void load(); }, ACTIVE_POLL_MS);
+    // Silent polling: never drives the pull-to-refresh spinner.
+    const timer = setInterval(() => { void load({ silent: true }); }, ACTIVE_POLL_MS);
     return () => clearInterval(timer);
   }, [hasActive, load]);
 
@@ -117,7 +124,7 @@ export function AgentHubPage({
       } else {
         await cloud.retryRuntimeRun(url, `hub-retry-${run.id}`);
       }
-      await load();
+      await load({ silent: true });
     } catch (reason) {
       notify?.(String((reason as Error)?.message || reason));
     } finally {
@@ -136,12 +143,12 @@ export function AgentHubPage({
     <View style={{ flex: 1, backgroundColor: tokens.colors.background }}>
       <ScrollView
         contentContainerStyle={{ padding: 16, gap: 12 }}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={() => { void load(); }} tintColor={tokens.colors.primary} />}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { void load(); }} tintColor={tokens.colors.primary} />}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Activity color={tokens.colors.primary} size={18} />
           <Text style={{ color: tokens.colors.foreground, fontSize: 17, fontWeight: '600' }}>
-            {chinese ? 'Agent Hub' : 'Agent Hub'}
+            Agent Hub
           </Text>
           <Text style={{ color: tokens.colors.textTertiary, fontSize: 13 }}>
             {chinese ? `${active.length} 运行中 · ${recent.length} 已结束` : `${active.length} active · ${recent.length} done`}
@@ -150,7 +157,7 @@ export function AgentHubPage({
         {error ? (
           <Text style={{ color: tokens.colors.destructive, fontSize: 13 }}>{error}</Text>
         ) : null}
-        {!runs.length && !loading ? (
+        {!runs.length && !refreshing ? (
           <Text style={{ color: tokens.colors.textSecondary, fontSize: 14 }}>
             {chinese ? '暂无 Agent 运行记录' : 'No agent runs yet'}
           </Text>
@@ -228,7 +235,7 @@ function HubRunCard({
         <Text numberOfLines={2} style={{ color: tokens.colors.destructive, fontSize: 12 }}>{run.error}</Text>
       ) : null}
       {!terminal || run.retryUrl ? (
-        <View style={{ flexDirection: 'row', gap: 8 }}>
+        <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
           {!terminal && run.cancelUrl ? (
             <IOSPressable
               disabled={busy}
@@ -251,7 +258,11 @@ function HubRunCard({
               <Text style={{ color: tokens.colors.primary, fontSize: 13 }}>{chinese ? '重试' : 'Retry'}</Text>
             </IOSPressable>
           ) : null}
-          {busy ? <RefreshCw color={tokens.colors.textTertiary} size={13} /> : null}
+          {busy ? (
+            <Text style={{ color: tokens.colors.textTertiary, fontSize: 12 }}>
+              {chinese ? '处理中…' : 'working…'}
+            </Text>
+          ) : null}
         </View>
       ) : null}
     </View>

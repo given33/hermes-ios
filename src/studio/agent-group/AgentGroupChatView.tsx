@@ -244,6 +244,9 @@ export function AgentGroupChatView({
             <AgentGroupMessageStream
               agents={activeRoom?.agents || []}
               compact={compact}
+              hasEarlierHistory={activeRoom?.hasEarlierHistory === true}
+              loadingEarlier={controller.loading && Boolean(activeRoom?.messages.length)}
+              onLoadEarlier={() => { void controller.loadEarlierMessages(); }}
               isChinese={isChinese}
               messages={activeRoom?.messages || []}
               onQuickReply={(text) => { void controller.sendMessage(text); }}

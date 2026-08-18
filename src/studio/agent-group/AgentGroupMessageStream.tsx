@@ -23,8 +23,11 @@ import { useTheme } from '../../design/ThemeProvider';
 export interface AgentGroupMessageStreamProps {
   agents: HermesStudioRoomAgent[];
   compact: boolean;
+  hasEarlierHistory?: boolean;
   isChinese: boolean;
+  loadingEarlier?: boolean;
   messages: HermesStudioGroupChatMessage[];
+  onLoadEarlier?(): void;
   onQuickReply?(text: string): void;
   onRetractMessage?(messageId: string): void;
   running: boolean;
@@ -43,8 +46,11 @@ export interface AgentGroupMessageStreamProps {
 export function AgentGroupMessageStream({
   agents,
   compact,
+  hasEarlierHistory = false,
   isChinese,
+  loadingEarlier = false,
   messages,
+  onLoadEarlier,
   onQuickReply,
   onRetractMessage,
   running,
@@ -119,6 +125,31 @@ export function AgentGroupMessageStream({
         scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
       >
+        {hasEarlierHistory && displayMessages.length > 0 ? (
+          <IOSPressable
+            accessibilityLabel={isChinese ? '加载更早的消息' : 'Load earlier messages'}
+            disabled={loadingEarlier}
+            haptic="selection"
+            onPress={() => { onLoadEarlier?.(); }}
+            style={{
+              alignItems: 'center',
+              alignSelf: 'center',
+              backgroundColor: multiplyAlpha(tokens.colors.card, 0.9),
+              borderColor: multiplyAlpha(tokens.colors.primary, 0.25),
+              borderRadius: 14,
+              borderWidth: 1,
+              marginBottom: 8,
+              paddingHorizontal: 14,
+              paddingVertical: 7,
+            }}
+          >
+            <Text style={{ color: tokens.colors.primary, fontSize: 13 }}>
+              {loadingEarlier
+                ? (isChinese ? '正在加载…' : 'Loading…')
+                : (isChinese ? '加载更早的消息' : 'Load earlier messages')}
+            </Text>
+          </IOSPressable>
+        ) : null}
         {!displayMessages.length ? (
           <GroupEmptyState agents={agents} isChinese={isChinese} />
         ) : displayMessages.map((message) => (

@@ -635,10 +635,8 @@ function PreviewRoute({
       ? (
         <AgentHubPage
           client={client}
-          compact={compactNavigation}
           isChinese={locale === 'zh'}
           notify={notify}
-          onOpenNavigation={openNavigation}
           profile={profile}
         />
       )

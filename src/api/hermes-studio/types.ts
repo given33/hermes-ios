@@ -274,6 +274,8 @@ export interface HermesStudioRoomSnapshot {
   loading: boolean;
   error: string | null;
   updatedAt: number;
+  /** Server history exists beyond what is loaded (paged drain budget hit). */
+  hasEarlierHistory?: boolean;
 }
 
 export interface HermesStudioPendingApproval {
@@ -498,4 +500,27 @@ export function numberValue(value: unknown, fallback: number): number {
 
 export function stringValue(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
+}
+
+/**
+ * True when an error response means the remote object is already gone
+ * (404/410). Accepts HermesApiError instances as well as plain status
+ * records; keep exactly one implementation — duplicated copies drifted
+ * before and silently lost the instanceof branch.
+ */
+export function isAlreadyDeletedRemote(
+  error: unknown,
+  errorCtor?: abstract new (...args: never[]) => { status?: number },
+): boolean {
+  const ctor = errorCtor;
+  if (ctor && error instanceof ctor) {
+    const status = Number((error as { status?: number }).status);
+    return status === 404 || status === 410;
+  }
+  if (typeof error === 'object' && error !== null && !Array.isArray(error)) {
+    const status = Number((error as { status?: unknown; statusCode?: unknown }).status
+      ?? (error as { statusCode?: unknown }).statusCode);
+    return status === 404 || status === 410;
+  }
+  return false;
 }

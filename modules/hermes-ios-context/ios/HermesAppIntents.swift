@@ -43,20 +43,27 @@ private enum HermesIntentQueueCipher {
     insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
     let status = SecItemAdd(insert as CFDictionary, nil)
     if status == errSecDuplicateItem, let existing = readKey(), existing.count == 32 {
+      // A concurrent creator won the race. Still mirror the winning bytes
+      // below: a process without the group entitlement reads the mirror,
+      // and skipping it would let the two spellings drift apart.
+      mirrorPlainItem(bytes: existing)
       return SymmetricKey(data: existing)
     }
     guard status == errSecSuccess else { throw HermesIntentQueueError.keyUnavailable }
-    // Mirror the same key bytes into the no-access-group item: the Share
-    // Extension may lack the group entitlement in resign-compatible builds,
-    // and both spellings must unlock the same queue.
-    if keySelector()[kSecAttrAccessGroup as String] != nil {
-      var plain = keySelector()
-      plain.removeValue(forKey: kSecAttrAccessGroup as String)
-      plain[kSecValueData as String] = bytes
-      plain[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-      SecItemAdd(plain as CFDictionary, nil)
-    }
+    mirrorPlainItem(bytes: bytes)
     return SymmetricKey(data: bytes)
+  }
+
+  /// Mirror key bytes into the no-access-group item: the Share Extension
+  /// may lack the group entitlement in resign-compatible builds, and both
+  /// spellings must unlock the same queue.
+  private static func mirrorPlainItem(bytes: Data) {
+    guard keySelector()[kSecAttrAccessGroup as String] != nil else { return }
+    var plain = keySelector()
+    plain.removeValue(forKey: kSecAttrAccessGroup as String)
+    plain[kSecValueData as String] = bytes
+    plain[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+    SecItemAdd(plain as CFDictionary, nil)
   }
 
   private static func readKey() -> Data? {
@@ -71,8 +78,10 @@ private enum HermesIntentQueueCipher {
     // Resign builds may only hold the mirrored plain item.
     query.removeValue(forKey: kSecAttrAccessGroup as String)
     result = nil
-    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-    return result as? Data
+    guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+          let plainData = result as? Data,
+          plainData.count == 32 else { return nil }
+    return plainData
   }
 
   private static func keySelector() -> [String: Any] {
@@ -175,7 +184,6 @@ final class HermesAgentTriggerStore {
           ) else { return [] }
     let now = Date().timeIntervalSince1970
     var entries: [[String: Any]] = []
-    var unreadable: [(URL, Date)] = []
     for file in files where file.pathExtension.lowercased() == "bin" {
       let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
         .contentModificationDate ?? Date.distantPast
@@ -190,8 +198,6 @@ final class HermesAgentTriggerStore {
             let parsed = HermesIntentQueueCipher.open(envelope).first else {
         if now - modified.timeIntervalSince1970 > 48 * 3600 {
           try? FileManager.default.removeItem(at: file)
-        } else {
-          unreadable.append((file, modified))
         }
         continue
       }
@@ -199,7 +205,10 @@ final class HermesAgentTriggerStore {
       entry["__spoolFile"] = file.lastPathComponent
       entries.append(entry)
     }
-    _ = unreadable
+    // Sort by creation time FIRST: the directory order is random (UUID
+    // names), so trimming before sorting dropped arbitrary entries instead
+    // of the oldest ones.
+    entries.sort { ($0["createdAt"] as? Double ?? 0) < ($1["createdAt"] as? Double ?? 0) }
     // Quota: keep the newest 200 sealed files; anything older is dropped so
     // a runaway producer can never exhaust the App Group container.
     if entries.count > 200 {
@@ -209,7 +218,7 @@ final class HermesAgentTriggerStore {
       }
       entries.removeFirst(entries.count - 200)
     }
-    return entries.sorted { ($0["createdAt"] as? Double ?? 0) < ($1["createdAt"] as? Double ?? 0) }
+    return entries
   }
 
   private func deleteSpoolEntry(fileName: String?) {

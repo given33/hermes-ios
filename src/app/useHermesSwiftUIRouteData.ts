@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AppState } from 'react-native';
 
 import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
+import { isAlreadyDeletedRemote as isAlreadyDeletedRemoteShared } from '../api/hermes-studio';
 import { withAbortableDeadline } from '../api/async-deadline';
 import { expireSystemRouteData } from '../api/managed-node-status';
 import { consumeManagedResourceEvents } from '../api/managed-resource-events';
@@ -783,10 +784,12 @@ function isPermanentRoomSendError(error: unknown): boolean {
 }
 
 function isAlreadyDeletedRemote(error: unknown): boolean {
-  if (error instanceof HermesApiError) return error.status === 404 || error.status === 410;
-  if (!isJsonRecord(error)) return false;
-  const status = Number(error.status ?? error.statusCode);
-  return status === 404 || status === 410;
+  // Shared helper with the agent-group controller; the constructor argument
+  // keeps the instanceof fast path this file relied on.
+  return isAlreadyDeletedRemoteShared(
+    error,
+    HermesApiError as unknown as abstract new (...args: never[]) => { status?: number },
+  );
 }
 
 function removeSessionFromRouteSnapshot(dataJson: string, conversationId: string): string {

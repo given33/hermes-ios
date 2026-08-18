@@ -95,6 +95,9 @@ private enum HermesShareQueueCipher {
 }
 
 final class ShareViewController: UIViewController {
+  // viewDidAppear can fire twice (stacked presentation, dismissal animations);
+  // without the guard one share sheet produced two spool entries.
+  private var isProcessing = false
   private static let appGroup = "group.app.sunstone1029.fig1171.hermes"
   private static let attachmentsDirectory = "agent-share-attachments-v1"
   // Each share becomes one individually sealed spool file. Append-only file
@@ -107,6 +110,8 @@ final class ShareViewController: UIViewController {
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
+    guard !isProcessing else { return }
+    isProcessing = true
     process()
   }
 
@@ -156,7 +161,9 @@ final class ShareViewController: UIViewController {
       }
       return
     }
-    let type: UTType = provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) ? .url : provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) ? .image : provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ? .movie : .item
+    // The plain-text and URL branches above already returned; this is the
+    // file-representation fallback for images/movies/arbitrary items.
+    let type: UTType = provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) ? .image : provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ? .movie : .item
     provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { temporaryURL, _ in
       guard let temporaryURL, let root else { completion(nil, 0); return }
       let accessed = temporaryURL.startAccessingSecurityScopedResource()

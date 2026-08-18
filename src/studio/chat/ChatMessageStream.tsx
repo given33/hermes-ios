@@ -128,8 +128,16 @@ export function ChatMessageStream({
     [messages],
   );
   // Turn map: y-offsets of every user-turn boundary, captured at layout so
-  // the side rail can scroll the stream to any past turn on tap.
+  // the side rail can scroll the stream to any past turn on tap. Pruned to
+  // the current message ids on every change so a conversation switch (or
+  // deletion) cannot leave stale offsets behind — and the map stays bounded.
   const turnOffsetsRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    const live = new Set(messages.map((message) => message.id));
+    for (const key of turnOffsetsRef.current.keys()) {
+      if (!live.has(key)) turnOffsetsRef.current.delete(key);
+    }
+  }, [messages]);
   const markTurnOffset = useCallback((id: string) => (event: { nativeEvent: { layout: { y: number } } }) => {
     turnOffsetsRef.current.set(id, event.nativeEvent.layout.y);
   }, []);

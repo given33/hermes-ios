@@ -45,6 +45,7 @@ import {
   normalizeRoomAgent,
   numberValue,
   stringValue,
+  isAlreadyDeletedRemote,
 } from '../../api/hermes-studio';
 import {
   addUnique,
@@ -176,6 +177,7 @@ export interface AgentGroupChatController {
   clearRoom(roomId: string): Promise<void>;
   refresh(forceNetwork?: boolean): Promise<void>;
   refreshRoom(roomId?: string): Promise<void>;
+  loadEarlierMessages(roomId?: string): Promise<void>;
   cloneRoom(roomId: string, name: string, inviteCode?: string): Promise<void>;
   joinRoomByCode(code: string): Promise<void>;
   updateRoomConfig(roomId: string, input: HermesStudioRoomConfigInput): Promise<void>;
@@ -864,22 +866,6 @@ export function useAgentGroupChatController({
       const degradedTombstones = localStore
         ? new Set<string>()
         : await readDegradedRoomTombstones(cacheOwner);
-      if (studioApi && degradedTombstones.size) {
-        // Opportunistic replay for the degraded path: a room whose earlier
-        // DELETE failed stays hidden via its tombstone until a retry lands.
-        for (const tombstonedId of degradedTombstones) {
-          if (!listedRooms.some((room) => room.id === tombstonedId)) {
-            await clearDegradedRoomTombstone(tombstonedId, cacheOwner);
-            continue;
-          }
-          try {
-            await studioApi.groupChat.deleteRoom(tombstonedId);
-            await clearDegradedRoomTombstone(tombstonedId, cacheOwner);
-          } catch {
-            // Still offline; the tombstone keeps the room hidden.
-          }
-        }
-      }
       const nextRooms = listedRooms.filter((room) => {
         const conversationId = room.conversationId?.trim();
         const syntheticConversationId = `chat_room_${room.id.replace(/^room_/, '')}`;
@@ -903,6 +889,26 @@ export function useAgentGroupChatController({
       applyRoomList(nextRooms);
       setConnected(true);
       setError(null);
+      if (studioApi && degradedTombstones.size) {
+        // Opportunistic replay for the degraded path, AFTER the list renders:
+        // each retry can block on a full network timeout in weak networks,
+        // and rendering must never wait behind them.
+        void (async () => {
+          for (const tombstonedId of degradedTombstones) {
+            if (!mountedRef.current) return;
+            if (!roomsRef.current.some((room) => room.id === tombstonedId)) {
+              await clearDegradedRoomTombstone(tombstonedId, cacheOwner);
+              continue;
+            }
+            try {
+              await studioApi.groupChat.deleteRoom(tombstonedId);
+              await clearDegradedRoomTombstone(tombstonedId, cacheOwner);
+            } catch {
+              // Still offline; the tombstone keeps the room hidden.
+            }
+          }
+        })();
+      }
       // New-device warm-up (#15): room summaries exist after the list call,
       // but full transcripts only land when a room is opened. Drain the most
       // recent rooms once, sequentially, in the background so switching to
@@ -1091,6 +1097,11 @@ export function useAgentGroupChatController({
         pendingApprovals: socketRef.current
           ? (current?.pendingApprovals || restored.pendingApprovals)
           : restored.pendingApprovals,
+        hasEarlierHistory: Boolean(
+          roomHistoryNextOffsetRef.current.has(roomId)
+          && !roomHistoryCompleteRef.current.has(roomId)
+          && (roomHistoryNextOffsetRef.current.get(roomId) || 0) < totalMessages,
+        ),
         updatedAt: Math.max(
           restored.updatedAt || 0,
           current?.updatedAt || 0,
@@ -1103,7 +1114,10 @@ export function useAgentGroupChatController({
       // the next offline launch.
       queueRoomSnapshotPersistence(nextSnapshot);
     } catch (reason) {
-      if (mountedRef.current) setConnected(false);
+      // A late failure from the previous account must not flip the new
+      // account's connection state (the snapshot patch is already a no-op —
+      // the maps were reset on the account boundary).
+      if (mountedRef.current && accountEpochCurrent()) setConnected(false);
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, loading: false, error: errorMessage(reason, isChinese) }));
     } finally {
       detailInFlightRef.current.delete(roomId);
@@ -1111,6 +1125,20 @@ export function useAgentGroupChatController({
   }, [applyRoomList, isChinese, patchSnapshot, queueRoomSnapshotPersistence, setSnapshot, studioApi]);
 
   refreshRoomRef.current = refreshRoom;
+
+  const loadEarlierMessages = useCallback(async (requestedRoomId?: string) => {
+    const roomId = requestedRoomId || activeRoomIdRef.current;
+    if (!roomId) return;
+    // Re-arm the bounded drain from the recorded server offset and pull the
+    // next page immediately instead of waiting for the next poll tick.
+    if (!roomHistoryNextOffsetRef.current.has(roomId)) return;
+    detailFingerprintRef.current.delete(roomId);
+    try {
+      await refreshRoom(roomId);
+    } catch {
+      // The next poll retries; the offset is preserved.
+    }
+  }, [refreshRoom]);
 
   const selectRoom = useCallback((roomId: string) => {
     if (!roomId || !roomsRef.current.some((room) => room.id === roomId)) return;
@@ -1861,6 +1889,7 @@ export function useAgentGroupChatController({
     clearRoom,
     refresh,
     refreshRoom,
+    loadEarlierMessages,
     cloneRoom,
     joinRoomByCode,
     updateRoomConfig,
@@ -2087,12 +2116,6 @@ function roomStateFingerprint(room: HermesStudioRoomInfo): string {
   // revision signals so they continue to refresh rather than becoming stale.
   if (room.messageCount === undefined && room.lastActiveAt === undefined && !turns.length) return '';
   return JSON.stringify([room.messageCount ?? 0, room.lastActiveAt ?? 0, turns]);
-}
-
-function isAlreadyDeletedRemote(error: unknown): boolean {
-  if (!isRecord(error)) return false;
-  const status = Number(error.status ?? error.statusCode);
-  return status === 404 || status === 410;
 }
 
 function stableHash(value: string): string {

@@ -56,6 +56,9 @@ type SocketListener = (...args: any[]) => void;
 
 interface RoomStreamRecord {
   roomId: string;
+  /** Stream identity: same conversation under a new account generation is a
+   *  different stream — attach must replace, not no-op. */
+  streamKey: string;
   conversationId: string;
   accountGeneration: string;
   controller: AbortController;
@@ -63,6 +66,7 @@ interface RoomStreamRecord {
   cursor: number;
   seen: Map<string, string>;
   retryTimer: ReturnType<typeof setTimeout> | null;
+  retryWake: (() => void) | null;
 }
 
 const ROOM_STREAM_RETRY_BASE_MS = 1_000;
@@ -107,9 +111,20 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
     const conversationId = room.conversationId?.trim();
     const accountGeneration = room.accountGeneration?.trim();
     if (!conversationId || !accountGeneration || !this.client) return;
-    if (this.streams.has(conversationId)) return;
+    const streamKey = `${conversationId}\u0000${accountGeneration}`;
+    if (this.streams.has(streamKey)) return;
+    const stale = this.streams.get(conversationId);
+    if (stale) {
+      // Same conversation under a different account fence: retire the old
+      // stream first so exactly one live subscription remains.
+      stale.stopped = true;
+      stale.controller.abort();
+      stale.retryWake?.();
+      this.streams.delete(conversationId);
+    }
     const record: RoomStreamRecord = {
       roomId: room.id,
+      streamKey,
       conversationId,
       accountGeneration,
       controller: new AbortController(),
@@ -117,8 +132,9 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       cursor: 0,
       seen: new Map(),
       retryTimer: null,
+      retryWake: null,
     };
-    this.streams.set(conversationId, record);
+    this.streams.set(streamKey, record);
     void this.runRoomStream(record);
   }
 
@@ -126,6 +142,9 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
     for (const record of this.streams.values()) {
       record.stopped = true;
       record.controller.abort();
+      // Wake any pending backoff wait so its async frame can observe the
+      // stop flag and exit instead of leaking until the timer fires.
+      record.retryWake?.();
       if (record.retryTimer) clearTimeout(record.retryTimer);
     }
     this.streams.clear();
@@ -154,6 +173,7 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
           },
         ),
       };
+      const cursorBefore = record.cursor;
       try {
         record.cursor = await consumeHostedConversationEvents(
           source,
@@ -165,7 +185,10 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
           undefined,
           5_000,
         );
-        attempt = 0;
+        // Only real progress justifies resetting the backoff: a stream that
+        // closes without advancing (server EOF at HEAD) keeps the capped
+        // schedule instead of reconnecting every second.
+        if (record.cursor > cursorBefore) attempt = 0;
       } catch {
         // Fall through to the reconnect backoff; polling stays authoritative.
       }
@@ -176,9 +199,11 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       );
       attempt += 1;
       await new Promise<void>((resolve) => {
+        record.retryWake = resolve;
         record.retryTimer = setTimeout(resolve, delay);
       });
       record.retryTimer = null;
+      record.retryWake = null;
     }
   }
 
@@ -203,6 +228,14 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       record.seen.set(id, revision);
       if (known && !content) continue;
       this.emit('message', { ...raw, roomId: record.roomId });
+    }
+    // Bound the dedupe map: keep the newest ~500 message revisions so a
+    // long-lived room stream cannot grow memory without limit.
+    if (record.seen.size > 600) {
+      for (const key of record.seen.keys()) {
+        record.seen.delete(key);
+        if (record.seen.size <= 500) break;
+      }
     }
     // Any other committed revision (typing, roster, hosted-turn status,
     // summary) wakes the controller through the generic room refresh path.

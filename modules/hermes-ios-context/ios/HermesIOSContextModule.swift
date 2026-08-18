@@ -444,6 +444,9 @@ public final class HermesIOSContextModule: Module {
         ownerScope: activeIdentity.ownerScope,
         accountGeneration: activeIdentity.accountGeneration
       )
+      // Identity changed through this bridge too — publish the hint so the
+      // Share Extension stamps shares for the now-active account.
+      HermesAgentTriggerStore.refreshOwnerHint()
       Self.setFileProviderOwnerScope(scope)
       HermesPermissionCollectionGate.shared.prepare(ownerScope: scope)
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
