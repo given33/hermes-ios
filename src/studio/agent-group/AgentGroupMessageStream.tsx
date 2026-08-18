@@ -127,7 +127,7 @@ export function AgentGroupMessageStream({
       >
         {hasEarlierHistory && displayMessages.length > 0 ? (
           <IOSPressable
-            accessibilityLabel={isChinese ? '加载更早的消息' : 'Load earlier messages'}
+            accessibilityLabel={isChinese ? '加载剩余历史消息' : 'Load remaining history'}
             disabled={loadingEarlier}
             haptic="selection"
             onPress={() => { onLoadEarlier?.(); }}
@@ -146,7 +146,7 @@ export function AgentGroupMessageStream({
             <Text style={{ color: tokens.colors.primary, fontSize: 13 }}>
               {loadingEarlier
                 ? (isChinese ? '正在加载…' : 'Loading…')
-                : (isChinese ? '加载更早的消息' : 'Load earlier messages')}
+                : (isChinese ? '加载剩余历史消息' : 'Load remaining history')}
             </Text>
           </IOSPressable>
         ) : null}

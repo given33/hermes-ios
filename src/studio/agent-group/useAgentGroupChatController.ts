@@ -178,6 +178,7 @@ export interface AgentGroupChatController {
   refresh(forceNetwork?: boolean): Promise<void>;
   refreshRoom(roomId?: string): Promise<void>;
   loadEarlierMessages(roomId?: string): Promise<void>;
+  loadingEarlier: ReadonlySet<string>;
   cloneRoom(roomId: string, name: string, inviteCode?: string): Promise<void>;
   joinRoomByCode(code: string): Promise<void>;
   updateRoomConfig(roomId: string, input: HermesStudioRoomConfigInput): Promise<void>;
@@ -228,6 +229,7 @@ export function useAgentGroupChatController({
   const [revision, setRevision] = useState(0);
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingEarlierIds, setLoadingEarlierIds] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -1132,11 +1134,19 @@ export function useAgentGroupChatController({
     // Re-arm the bounded drain from the recorded server offset and pull the
     // next page immediately instead of waiting for the next poll tick.
     if (!roomHistoryNextOffsetRef.current.has(roomId)) return;
+    setLoadingEarlierIds((current) => new Set(current).add(roomId));
     detailFingerprintRef.current.delete(roomId);
     try {
       await refreshRoom(roomId);
     } catch {
       // The next poll retries; the offset is preserved.
+    } finally {
+      setLoadingEarlierIds((current) => {
+        if (!current.has(roomId)) return current;
+        const next = new Set(current);
+        next.delete(roomId);
+        return next;
+      });
     }
   }, [refreshRoom]);
 
@@ -1890,6 +1900,7 @@ export function useAgentGroupChatController({
     refresh,
     refreshRoom,
     loadEarlierMessages,
+    loadingEarlier: loadingEarlierIds,
     cloneRoom,
     joinRoomByCode,
     updateRoomConfig,

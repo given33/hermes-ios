@@ -245,7 +245,7 @@ export function AgentGroupChatView({
               agents={activeRoom?.agents || []}
               compact={compact}
               hasEarlierHistory={activeRoom?.hasEarlierHistory === true}
-              loadingEarlier={controller.loading && Boolean(activeRoom?.messages.length)}
+              loadingEarlier={activeRoom ? controller.loadingEarlier.has(activeRoom.room.id) : false}
               onLoadEarlier={() => { void controller.loadEarlierMessages(); }}
               isChinese={isChinese}
               messages={activeRoom?.messages || []}

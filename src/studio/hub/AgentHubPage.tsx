@@ -97,7 +97,10 @@ export function AgentHubPage({
         setError(String((reason as Error)?.message || reason));
       }
     } finally {
-      if (mounted.current && seq === requestSeq.current && !options.silent) {
+      // The newest request owns the spinner state regardless of its own
+      // mode: otherwise a manual refresh overtaken by a silent poll leaves
+      // refreshing stuck on.
+      if (mounted.current && seq === requestSeq.current) {
         setRefreshing(false);
       }
     }

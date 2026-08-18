@@ -113,14 +113,15 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
     if (!conversationId || !accountGeneration || !this.client) return;
     const streamKey = `${conversationId}\u0000${accountGeneration}`;
     if (this.streams.has(streamKey)) return;
-    const stale = this.streams.get(conversationId);
-    if (stale) {
-      // Same conversation under a different account fence: retire the old
-      // stream first so exactly one live subscription remains.
-      stale.stopped = true;
-      stale.controller.abort();
-      stale.retryWake?.();
-      this.streams.delete(conversationId);
+    for (const [key, stale] of [...this.streams.entries()]) {
+      if (stale.conversationId === conversationId && key !== streamKey) {
+        // Same conversation under a different account fence: retire the old
+        // stream so exactly one live subscription remains.
+        stale.stopped = true;
+        stale.controller.abort();
+        stale.retryWake?.();
+        this.streams.delete(key);
+      }
     }
     const record: RoomStreamRecord = {
       roomId: room.id,
