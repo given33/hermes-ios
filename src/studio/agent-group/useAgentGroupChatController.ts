@@ -287,7 +287,16 @@ export function useAgentGroupChatController({
             await studioApi.groupChat.deleteRoom(roomId);
           },
           isAlreadyDeleted: (error) => isAlreadyDeletedRemote(error),
-          isRetryable: () => true,
+          isRetryable: (error) => {
+              // 403 is a permission boundary (e.g. a member deleting an
+              // owner's room): retrying can never succeed and used to loop
+              // every 60s forever. Let it fail permanently.
+              const status = Number(
+                (error as unknown as { status?: unknown })?.status
+                ?? (error as unknown as { statusCode?: unknown })?.statusCode,
+              );
+              return status !== 403 && status !== 401;
+            },
           outbox: localStore,
           retryDelayMs: 60_000,
           workerId: 'agent-group:conversation-delete',
@@ -1277,8 +1286,10 @@ export function useAgentGroupChatController({
       updatedAt: Date.now(),
     }));
     persistCurrentRoom(roomId);
-    await sendMessage(content.trim());
-  }, [patchSnapshot, persistCurrentRoom, sendMessage]);
+    // Call the inner body directly: the guard would silently swallow the
+    // retry if another send is in flight, losing the text we just removed.
+    await sendMessageInner(content.trim(), undefined, undefined, roomId);
+  }, [patchSnapshot, persistCurrentRoom, sendMessageInner]);
 
 
   const createRoom = useCallback(async (
