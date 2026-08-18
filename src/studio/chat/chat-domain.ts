@@ -347,10 +347,17 @@ export async function mapWithConcurrency<T, R>(
 
 export function serverFailure(error: unknown, chinese: boolean): string {
   if (error instanceof HermesApiError) {
-    if (error.status === 401 || error.status === 403) {
+    if (error.status === 401) {
       return chinese
-        ? `HTTP ${error.status}：Hermes 登录状态已失效，请重新登录。`
-        : `HTTP ${error.status}: Your Hermes session has expired. Sign in again.`;
+        ? '登录已失效，请重新登录。'
+        : 'Your session has expired. Sign in again.';
+    }
+    if (error.status === 403) {
+      // 403 is a permission boundary (room owner-only action, member
+      // workspace access), NOT an auth failure — re-login cannot fix it.
+      return chinese
+        ? '没有权限执行此操作（可能需要房主身份）。'
+        : 'You do not have permission for this action (room owner may be required).';
     }
     if (error.status === 429) {
       return chinese

@@ -160,7 +160,9 @@ test('Agent room deletion is local-first and duplicate room transcripts stay out
   assert.match(chatModes, /conversation\.id\.startsWith\('chat_room_'/);
   assert.match(chatModes, /sortRoomInfosByActivity\(agentGroupController\.rooms, roomSnapshots\)/);
   assert.doesNotMatch(chatView, /clearRoom\(activeRoom\.room\.id\)/);
-  assert.doesNotMatch(chatView, /AgentGroupRoomSettingsModal/);
+  // The settings modal was previously dead code (never mounted); it is now
+  // mounted in AgentGroupChatView behind the room-settings button.
+  assert.match(chatView, /AgentGroupRoomSettingsModal/);
   assert.doesNotMatch(chatView, /Invite code \(optional\)|Summary provider|Workspace path/);
 });
 

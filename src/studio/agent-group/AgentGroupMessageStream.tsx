@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clipboard as ClipboardIcon,
   FileText,
+  RotateCcw,
   Undo2,
   Wrench,
 } from 'lucide-react-native';
@@ -24,6 +25,8 @@ export interface AgentGroupMessageStreamProps {
   agents: HermesStudioRoomAgent[];
   compact: boolean;
   hasEarlierHistory?: boolean;
+  /** Resend a failed optimistic message by id (returns its text). */
+  onRetryFailed?(messageId: string): void;
   isChinese: boolean;
   loadingEarlier?: boolean;
   messages: HermesStudioGroupChatMessage[];
@@ -47,6 +50,7 @@ export function AgentGroupMessageStream({
   agents,
   compact,
   hasEarlierHistory = false,
+  onRetryFailed,
   isChinese,
   loadingEarlier = false,
   messages,
@@ -157,7 +161,7 @@ export function AgentGroupMessageStream({
             {message.runItems?.length ? (
               <AgentRunCard agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} onRetract={onRetractMessage} userId={userId} />
             ) : (
-              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} onRetract={onRetractMessage} userId={userId} />
+              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} onRetract={onRetractMessage} onRetryFailed={onRetryFailed} userId={userId} />
             )}
             {summaryAnchorId && containsMessageId(message, summaryAnchorId) ? (
               <SummaryAnchorDivider isChinese={isChinese} />
@@ -288,6 +292,7 @@ function AgentGroupMessageItem({
   message,
   onQuickReply,
   onRetract,
+  onRetryFailed,
   userId,
 }: {
   agents: HermesStudioRoomAgent[];
@@ -296,6 +301,7 @@ function AgentGroupMessageItem({
   message: HermesStudioGroupChatMessage;
   onQuickReply?(text: string): void;
   onRetract?(messageId: string): void;
+  onRetryFailed?(messageId: string): void;
   userId: string;
 }) {
   const { tokens } = useTheme();
@@ -379,6 +385,19 @@ function AgentGroupMessageItem({
         </View>
         {!embedded ? (
           <View style={styles.messageMeta}>
+            {message.deliveryStatus === 'failed' && onRetryFailed ? (
+              <IOSPressable
+                accessibilityLabel={isChinese ? '重发这条消息' : 'Resend this message'}
+                haptic="selection"
+                onPress={() => onRetryFailed(message.id)}
+                style={[styles.metaButton, { alignItems: 'center', flexDirection: 'row', gap: 3, paddingHorizontal: 6 }]}
+              >
+                <RotateCcw color={tokens.colors.primary} size={13} />
+                <Text style={{ color: tokens.colors.primary, fontSize: 11, fontWeight: '600' }}>
+                  {isChinese ? '重发' : 'Retry'}
+                </Text>
+              </IOSPressable>
+            ) : null}
             {onRetract && isSelf && message.role === 'user' && !message.retracted && !message.deliveryStatus ? (
               <IOSPressable
                 accessibilityLabel={isChinese ? '撤回这条群聊消息' : 'Retract this group message'}

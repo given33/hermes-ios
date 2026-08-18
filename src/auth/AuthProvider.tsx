@@ -156,6 +156,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const authenticatedConnection = useRef<SavedConnection | null>(null);
   const persistAuthenticatedSession = useRef(false);
   const [registrationOpen, setRegistrationOpen] = useState(false);
+  const refreshRegistrationStatus = useCallback(async () => {
+    try {
+      const status = await new MobileAuthApiClient(HERMES_ORIGIN).getStatus();
+      setRegistrationOpen(Boolean(status?.registrationOpen));
+    } catch {
+      // Keep the current value on transient failures.
+    }
+  }, []);
   const [rememberedLogin, setRememberedLogin] = useState<RememberedLogin>(
     EMPTY_REMEMBERED_LOGIN,
   );
@@ -808,6 +816,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         persistAuthenticatedSession.current = false;
         if (!rememberedLogin.enabled) setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         dispatch({ type: 'LOGGED_OUT' });
+        void refreshRegistrationStatus();
       }
     } catch {
       if (authLifecycle.current.isCurrent(operationGeneration)) {
@@ -843,6 +852,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         persistAuthenticatedSession.current = false;
         setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         dispatch({ type: 'LOGGED_OUT' });
+        void refreshRegistrationStatus();
       }
     } catch {
       if (serverDeleted && authLifecycle.current.isCurrent(operationGeneration)) {
@@ -858,6 +868,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
         persistAuthenticatedSession.current = false;
         setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         dispatch({ type: 'LOGGED_OUT' });
+        void refreshRegistrationStatus();
         return;
       }
       if (authLifecycle.current.isCurrent(operationGeneration)) {

@@ -193,6 +193,7 @@ export interface AgentGroupChatController {
   interruptAgent(roomId: string, agentName: string): Promise<void>;
   respondApproval(roomId: string, approvalId: string, choice: HermesStudioPendingApproval['choices'][number]): Promise<void>;
   retractMessage(roomId: string, messageId: string): Promise<void>;
+  retryFailedMessage(roomId: string, messageId: string, content: string): Promise<void>;
   emitTyping(roomId: string): void;
   emitStopTyping(roomId: string): void;
   listWorkspaceFiles(roomId: string, path?: string): Promise<HermesStudioWorkspaceFileListing>;
@@ -1172,14 +1173,15 @@ export function useAgentGroupChatController({
     if (socket && studioApi) studioApi.groupChat.emitStopTyping(socket, roomId);
   }, [studioApi]);
 
-  const sendMessage = useCallback(async (
-    requestedContent?: string,
-    attachments?: unknown[],
-    mentions?: HermesStudioGroupChatMention[],
+  const sendingRoomIdsRef = useRef<Set<string>>(new Set());
+
+
+  const sendMessageInner = useCallback(async (
+    content: string,
+    attachments: unknown[] | undefined,
+    mentions: HermesStudioGroupChatMention[] | undefined,
+    roomId: string,
   ) => {
-    const roomId = activeRoomIdRef.current;
-    const content = (requestedContent ?? draftsRef.current[roomId] ?? '').trim();
-    if (!roomId || (!content && !attachments?.length)) return;
     emitStopTyping(roomId);
     const snapshot = snapshotsRef.current.get(roomId);
     if (!snapshot) return;
@@ -1239,6 +1241,40 @@ export function useAgentGroupChatController({
       notify(message);
     }
   }, [emitStopTyping, identity.name, isChinese, notify, patchSnapshot, persistCurrentRoom, setDraft, stableUserId, studioApi]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- inner body of the guarded sendMessage
+
+
+  const sendMessage = useCallback(async (
+    requestedContent?: string,
+    attachments?: unknown[],
+    mentions?: HermesStudioGroupChatMention[],
+  ) => {
+    const roomId = activeRoomIdRef.current;
+    const content = (requestedContent ?? draftsRef.current[roomId] ?? '').trim();
+    if (!roomId || (!content && !attachments?.length)) return;
+    // In-flight guard: quick-reply taps bypass the draft-clearing that the
+    // main composer relies on; without this a double-tap sends twice (each
+    // call mints a fresh request_id, so server-side idempotency can't dedupe).
+    if (sendingRoomIdsRef.current.has(roomId)) return;
+    sendingRoomIdsRef.current.add(roomId);
+    try {
+      await sendMessageInner(content, attachments, mentions, roomId);
+    } finally {
+      sendingRoomIdsRef.current.delete(roomId);
+    }
+  }, []);
+
+  const retryFailedMessage = useCallback(async (roomId: string, messageId: string, content: string) => {
+    if (!roomId || !messageId || !content.trim()) return;
+    patchSnapshot(roomId, (current) => ({
+      ...current,
+      messages: current.messages.filter((message) => message.id !== messageId),
+      updatedAt: Date.now(),
+    }));
+    persistCurrentRoom(roomId);
+    await sendMessage(content.trim());
+  }, [patchSnapshot, persistCurrentRoom, sendMessage]);
+
 
   const createRoom = useCallback(async (
     name: string,
@@ -1915,6 +1951,7 @@ export function useAgentGroupChatController({
     interruptAgent,
     respondApproval,
     retractMessage,
+    retryFailedMessage,
     emitTyping,
     emitStopTyping,
     listWorkspaceFiles,

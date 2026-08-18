@@ -6,7 +6,9 @@ import {
   Send,
   Square,
   Trash2,
+  UserRoundPlus,
   Users,
+  UsersRound,
   Wifi,
   WifiOff,
 } from 'lucide-react-native';
@@ -29,6 +31,7 @@ import { useTheme } from '../../design/ThemeProvider';
 import { PreviewModal, PreviewText } from '../PreviewPrimitives';
 import { latestRoomPreview, roomHasRunningWork } from './agent-group-model';
 import { AgentGroupMessageStream } from './AgentGroupMessageStream';
+import { AgentGroupRoomSettingsModal } from './AgentGroupRoomSettingsModal';
 import type { AgentGroupChatController } from './useAgentGroupChatController';
 
 export interface AgentGroupChatViewProps {
@@ -61,6 +64,10 @@ export function AgentGroupChatView({
   const [roomName, setRoomName] = useState('');
   const [profilesInput, setProfilesInput] = useState('default');
   const [inputSettingsOpen, setInputSettingsOpen] = useState(false);
+  const [roomSettingsOpen, setRoomSettingsOpen] = useState(false);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [joinCodeInput, setJoinCodeInput] = useState('');
+  const [joinBusy, setJoinBusy] = useState(false);
   const [showToolTrace, setShowToolTrace] = useState(true);
   const activeRoom = controller.activeRoom;
   const draft = activeRoom ? controller.drafts[activeRoom.room.id] || '' : '';
@@ -176,6 +183,17 @@ export function AgentGroupChatView({
                 <Text style={[styles.emptyRoomText, { color: tokens.colors.textSecondary }]}>
                   {isChinese ? '还没有 Agent 房间' : 'No Agent rooms yet'}
                 </Text>
+                <IOSPressable
+                  accessibilityLabel={isChinese ? '用邀请码加入房间' : 'Join a room with an invite code'}
+                  haptic="selection"
+                  onPress={() => setJoinOpen(true)}
+                  style={[styles.joinByCodeButton, { borderColor: multiplyAlpha(tokens.colors.primary, 0.35) }]}
+                >
+                  <UserRoundPlus color={tokens.colors.primary} size={14} />
+                  <Text style={{ color: tokens.colors.primary, fontSize: 13 }}>
+                    {isChinese ? '邀请码加入' : 'Join with code'}
+                  </Text>
+                </IOSPressable>
               </View>
             ) : null}
           </ScrollView>
@@ -251,6 +269,13 @@ export function AgentGroupChatView({
               messages={activeRoom?.messages || []}
               onQuickReply={(text) => { void controller.sendMessage(text); }}
               onRetractMessage={activeRoom ? (messageId) => { void controller.retractMessage(activeRoom.room.id, messageId); } : undefined}
+              onRetryFailed={activeRoom ? (messageId) => {
+                const snapshot = controller.roomSnapshots.find((item) => item.room.id === activeRoom.room.id);
+                const failed = snapshot?.messages.find((item) => item.id === messageId);
+                if (!failed) return;
+                // Remove the failed optimistic row and resend its text.
+                controller.retryFailedMessage(activeRoom.room.id, messageId, failed.content);
+              } : undefined}
               running={Boolean(activeRoom?.runningAgents.length)}
               safeAreaBottom={safeAreaBottom}
               showToolTrace={showToolTrace}
@@ -287,6 +312,14 @@ export function AgentGroupChatView({
             </View>
           ) : null}
           <View style={[styles.composer, { borderTopColor: tokens.colors.border, paddingBottom: 8 + safeAreaBottom }]}> 
+            <IOSPressable
+              accessibilityLabel={isChinese ? '房间设置、邀请码与成员管理' : 'Room settings, invite code and members'}
+              disabled={!activeRoom}
+              onPress={() => setRoomSettingsOpen(true)}
+              style={styles.inputSettingsButton}
+            >
+              <UsersRound color={activeRoom ? tokens.colors.textTertiary : multiplyAlpha(tokens.colors.textTertiary, 0.4)} size={16} />
+            </IOSPressable>
             <IOSPressable
               accessibilityLabel={isChinese ? 'Agent 群聊输入设置' : 'Agent group input settings'}
               onPress={() => setInputSettingsOpen(true)}
@@ -393,6 +426,50 @@ export function AgentGroupChatView({
         <PreviewText variant="tiny">{isChinese ? '普通聊天、托管协作时间线和 Agent 群聊各自保存自己的显示设置。' : 'Ordinary chat, hosted collaboration, and Agent group chat keep separate display settings.'}</PreviewText>
       </PreviewModal>
 
+      <AgentGroupRoomSettingsModal
+        controller={controller}
+        isChinese={isChinese}
+        onClose={() => setRoomSettingsOpen(false)}
+        open={roomSettingsOpen}
+      />
+
+      <PreviewModal
+        onClose={() => setJoinOpen(false)}
+        open={joinOpen}
+        title={isChinese ? '用邀请码加入房间' : 'Join a room with an invite code'}
+      >
+        <PreviewText variant="muted">
+          {isChinese ? '输入房主分享给你的邀请码即可加入其 Agent 群聊房间。' : 'Enter the invite code shared by the room owner to join their Agent group room.'}
+        </PreviewText>
+        <TextInput
+          autoCapitalize="none"
+          autoCorrect={false}
+          onChangeText={setJoinCodeInput}
+          placeholder={isChinese ? '邀请码' : 'Invite code'}
+          placeholderTextColor={tokens.colors.textTertiary}
+          style={[styles.modalInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
+          value={joinCodeInput}
+        />
+        <NativeButton
+          disabled={!joinCodeInput.trim() || joinBusy}
+          onPress={() => {
+            const code = joinCodeInput.trim();
+            if (!code || joinBusy) return;
+            setJoinBusy(true);
+            void controller.joinRoomByCode(code)
+              .catch(() => undefined)
+              .finally(() => {
+                setJoinBusy(false);
+                setJoinOpen(false);
+                setJoinCodeInput('');
+              });
+          }}
+          prefix={<UserRoundPlus />}
+        >
+          {joinBusy ? (isChinese ? '加入中…' : 'Joining…') : (isChinese ? '加入房间' : 'Join room')}
+        </NativeButton>
+      </PreviewModal>
+
       <ConfirmDialog
         cancelLabel={isChinese ? '取消' : 'Cancel'}
         confirmLabel={isChinese ? '删除' : 'Delete'}
@@ -412,6 +489,16 @@ export function AgentGroupChatView({
 }
 
 const styles = {
+  joinByCodeButton: {
+    alignItems: 'center' as const,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row' as const,
+    gap: 5,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
   root: { flex: 1 },
   body: { flex: 1, flexDirection: 'row' as const, minHeight: 0 },
   bodyCompact: { flexDirection: 'column' as const },
