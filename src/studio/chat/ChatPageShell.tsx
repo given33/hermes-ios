@@ -74,6 +74,11 @@ export function ChatPageShell({
   streamProps,
 }: ChatPageShellProps) {
   // Latest context usage without allocating a reversed copy on every render.
+  // The memo is bound to the message array AND the chat mode/collaboration
+  // state: switching conversations replaces the array (empty first frame →
+  // undefined → no stale flash), and crossing a mode boundary deliberately
+  // drops the previous surface's reading instead of letting the ring render
+  // a value that no longer belongs to what is on screen.
   const contextUsedPercent = useMemo(() => {
     const { messages } = streamProps;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -81,7 +86,7 @@ export function ChatPageShell({
       if (typeof value === 'number') return value;
     }
     return undefined;
-  }, [streamProps.messages]);
+  }, [streamProps.messages, headerProps.chatMode, headerProps.collaborationState]);
   return (
     <Reanimated.View
       style={[

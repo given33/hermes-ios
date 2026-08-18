@@ -93,6 +93,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   onMentionMember,
   onRespondToChoice,
   onToggleSpeech,
+  showTodos = true,
   speaking,
 }: {
   index: number;
@@ -106,6 +107,8 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   onMentionMember(message: ChatMessage): void;
   onRespondToChoice?(activityId: string, text: string): void;
   onToggleSpeech(message: ChatMessage): void;
+  /** History renders the checklist once, on the newest snapshot's message. */
+  showTodos?: boolean;
   speaking: boolean;
 }) {
   const { tokens } = useTheme();
@@ -260,7 +263,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           onLongPress={isUser ? undefined : () => onMentionMember(message)}
         />
         <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
-          {!isUser && message.todos?.length ? (
+          {!isUser && showTodos && message.todos?.length ? (
             <TodoSection
               isChinese={isChinese}
               running={messageIsRunning(message)}

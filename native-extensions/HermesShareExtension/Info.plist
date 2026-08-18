@@ -4,6 +4,8 @@
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>$(DEVELOPMENT_LANGUAGE)</string>
+  <key>HermesSharedKeychainAccessGroup</key>
+  <string>$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared</string>
   <key>CFBundleDisplayName</key>
   <string>Send to Hermes</string>
   <key>CFBundleExecutable</key>

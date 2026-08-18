@@ -168,6 +168,52 @@ export function mergeCachedConversationUpdate(
   ].sort((left, right) => numberValue(right.updated_at) - numberValue(left.updated_at));
 }
 
+/**
+ * Authoritative transcript reset for a cached conversation.
+ *
+ * The ordinary merge is union/max so live optimistic messages survive a
+ * concurrent download. But some server transitions legitimately SHRINK the
+ * transcript — context clearing, compression, and post-retraction
+ * reconciliation. Callers that just observed such a transition pass the fresh
+ * server snapshot here: local messages that the snapshot no longer contains
+ * are dropped instead of resurrecting at the next sync, with one exception —
+ * optimistic messages still awaiting their server echo are preserved so an
+ * in-flight send cannot be silently erased by a refresh.
+ */
+export function resetCachedConversationTranscript(
+  conversations: readonly SingleConversation[],
+  conversation: SingleConversation,
+  replacedId = '',
+): SingleConversation[] {
+  const existing = conversations.find(({ id }) => conversation.id);
+  const pendingOptimistic = (existing?.messages || [])
+    .filter((message) => isOptimisticPendingMessage(message))
+    .filter((message) => !conversation.messages.some((server) => server.id === message.id));
+  const authoritative = {
+    ...conversation,
+    messages: [...conversation.messages, ...pendingOptimistic].map(cloneCollaborationMessage),
+    message_count: Math.max(
+      numberValue(conversation.message_count),
+      conversation.messages.length,
+    ),
+  };
+  return [
+    cloneCachedConversation(authoritative),
+    ...conversations.filter((item) => (
+      item.id !== conversation.id && (!replacedId || item.id !== replacedId)
+    )).map(cloneCachedConversation),
+  ].sort((left, right) => numberValue(right.updated_at) - numberValue(left.updated_at));
+}
+
+function isOptimisticPendingMessage(message: CollaborationMessage): boolean {
+  const meta = (message as unknown as { meta?: unknown }).meta;
+  if (meta && typeof meta === 'object' && (meta as Record<string, unknown>).optimistic === true) {
+    return true;
+  }
+  const delivery = (message as unknown as { deliveryStatus?: unknown }).deliveryStatus;
+  return delivery === 'pending' || delivery === 'failed';
+}
+
 export function isCompleteConversation(conversation: SingleConversation): boolean {
   if (isOfficialPlaceholder(conversation)) return false;
   const expected = Math.max(0, numberValue(conversation.message_count));

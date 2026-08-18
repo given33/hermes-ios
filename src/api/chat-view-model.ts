@@ -706,16 +706,35 @@ function latestTodoSnapshot(
   activities?: readonly HermesChatActivity[],
 ): HermesChatTodo[] | null {
   if (!activities?.length) return null;
-  const snapshots = activities.flatMap((activity) => {
+  const snapshots = activities.flatMap((activity, position) => {
     const todos = todoItemsFromActivity(activity);
     if (!todos) return [];
     return [{
       todos,
       timestamp: activity.completedAt || activity.startedAt || 0,
+      // Activities without any timestamp must not win by accident of the
+      // stable sort; a later array position is the newer observation.
+      position,
     }];
   });
-  snapshots.sort((left, right) => right.timestamp - left.timestamp);
-  return snapshots[0]?.todos || null;
+  if (!snapshots.length) return null;
+  snapshots.sort((left, right) => (
+    right.timestamp - left.timestamp
+    || right.position - left.position
+  ));
+  const winner = snapshots[0].todos;
+  if (!winner.length) return null;
+  // A run can re-emit the same task with a status change; keep one row per
+  // task id so the visible checklist never double-counts.
+  const seen = new Set<string>();
+  const deduped = winner.filter((todo) => {
+    const key = String(todo.id ?? '').trim() || String(todo.title ?? '').trim();
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return deduped.length ? deduped : null;
 }
 
 function mapMessageAttachments(value: unknown): HermesChatAttachment[] {

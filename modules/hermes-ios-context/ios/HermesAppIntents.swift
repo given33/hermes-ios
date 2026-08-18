@@ -46,6 +46,16 @@ private enum HermesIntentQueueCipher {
       return SymmetricKey(data: existing)
     }
     guard status == errSecSuccess else { throw HermesIntentQueueError.keyUnavailable }
+    // Mirror the same key bytes into the no-access-group item: the Share
+    // Extension may lack the group entitlement in resign-compatible builds,
+    // and both spellings must unlock the same queue.
+    if keySelector()[kSecAttrAccessGroup as String] != nil {
+      var plain = keySelector()
+      plain.removeValue(forKey: kSecAttrAccessGroup as String)
+      plain[kSecValueData as String] = bytes
+      plain[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+      SecItemAdd(plain as CFDictionary, nil)
+    }
     return SymmetricKey(data: bytes)
   }
 
@@ -54,6 +64,13 @@ private enum HermesIntentQueueCipher {
     query[kSecMatchLimit as String] = kSecMatchLimitOne
     query[kSecReturnData as String] = true
     var result: CFTypeRef?
+    if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+       let data = result as? Data, data.count == 32 {
+      return data
+    }
+    // Resign builds may only hold the mirrored plain item.
+    query.removeValue(forKey: kSecAttrAccessGroup as String)
+    result = nil
     guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
     return result as? Data
   }
@@ -82,6 +99,7 @@ final class HermesAgentTriggerStore {
   static let appGroup = "group.app.sunstone1029.fig1171.hermes"
   private let key = "agent-trigger-inbox-v2"
   private let legacyKey = "agent-trigger-inbox-v1"
+  private let spoolDirectory = "agent-trigger-inbox-v3"
   private let lock = NSLock()
 
   private init() {}
@@ -89,6 +107,69 @@ final class HermesAgentTriggerStore {
   static var shareAttachmentRoot: URL? {
     FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
       .appendingPathComponent("agent-share-attachments-v1", isDirectory: true)
+  }
+
+  private var spoolRoot: URL? {
+    FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup)?
+      .appendingPathComponent(spoolDirectory, isDirectory: true)
+  }
+
+  /// One sealed spool file per request. Append-only creation is lock-free
+  /// across processes: the Share Extension, the App Intents extension, and
+  /// the main app all produce distinct files, and only the main app drains.
+  @discardableResult
+  private func writeSpoolEntry(_ entry: [String: Any]) -> Bool {
+    guard let envelope = HermesIntentQueueCipher.seal([entry]),
+          let root = spoolRoot else { return false }
+    do {
+      try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+      let target = root.appendingPathComponent("\(UUID().uuidString.lowercased()).bin")
+      try envelope.write(to: target, options: [.atomic])
+      return true
+    } catch { return false }
+  }
+
+  private func readSpoolEntries() -> [[String: Any]] {
+    guard let root = spoolRoot,
+          let files = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+          ) else { return [] }
+    var entries: [[String: Any]] = []
+    for file in files where file.pathExtension.lowercased() == "bin" {
+      guard let envelope = try? Data(contentsOf: file),
+            let parsed = HermesIntentQueueCipher.open(envelope).first else {
+        // Unreadable spool files are quarantined away rather than deleted:
+        // a cipher-key mismatch after a restore should not silently destroy
+        // pending shares until the app has definitively drained them once.
+        continue
+      }
+      var entry = parsed
+      entry["__spoolFile"] = file.lastPathComponent
+      entries.append(entry)
+    }
+    return entries.sorted { ($0["createdAt"] as? Double ?? 0) < ($1["createdAt"] as? Double ?? 0) }
+  }
+
+  private func deleteSpoolEntry(fileName: String?) {
+    guard let fileName, !fileName.isEmpty, !fileName.contains("/"), let root = spoolRoot else { return }
+    try? FileManager.default.removeItem(at: root.appendingPathComponent(fileName))
+  }
+
+  private func drainQuarantinedSpool() {
+    // Files that decrypt successfully are consumed through the normal
+    // per-request path; this sweep only runs when the whole queue is being
+    // cleared, so leftover unreadable envelopes are dropped with it.
+    guard let root = spoolRoot,
+          let files = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+          ) else { return }
+    for file in files where file.pathExtension.lowercased() == "bin" {
+      try? FileManager.default.removeItem(at: file)
+    }
   }
 
   @discardableResult
@@ -107,10 +188,6 @@ final class HermesAgentTriggerStore {
     let identity = HermesContextEventQueue.shared.currentOwnerIdentity
     guard identity.isBound else { return nil }
     let requestID = UUID().uuidString.lowercased()
-    lock.lock()
-    defer { lock.unlock() }
-    let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-    var entries = readEntries(defaults)
     var entry: [String: Any] = [
       "content": normalizedContent,
       "createdAt": Date().timeIntervalSince1970 * 1000,
@@ -122,8 +199,19 @@ final class HermesAgentTriggerStore {
     if let sessionID, !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { entry["sessionID"] = String(sessionID.prefix(256)) }
     if let model, !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { entry["model"] = String(model.prefix(128)) }
     if !attachments.isEmpty { entry["attachments"] = Array(attachments.prefix(10)) }
-    entries.append(entry)
-    guard writeEntries(Array(entries.suffix(50)), defaults: defaults) else { return nil }
+    // Intents can run in an extension process; the spool file keeps the
+    // enqueue atomic against a concurrent main-app drain of the v2 array.
+    guard writeSpoolEntry(entry) else {
+      // Spool unavailable (no container, disk full): fall back to the
+      // in-process v2 array rather than dropping the request outright.
+      lock.lock()
+      defer { lock.unlock() }
+      let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
+      var entries = readStoredEntries(defaults)
+      entries.append(entry)
+      guard writeEntries(Array(entries.suffix(50)), defaults: defaults) else { return nil }
+      return requestID
+    }
     return requestID
   }
 
@@ -131,7 +219,9 @@ final class HermesAgentTriggerStore {
     lock.lock()
     defer { lock.unlock() }
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-    return readEntries(defaults)
+    var entries = readStoredEntries(defaults)
+    entries.append(contentsOf: readSpoolEntries())
+    return entries
   }
 
   @discardableResult
@@ -141,7 +231,12 @@ final class HermesAgentTriggerStore {
     lock.lock()
     defer { lock.unlock() }
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-    let entries = readEntries(defaults)
+    let spoolEntries = readSpoolEntries()
+    if let spooled = spoolEntries.first(where: { ($0["requestID"] as? String) == normalized }) {
+      deleteSpoolEntry(fileName: spooled["__spoolFile"] as? String)
+      return true
+    }
+    let entries = readStoredEntries(defaults)
     let remaining = entries.filter { ($0["requestID"] as? String) != normalized }
     guard remaining.count != entries.count else { return false }
     return writeEntries(remaining, defaults: defaults)
@@ -151,12 +246,15 @@ final class HermesAgentTriggerStore {
     lock.lock()
     defer { lock.unlock() }
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
-    let entries = readEntries(defaults)
+    let entries = readStoredEntries(defaults)
     let matching = entries.filter {
       ($0["ownerScope"] as? String) == ownerScope
         && ($0["accountGeneration"] as? String) == accountGeneration
     }
     if matching.count != entries.count { _ = writeEntries(matching, defaults: defaults) }
+    // Unbound spool entries (Share Extension writes) cannot be attributed to
+    // a previous account; they stay queued for the next account to claim,
+    // mirroring the first-reader-binds migration of the legacy v1 array.
   }
 
   func clear() {
@@ -165,13 +263,38 @@ final class HermesAgentTriggerStore {
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
     defaults.removeObject(forKey: key)
     defaults.removeObject(forKey: legacyKey)
+    drainQuarantinedSpool()
   }
 
-  private func readEntries(_ defaults: UserDefaults) -> [[String: Any]] {
-    // Plaintext v1 payloads are intentionally discarded during migration.
-    defaults.removeObject(forKey: legacyKey)
+  private func readStoredEntries(_ defaults: UserDefaults) -> [[String: Any]] {
+    migrateLegacyPlaintextEntries(defaults)
     guard let envelope = defaults.data(forKey: key) else { return [] }
     return HermesIntentQueueCipher.open(envelope)
+  }
+
+  /// The pre-fence v1 array was written before the queue carried an account
+  /// identity. Bind those plaintext share requests to the account that
+  /// first drains the queue after the upgrade instead of discarding them:
+  /// they originate from this device's Share Extension, and the identity
+  /// fence exists to stop cross-ACCOUNT replay, not to lose local history.
+  private func migrateLegacyPlaintextEntries(_ defaults: UserDefaults) {
+    guard let legacy = defaults.array(forKey: legacyKey) as? [[String: Any]], !legacy.isEmpty else {
+      if defaults.data(forKey: legacyKey) != nil || defaults.array(forKey: legacyKey) != nil {
+        defaults.removeObject(forKey: legacyKey)
+      }
+      return
+    }
+    defaults.removeObject(forKey: legacyKey)
+    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
+    guard identity.isBound else { return }
+    let existing = (defaults.data(forKey: key)).flatMap { HermesIntentQueueCipher.open($0) } ?? []
+    let bound = legacy.map { entry -> [String: Any] in
+      var bound = entry
+      bound["ownerScope"] = identity.ownerScope
+      bound["accountGeneration"] = identity.accountGeneration
+      return bound
+    }
+    _ = writeEntries(Array((existing + bound).suffix(50)), defaults: defaults)
   }
 
   @discardableResult

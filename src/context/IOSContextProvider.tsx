@@ -1766,9 +1766,15 @@ function queuedIntentMatchesOwner(
     : typeof value.account_generation === 'string'
       ? value.account_generation
       : '';
+  // Unbound entries arrive from producers that cannot know the signed-in
+  // account (Share Extension spool files, pre-fence v1 payloads that failed
+  // their binding migration). The queue is device-local and encrypted, so the
+  // first account to drain claims them — the same first-reader-binds rule the
+  // backend applies to legacy local records. Explicitly bound entries from a
+  // DIFFERENT account are still rejected outright below.
+  const unbound = !queuedOwner && !queuedGeneration;
   return Boolean(ownerScope && accountGeneration)
-    && queuedOwner === ownerScope
-    && queuedGeneration === accountGeneration;
+    && (unbound || (queuedOwner === ownerScope && queuedGeneration === accountGeneration));
 }
 
 function permissionForCommand(key: string): IOSPermissionKey | null {

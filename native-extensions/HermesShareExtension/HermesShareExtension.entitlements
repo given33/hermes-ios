@@ -6,5 +6,9 @@
   <array>
     <string>group.app.sunstone1029.fig1171.hermes</string>
   </array>
+  <key>keychain-access-groups</key>
+  <array>
+    <string>$(AppIdentifierPrefix)app.sunstone1029.fig1171.hermes.shared</string>
+  </array>
 </dict>
 </plist>

@@ -84,6 +84,7 @@ export {
   replaceCachedConversationSnapshot,
   synchronizeConversationCache,
 } from './conversation-cache-sync';
+export { resetCachedConversationTranscript } from './conversation-cache-sync';
 export { createConversationDeleteReplayService } from './conversation-delete-replay';
 export { filterConversationDeletionTombstones, selectReadyConversationDeleteOutboxItems } from './conversation-delete-outbox';
 export class ConversationLocalStore {
@@ -135,7 +136,7 @@ export class ConversationLocalStore {
   ): Promise<void> {
     return this.cache.write(owner, conversations, activeConversationId, expectedEpoch);
   }
-  async upsert(owner: string, conversation: SingleConversation, activeConversationId = '', expectedEpoch?: number, expectedDeletionRevision?: number) { return this.cache.upsert(owner, conversation, activeConversationId, expectedEpoch, expectedDeletionRevision); }
+  async upsert(owner: string, conversation: SingleConversation, activeConversationId = '', expectedEpoch?: number, expectedDeletionRevision?: number): Promise<boolean> { return this.cache.upsert(owner, conversation, activeConversationId, expectedEpoch, expectedDeletionRevision); }
   beginSynchronization(owner: string): number {
     return this.cache.beginSynchronization(owner);
   }

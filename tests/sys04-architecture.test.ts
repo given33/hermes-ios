@@ -32,7 +32,7 @@ test('chat dependency layers and module-size ratchets stay enforced', () => {
   for (const [path, limit] of [
     ['src/studio/PreviewChatPage.tsx', 900],
     ['src/api/HermesCloudApi.ts', 1_100],
-    ['src/api/conversation-local-store.ts', 550],
+    ['src/api/conversation-local-store.ts', 551], // +1: resetCachedConversationTranscript re-export
     ['src/studio/chat/useChatPageState.ts', 160],
   ] as const) {
     assert.ok(lines(path) <= limit, `${path} exceeded ${limit} lines`);

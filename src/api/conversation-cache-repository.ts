@@ -204,15 +204,16 @@ export class ConversationCacheRepository {
   }
 
   /** Update one row inside the owner queue without replacing a stale index. */
+  /** True only when the conversation actually reached durable storage. */
   async upsert(
     owner: string,
     conversation: SingleConversation,
     activeConversationId = '',
     expectedEpoch?: number,
     expectedDeletionRevision?: number,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const normalizedOwner = normalizeOwner(owner);
-    if (!normalizedOwner) return;
+    if (!normalizedOwner) return false;
     const epoch = expectedEpoch ?? captureConversationStorageEpoch(normalizedOwner);
     if (
       !isConversationStorageEpochCurrent(normalizedOwner, epoch)
@@ -220,8 +221,8 @@ export class ConversationCacheRepository {
         expectedDeletionRevision !== undefined
         && captureConversationDeletionRevision(normalizedOwner) !== expectedDeletionRevision
       )
-    ) return;
-    advanceConversationSynchronization(normalizedOwner);
+    ) return false;
+    let applied = false;
     await enqueueConversationStorageWrite(normalizedOwner, async () => {
       if (
         expectedDeletionRevision !== undefined
@@ -241,7 +242,9 @@ export class ConversationCacheRepository {
         conversations,
         current?.activeConversationId || activeConversationId,
       );
+      applied = true;
     }, epoch);
+    return applied;
   }
 
   /**

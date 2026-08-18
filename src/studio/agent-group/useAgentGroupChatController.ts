@@ -6,6 +6,7 @@ import {
   useState,
 } from 'react';
 import { AppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import type { HermesApiClient } from '../../api/HermesApiClient';
 import type {
@@ -59,6 +60,59 @@ import {
 } from './agent-group-model';
 
 const MOBILE_GROUP_USER_ID_PREFIX = 'hermes-mobile-group-user';
+
+/**
+ * Durable room-deletion tombstones for degraded shells without the
+ * conversation local store. The full outbox lives in the local store; this
+ * lightweight AsyncStorage set only exists so "hide locally, then DELETE"
+ * cannot silently resurrect a room after a network failure in that degraded
+ * mode. Values carry the owner so an account switch never filters another
+ * account's pending deletions.
+ */
+const DEGRADED_ROOM_TOMBSTONES_KEY = 'hermes.agent-group.degraded-room-tombstones';
+
+async function readDegradedRoomTombstones(owner: string): Promise<Set<string>> {
+  try {
+    const raw = await AsyncStorage.getItem(DEGRADED_ROOM_TOMBSTONES_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== 'object') return new Set();
+    return new Set(
+      Object.entries(parsed as Record<string, unknown>)
+        .filter(([, value]) => typeof value === 'string' && value === owner)
+        .map(([roomId]) => roomId),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+async function writeDegradedRoomTombstone(roomId: string, owner: string): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(DEGRADED_ROOM_TOMBSTONES_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    const next: Record<string, string> = parsed && typeof parsed === 'object'
+      ? { ...(parsed as Record<string, string>) }
+      : {};
+    next[roomId] = owner;
+    await AsyncStorage.setItem(DEGRADED_ROOM_TOMBSTONES_KEY, JSON.stringify(next));
+  } catch {
+    // Persistence failure keeps the in-memory hide only — never block the
+    // user's delete on best-effort bookkeeping.
+  }
+}
+
+async function clearDegradedRoomTombstone(roomId: string): Promise<void> {
+  try {
+    const raw = await AsyncStorage.getItem(DEGRADED_ROOM_TOMBSTONES_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== 'object' || !(roomId in (parsed as object))) return;
+    const next = { ...(parsed as Record<string, string>) };
+    delete next[roomId];
+    await AsyncStorage.setItem(DEGRADED_ROOM_TOMBSTONES_KEY, JSON.stringify(next));
+  } catch {
+    // Best-effort cleanup.
+  }
+}
 
 export interface AgentGroupChatControllerProps {
   agentProfile?: string;
@@ -171,6 +225,8 @@ export function useAgentGroupChatController({
   const joinPromisesRef = useRef(new Map<string, Promise<void>>());
   const typingTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const bootstrapGenerationRef = useRef(0);
+  const backgroundHydrationDoneRef = useRef(false);
+  const refreshRoomRef = useRef<((roomId?: string) => Promise<void>) | null>(null);
   const joinRoomOnSocketRef = useRef<(
     roomId: string,
     socket?: HermesStudioGroupChatSocket | null,
@@ -406,15 +462,20 @@ export function useAgentGroupChatController({
       roomHistoryCompleteRef.current.has(snapshot.room.id),
       roomHistoryNextOffsetRef.current.get(snapshot.room.id),
     );
-    await localStore.upsert(
+    const applied = await localStore.upsert(
       cacheOwner,
       conversation,
       cached?.activeConversationId || '',
       ownerEpoch,
       deletionRevision,
     );
+    // Mark the fingerprint ONLY on a confirmed durable write: a silently
+    // skipped upsert (epoch/deletion guard tripped mid-flight) must leave
+    // the fingerprint unset so the next persist pass retries instead of
+    // treating the skipped snapshot as durable forever.
     if (
-      isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+      applied
+      && isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
       && captureConversationDeletionRevision(cacheOwner) === deletionRevision
     ) {
       persistedRoomFingerprintRef.current.set(conversationId, fingerprint);
@@ -784,11 +845,31 @@ export function useAgentGroupChatController({
             ...pendingDeletionIds,
             ...latestPendingDeletionIds,
           ]);
+      const degradedTombstones = localStore
+        ? new Set<string>()
+        : await readDegradedRoomTombstones(cacheOwner);
+      if (studioApi && degradedTombstones.size) {
+        // Opportunistic replay for the degraded path: a room whose earlier
+        // DELETE failed stays hidden via its tombstone until a retry lands.
+        for (const tombstonedId of degradedTombstones) {
+          if (!listedRooms.some((room) => room.id === tombstonedId)) {
+            await clearDegradedRoomTombstone(tombstonedId);
+            continue;
+          }
+          try {
+            await studioApi.groupChat.deleteRoom(tombstonedId);
+            await clearDegradedRoomTombstone(tombstonedId);
+          } catch {
+            // Still offline; the tombstone keeps the room hidden.
+          }
+        }
+      }
       const nextRooms = listedRooms.filter((room) => {
         const conversationId = room.conversationId?.trim();
         const syntheticConversationId = `chat_room_${room.id.replace(/^room_/, '')}`;
         return !pendingRoomConversationIdsRef.current.has(room.id)
           && !pendingRoomConversationIdsRef.current.has(syntheticConversationId)
+          && !degradedTombstones.has(room.id)
           && (!conversationId || !pendingRoomConversationIdsRef.current.has(conversationId));
       });
       if (generation !== bootstrapGenerationRef.current || !mountedRef.current) return;
@@ -806,6 +887,33 @@ export function useAgentGroupChatController({
       applyRoomList(nextRooms);
       setConnected(true);
       setError(null);
+      // New-device warm-up (#15): room summaries exist after the list call,
+      // but full transcripts only land when a room is opened. Drain the most
+      // recent rooms once, sequentially, in the background so switching to
+      // them offline (or after a failed detail request) still shows history.
+      if (
+        studioApi
+        && !fixtureMode
+        && enabled
+        && !backgroundHydrationDoneRef.current
+        && nextRooms.length
+      ) {
+        backgroundHydrationDoneRef.current = true;
+        const targets = [...nextRooms]
+          .sort((left, right) => (right.lastActiveAt || 0) - (left.lastActiveAt || 0))
+          .slice(0, 5);
+        void (async () => {
+          for (const room of targets) {
+            if (!mountedRef.current) return;
+            if (roomHistoryCompleteRef.current.has(room.id)) continue;
+            try {
+              await refreshRoomRef.current?.(room.id);
+            } catch {
+              // Background warm-up is best-effort; opening the room retries.
+            }
+          }
+        })();
+      }
     } catch (reason) {
       if (generation === bootstrapGenerationRef.current && mountedRef.current) {
         setConnected(false);
@@ -867,7 +975,19 @@ export function useAgentGroupChatController({
       // Newer collaboration servers expose offset/limit/has_more. Drain the
       // older pages only on the initial load; steady-state polling requests a
       // bounded tail and merges it with the cached transcript.
-      while (detail.hasMore && pageCount < 100 && detail.messages.length > 0) {
+      // Two bounds: per-refresh pages (100 × 150) and an absolute transcript
+      // ceiling across resumed passes, so a pathological room can never make
+      // the client drain unbounded history in the background forever.
+      const totalKnown = roomHistoryCountRef.current.get(roomId) || 0;
+      const ROOM_DRAIN_PAGE_CAP = 100;
+      const ROOM_DRAIN_TOTAL_CAP = 45_000;
+      const roomTotalBudget = Math.max(0, ROOM_DRAIN_TOTAL_CAP - totalKnown);
+      while (
+        detail.hasMore
+        && pageCount < ROOM_DRAIN_PAGE_CAP
+        && detail.messages.length > 0
+        && nextOffset - initialOffset < roomTotalBudget
+      ) {
         const page = await studioApi.groupChat.getRoomDetail(roomId, {
           offset: nextOffset,
           limit: 150,
@@ -966,6 +1086,8 @@ export function useAgentGroupChatController({
       detailInFlightRef.current.delete(roomId);
     }
   }, [applyRoomList, isChinese, patchSnapshot, queueRoomSnapshotPersistence, setSnapshot, studioApi]);
+
+  refreshRoomRef.current = refreshRoom;
 
   const selectRoom = useCallback((roomId: string) => {
     if (!roomId || !roomsRef.current.some((room) => room.id === roomId)) return;
@@ -1546,11 +1668,16 @@ export function useAgentGroupChatController({
       return;
     }
 
-    // Degraded shells without a local store retain the old best-effort path.
+    // Degraded shells without a local store still keep a durable tombstone:
+    // hide first, then DELETE, and on failure leave the tombstone so the
+    // room cannot reappear from the next refresh — the refresh pass below
+    // retries the remote DELETE for tombstoned rooms opportunistically.
     removeRoomFromState(roomId);
     if (!studioApi) return;
+    await writeDegradedRoomTombstone(roomId, cacheOwner);
     try {
       await studioApi.groupChat.deleteRoom(roomId);
+      await clearDegradedRoomTombstone(roomId);
     } catch (reason) {
       const message = errorMessage(reason, isChinese);
       setError(message);
@@ -1566,12 +1693,21 @@ export function useAgentGroupChatController({
     try {
       await studioApi.groupChat.clearRoomContext(roomId);
       applyEvent({ type: 'room-cleared', roomId });
+      // The server transcript is now authoritatively empty; persist the
+      // cleared snapshot so the next offline hydration cannot resurrect the
+      // pre-clear history from the local cache (union/max merge otherwise
+      // keeps whatever was on disk).
+      persistCurrentRoom(roomId);
+      detailFingerprintRef.current.delete(roomId);
+      roomHistoryCompleteRef.current.add(roomId);
+      roomHistoryCountRef.current.set(roomId, 0);
+      roomHistoryNextOffsetRef.current.delete(roomId);
     } catch (reason) {
       const message = errorMessage(reason, isChinese);
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, error: message }));
       notify(message);
     }
-  }, [applyEvent, isChinese, notify, patchSnapshot, studioApi]);
+  }, [applyEvent, isChinese, notify, patchSnapshot, persistCurrentRoom, studioApi]);
 
   joinRoomOnSocketRef.current = joinRoomOnSocket;
 

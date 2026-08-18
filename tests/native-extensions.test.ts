@@ -110,13 +110,21 @@ test('WidgetKit, WatchConnectivity, and DeviceActivity sources are buildable inp
   assert.ok(existsSync(resolve(projectRoot, 'native-extensions/HermesWeatherWidget/Info.plist')));
   const share = read('native-extensions/HermesShareExtension/ShareViewController.swift');
   assert.match(share, /NSExtensionItem/);
-  assert.match(share, /agent-trigger-inbox-v1/);
+  // The queue moved to individually sealed spool files: no plaintext
+  // UserDefaults array, no cross-process read-modify-write.
+  assert.doesNotMatch(share, /agent-trigger-inbox-v1/);
+  assert.match(share, /agent-trigger-inbox-v3/);
+  assert.match(share, /AES\.GCM\.seal/);
+  assert.match(share, /options: \[\.atomic\]/);
   assert.match(share, /loadFileRepresentation/);
   assert.match(share, /attachmentPath/);
   assert.match(share, /removeItem\(at: root\.appendingPathComponent\(filename\)\)/);
   assert.equal((share.match(/completeRequest\(returningItems: nil\)/g) || []).length, 1);
   assert.match(read('native-extensions/HermesShareExtension/Info.plist'), /com\.apple\.share-services/);
   assert.match(read('native-extensions/HermesShareExtension/HermesShareExtension.entitlements'), /group\.app\.sunstone1029\.fig1171\.hermes/);
+  // The extension must reach the same Keychain key as the main app's queue.
+  assert.match(read('native-extensions/HermesShareExtension/HermesShareExtension.entitlements'), /keychain-access-groups/);
+  assert.match(read('native-extensions/HermesShareExtension/Info.plist'), /HermesSharedKeychainAccessGroup/);
   assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /NSFileProviderReplicatedExtension/);
   assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /HermesFiles/);
   assert.match(read('native-extensions/HermesFileProvider/HermesFileProvider.swift'), /uploads/);

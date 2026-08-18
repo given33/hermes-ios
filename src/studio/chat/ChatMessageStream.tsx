@@ -93,6 +93,17 @@ export function ChatMessageStream({
   speakingMessageId,
   streamRef,
 }: ChatMessageStreamProps) {
+  // Only the newest todo snapshot renders a checklist; every older
+  // assistant message that carried one stays quiet so history cannot show
+  // several stale lists or double-count the same tasks.
+  const lastTodoIndex = messages.length - 1 - messages.reduceRight(
+    (found, message, position) => (
+      found === -1 && message.role !== 'user' && message.todos?.length
+        ? position
+        : found
+    ),
+    -1,
+  );
   const { tokens } = useTheme();
   const latestMessage = messages[messages.length - 1];
   const followVersion = [
@@ -162,6 +173,9 @@ export function ChatMessageStream({
             </Text>
           </Reanimated.View>
         ) : messages.map((message, index) => (
+          // One checklist for the whole history: the newest snapshot wins.
+          // Older assistant messages keep their todos in the view model for
+          // inspection, but only the last carrier renders a TodoSection.
           <Fragment key={messageReactKey(message)}>
             {collaborationState === 'active' && collaborationStartIndex === index ? (
               <>
@@ -178,6 +192,7 @@ export function ChatMessageStream({
               index={index}
               isChinese={isChinese}
               message={message}
+              showTodos={index === lastTodoIndex}
               onBranch={onBranch}
               onChoiceInputFocus={onChoiceInputFocus}
               onCloseActivity={onCloseActivity}
