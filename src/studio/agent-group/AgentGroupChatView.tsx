@@ -247,6 +247,7 @@ export function AgentGroupChatView({
               isChinese={isChinese}
               messages={activeRoom?.messages || []}
               onQuickReply={(text) => { void controller.sendMessage(text); }}
+              onRetractMessage={activeRoom ? (messageId) => { void controller.retractMessage(activeRoom.room.id, messageId); } : undefined}
               running={Boolean(activeRoom?.runningAgents.length)}
               safeAreaBottom={safeAreaBottom}
               showToolTrace={showToolTrace}

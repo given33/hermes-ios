@@ -25,6 +25,8 @@ export interface HermesStudioRoomInfo {
   allowRemoteWorkspaceAccess?: number;
   createdAt?: number;
   lastActiveAt?: number;
+  /** Server account generation fence for the room's hosted-event stream. */
+  accountGeneration?: string;
 }
 
 export interface HermesStudioRoomAgent {
@@ -167,6 +169,8 @@ export interface HermesStudioGroupChatMessage {
   firstSeenAt?: number;
   /** Client-side delivery state for optimistic mobile messages. */
   deliveryStatus?: 'pending' | 'sent' | 'failed';
+  /** Server tombstone flag after a retraction ([已撤回] marker content). */
+  retracted?: boolean;
 }
 
 export interface HermesStudioGroupChatJoinResult {
@@ -196,6 +200,7 @@ export interface HermesStudioGroupChatRoomDetail {
   offset?: number;
   limit?: number;
   hasMore?: boolean;
+  typingUsers?: string[];
 }
 
 export interface HermesStudioWorkspaceFileEntry {
@@ -281,6 +286,10 @@ export interface HermesStudioPendingApproval {
   allowPermanent: boolean;
   isMemoryWrite: boolean;
   requestedAt: number;
+  /** Collaboration-plugin decision routing context (write approvals). */
+  profile?: string;
+  expectedRevision?: number;
+  payloadDigest?: string;
 }
 
 export interface HermesStudioWorkflowViewport {

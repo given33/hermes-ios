@@ -119,6 +119,7 @@ export interface AgentGroupChatController {
   updateRoomSummary(roomId: string, summary: string): Promise<void>;
   interruptAgent(roomId: string, agentName: string): Promise<void>;
   respondApproval(roomId: string, approvalId: string, choice: HermesStudioPendingApproval['choices'][number]): Promise<void>;
+  retractMessage(roomId: string, messageId: string): Promise<void>;
   emitTyping(roomId: string): void;
   emitStopTyping(roomId: string): void;
   listWorkspaceFiles(roomId: string, path?: string): Promise<HermesStudioWorkspaceFileListing>;
@@ -562,12 +563,19 @@ export function useAgentGroupChatController({
     const onRoomUpdated = (payload: unknown) => {
       if (!isRecord(payload)) return;
       const roomId = stringValue(payload.roomId);
-      if (roomId) applyEvent({
-        type: 'room-updated',
-        roomId,
-        totalTokens: payload.totalTokens === undefined ? undefined : Number(payload.totalTokens),
-        name: stringValue(payload.name) || undefined,
-      });
+      if (roomId) {
+        applyEvent({
+          type: 'room-updated',
+          roomId,
+          totalTokens: payload.totalTokens === undefined ? undefined : Number(payload.totalTokens),
+          name: stringValue(payload.name) || undefined,
+        });
+        // The SSE wake emits room_updated for every committed revision
+        // (typing, roster, hosted-turn status, summary). Drop the detail
+        // fingerprint so the very next poll tick performs a network refresh
+        // instead of serving the cached projection.
+        detailFingerprintRef.current.delete(roomId);
+      }
     };
     const onRoomCleared = (payload: unknown) => {
       if (!isRecord(payload)) return;
@@ -977,7 +985,9 @@ export function useAgentGroupChatController({
     const timer = typingTimersRef.current.get(roomId);
     if (timer) clearTimeout(timer);
     typingTimersRef.current.delete(roomId);
-  }, []);
+    const socket = socketRef.current;
+    if (socket && studioApi) studioApi.groupChat.emitStopTyping(socket, roomId);
+  }, [studioApi]);
 
   const sendMessage = useCallback(async (
     requestedContent?: string,
@@ -1001,6 +1011,7 @@ export function useAgentGroupChatController({
       timestamp: Date.now(),
       role: 'user',
       deliveryStatus: 'pending',
+      ...(mentions?.length ? { mentions } : {}),
     };
     patchSnapshot(roomId, (current) => ({
       ...current,
@@ -1021,8 +1032,13 @@ export function useAgentGroupChatController({
     }
     detailFingerprintRef.current.delete(roomId);
     try {
-      const profiles = snapshot.agents.map((agent) => agent.profile).filter(Boolean);
-      await studioApi.groupChat.sendRoomMessage(roomId, id, content, profiles);
+      // Mentions own server-side routing when present; the full roster is
+      // only addressed for legacy broadcast sends without a resolved chip.
+      const resolvedMentions = mentions?.length ? mentions : undefined;
+      const profiles = resolvedMentions
+        ? []
+        : snapshot.agents.map((agent) => agent.profile).filter(Boolean);
+      await studioApi.groupChat.sendRoomMessage(roomId, id, content, profiles, undefined, resolvedMentions);
       patchSnapshot(roomId, (current) => ({
         ...current,
         messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
@@ -1328,21 +1344,53 @@ export function useAgentGroupChatController({
     await refreshRoom(roomId);
   }, [refreshRoom, studioApi]);
 
+  const retractMessage = useCallback(async (roomId: string, messageId: string) => {
+    if (!studioApi || !messageId.trim()) return;
+    try {
+      await studioApi.groupChat.retractMessage(roomId, messageId);
+      // Mirror the server tombstone locally so the bubble flips immediately;
+      // the next detail refresh reconciles against the authoritative marker.
+      patchSnapshot(roomId, (current) => ({
+        ...current,
+        messages: current.messages.map((message) => (
+          message.id === messageId
+            ? { ...message, content: isChinese ? '[已撤回]' : '[Retracted]', retracted: true }
+            : message
+        )),
+        updatedAt: Date.now(),
+      }));
+      persistCurrentRoom(roomId);
+      detailFingerprintRef.current.delete(roomId);
+    } catch (reason) {
+      notify(errorMessage(reason, isChinese));
+    }
+  }, [detailFingerprintRef, identity.name, isChinese, notify, patchSnapshot, persistCurrentRoom, stableUserId, studioApi]);
+
   const respondApproval = useCallback(async (
     roomId: string,
     approvalId: string,
     choice: HermesStudioPendingApproval['choices'][number],
   ) => {
     if (!studioApi) return;
-    await studioApi.groupChat.respondApprovalRest(roomId, approvalId, choice);
+    // Route through the pending record so the write-approval decision carries
+    // the profile/revision/digest context the collaboration plugin validates.
+    const snapshot = snapshotsRef.current.get(roomId);
+    const pending = (snapshot?.pendingApprovals || []).find((item) => item.approvalId === approvalId);
+    await studioApi.groupChat.respondApprovalRest(roomId, approvalId, choice, {
+      profile: pending?.profile,
+      expectedRevision: pending?.expectedRevision,
+      payloadDigest: pending?.payloadDigest,
+    });
     applyEvent({ type: 'approval-resolved', roomId, approvalId });
   }, [applyEvent, studioApi]);
 
   const emitTyping = useCallback((roomId: string) => {
     const previous = typingTimersRef.current.get(roomId);
     if (previous) clearTimeout(previous);
+    const socket = socketRef.current;
+    if (socket && studioApi) studioApi.groupChat.emitTyping(socket, roomId);
     typingTimersRef.current.set(roomId, setTimeout(() => emitStopTyping(roomId), 4_000));
-  }, [emitStopTyping]);
+  }, [emitStopTyping, studioApi]);
 
   const listWorkspaceFiles = useCallback(async (roomId: string, path = ''): Promise<HermesStudioWorkspaceFileListing> => {
     if (!studioApi) return { entries: [], path };
@@ -1644,6 +1692,7 @@ export function useAgentGroupChatController({
     updateRoomSummary,
     interruptAgent,
     respondApproval,
+    retractMessage,
     emitTyping,
     emitStopTyping,
     listWorkspaceFiles,

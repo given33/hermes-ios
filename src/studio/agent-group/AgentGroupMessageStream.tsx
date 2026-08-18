@@ -5,6 +5,7 @@ import {
   ChevronRight,
   Clipboard as ClipboardIcon,
   FileText,
+  Undo2,
   Wrench,
 } from 'lucide-react-native';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -25,6 +26,7 @@ export interface AgentGroupMessageStreamProps {
   isChinese: boolean;
   messages: HermesStudioGroupChatMessage[];
   onQuickReply?(text: string): void;
+  onRetractMessage?(messageId: string): void;
   running: boolean;
   safeAreaBottom: number;
   showToolTrace?: boolean;
@@ -44,6 +46,7 @@ export function AgentGroupMessageStream({
   isChinese,
   messages,
   onQuickReply,
+  onRetractMessage,
   running,
   safeAreaBottom,
   showToolTrace = true,
@@ -121,9 +124,9 @@ export function AgentGroupMessageStream({
         ) : displayMessages.map((message) => (
           <Fragment key={message.id}>
             {message.runItems?.length ? (
-              <AgentRunCard agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} userId={userId} />
+              <AgentRunCard agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} onRetract={onRetractMessage} userId={userId} />
             ) : (
-              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} userId={userId} />
+              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} onRetract={onRetractMessage} userId={userId} />
             )}
             {summaryAnchorId && containsMessageId(message, summaryAnchorId) ? (
               <SummaryAnchorDivider isChinese={isChinese} />
@@ -210,12 +213,14 @@ function AgentRunCard({
   isChinese,
   message,
   onQuickReply,
+  onRetract,
   userId,
 }: {
   agents: HermesStudioRoomAgent[];
   isChinese: boolean;
   message: HermesStudioGroupChatMessage;
   onQuickReply?(text: string): void;
+  onRetract?(messageId: string): void;
   userId: string;
 }) {
   const { tokens } = useTheme();
@@ -234,6 +239,7 @@ function AgentRunCard({
               isChinese={isChinese}
               key={item.id}
               message={item}
+              onQuickReply={onQuickReply}
               userId={userId}
             />
           ))}
@@ -250,6 +256,7 @@ function AgentGroupMessageItem({
   isChinese,
   message,
   onQuickReply,
+  onRetract,
   userId,
 }: {
   agents: HermesStudioRoomAgent[];
@@ -257,6 +264,7 @@ function AgentGroupMessageItem({
   isChinese: boolean;
   message: HermesStudioGroupChatMessage;
   onQuickReply?(text: string): void;
+  onRetract?(messageId: string): void;
   userId: string;
 }) {
   const { tokens } = useTheme();
@@ -340,6 +348,16 @@ function AgentGroupMessageItem({
         </View>
         {!embedded ? (
           <View style={styles.messageMeta}>
+            {onRetract && isSelf && message.role === 'user' && !message.retracted && !message.deliveryStatus ? (
+              <IOSPressable
+                accessibilityLabel={isChinese ? '撤回这条群聊消息' : 'Retract this group message'}
+                haptic="selection"
+                onPress={() => onRetract(message.id)}
+                style={styles.metaButton}
+              >
+                <Undo2 color={tokens.colors.textTertiary} size={13} />
+              </IOSPressable>
+            ) : null}
             <IOSPressable accessibilityLabel={isChinese ? '复制群聊消息' : 'Copy group message'} onPress={() => { void copyMessage(); }} style={styles.metaButton}>
               <ClipboardIcon color={tokens.colors.textTertiary} size={13} />
             </IOSPressable>

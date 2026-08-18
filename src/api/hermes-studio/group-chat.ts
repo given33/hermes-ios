@@ -1,4 +1,5 @@
 import type { HermesApiClient } from '../HermesApiClient';
+import { consumeHostedConversationEvents } from '../hosted-conversation-events';
 import {
   isRecord,
   numberValue,
@@ -33,7 +34,7 @@ export interface HermesStudioRealtimeOptions {
 
 /**
  * Compatibility handle for the old controller API.  The collaboration plugin
- * is REST-only; this object never opens a socket and is only used to keep
+ * is REST+SSE; this bus never opens a Socket.IO connection and exists to keep
  * existing callers from having to coordinate a second state machine.
  */
 export interface HermesStudioGroupChatSocket {
@@ -43,13 +44,170 @@ export interface HermesStudioGroupChatSocket {
   off(event: string, listener?: (...args: any[]) => void): this;
   removeAllListeners(event?: string): this;
   disconnect(): void;
+  /** REST+SSE transport only: subscribe this bus to a room's event stream. */
+  attachRoomStream?(room: {
+    id: string;
+    conversationId?: string;
+    accountGeneration?: string;
+  }): void;
 }
 
 type SocketListener = (...args: any[]) => void;
 
+interface RoomStreamRecord {
+  roomId: string;
+  conversationId: string;
+  accountGeneration: string;
+  controller: AbortController;
+  stopped: boolean;
+  cursor: number;
+  seen: Map<string, string>;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+}
+
+const ROOM_STREAM_RETRY_BASE_MS = 1_000;
+const ROOM_STREAM_RETRY_MAX_MS = 30_000;
+
+/**
+ * Event-bus socket backed by REST polling plus the hosted-event SSE stream.
+ *
+ * The collaboration plugin has no Socket.IO endpoint: room freshness comes
+ * from the controller's REST polling while an attached per-room SSE
+ * subscription wakes the bus the moment the server commits a change.  SSE
+ * frames deliver new/updated transcript messages as `message` events and
+ * surface any other conversation revision as `room_updated`, so snapshot
+ * merges happen immediately instead of waiting for the next poll tick.
+ */
 class RestPollingSocket implements HermesStudioGroupChatSocket {
   connected = true;
   private readonly listeners = new Map<string, Set<SocketListener>>();
+  private readonly streams = new Map<string, RoomStreamRecord>();
+  private client: HermesApiClient | null = null;
+
+  bind(client: HermesApiClient): void {
+    this.client = client;
+  }
+
+  emit(event: string, ...args: unknown[]): void {
+    const bucket = [...(this.listeners.get(event) || [])];
+    for (const listener of bucket) {
+      try {
+        listener(...args);
+      } catch {
+        // A listener failure must not take down the stream loop.
+      }
+    }
+  }
+
+  attachRoomStream(room: {
+    id: string;
+    conversationId?: string;
+    accountGeneration?: string;
+  }): void {
+    const conversationId = room.conversationId?.trim();
+    const accountGeneration = room.accountGeneration?.trim();
+    if (!conversationId || !accountGeneration || !this.client) return;
+    if (this.streams.has(conversationId)) return;
+    const record: RoomStreamRecord = {
+      roomId: room.id,
+      conversationId,
+      accountGeneration,
+      controller: new AbortController(),
+      stopped: false,
+      cursor: 0,
+      seen: new Map(),
+      retryTimer: null,
+    };
+    this.streams.set(conversationId, record);
+    void this.runRoomStream(record);
+  }
+
+  detachRoomStreams(): void {
+    for (const record of this.streams.values()) {
+      record.stopped = true;
+      record.controller.abort();
+      if (record.retryTimer) clearTimeout(record.retryTimer);
+    }
+    this.streams.clear();
+  }
+
+  private async runRoomStream(record: RoomStreamRecord): Promise<void> {
+    let attempt = 0;
+    while (!record.stopped && this.connected && this.client) {
+      const client = this.client;
+      const source = {
+        openHostedConversationEvents: (
+          conversationId: string,
+          cursor: number,
+          signal: AbortSignal,
+          expectedAccountGeneration: string,
+          deadlineMs?: number,
+        ) => client.openEventStream(
+          `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-events`,
+          {
+            query: {
+              cursor: Math.max(0, Math.floor(cursor)),
+              expected_account_generation: expectedAccountGeneration,
+            },
+            deadlineMs,
+            signal,
+          },
+        ),
+      };
+      try {
+        record.cursor = await consumeHostedConversationEvents(
+          source,
+          record.conversationId,
+          record.cursor,
+          record.accountGeneration,
+          record.controller.signal,
+          (frame) => this.consumeRoomFrame(record, frame),
+          undefined,
+          5_000,
+        );
+        attempt = 0;
+      } catch {
+        // Fall through to the reconnect backoff; polling stays authoritative.
+      }
+      if (record.stopped || !this.connected) break;
+      const delay = Math.min(
+        ROOM_STREAM_RETRY_BASE_MS * 2 ** attempt,
+        ROOM_STREAM_RETRY_MAX_MS,
+      );
+      attempt += 1;
+      await new Promise<void>((resolve) => {
+        record.retryTimer = setTimeout(resolve, delay);
+      });
+      record.retryTimer = null;
+    }
+  }
+
+  private consumeRoomFrame(
+    record: RoomStreamRecord,
+    frame: {
+      conversation?: { messages?: unknown[] };
+      events?: unknown[];
+    },
+  ): void {
+    const messages = Array.isArray(frame.conversation?.messages)
+      ? frame.conversation!.messages
+      : [];
+    for (const raw of messages) {
+      if (!isRecord(raw)) continue;
+      const id = stringValue(raw.id);
+      if (!id) continue;
+      const content = stringValue(raw.content);
+      const revision = `${content.length}:${stringValue(raw.status)}`;
+      if (record.seen.get(id) === revision) continue;
+      const known = record.seen.has(id);
+      record.seen.set(id, revision);
+      if (known && !content) continue;
+      this.emit('message', { ...raw, roomId: record.roomId });
+    }
+    // Any other committed revision (typing, roster, hosted-turn status,
+    // summary) wakes the controller through the generic room refresh path.
+    this.emit('room_updated', { roomId: record.roomId });
+  }
 
   on(event: string, listener: SocketListener): this {
     const bucket = this.listeners.get(event) || new Set<SocketListener>();
@@ -86,12 +244,13 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
   disconnect(): void {
     if (!this.connected) return;
     this.connected = false;
+    this.detachRoomStreams();
     const bucket = [...(this.listeners.get('disconnect') || [])];
     for (const listener of bucket) listener('rest-polling-stopped');
   }
 }
 
-/** REST adapter for the hermes-agent collaboration plugin. */
+/** REST + hosted-event-SSE adapter for the hermes-agent collaboration plugin. */
 export class HermesStudioGroupChatApi {
   constructor(private readonly client: HermesApiClient) {}
 
@@ -116,19 +275,36 @@ export class HermesStudioGroupChatApi {
     ).then((response) => normalizeRoomDetail(response));
   }
 
-  createRoom(input: HermesStudioCreateRoomInput) {
+  async createRoom(input: HermesStudioCreateRoomInput) {
     const profiles = [...new Set((input.agents || [])
       .map((agent) => agent.profile.trim())
       .filter(Boolean))];
     return this.client.request<{ room?: unknown }>(`${COLLABORATION}/rooms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: input.name.trim(), profiles }),
+      body: JSON.stringify({
+        name: input.name.trim(),
+        profiles,
+        invite_code: input.inviteCode?.trim() || '',
+        ...(input.workspace?.trim() ? { workspace: input.workspace.trim() } : {}),
+        ...(input.summary ? { summary: input.summary } : {}),
+        ...(input.allowGuestAgents !== undefined || input.guestAgentApproval !== undefined
+          || input.maxGuestAgentsPerMember !== undefined || input.allowRemoteWorkspaceAccess !== undefined
+            ? {
+              settings: {
+                ...(input.allowGuestAgents !== undefined ? { allow_guest_agents: input.allowGuestAgents } : {}),
+                ...(input.guestAgentApproval !== undefined ? { guest_agent_approval: input.guestAgentApproval } : {}),
+                ...(input.maxGuestAgentsPerMember !== undefined ? { max_guest_agents_per_member: input.maxGuestAgentsPerMember } : {}),
+                ...(input.allowRemoteWorkspaceAccess !== undefined ? { allow_remote_workspace_access: input.allowRemoteWorkspaceAccess } : {}),
+              },
+            }
+            : {}),
+      }),
     }).then((response) => {
       const room = requiredRoom(response.room);
       return {
         room,
-        agents: agentsFromProfiles(room.id, room.profiles || profiles),
+        agents: agentsFromDetail(response.room, room.id, profiles),
         agentResults: [] as unknown[],
       };
     });
@@ -143,44 +319,127 @@ export class HermesStudioGroupChatApi {
     });
   }
 
-  joinRoomByCode(_code: string): Promise<{ room: HermesStudioRoomInfo }> {
-    return Promise.reject(new Error('Room invite links are not supported by the collaboration backend'));
+  async joinRoomByCode(code: string): Promise<{ room: HermesStudioRoomInfo }> {
+    const response = await this.client.request<unknown>(`${COLLABORATION}/rooms/join`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invite_code: code.trim() }),
+    });
+    const detail = normalizeRoomDetail(response);
+    return { room: detail.room };
   }
 
   async deleteRoom(roomId: string): Promise<void> {
     await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}`, { method: 'DELETE' });
   }
 
-  removeRoomMember(_roomId: string, _userId: string): Promise<{ success: boolean; agents: HermesStudioRoomAgent[]; members: HermesStudioRoomMember[] }> {
-    return Promise.reject(unsupported('member removal'));
+  async removeRoomMember(roomId: string, userId: string): Promise<{ success: boolean; agents: HermesStudioRoomAgent[]; members: HermesStudioRoomMember[] }> {
+    const response = await this.client.request<{ success?: boolean; agents?: unknown[]; members?: unknown[] }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(userId)}`,
+      { method: 'DELETE' },
+    );
+    return {
+      success: response.success !== false,
+      agents: normalizeAgents(response.agents),
+      members: normalizeMembers(response.members),
+    };
   }
 
-  clearRoomContext(_roomId: string): Promise<{ success: boolean; room: HermesStudioRoomInfo }> {
-    return Promise.reject(unsupported('context clearing'));
+  async clearRoomContext(roomId: string): Promise<{ success: boolean; room: HermesStudioRoomInfo }> {
+    await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/clear`, { method: 'POST' });
+    const detail = await this.getRoomDetail(roomId);
+    return { success: true, room: detail.room };
   }
 
-  updateInviteCode(_roomId: string, _inviteCode: string): Promise<{ success: boolean }> {
-    return Promise.reject(unsupported('invite codes'));
+  async updateInviteCode(roomId: string, inviteCode: string): Promise<{ success: boolean }> {
+    const response = await this.client.request<{ success?: boolean; invite_code?: string }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/invite-code`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invite_code: inviteCode.trim() }),
+      },
+    );
+    return { success: response.success !== false };
   }
 
-  updateRoomConfig(_roomId: string, _input: HermesStudioRoomConfigInput): Promise<{ room: HermesStudioRoomInfo }> {
-    return Promise.reject(unsupported('room configuration updates'));
+  async updateRoomConfig(roomId: string, input: HermesStudioRoomConfigInput): Promise<{ room: HermesStudioRoomInfo }> {
+    const body: Record<string, unknown> = {};
+    if (input.name?.trim()) body.name = input.name.trim();
+    const summary: Record<string, unknown> = {};
+    if (input.summaryProfile) summary.profile = input.summaryProfile;
+    if (input.summaryProvider) summary.provider = input.summaryProvider;
+    if (input.summaryModel) summary.model = input.summaryModel;
+    if (input.summaryApiMode) summary.api_mode = input.summaryApiMode;
+    if (input.summaryEveryTurns) summary.every_turns = input.summaryEveryTurns;
+    if (Object.keys(summary).length) body.summary = summary;
+    const response = await this.client.request<unknown>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      },
+    );
+    const detail = normalizeRoomDetail(response);
+    return { room: detail.room };
   }
 
-  updateRoomWorkspace(_roomId: string, _workspace: string): Promise<{ room: HermesStudioRoomInfo }> {
-    return Promise.reject(unsupported('room workspaces'));
+  async updateRoomWorkspace(roomId: string, workspace: string): Promise<{ room: HermesStudioRoomInfo }> {
+    const response = await this.client.request<unknown>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspace: workspace.trim() }),
+      },
+    );
+    const detail = normalizeRoomDetail(response);
+    return { room: detail.room };
   }
 
-  listWorkspaceFiles(_roomId: string, _path = ''): Promise<HermesStudioWorkspaceFileListing> {
-    return Promise.reject(unsupported('workspace files'));
+  async listWorkspaceFiles(roomId: string, path = ''): Promise<HermesStudioWorkspaceFileListing> {
+    const response = await this.client.request<{ entries?: unknown[]; truncated?: boolean }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/files`,
+      { query: path ? { path } : undefined },
+    );
+    const entries = (Array.isArray(response.entries) ? response.entries : [])
+      .map((entry) => {
+        if (!isRecord(entry)) return null;
+        const name = stringValue(entry.name);
+        if (!name) return null;
+        const isDir = stringValue(entry.type, 'file') === 'directory';
+        const modifiedMs = numberValue(alias(entry, 'modified_at', 'modifiedAt'), 0);
+        return {
+          name,
+          path: stringValue(entry.path, name),
+          isDir,
+          size: numberValue(entry.size, 0),
+          modTime: modifiedMs ? new Date(modifiedMs).toISOString() : new Date(0).toISOString(),
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
+    void response.truncated;
+    return { entries, path };
   }
 
-  readWorkspaceFile(_roomId: string, _path: string): Promise<HermesStudioWorkspaceFileContent> {
-    return Promise.reject(unsupported('workspace files'));
+  async readWorkspaceFile(roomId: string, path: string): Promise<HermesStudioWorkspaceFileContent> {
+    const response = await this.client.request<{ path?: string; name?: string; content?: string; size?: number }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/file`,
+      { query: { path } },
+    );
+    const content = stringValue(response.content);
+    return {
+      path: stringValue(response.path, path),
+      content,
+      size: numberValue(response.size, content.length),
+    };
   }
 
-  downloadWorkspaceFile(_roomId: string, _path: string, _options: { signal?: AbortSignal; download?: boolean } = {}): Promise<Blob> {
-    return Promise.reject(unsupported('workspace files'));
+  async downloadWorkspaceFile(roomId: string, path: string, options: { signal?: AbortSignal; download?: boolean } = {}): Promise<Blob> {
+    const content = await this.readWorkspaceFile(roomId, path);
+    void options;
+    return new Blob([content.content], { type: 'text/plain' });
   }
 
   async readWorkspaceFileText(roomId: string, path: string, _signal?: AbortSignal): Promise<{ content: string; size: number }> {
@@ -188,43 +447,105 @@ export class HermesStudioGroupChatApi {
     return { content: file.content, size: file.size };
   }
 
-  writeWorkspaceFile(_roomId: string, _path: string, _content: string): Promise<void> {
-    return Promise.reject(unsupported('workspace files'));
-  }
-
-  mkdirWorkspaceFile(_roomId: string, _path: string): Promise<void> {
-    return Promise.reject(unsupported('workspace files'));
-  }
-
-  deleteWorkspaceFile(_roomId: string, _path: string, _recursive = false): Promise<void> {
-    return Promise.reject(unsupported('workspace files'));
-  }
-
-  renameWorkspaceFile(_roomId: string, _oldPath: string, _newPath: string): Promise<void> {
-    return Promise.reject(unsupported('workspace files'));
-  }
-
-  copyWorkspaceFile(_roomId: string, _srcPath: string, _destPath: string): Promise<void> {
-    return Promise.reject(unsupported('workspace files'));
-  }
-
-  getRoomSummary(roomId: string): Promise<{ summary: HermesStudioRoomSummaryState; anchor: HermesStudioRoomSummaryAnchor | null }> {
-    return Promise.resolve({
-      summary: emptySummary(roomId),
-      anchor: null,
+  async writeWorkspaceFile(roomId: string, path: string, content: string): Promise<void> {
+    await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/file`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, content }),
     });
   }
 
-  updateRoomSummary(_roomId: string, _summary: string): Promise<{ summary: HermesStudioRoomSummaryState }> {
-    return Promise.reject(unsupported('room summaries'));
+  async mkdirWorkspaceFile(roomId: string, path: string): Promise<void> {
+    await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
   }
 
-  addAgent(_roomId: string, _input: HermesStudioRoomAgentInput): Promise<{ agent: HermesStudioRoomAgent }> {
-    return Promise.reject(unsupported('room member updates'));
+  async deleteWorkspaceFile(roomId: string, path: string, recursive = false): Promise<void> {
+    await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/file`, {
+      method: 'DELETE',
+      query: { path, recursive: recursive ? 'true' : 'false' },
+    });
   }
 
-  updateAgent(_roomId: string, _agentId: string, _input: HermesStudioRoomAgentInput): Promise<{ agent: HermesStudioRoomAgent; agents: HermesStudioRoomAgent[]; members: HermesStudioRoomMember[] }> {
-    return Promise.reject(unsupported('room member updates'));
+  async renameWorkspaceFile(roomId: string, oldPath: string, newPath: string): Promise<void> {
+    await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_path: oldPath, new_path: newPath }),
+    });
+  }
+
+  async copyWorkspaceFile(roomId: string, srcPath: string, destPath: string): Promise<void> {
+    await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/copy`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_path: srcPath, destination_path: destPath }),
+    });
+  }
+
+  async getRoomSummary(roomId: string): Promise<{ summary: HermesStudioRoomSummaryState; anchor: HermesStudioRoomSummaryAnchor | null }> {
+    const response = await this.client.request<{ summary?: unknown; anchor?: unknown }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/summary`,
+    );
+    return {
+      summary: normalizeSummaryState(response.summary, roomId),
+      anchor: normalizeSummaryAnchor(response.anchor),
+    };
+  }
+
+  async updateRoomSummary(roomId: string, summary: string): Promise<{ summary: HermesStudioRoomSummaryState }> {
+    const response = await this.client.request<{ summary?: unknown }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/summary`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ summary }),
+      },
+    );
+    return { summary: normalizeSummaryState(response.summary, roomId) };
+  }
+
+  async addAgent(roomId: string, input: HermesStudioRoomAgentInput): Promise<{ agent: HermesStudioRoomAgent }> {
+    const response = await this.client.request<{ agent?: unknown }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/agents`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          profile: input.profile.trim(),
+          name: input.name?.trim() || '',
+          description: input.description?.trim() || '',
+        }),
+      },
+    );
+    const agent = normalizeAgent(response.agent);
+    if (!agent) throw new Error('Hermes collaboration returned an invalid room agent');
+    return { agent };
+  }
+
+  async updateAgent(roomId: string, agentId: string, input: HermesStudioRoomAgentInput): Promise<{ agent: HermesStudioRoomAgent; agents: HermesStudioRoomAgent[]; members: HermesStudioRoomMember[] }> {
+    const response = await this.client.request<{ agent?: unknown; agents?: unknown[]; members?: unknown[] }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          profile: input.profile?.trim() || '',
+          name: input.name?.trim() || '',
+          description: input.description?.trim() || '',
+        }),
+      },
+    );
+    const agent = normalizeAgent(response.agent);
+    if (!agent) throw new Error('Hermes collaboration returned an invalid room agent');
+    return {
+      agent,
+      agents: normalizeAgents(response.agents),
+      members: normalizeMembers(response.members),
+    };
   }
 
   async listAgents(roomId: string): Promise<{ agents: HermesStudioRoomAgent[] }> {
@@ -232,17 +553,28 @@ export class HermesStudioGroupChatApi {
     return { agents: detail.agents };
   }
 
-  removeAgent(_roomId: string, _agentId: string): Promise<{ success: boolean; agents: HermesStudioRoomAgent[]; members: HermesStudioRoomMember[] }> {
-    return Promise.reject(unsupported('room member updates'));
+  async removeAgent(roomId: string, agentId: string): Promise<{ success: boolean; agents: HermesStudioRoomAgent[]; members: HermesStudioRoomMember[] }> {
+    const response = await this.client.request<{ success?: boolean; agents?: unknown[]; members?: unknown[] }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/agents/${encodeURIComponent(agentId)}`,
+      { method: 'DELETE' },
+    );
+    return {
+      success: response.success !== false,
+      agents: normalizeAgents(response.agents),
+      members: normalizeMembers(response.members),
+    };
   }
 
-  /** No network connection is created; controller polling owns freshness. */
+  /** Opens the REST+SSE wake bus; the controller's polling owns freshness. */
   async connectRealtime(_options: HermesStudioRealtimeOptions): Promise<HermesStudioGroupChatSocket> {
-    return new RestPollingSocket();
+    const socket = new RestPollingSocket();
+    socket.bind(this.client);
+    return socket;
   }
 
-  async joinRoom(_socket: HermesStudioGroupChatSocket, roomId: string, _identity: { name: string; description?: string; inviteCode?: string }): Promise<HermesStudioGroupChatJoinResult> {
+  async joinRoom(socket: HermesStudioGroupChatSocket, roomId: string, _identity: { name: string; description?: string; inviteCode?: string }): Promise<HermesStudioGroupChatJoinResult> {
     const detail = await this.getRoomDetail(roomId);
+    socket.attachRoomStream?.(detail.room);
     return {
       roomId: detail.room.id,
       roomName: detail.room.name,
@@ -256,13 +588,23 @@ export class HermesStudioGroupChatApi {
       hasMore: detail.hasMore,
       contextStatuses: contextStatusesFromRoom(detail.room),
       pendingApprovals: [],
-      typingUsers: [],
+      typingUsers: (detail.typingUsers || []).map((name) => ({ userId: name, userName: name })),
     };
   }
 
-  async sendRoomMessage(roomId: string, id: string, content: string, profiles: string[] = [], signal?: AbortSignal): Promise<Record<string, unknown>> {
+  async sendRoomMessage(
+    roomId: string,
+    id: string,
+    content: string,
+    profiles: string[] = [],
+    signal?: AbortSignal,
+    mentions?: HermesStudioGroupChatMention[],
+  ): Promise<Record<string, unknown>> {
     const requestId = id.trim() || `room-request-${Date.now().toString(36)}`;
     const turnId = `room-turn-${requestId.replace(/^room-request-/, '')}`;
+    // Mentions own routing when present; an explicit profile list is only
+    // kept for legacy callers that never resolved a mention chip.
+    const useProfiles = mentions?.length ? [] : profiles;
     return this.client.request<Record<string, unknown>>(
       `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/messages`,
       {
@@ -270,7 +612,16 @@ export class HermesStudioGroupChatApi {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           content,
-          ...(profiles.length ? { profiles } : {}),
+          ...(useProfiles.length ? { profiles: useProfiles } : {}),
+          ...(mentions?.length
+            ? {
+              mentions: mentions.map((mention) => ({
+                type: mention.type,
+                participantId: mention.participantId || mention.displayName,
+                displayName: mention.displayName,
+              })),
+            }
+            : {}),
           request_id: requestId,
           turn_id: turnId,
         }),
@@ -285,11 +636,18 @@ export class HermesStudioGroupChatApi {
     id: string,
     content: string,
     _attachments?: unknown[],
-    _mentions?: HermesStudioGroupChatMention[],
+    mentions?: HermesStudioGroupChatMention[],
   ): Promise<string> {
-    const response = await this.sendRoomMessage(roomId, id, content);
+    const response = await this.sendRoomMessage(roomId, id, content, [], undefined, mentions);
     const message = isRecord(response.message) ? response.message : null;
     return stringValue(message?.id, stringValue(response.request_id, id));
+  }
+
+  async retractMessage(roomId: string, messageId: string): Promise<void> {
+    await this.client.request(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/messages/${encodeURIComponent(messageId)}`,
+      { method: 'DELETE' },
+    );
   }
 
   async cancelHostedTurn(roomId: string, turnId: string, reason = 'user_cancelled'): Promise<void> {
@@ -318,28 +676,94 @@ export class HermesStudioGroupChatApi {
     await this.interruptAgent(new RestPollingSocket(), roomId, agentName);
   }
 
+  async listApprovals(roomId: string): Promise<HermesStudioPendingApproval[]> {
+    const response = await this.client.request<{ approvals?: unknown[] }>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/approvals`,
+    );
+    return (Array.isArray(response.approvals) ? response.approvals : [])
+      .map((approval) => normalizeApproval(approval, roomId))
+      .filter((approval): approval is HermesStudioPendingApproval => approval !== null);
+  }
+
   respondApproval(
     _socket: HermesStudioGroupChatSocket,
-    _input: { roomId: string; approvalId: string; choice: HermesStudioPendingApproval['choices'][number] },
+    input: { roomId: string; approvalId: string; choice: HermesStudioPendingApproval['choices'][number] },
   ): Promise<void> {
-    return Promise.reject(unsupported('approval responses'));
+    return this.respondApprovalRest(input.roomId, input.approvalId, input.choice);
   }
 
-  respondApprovalRest(
-    _roomId: string,
-    _approvalId: string,
-    _choice: HermesStudioPendingApproval['choices'][number],
+  async respondApprovalRest(
+    roomId: string,
+    approvalId: string,
+    choice: HermesStudioPendingApproval['choices'][number],
+    context: { profile?: string; expectedRevision?: number; payloadDigest?: string } = {},
   ): Promise<void> {
-    return Promise.reject(unsupported('approval responses'));
+    await this.client.request(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/approvals/${encodeURIComponent(approvalId)}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          profile: context.profile || 'default',
+          expected_revision: context.expectedRevision || 1,
+          decision: choice === 'deny' ? 'reject' : 'approve',
+          payload_digest: context.payloadDigest || '',
+        }),
+      },
+    );
   }
 
-  emitTyping(_socket: HermesStudioGroupChatSocket, _roomId: string): void {}
+  emitTyping(socket: HermesStudioGroupChatSocket, roomId: string): void {
+    void this.postTyping(socket, roomId, 'start');
+  }
 
-  emitStopTyping(_socket: HermesStudioGroupChatSocket, _roomId: string): void {}
+  emitStopTyping(socket: HermesStudioGroupChatSocket, roomId: string): void {
+    void this.postTyping(socket, roomId, 'stop');
+  }
+
+  private async postTyping(
+    _socket: HermesStudioGroupChatSocket,
+    roomId: string,
+    state: 'start' | 'stop',
+  ): Promise<void> {
+    try {
+      await this.client.request(`${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/typing`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state }),
+      });
+    } catch {
+      // Typing presence is best-effort; never surface transport errors for it.
+    }
+  }
 }
 
-function unsupported(feature: string): Error {
-  return new Error(`Hermes collaboration backend does not expose ${feature}`);
+function agentsFromDetail(value: unknown, roomId: string, fallbackProfiles: string[]): HermesStudioRoomAgent[] {
+  const agents = Array.isArray((value as Record<string, unknown>)?.agents)
+    ? normalizeAgents((value as Record<string, unknown>).agents)
+    : [];
+  return agents.length ? agents : agentsFromProfiles(roomId, fallbackProfiles);
+}
+
+function normalizeApproval(value: unknown, roomId: string): HermesStudioPendingApproval | null {
+  if (!isRecord(value)) return null;
+  const approvalId = stringValue(alias(value, 'approval_id', 'id'));
+  if (!approvalId) return null;
+  const choices = ['once', 'session', 'deny'] as const;
+  return {
+    roomId,
+    agentName: stringValue(alias(value, 'subsystem', 'profile')),
+    approvalId,
+    command: stringValue(value.command),
+    description: stringValue(alias(value, 'summary', 'description')),
+    choices: [...choices],
+    allowPermanent: false,
+    isMemoryWrite: stringValue(value.subsystem) === 'memory',
+    requestedAt: numberValue(alias(value, 'created_at', 'createdAt'), Date.now()),
+    profile: stringValue(value.profile, 'default'),
+    expectedRevision: numberValue(alias(value, 'revision', 'expected_revision'), 1) || 1,
+    payloadDigest: stringValue(alias(value, 'payload_digest', 'payloadDigest')),
+  };
 }
 
 function alias(record: Record<string, unknown>, ...keys: string[]): unknown {
@@ -357,16 +781,30 @@ function normalizeRoom(value: unknown): HermesStudioRoomInfo | null {
   const hostedTurns = normalizeHostedTurns(alias(value, 'hosted_turns', 'hostedTurns'));
   const createdAt = numberValue(alias(value, 'createdAt', 'created_at'), 0);
   const lastActiveAt = numberValue(alias(value, 'lastActiveAt', 'updated_at', 'updatedAt'), createdAt);
+  const summaryConfig = isRecord(value.summary_config) ? value.summary_config : {};
+  const settings = isRecord(value.settings) ? value.settings : {};
+  const inviteCodeRaw = alias(value, 'inviteCode', 'invite_code');
   return {
     id: stringValue(value.id),
     name: stringValue(value.name, stringValue(value.id)),
-    inviteCode: null,
+    inviteCode: typeof inviteCodeRaw === 'string' && inviteCodeRaw.trim() ? inviteCodeRaw : null,
     profiles,
     messageCount: numberValue(alias(value, 'messageCount', 'message_count'), 0),
     conversationId: stringValue(alias(value, 'conversationId', 'conversation_id')) || undefined,
     hostedTurns,
-    canManage: true,
-    canMentionAll: false,
+    canManage: value.can_manage !== false,
+    canMentionAll: value.can_mention_all === true || profiles.length > 1,
+    accountGeneration: stringValue(alias(value, 'account_generation', 'accountGeneration')) || undefined,
+    summaryProfile: stringValue(alias(summaryConfig, 'profile')) || undefined,
+    summaryProvider: stringValue(alias(summaryConfig, 'provider')) || undefined,
+    summaryModel: stringValue(alias(summaryConfig, 'model')) || undefined,
+    summaryApiMode: stringValue(alias(summaryConfig, 'api_mode')) || undefined,
+    summaryEveryTurns: numberValue(alias(summaryConfig, 'every_turns'), 0) || undefined,
+    workspace: stringValue(value.workspace) || undefined,
+    allowGuestAgents: numberValue(alias(settings, 'allow_guest_agents'), 0) || undefined,
+    guestAgentApproval: stringValue(alias(settings, 'guest_agent_approval')) || undefined,
+    maxGuestAgentsPerMember: numberValue(alias(settings, 'max_guest_agents_per_member'), 0) || undefined,
+    allowRemoteWorkspaceAccess: numberValue(alias(settings, 'allow_remote_workspace_access'), 0) || undefined,
     createdAt: createdAt || undefined,
     lastActiveAt: lastActiveAt || undefined,
   };
@@ -495,6 +933,7 @@ export function normalizeGroupMessage(value: unknown, fallbackRoomId = ''): Herm
     deliveryStatus: value.deliveryStatus === 'pending' || value.deliveryStatus === 'sent' || value.deliveryStatus === 'failed'
       ? value.deliveryStatus
       : undefined,
+    retracted: meta.retracted === true,
     runItems: Array.isArray(value.runItems)
       ? value.runItems.map((item) => normalizeGroupMessage(item, stringValue(alias(value, 'roomId', 'room_id'), fallbackRoomId))).filter((item): item is HermesStudioGroupChatMessage => item !== null)
       : undefined,
@@ -522,6 +961,9 @@ function normalizeRoomDetail(value: unknown): HermesStudioGroupChatRoomDetail {
     limit: numberValue(alias(record, 'limit', 'page_size'), numberValue(rawRoom.limit, messages.length || 150)),
     hasMore: record.has_more === true || record.hasMore === true
       || rawRoom.has_more === true || rawRoom.hasMore === true,
+    typingUsers: (Array.isArray(record.typing_users) ? record.typing_users : [])
+      .map((entry) => (isRecord(entry) ? stringValue(entry.name) : ''))
+      .filter(Boolean),
   };
 }
 
@@ -533,16 +975,30 @@ function contextStatusesFromRoom(room: HermesStudioRoomInfo): Array<{ agentName:
   });
 }
 
-function emptySummary(roomId: string): HermesStudioRoomSummaryState {
+function normalizeSummaryState(value: unknown, roomId: string): HermesStudioRoomSummaryState {
+  const record = isRecord(value) ? value : {};
   return {
-    roomId,
-    summary: '',
-    summaryThroughMessageId: '',
-    summaryThroughMessageTimestamp: 0,
-    summarizedTurnCount: 0,
-    status: 'idle',
-    version: 0,
-    updatedAt: 0,
-    lastError: null,
+    roomId: stringValue(record.roomId, roomId),
+    summary: stringValue(record.summary),
+    summaryThroughMessageId: stringValue(alias(record, 'summaryThroughMessageId', 'summary_through_message_id')),
+    summaryThroughMessageTimestamp: numberValue(alias(record, 'summaryThroughMessageTimestamp', 'summary_through_message_timestamp'), 0),
+    summarizedTurnCount: numberValue(alias(record, 'summarizedTurnCount', 'summarized_turn_count'), 0),
+    status: stringValue(record.status, 'idle'),
+    version: numberValue(record.version, 0),
+    updatedAt: numberValue(alias(record, 'updatedAt', 'updated_at'), 0),
+    lastError: record.lastError === null || record.lastError === undefined ? null : stringValue(record.lastError) || null,
+  };
+}
+
+function normalizeSummaryAnchor(value: unknown): HermesStudioRoomSummaryAnchor | null {
+  if (!isRecord(value)) return null;
+  const id = stringValue(value.id);
+  if (!id) return null;
+  return {
+    id,
+    timestamp: numberValue(value.timestamp, 0),
+    senderName: stringValue(value.senderName, 'Member'),
+    role: stringValue(value.role) || undefined,
+    content: stringValue(value.content),
   };
 }

@@ -54,8 +54,19 @@ export interface HostedConversationEventFrame {
   snapshotCursor: number;
 }
 
+/** Structural seam so non-cloud consumers (Studio group rooms) reuse the parser. */
+export interface HostedConversationEventSource {
+  openHostedConversationEvents(
+    conversationId: string,
+    cursor: number,
+    signal: AbortSignal,
+    expectedAccountGeneration: string,
+    deadlineMs?: number,
+  ): Promise<Response>;
+}
+
 export async function consumeHostedConversationEvents(
-  api: HermesCloudApi,
+  api: HostedConversationEventSource,
   conversationId: string,
   cursor: number,
   expectedAccountGeneration: string,

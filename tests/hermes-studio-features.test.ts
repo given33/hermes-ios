@@ -51,9 +51,20 @@ test('Hermes Studio group chat uses the collaboration room contract', async () =
     workspace: 'C:/workspace',
   });
   assert.equal(calls[1]?.url, 'https://hermes.test/api/plugins/collaboration/rooms');
+  // The completed collaboration contract carries the room configuration the
+  // Studio settings modal collects at creation time.
   assert.deepEqual(JSON.parse(String(calls[1]?.init?.body)), {
     name: 'New room',
     profiles: ['default'],
+    invite_code: 'ABC123',
+    workspace: 'C:/workspace',
+    summary: {
+      profile: 'default',
+      provider: 'openai',
+      model: 'gpt-5',
+      apiMode: 'chat_completions',
+      everyTurns: 20,
+    },
   });
 });
 
@@ -113,7 +124,8 @@ test('Agent group controller polls room detail and sends without a socket transp
     fileURLToPath(new NodeURL('../src/studio/agent-group/useAgentGroupChatController.ts', import.meta.url)),
     'utf8',
   );
-  assert.match(source, /sendRoomMessage\(roomId, id, content, profiles\)/);
+  // Mention-aware sends route server-side; broadcast sends keep the roster.
+  assert.match(source, /sendRoomMessage\(roomId, id, content, profiles, undefined, resolvedMentions\)/);
   assert.match(source, /setInterval\(\(\) =>/);
   assert.match(source, /2_500/);
   assert.match(source, /roomActivityTimestamp\(room, existing\.messages\)/);
@@ -463,3 +475,108 @@ function testClient(
     },
   );
 }
+
+test('Agent group send routes structured mentions and omits the broadcast roster', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const client = testClient(calls, () => ({ request_id: 'm-1', message: { id: 'm-1' } }));
+  const api = new HermesStudioGroupChatApi(client);
+
+  await api.sendRoomMessage('room-1', 'm-1', '@pc-worker 请检查部署', [], undefined, [
+    { type: 'agent', participantId: 'pc-worker', displayName: 'PC Worker' },
+  ]);
+  const body = JSON.parse(String(calls[0]?.init?.body));
+  assert.equal(body.profiles, undefined);
+  assert.deepEqual(body.mentions, [
+    { type: 'agent', participantId: 'pc-worker', displayName: 'PC Worker' },
+  ]);
+
+  await api.sendRoomMessage('room-1', 'm-2', '广播一条', ['default']);
+  const broadcast = JSON.parse(String(calls[1]?.init?.body));
+  assert.deepEqual(broadcast.profiles, ['default']);
+  assert.equal(broadcast.mentions, undefined);
+});
+
+test('Agent group retraction, typing, join, and roster calls hit the completed room API', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const client = testClient(calls, (url) => url.endsWith('/rooms/room-1/agents')
+    ? { agent: { id: 'a-1', profile: 'reviewer', name: '评审员' } }
+    : { success: true, ok: true, room: { id: 'room-1', name: 'R', profiles: ['default'] }, agents: [], members: [] });
+  const api = new HermesStudioGroupChatApi(client);
+
+  await api.retractMessage('room-1', 'msg-9');
+  assert.equal(calls[0]?.url, 'https://hermes.test/api/plugins/collaboration/rooms/room-1/messages/msg-9');
+  assert.equal(calls[0]?.init?.method, 'DELETE');
+
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+  api.emitTyping(socket, 'room-1');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const typingCall = calls.find((call) => call.url.endsWith('/rooms/room-1/typing'));
+  assert.ok(typingCall, 'typing POST recorded');
+  assert.equal(JSON.parse(String(typingCall?.init?.body)).state, 'start');
+  socket.disconnect();
+
+  await api.joinRoomByCode('JOIN123');
+  const joinCall = calls.find((call) => call.url.endsWith('/rooms/join'));
+  assert.deepEqual(JSON.parse(String(joinCall?.init?.body)), { invite_code: 'JOIN123' });
+
+  await api.addAgent('room-1', { profile: 'reviewer', name: '评审员' });
+  const addCall = calls.find((call) => call.url.endsWith('/rooms/room-1/agents') && call.init?.method === 'POST');
+  assert.deepEqual(JSON.parse(String(addCall?.init?.body)), { profile: 'reviewer', name: '评审员', description: '' });
+
+  await api.updateInviteCode('room-1', 'NEWCODE1');
+  const codeCall = calls.find((call) => call.url.endsWith('/rooms/room-1/invite-code'));
+  assert.deepEqual(JSON.parse(String(codeCall?.init?.body)), { invite_code: 'NEWCODE1' });
+});
+
+test('Agent group socket streams hosted-event frames as message events', async () => {
+  const envelope = {
+    account_generation: 'gen-1',
+    conversation: {
+      id: 'chat_room_1',
+      profile: 'default',
+      title: 'R',
+      account_generation: 'gen-1',
+      messages: [
+        { id: 'm-1', role: 'user', name: 'User', content: 'hello', created_at: 1 },
+        { id: 'm-2', role: 'assistant', name: 'default', content: 'done', created_at: 2 },
+      ],
+    },
+    cursor: 5,
+    events: [],
+    has_gap: false,
+    min_cursor: 1,
+    reset_cursor: false,
+    snapshot_cursor: 5,
+  };
+  const frame = `id: 5\nevent: conversation\ndata: ${JSON.stringify(envelope)}\n\n`;
+  const sseResponse = () => new Response(frame, {
+    headers: { 'Content-Type': 'text/event-stream' },
+    status: 200,
+  });
+  const sseClient = new HermesApiClient(
+    'https://hermes.test',
+    'test-token',
+    async () => sseResponse(),
+    sseResponse as unknown as typeof fetch,
+  );
+  const api = new HermesStudioGroupChatApi(sseClient);
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+
+  const delivered: Array<Record<string, unknown>> = [];
+  const wakes: string[] = [];
+  socket.on('message', (payload: Record<string, unknown>) => delivered.push(payload));
+  socket.on('room_updated', (payload: { roomId?: string }) => wakes.push(String(payload?.roomId)));
+  socket.attachRoomStream?.({
+    id: 'room-1',
+    conversationId: 'chat_room_1',
+    accountGeneration: 'gen-1',
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  socket.disconnect();
+
+  assert.ok(delivered.length >= 2, `expected streamed messages, got ${delivered.length}`);
+  assert.deepEqual(delivered.map((message) => message.id).slice(0, 2), ['m-1', 'm-2']);
+  assert.ok(delivered.every((message) => message.roomId === 'room-1'));
+  assert.ok(wakes.includes('room-1'));
+});
