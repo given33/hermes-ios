@@ -1255,7 +1255,7 @@ export function useAgentGroupChatController({
       notify(message);
     }
   }, [emitStopTyping, identity.name, isChinese, notify, patchSnapshot, persistCurrentRoom, setDraft, stableUserId, studioApi]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- inner body of the guarded sendMessage
+
 
 
   const sendMessage = useCallback(async (
@@ -1276,7 +1276,7 @@ export function useAgentGroupChatController({
     } finally {
       sendingRoomIdsRef.current.delete(roomId);
     }
-  }, []);
+  }, [sendMessageInner]);
 
   const retryFailedMessage = useCallback(async (roomId: string, messageId: string, content: string) => {
     if (!roomId || !messageId || !content.trim()) return;
