@@ -16,6 +16,7 @@ import type {
   OptimisticPendingTurn,
 } from '../../api/conversation-local-store';
 import { replaceCachedConversationSnapshot } from '../../api/conversation-local-store';
+import { fetchSessionEntriesToLeaf } from './fetchSessionEntriesToLeaf';
 import { reconcileConversationSessionEntries } from '../../api/conversation-session-entries';
 import {
   captureConversationDeletionRevision,
@@ -434,12 +435,14 @@ export function useConversationSnapshotController({
     };
     const [result, initialEntries] = await Promise.all([
       cloudApi.getConversation(conversationId, signal),
-      cloudApi.getConversationSessionEntries(
+      // Loop full pages to the leaf so a first open of a >2000-entry
+      // conversation renders its complete history/Todos immediately.
+      fetchSessionEntriesToLeaf(
+        cloudApi,
         conversationId,
         previousEntryState.cursor,
-        2_000,
         signal,
-      ).catch(() => null),
+      ),
     ]);
     if (
       captureConversationDeletionRevision(cacheOwner) !== deletionRevision
@@ -467,12 +470,7 @@ export function useConversationSnapshotController({
         )
       )
     ) {
-      entries = await cloudApi.getConversationSessionEntries(
-        conversationId,
-        0,
-        2_000,
-        signal,
-      );
+      entries = await fetchSessionEntriesToLeaf(cloudApi, conversationId, 0, signal);
       if (
         captureConversationDeletionRevision(cacheOwner) !== deletionRevision
         || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)

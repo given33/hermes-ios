@@ -580,3 +580,121 @@ test('Agent group socket streams hosted-event frames as message events', async (
   assert.ok(delivered.every((message) => message.roomId === 'room-1'));
   assert.ok(wakes.includes('room-1'));
 });
+
+test('remote deletion tombstones drop cached conversations instead of preserving them', async () => {
+  const { synchronizeConversationCache } = await import('../src/api/conversation-cache-sync');
+  const { HermesApiClient } = await import('../src/api/HermesApiClient');
+  const calls: string[] = [];
+  const summary = (id: string) => ({
+    id,
+    title: id,
+    profile: 'default',
+    message_count: 0,
+    messages: [],
+    updated_at: 1,
+  });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'test-token',
+    async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith('/single/conversations/' + encodeURIComponent('kept-1'))) {
+        return new Response(JSON.stringify({ conversation: {
+          ...summary('kept-1'),
+          messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1 }],
+          message_count: 1,
+        } }), { headers: { 'Content-Type': 'application/json' }, status: 200 });
+      }
+      if (url.endsWith('/single/conversations')) {
+        return new Response(JSON.stringify({
+          conversations: [summary('kept-1')],
+          deleted: ['deleted-elsewhere'],
+        }), { headers: { 'Content-Type': 'application/json' }, status: 200 });
+      }
+      return new Response(JSON.stringify({ conversation: {
+        ...summary('kept-1'),
+        messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1 }],
+        message_count: 1,
+      } }), { headers: { 'Content-Type': 'application/json' }, status: 200 });
+    },
+  );
+  const written: unknown[] = [];
+  const store = {
+    beginSynchronization: () => 1,
+    read: async () => ({
+      version: 1,
+      owner: 'owner',
+      activeConversationId: 'deleted-elsewhere',
+      conversations: [
+        { ...summary('deleted-elsewhere'), messages: [{ id: 'old', role: 'user', content: 'x', created_at: 1 }] },
+        { ...summary('kept-1') },
+      ],
+      syncedAt: 0,
+    }),
+    readPendingConversationDeletionIds: async () => new Set<string>(),
+    writeSynchronized: async (_owner: string, _generation: number, conversations: unknown) => {
+      written.push(conversations);
+      return true;
+    },
+  };
+  // Minimal API stand-in: importing the real facade pulls react-native into
+  // the node test runtime. The sync contract only needs these two calls.
+  const api = {
+    getUnifiedConversations: async () => {
+      const response = await client.request<{ conversations: unknown[]; deleted?: string[] }>(
+        '/api/plugins/collaboration/single/conversations',
+      );
+      return {
+        conversations: response.conversations as never[],
+        deleted: response.deleted || [],
+      };
+    },
+    getConversation: async (id: string) => {
+      const response = await client.request<{ conversation: unknown }>(
+        `/api/plugins/collaboration/single/conversations/${encodeURIComponent(id)}`,
+      );
+      return { conversation: response.conversation };
+    },
+  };
+  const snapshot = await synchronizeConversationCache(
+    api as unknown as Parameters<typeof synchronizeConversationCache>[0],
+    store as unknown as Parameters<typeof synchronizeConversationCache>[1],
+    'owner',
+  );
+  const ids = snapshot.conversations.map((conversation: { id: string }) => conversation.id);
+  assert.ok(!ids.includes('deleted-elsewhere'), 'remotely deleted conversation must be dropped');
+  assert.ok(ids.includes('kept-1'), 'live conversation must survive');
+  assert.equal(snapshot.activeConversationId, 'kept-1', 'active falls back after deletion');
+},);
+
+test('session entries paginate to the leaf on full pages', async () => {
+  const { fetchSessionEntriesToLeaf, SESSION_ENTRIES_PAGE_SIZE } = await import('../src/studio/chat/fetchSessionEntriesToLeaf');
+  const requestedCursors: number[] = [];
+  let page = 0;
+  const pages = [
+    { cursor: 2000, entries: Array.from({ length: SESSION_ENTRIES_PAGE_SIZE }, (_, i) => ({ cursor: i + 1 })) },
+    { cursor: 3000, entries: Array.from({ length: SESSION_ENTRIES_PAGE_SIZE }, (_, i) => ({ cursor: 2001 + i })) },
+    { cursor: 3050, entries: Array.from({ length: 50 }, (_, i) => ({ cursor: 4001 + i })) },
+  ];
+  const cloudApi = {
+    getConversationSessionEntries: async (_id: string, cursor: number) => {
+      requestedCursors.push(cursor);
+      const response = pages[page] ?? pages[pages.length - 1];
+      page += 1;
+      return {
+        schema_version: 'hermes.session-entry.v1',
+        account_generation: 'gen',
+        cursor: response.cursor,
+        reset_cursor: false,
+        reset_reason: '',
+        leaf_entry_id: '',
+        entries: response.entries,
+      };
+    },
+  };
+  const result = await fetchSessionEntriesToLeaf(cloudApi as never, 'chat-1', 0);
+  assert.deepEqual(requestedCursors, [0, 2000, 3000]);
+  assert.equal(result?.entries.length, SESSION_ENTRIES_PAGE_SIZE * 2 + 50);
+  assert.equal(result?.cursor, 3050);
+});

@@ -25,7 +25,11 @@ export class HermesConversationsCloudApi {
   constructor(private readonly transport: HermesCloudTransport) {}
 
   getConversations(signal?: AbortSignal) {
-    return this.transport.request<{ conversations: SingleConversation[] }>(
+    return this.transport.request<{
+      conversations: SingleConversation[];
+      /** Newest-first ids deleted on the server (deletion tombstones). */
+      deleted?: string[];
+    }>(
       `${COLLABORATION}/single/conversations`,
       { signal },
     );
@@ -33,9 +37,16 @@ export class HermesConversationsCloudApi {
 
   async getUnifiedConversations(_profile = 'default', signal?: AbortSignal) {
     // Server profile history is process-wide on older deployments. Account
-    // conversations are the only safe source for this signed-in surface.
+    // conversations are the only source for this signed-in surface. The
+    // deleted tombstone set rides along so caches can drop remotely deleted
+    // conversations instead of preserving them forever.
     const cloud = await this.getConversations(signal);
-    return { conversations: cloud.conversations };
+    return {
+      conversations: cloud.conversations,
+      deleted: Array.isArray(cloud.deleted)
+        ? cloud.deleted.filter((id): id is string => typeof id === 'string' && Boolean(id))
+        : [],
+    };
   }
 
   getConversation(id: string, signal?: AbortSignal) {

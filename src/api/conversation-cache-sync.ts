@@ -245,11 +245,19 @@ export async function synchronizeConversationCache(
   const remote = await api.getUnifiedConversations(profile);
   const pendingDeletionIds = await store.readPendingConversationDeletionIds?.(owner)
     || new Set<string>();
+  // Server deletion tombstones: the list response carries ids deleted on
+  // ANOTHER device. Dropping them here is authoritative — preserveLocalOnly
+  // must keep offline creations (server never saw the id), never resurrect
+  // conversations the server explicitly deleted.
+  const remoteDeletedIds = new Set(
+    (remote.deleted || []).filter((id) => !pendingDeletionIds.has(id)),
+  );
   // A process can die after the durable delete intent is written but before
   // the row-level cache prune finishes. Filter both sides before reconciliation
   // so preserveLocalOnly cannot resurrect that tombstoned row on restart.
   const localConversations = (cached?.conversations || [])
-    .filter(({ id }) => !pendingDeletionIds.has(id));
+    .filter(({ id }) => !pendingDeletionIds.has(id))
+    .filter(({ id }) => !remoteDeletedIds.has(id));
   const reconciliation = reconcileConversationCache(
     localConversations,
     remote.conversations.filter(({ id }) => !pendingDeletionIds.has(id)),
@@ -275,7 +283,9 @@ export async function synchronizeConversationCache(
     },
   );
   const conversations = mergeDownloadedConversations(
-    reconciliation.conversations.filter(({ id }) => !missingIds.has(id)),
+    reconciliation.conversations
+      .filter(({ id }) => !missingIds.has(id))
+      .filter(({ id }) => !remoteDeletedIds.has(id)),
     downloaded.filter((conversation): conversation is SingleConversation => conversation !== null),
   );
   const activeConversationId = conversations.some(
