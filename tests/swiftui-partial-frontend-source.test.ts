@@ -112,6 +112,12 @@ test('signed iOS builds keep native route surfaces while the JS sidebar remains 
   );
   assert.doesNotMatch(routes, /case \.chat:[\s\S]*HermesChatPage\(/);
   assert.match(preview, /route\.routeId !== 'chat'/);
+  assert.doesNotMatch(
+    preview,
+    /usesNativeSwiftUIRoute[\s\S]{0,500}route\.routeId !== 'workflows'/,
+  );
+  assert.match(read('src/api/cloud/workflows.ts'), /\/api\/plugins\/workflows/);
+  assert.match(read('src/app/useHermesSwiftUIRouteData.ts'), /routeId === 'workflows'/);
   assert.match(preview, /<ChatPreviewPage/);
   assert.match(preview, /<ChatPreviewPage[\s\S]*profile=\{profile\}/);
   const chat = [

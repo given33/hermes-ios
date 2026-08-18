@@ -599,8 +599,7 @@ export function NativeShell({
                     (item) => item.path === route.path,
                   )?.label ?? route.path;
                   const chatRoute = route.routeId === 'chat';
-                  const jsParityRoute = route.routeId === 'agent-group'
-                    || route.routeId === 'workflows';
+                  const jsParityRoute = route.routeId === 'agent-group';
                   const swiftUIRoute = nativeRouteChrome
                     && !jsParityRoute
                     && route.routeId !== 'chat'

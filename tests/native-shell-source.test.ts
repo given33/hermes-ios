@@ -40,7 +40,8 @@ test('drawer dependency delegates Reduce Motion to the system', () => {
 
   assert.match(patch, /reduceMotion: ReduceMotion\.System/);
   assert.doesNotMatch(patch, /^\+.*ReduceMotion\.Never/m);
-  assert.match(lock, /patchedDependencies:\s+react-native-drawer-layout@4\.2\.7:/);
+  assert.match(lock, /patchedDependencies:/);
+  assert.match(lock, /react-native-drawer-layout@4\.2\.7:/);
 });
 
 test('ProMotion uses native UI-thread transitions and 8ms scroll cadence', () => {

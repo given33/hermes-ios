@@ -34,11 +34,18 @@ export class HermesStudioWorkflowSocketApi {
     this.socketEpoch += 1;
     this.desiredSubscriptions.clear();
     this.socket?.disconnect();
-    const token = await this.client.getAccessTokenForRealtime();
     const endpoint = new URL('/workflow', `${this.client.baseUrl}/`).toString();
     const socket = io(endpoint, {
       autoConnect: false,
-      auth: { token },
+      // Socket.IO invokes an auth callback for every namespace handshake,
+      // including reconnects. Fetching here avoids the reconnect_attempt
+      // race where the manager starts a handshake before an async token
+      // refresh has completed.
+      auth: (callback) => {
+        void this.client.getAccessTokenForRealtime()
+          .then((token) => callback({ token }))
+          .catch(() => callback({ token: '' }));
+      },
       query: { profile },
       transports: ['websocket', 'polling'],
       reconnection: true,
@@ -47,24 +54,13 @@ export class HermesStudioWorkflowSocketApi {
       reconnectionDelayMax: 30_000,
       timeout: 30_000,
     });
-    // `reconnect_attempt` belongs to Socket.IO's Manager, not the Socket.
-    // Updating the Socket listener silently did nothing, so a long-lived
-    // mobile session retried with an expired bearer token.
-    socket.io.on('reconnect_attempt', () => {
-      void this.client.getAccessTokenForRealtime()
-        .then((nextToken) => {
-          const currentAuth = socket.auth && typeof socket.auth === 'object' ? socket.auth : {};
-          socket.auth = { ...currentAuth, token: nextToken };
-        })
-        .catch(() => undefined);
-    });
     // Socket.IO creates a new server-side subscription for every transport
     // connection. Re-apply the official workflow subscription after the
     // socket's `connect` event so a mobile network handoff cannot leave the
     // page silently stuck on its last status snapshot.
     socket.on('connect', () => {
       if (this.socket !== socket) return;
-      void this.replaySubscriptions(socket);
+      void this.replaySubscriptions(socket).catch(() => undefined);
     });
     this.socket = socket;
     this.socketProfile = profile;
@@ -169,11 +165,21 @@ export class HermesStudioWorkflowSocketApi {
     const replay = (async () => {
       for (const subscription of this.desiredSubscriptions.values()) {
         if (this.socket !== socket || this.socketEpoch !== epoch || !socket.connected) return;
-        await new Promise<void>((resolve) => {
+        await new Promise<void>((resolve, reject) => {
           socket.timeout(30_000).emit(
             'workflow.status.subscribe',
             subscription.workflowId ? { workflowId: subscription.workflowId } : {},
-            (error: Error | null) => resolve(),
+            (error: Error | null, response?: WorkflowSocketAck<unknown>) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              if (!response?.ok) {
+                reject(new Error(response?.error || 'workflow.status.subscribe failed during replay'));
+                return;
+              }
+              resolve();
+            },
           );
         });
       }

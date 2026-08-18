@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { AppState } from 'react-native';
 
 import type { HermesApiClient } from '../../api/HermesApiClient';
 import type {
@@ -21,6 +22,7 @@ import {
   captureConversationStorageEpoch,
   isConversationStorageEpochCurrent,
 } from '../../api/conversation-storage-coordinator';
+import { startForegroundReplayLifecycle } from '../../api/foreground-replay-lifecycle';
 import type {
   HermesStudioGroupChatMessage,
   HermesStudioGroupChatJoinResult,
@@ -1560,10 +1562,6 @@ export function useAgentGroupChatController({
       // history even before the user switches into the Studio mode. This is
       // local-only hydration; it does not open a network channel.
       void hydrateCachedRooms();
-      // Deletion replay is independent of the visible mode. A room removed
-      // from the unified history must still reach the cloud while the user is
-      // browsing ordinary chat or a native route.
-      void conversationDeleteReplayService?.replay().catch(() => undefined);
       return;
     }
     void (async () => {
@@ -1574,6 +1572,18 @@ export function useAgentGroupChatController({
       if (firstRoomId) selectRoom(firstRoomId);
     })();
   }, [applyRoomList, conversationDeleteReplayService, enabled, fixtureMode, hydrateCachedRooms, refresh, selectRoom]);
+
+  // Room tombstones must keep retrying even when this controller stays
+  // mounted behind the ordinary chat route. AppState wake-up is important on
+  // iOS because background timers are suspended and may never fire again.
+  useEffect(() => {
+    if (!conversationDeleteReplayService || fixtureMode) return undefined;
+    return startForegroundReplayLifecycle({
+      getAppState: () => AppState.currentState,
+      replay: () => conversationDeleteReplayService.replay(),
+      subscribe: (listener) => AppState.addEventListener('change', listener),
+    }).stop;
+  }, [conversationDeleteReplayService, fixtureMode]);
 
   // The collaboration plugin exposes REST snapshots and hosted-turn state,
   // not a Socket.IO namespace. Poll the active room while Studio is visible so

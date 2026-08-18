@@ -85,7 +85,8 @@ test('Expo Go loads the native authenticated surface, not the Web fixture previe
   assert.match(nativeApp, /<AuthProvider>/);
   assert.match(nativeApp, /isFrontendPreviewRuntime/);
   assert.match(previewApp, /isFrontendPreviewRuntime/);
-  assert.match(shell, /jsParityRoute[\s\S]*route\.routeId === 'workflows'/);
+  assert.match(shell, /jsParityRoute = route\.routeId === 'agent-group'/);
+  assert.doesNotMatch(shell, /jsParityRoute[\s\S]{0,120}route\.routeId === 'workflows'/);
   assert.match(shell, /headerShown: !chatRoute && !swiftUIRoute && !jsParityRoute/);
   // The group surface supports two placements: embedded in the chat page with
   // the rail hidden (showRoomRail=false) and the sidebar Agent Rooms page

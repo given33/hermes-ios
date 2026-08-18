@@ -212,6 +212,16 @@ test('Hermes Studio workflow wrapper preserves latest update, run, approval, imp
   assert.equal(calls.at(-1)?.url, 'https://hermes.test/api/hermes/workflows/wf-1/runs/run-1/stop');
 });
 
+test('optional Hermes Studio workflow capability reports a missing companion service', async () => {
+  const client = new HermesApiClient('https://hermes.test', 'token', async () => new Response(
+    JSON.stringify({ detail: 'Not Found' }),
+    { headers: { 'Content-Type': 'application/json' }, status: 404 },
+  ));
+  const api = new HermesStudioWorkflowsApi(client);
+
+  assert.deepEqual(await api.probe('default'), { available: false, workflows: [] });
+});
+
 test('Hermes Studio workflow socket replays subscriptions after Socket.IO reconnects', () => {
   const source = readFileSync(
     fileURLToPath(new NodeURL('../src/api/hermes-studio/workflow-socket.ts', import.meta.url)),
@@ -221,6 +231,9 @@ test('Hermes Studio workflow socket replays subscriptions after Socket.IO reconn
   assert.match(source, /replaySubscriptions\(socket\)/);
   assert.match(source, /desiredSubscriptions/);
   assert.match(source, /workflow\.status\.subscribe/);
+  assert.match(source, /auth: \(callback\)/);
+  assert.doesNotMatch(source, /socket\.io\.on\('reconnect_attempt'/);
+  assert.match(source, /response\?\.ok/);
 });
 
 test('Agent group event updates are room-scoped and stream deltas are idempotent', () => {

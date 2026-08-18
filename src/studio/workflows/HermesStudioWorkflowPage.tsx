@@ -140,6 +140,7 @@ export function HermesStudioWorkflowPage({
   const [importing, setImporting] = useState(false);
   const [compactDetailOpen, setCompactDetailOpen] = useState(false);
   const [schedulesOpen, setSchedulesOpen] = useState(false);
+  const [workflowCapability, setWorkflowCapability] = useState<'unknown' | 'available' | 'missing'>('unknown');
 
   const selectedWorkflow = workflows.find((workflow) => workflow.id === selectedId) || null;
 
@@ -165,6 +166,7 @@ export function HermesStudioWorkflowPage({
   const refresh = useCallback(async () => {
     if (!api) {
       const fixture = fixtureWorkflows(profile);
+      setWorkflowCapability('available');
       setWorkflows(fixture);
       setSelectedId((current) => fixture.some((workflow) => workflow.id === current) ? current : fixture[0]?.id || '');
       setError(null);
@@ -172,7 +174,18 @@ export function HermesStudioWorkflowPage({
     }
     setLoading(true);
     try {
-      const next = await api.workflows.list(profile);
+      const capability = await api.workflows.probe(profile);
+      if (!capability.available) {
+        setWorkflowCapability('missing');
+        setWorkflows([]);
+        setSelectedId('');
+        setError(isChinese
+          ? 'Hermes Studio 工作流服务未部署'
+          : 'Hermes Studio workflow service is not deployed');
+        return;
+      }
+      const next = capability.workflows;
+      setWorkflowCapability('available');
       setWorkflows(next);
       setSelectedId((current) => next.some((workflow) => workflow.id === current) ? current : next[0]?.id || '');
       setError(null);
@@ -198,7 +211,7 @@ export function HermesStudioWorkflowPage({
   }, [api, refreshRuns, selectedId]);
 
   useEffect(() => {
-    if (!api) return undefined;
+    if (!api || workflowCapability !== 'available') return undefined;
     let disposed = false;
     let removeStatusListener: () => void = () => undefined;
     let removeErrorListener: () => void = () => undefined;
@@ -233,7 +246,7 @@ export function HermesStudioWorkflowPage({
       removeErrorListener();
       api.workflowSocket.disconnect();
     };
-  }, [api, isChinese, profile, selectedId]);
+  }, [api, isChinese, profile, selectedId, workflowCapability]);
 
   const createWorkflow = useCallback(async () => {
     const name = workflowName.trim();
@@ -648,6 +661,49 @@ export function HermesStudioWorkflowPage({
       notify(message);
     }
   }, [api, isChinese, notify, workflows]);
+
+  if (api && workflowCapability !== 'available') {
+    const capabilityMissing = workflowCapability === 'missing';
+    return (
+      <View style={[styles.root, { backgroundColor: tokens.colors.background, paddingBottom: insets.bottom }]}>
+        <View style={[styles.header, compact && styles.headerCompact, { borderBottomColor: tokens.colors.border }]}>
+          <View style={styles.headerTitleRow}>
+            <IOSPressable accessibilityLabel={isChinese ? '返回导航' : 'Open navigation'} onPress={onOpenNavigation} style={styles.navigationButton}>
+              <Menu color={tokens.colors.foreground} size={20} />
+            </IOSPressable>
+            <StudioOfficialAvatar size={compact ? 25 : 30} />
+            <View style={styles.headerTitleCopy}>
+              <Text numberOfLines={1} style={[styles.title, { color: tokens.colors.foreground }]}>{isChinese ? 'Hermes Studio 工作流' : 'Hermes Studio workflows'}</Text>
+              <Text numberOfLines={1} style={[styles.subtitle, { color: tokens.colors.textTertiary }]}>
+                {capabilityMissing
+                  ? isChinese ? '服务未连接' : 'Service unavailable'
+                  : isChinese ? '正在检测服务' : 'Checking service'}
+              </Text>
+            </View>
+          </View>
+          <IOSPressable accessibilityLabel={isChinese ? '重新检测工作流服务' : 'Retry workflow service check'} onPress={() => { setWorkflowCapability('unknown'); void refresh(); }} style={styles.headerIconButton}>
+            <RefreshCw color={tokens.colors.foreground} size={18} />
+          </IOSPressable>
+        </View>
+        <View style={styles.unavailableState}>
+          {capabilityMissing ? <CircleAlert color={tokens.colors.warning} size={34} /> : <RefreshCw color={tokens.colors.textSecondary} size={28} />}
+          <Text style={[styles.detailTitle, { color: tokens.colors.foreground, textAlign: 'center' }]}>
+            {capabilityMissing
+              ? isChinese ? 'Hermes Studio 工作流服务未部署' : 'Hermes Studio workflow service is not deployed'
+              : isChinese ? '正在检测 Hermes Studio 工作流服务' : 'Checking Hermes Studio workflow service'}
+          </Text>
+          {capabilityMissing ? (
+            <>
+              <Text style={[styles.emptyDetailText, { color: tokens.colors.textSecondary }]}>{isChinese ? '当前 Hermes Agent 没有提供 /api/hermes/workflows。请先部署 Hermes Studio 服务，再重试。' : 'This Hermes Agent does not provide /api/hermes/workflows. Deploy the Hermes Studio service, then retry.'}</Text>
+              <NativeButton onPress={() => { setWorkflowCapability('unknown'); void refresh(); }} prefix={<RefreshCw />}>
+                {isChinese ? '重新检测' : 'Retry detection'}
+              </NativeButton>
+            </>
+          ) : null}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.root, { backgroundColor: tokens.colors.background }]}> 
@@ -1460,6 +1516,7 @@ const styles = {
   noRuns: { fontSize: 11, paddingVertical: 10 },
   emptyDetail: { alignItems: 'center' as const, justifyContent: 'center' as const, minHeight: 320, padding: 28 },
   emptyDetailText: { fontSize: 12, marginTop: 6, textAlign: 'center' as const },
+  unavailableState: { alignItems: 'center' as const, flex: 1, gap: 12, justifyContent: 'center' as const, padding: 28 },
   modalInput: { borderRadius: 8, borderWidth: 1, fontSize: 13, marginTop: 10, minHeight: 40, paddingHorizontal: 10, paddingVertical: 8 },
   modalInputLarge: { minHeight: 100, textAlignVertical: 'top' as const },
   nodeEditorGrid: { flexDirection: 'row' as const, gap: 7 },

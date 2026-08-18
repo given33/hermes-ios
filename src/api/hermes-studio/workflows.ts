@@ -1,4 +1,4 @@
-import type { HermesApiClient } from '../HermesApiClient';
+import { HermesApiError, type HermesApiClient } from '../HermesApiClient';
 import {
   isRecord,
   numberValue,
@@ -33,9 +33,29 @@ export interface HermesStudioWorkflowUpdateInput {
   viewport?: HermesStudioWorkflowViewport;
 }
 
+export type HermesStudioWorkflowCapability =
+  | { available: true; workflows: HermesStudioWorkflowRecord[] }
+  | { available: false; workflows: [] };
+
 /** Native client wrapper for Hermes Studio's workflow contract. */
 export class HermesStudioWorkflowsApi {
   constructor(private readonly client: HermesApiClient) {}
+
+  /**
+   * Probe the optional external Studio service without turning an expected
+   * 404/405 into a generic transport failure. The bundled Hermes workflow
+   * plugin uses a different contract and is surfaced by the native route.
+   */
+  async probe(profile?: string | null): Promise<HermesStudioWorkflowCapability> {
+    try {
+      return { available: true, workflows: await this.list(profile) };
+    } catch (reason) {
+      if (reason instanceof HermesApiError && (reason.status === 404 || reason.status === 405)) {
+        return { available: false, workflows: [] };
+      }
+      throw reason;
+    }
+  }
 
   async list(profile?: string | null): Promise<HermesStudioWorkflowRecord[]> {
     const response = await this.client.request<{ workflows?: unknown[] }>('/api/hermes/workflows', {

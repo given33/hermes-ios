@@ -486,8 +486,7 @@ function PreviewRoute({
     && route.routeId !== 'memory'
     && route.routeId !== 'account'
     && route.routeId !== 'chat'
-    && route.routeId !== 'agent-group'
-    && route.routeId !== 'workflows';
+    && route.routeId !== 'agent-group';
   useEffect(() => {
     if (usesNativeSwiftUIRoute) return undefined;
     const frame = requestAnimationFrame(() => reportRouteReady(route.path));
