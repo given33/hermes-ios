@@ -228,6 +228,11 @@ export class ConversationCacheRepository {
         expectedDeletionRevision !== undefined
         && captureConversationDeletionRevision(normalizedOwner) !== expectedDeletionRevision
       ) return;
+      // An upsert is fresh local truth: advancing the synchronization
+      // generation here prevents a stale in-flight network sync (started
+      // before this write) from overwriting the just-persisted transcript
+      // with its older snapshot when it lands.
+      advanceConversationSynchronization(normalizedOwner);
       const current = await this.readSnapshotForMutation(normalizedOwner);
       const existing = current?.conversations.find(({ id }) => id === conversation.id);
       const nextConversation = existing

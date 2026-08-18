@@ -615,10 +615,18 @@ export function collaborationMessageToView(
         ?? meta.context_used_percent
         ?? meta.context_percent
         ?? meta.context_usage_percent;
-      if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) return raw;
+      // Producers disagree on units: ratios (0.87), percents (87), and the
+      // occasional 0..1 fraction with trailing noise. Normalize everything
+      // to a 0..100 percent so the ring never shows 1% for 0.87 or 100% for
+      // a bare token count style integer below the ratio threshold.
+      const normalize = (value: number): number | undefined => (
+        Number.isFinite(value) && value >= 0
+          ? Math.min(100, value <= 1 ? value * 100 : value)
+          : undefined
+      );
+      if (typeof raw === 'number') return normalize(raw);
       if (typeof raw === 'string' && raw.trim() && Number.isFinite(Number(raw))) {
-        const parsed = Number(raw);
-        if (parsed >= 0) return parsed;
+        return normalize(Number(raw));
       }
       return undefined;
     })(),

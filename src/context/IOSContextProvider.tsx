@@ -1592,11 +1592,13 @@ async function drainPendingAgentTriggers(
   deviceId: string,
 ): Promise<void> {
   const pending = await runCurrent(() => HermesIOSContext.readPendingAgentTriggers());
+  let droppedUnboundShares = 0;
   for (const trigger of pending.slice(0, 10)) {
     const requestID = typeof trigger.requestID === 'string' ? trigger.requestID.trim() : '';
     if (requestID && !queuedIntentMatchesOwner(trigger, ownerScope, accountGeneration)) {
       // A queue item from a previous account (or an old unscoped build) is
       // consumed and dropped; it must never reuse its sessionID in this one.
+      if (!trigger.ownerScope && !trigger.accountGeneration) droppedUnboundShares += 1;
       await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID)).catch(() => false);
       continue;
     }
@@ -1686,6 +1688,7 @@ async function drainPendingAgentTriggers(
       updated_at: createdAt,
     };
     const uploadedAttachments: Array<Record<string, unknown>> = [];
+    const uploadedAttachmentOriginals: string[] = [];
     const attachmentEntries = Array.isArray(runtimeAttachments)
       ? runtimeAttachments.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
       : [];
@@ -1721,9 +1724,10 @@ async function drainPendingAgentTriggers(
             if (record.attachment && typeof record.attachment === 'object') uploadedAttachments.push(record.attachment as Record<string, unknown>);
           }
           await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI));
-          if (filename) {
-            await runCurrent(() => HermesIOSContext.deleteAgentShareAttachment?.(filename) ?? Promise.resolve(false));
-          }
+          // The ORIGINAL share copy stays on disk until the hosted turn is
+          // durably accepted: an enqueue failure below retries the trigger,
+          // and that retry must still find its attachments.
+          if (filename) uploadedAttachmentOriginals.push(filename);
         } catch {
           if (plaintextURI) {
             await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI)).catch(() => false);
@@ -1747,7 +1751,20 @@ async function drainPendingAgentTriggers(
       requestId: requestID,
       turnId: `ios-trigger-turn-${requestID}`,
     }));
+    // Durable ACK received: the server owns the attachments now, so the
+    // plaintext share originals can finally be removed.
+    for (const filename of uploadedAttachmentOriginals) {
+      await runCurrent(() => HermesIOSContext.deleteAgentShareAttachment?.(filename) ?? Promise.resolve(false)).catch(() => false);
+    }
     await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
+  }
+  if (droppedUnboundShares > 0) {
+    // Unbound (pre-hint) share requests are never auto-claimed: surface the
+    // drop so the user knows to share again while signed in.
+    console.warn(
+      `[ios-context] dropped ${droppedUnboundShares} unbound share request(s); `
+      + 'share again while signed in to attach them to this account',
+    );
   }
 }
 
@@ -1766,15 +1783,13 @@ function queuedIntentMatchesOwner(
     : typeof value.account_generation === 'string'
       ? value.account_generation
       : '';
-  // Unbound entries arrive from producers that cannot know the signed-in
-  // account (Share Extension spool files, pre-fence v1 payloads that failed
-  // their binding migration). The queue is device-local and encrypted, so the
-  // first account to drain claims them — the same first-reader-binds rule the
-  // backend applies to legacy local records. Explicitly bound entries from a
-  // DIFFERENT account are still rejected outright below.
-  const unbound = !queuedOwner && !queuedGeneration;
+  // Strict identity fence: an entry must carry the CURRENT account's
+  // ownerScope and accountGeneration or it never executes. Unbound entries
+  // (pre-hint legacy payloads) are dropped by the drain loop — the first
+  // signed-in account must never claim another account's share silently.
   return Boolean(ownerScope && accountGeneration)
-    && (unbound || (queuedOwner === ownerScope && queuedGeneration === accountGeneration));
+    && queuedOwner === ownerScope
+    && queuedGeneration === accountGeneration;
 }
 
 function permissionForCommand(key: string): IOSPermissionKey | null {

@@ -277,6 +277,12 @@ const BUILTIN_NAV_REST = [
     icon: 'ShieldCheck',
   },
   {
+    routeId: 'agent-hub',
+    path: '/agent-hub',
+    labels: { en: 'Agent Hub', zh: 'Agent 中心' },
+    icon: 'Radio',
+  },
+  {
     routeId: 'runtime-center',
     path: '/runtime-center',
     labels: { en: 'Runtime Center', zh: '\u8fd0\u884c\u4e2d\u5fc3' },

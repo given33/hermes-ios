@@ -19,6 +19,9 @@ enum HermesAccountLifecycle {
       ownerScope: activeIdentity.ownerScope,
       accountGeneration: activeIdentity.accountGeneration
     )
+    // Publish the now-active identity so out-of-process producers (Share
+    // Extension) stamp account-bound queue entries at write time.
+    HermesAgentTriggerStore.refreshOwnerHint()
     HermesTaskControlStore.shared.discardMismatched(
       ownerScope: activeIdentity.ownerScope,
       accountGeneration: activeIdentity.accountGeneration

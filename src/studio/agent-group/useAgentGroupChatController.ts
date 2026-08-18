@@ -71,6 +71,16 @@ const MOBILE_GROUP_USER_ID_PREFIX = 'hermes-mobile-group-user';
  */
 const DEGRADED_ROOM_TOMBSTONES_KEY = 'hermes.agent-group.degraded-room-tombstones';
 
+// Single-writer serialization for the degraded tombstone map: concurrent
+// deleteRoom/refresh passes must not interleave their read-modify-write.
+let degradedTombstoneWrite: Promise<unknown> = Promise.resolve();
+
+function withDegradedTombstoneWrite<T>(task: () => Promise<T>): Promise<T> {
+  const next = degradedTombstoneWrite.then(task, task);
+  degradedTombstoneWrite = next.catch(() => undefined);
+  return next;
+}
+
 async function readDegradedRoomTombstones(owner: string): Promise<Set<string>> {
   try {
     const raw = await AsyncStorage.getItem(DEGRADED_ROOM_TOMBSTONES_KEY);
@@ -87,6 +97,7 @@ async function readDegradedRoomTombstones(owner: string): Promise<Set<string>> {
 }
 
 async function writeDegradedRoomTombstone(roomId: string, owner: string): Promise<void> {
+  return withDegradedTombstoneWrite(async () => {
   try {
     const raw = await AsyncStorage.getItem(DEGRADED_ROOM_TOMBSTONES_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
@@ -99,19 +110,24 @@ async function writeDegradedRoomTombstone(roomId: string, owner: string): Promis
     // Persistence failure keeps the in-memory hide only — never block the
     // user's delete on best-effort bookkeeping.
   }
+  });
 }
 
-async function clearDegradedRoomTombstone(roomId: string): Promise<void> {
+async function clearDegradedRoomTombstone(roomId: string, owner = ''): Promise<void> {
+  return withDegradedTombstoneWrite(async () => {
   try {
     const raw = await AsyncStorage.getItem(DEGRADED_ROOM_TOMBSTONES_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     if (!parsed || typeof parsed !== 'object' || !(roomId in (parsed as object))) return;
     const next = { ...(parsed as Record<string, string>) };
-    delete next[roomId];
+    // Owner-scoped removal: another account's pending tombstone must survive
+    // this account's successful delete.
+    if (!owner || next[roomId] === owner) delete next[roomId];
     await AsyncStorage.setItem(DEGRADED_ROOM_TOMBSTONES_KEY, JSON.stringify(next));
   } catch {
     // Best-effort cleanup.
   }
+  });
 }
 
 export interface AgentGroupChatControllerProps {
@@ -853,12 +869,12 @@ export function useAgentGroupChatController({
         // DELETE failed stays hidden via its tombstone until a retry lands.
         for (const tombstonedId of degradedTombstones) {
           if (!listedRooms.some((room) => room.id === tombstonedId)) {
-            await clearDegradedRoomTombstone(tombstonedId);
+            await clearDegradedRoomTombstone(tombstonedId, cacheOwner);
             continue;
           }
           try {
             await studioApi.groupChat.deleteRoom(tombstonedId);
-            await clearDegradedRoomTombstone(tombstonedId);
+            await clearDegradedRoomTombstone(tombstonedId, cacheOwner);
           } catch {
             // Still offline; the tombstone keeps the room hidden.
           }
@@ -928,6 +944,11 @@ export function useAgentGroupChatController({
     const roomId = requestedRoomId || activeRoomIdRef.current;
     if (!roomId) return;
     if (!studioApi) return;
+    // Account epoch: a cacheOwner switch bumps this generation and wipes the
+    // snapshots, so any in-flight detail response from the previous account
+    // must never apply into the new one.
+    const accountEpoch = bootstrapGenerationRef.current;
+    const accountEpochCurrent = () => bootstrapGenerationRef.current === accountEpoch;
     const roomRevision = roomLifecycleRevisionRef.current.get(roomId) || 0;
     const listedRoom = roomsRef.current.find((room) => room.id === roomId);
     const listedFingerprint = listedRoom ? roomStateFingerprint(listedRoom) : '';
@@ -963,6 +984,7 @@ export function useAgentGroupChatController({
       ]);
       if (
         !mountedRef.current
+        || !accountEpochCurrent()
         || (roomLifecycleRevisionRef.current.get(roomId) || 0) !== roomRevision
         || !roomsRef.current.some((room) => room.id === roomId)
       ) return;
@@ -994,6 +1016,7 @@ export function useAgentGroupChatController({
         });
         if (
           !mountedRef.current
+          || !accountEpochCurrent()
           || (roomLifecycleRevisionRef.current.get(roomId) || 0) !== roomRevision
           || !roomsRef.current.some((room) => room.id === roomId)
         ) return;
@@ -1677,7 +1700,7 @@ export function useAgentGroupChatController({
     await writeDegradedRoomTombstone(roomId, cacheOwner);
     try {
       await studioApi.groupChat.deleteRoom(roomId);
-      await clearDegradedRoomTombstone(roomId);
+      await clearDegradedRoomTombstone(roomId, cacheOwner);
     } catch (reason) {
       const message = errorMessage(reason, isChinese);
       setError(message);
@@ -1687,7 +1710,13 @@ export function useAgentGroupChatController({
 
   const clearRoom = useCallback(async (roomId: string) => {
     if (!studioApi) {
+      // Offline preview clear is still a durable reset: persist the emptied
+      // snapshot so a restart cannot resurrect the pre-clear history.
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, messages: [], updatedAt: Date.now() }));
+      persistCurrentRoom(roomId);
+      roomHistoryCompleteRef.current.add(roomId);
+      roomHistoryCountRef.current.set(roomId, 0);
+      roomHistoryNextOffsetRef.current.delete(roomId);
       return;
     }
     try {
@@ -1714,6 +1743,23 @@ export function useAgentGroupChatController({
   useEffect(() => {
     mountedRef.current = true;
     bootstrapGenerationRef.current += 1;
+    // A new cacheOwner (or client) is a hard account boundary: every piece
+    // of visible state from the previous account must go, not only the refs
+    // the unmount cleanup below already resets.
+    activeRoomIdRef.current = '';
+    setActiveRoomId('');
+    roomsRef.current = [];
+    setRooms([]);
+    snapshotsRef.current.clear();
+    draftsRef.current = {};
+    setDrafts({});
+    detailFingerprintRef.current.clear();
+    hydratedRoomOwnerRef.current = '';
+    backgroundHydrationDoneRef.current = false;
+    setConnected(false);
+    setError(null);
+    setLoading(false);
+    setCreating(false);
     return () => {
       mountedRef.current = false;
       bootstrapGenerationRef.current += 1;

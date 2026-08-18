@@ -1,5 +1,5 @@
 import { ChevronDown } from 'lucide-react-native';
-import { Fragment, type RefObject, useEffect, useMemo } from 'react';
+import { Fragment, type RefObject, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ScrollView, type ScrollViewProps, Text, View } from 'react-native';
 import Reanimated, { Easing, FadeIn } from 'react-native-reanimated';
 
@@ -96,14 +96,14 @@ export function ChatMessageStream({
   // Only the newest todo snapshot renders a checklist; every older
   // assistant message that carried one stays quiet so history cannot show
   // several stale lists or double-count the same tasks.
-  const lastTodoIndex = messages.length - 1 - messages.reduceRight(
-    (found, message, position) => (
-      found === -1 && message.role !== 'user' && message.todos?.length
-        ? position
-        : found
-    ),
-    -1,
-  );
+  let lastTodoIndex = -1;
+  for (let position = messages.length - 1; position >= 0; position -= 1) {
+    const message = messages[position];
+    if (message.role !== 'user' && message.todos?.length) {
+      lastTodoIndex = position;
+      break;
+    }
+  }
   const { tokens } = useTheme();
   const latestMessage = messages[messages.length - 1];
   const followVersion = [
@@ -127,6 +127,17 @@ export function ChatMessageStream({
       .filter((item) => item.isUser),
     [messages],
   );
+  // Turn map: y-offsets of every user-turn boundary, captured at layout so
+  // the side rail can scroll the stream to any past turn on tap.
+  const turnOffsetsRef = useRef<Map<string, number>>(new Map());
+  const markTurnOffset = useCallback((id: string) => (event: { nativeEvent: { layout: { y: number } } }) => {
+    turnOffsetsRef.current.set(id, event.nativeEvent.layout.y);
+  }, []);
+  const scrollToTurn = useCallback((id: string) => {
+    const offset = turnOffsetsRef.current.get(id);
+    if (offset === undefined) return;
+    streamRef.current?.scrollTo({ y: Math.max(0, offset - 12), animated: true });
+  }, []);
   return (
     <>
       <ScrollView
@@ -177,6 +188,9 @@ export function ChatMessageStream({
           // Older assistant messages keep their todos in the view model for
           // inspection, but only the last carrier renders a TodoSection.
           <Fragment key={messageReactKey(message)}>
+            {message.role === 'user' ? (
+              <View collapsable={false} onLayout={markTurnOffset(message.id)} style={{ height: 0 }} />
+            ) : null}
             {collaborationState === 'active' && collaborationStartIndex === index ? (
               <>
                 <CollaborationLiftNotice
@@ -231,24 +245,41 @@ export function ChatMessageStream({
           style={{
             bottom: 12,
             gap: 3,
+            justifyContent: 'space-between',
             position: 'absolute',
-            right: 3,
+            right: 0,
             top: 12,
-            width: 12,
+            width: 20,
             alignItems: 'center',
           }}
         >
           {userTurns.map((turn, position) => (
-            <View
+            <IOSPressable
+              accessibilityLabel={isChinese ? `跳转到第 ${position + 1} 轮` : `Jump to turn ${position + 1}`}
+              haptic="selection"
               key={turn.id}
+              onPress={() => scrollToTurn(turn.id)}
               style={{
-                borderRadius: 2,
-                height: Math.max(2, 14 / userTurns.length),
-                opacity: position === userTurns.length - 1 ? 0.9 : 0.35,
-                width: 3,
-                backgroundColor: tokens.colors.textTertiary,
+                alignItems: 'center',
+                borderRadius: 6,
+                height: 14,
+                justifyContent: 'center',
+                paddingHorizontal: 6,
+                width: 20,
               }}
-            />
+            >
+              <View
+                style={{
+                  borderRadius: 2,
+                  height: Math.max(3, 14 / userTurns.length),
+                  opacity: position === userTurns.length - 1 ? 0.95 : 0.4,
+                  width: 3,
+                  backgroundColor: position === userTurns.length - 1
+                    ? tokens.colors.primary
+                    : tokens.colors.textTertiary,
+                }}
+              />
+            </IOSPressable>
           ))}
         </View>
       ) : null}

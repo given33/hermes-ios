@@ -100,9 +100,46 @@ final class HermesAgentTriggerStore {
   private let key = "agent-trigger-inbox-v2"
   private let legacyKey = "agent-trigger-inbox-v1"
   private let spoolDirectory = "agent-trigger-inbox-v3"
+  static let ownerHintKey = "agent-trigger-owner-hint"
   private let lock = NSLock()
 
   private init() {}
+
+  /// Publish the signed-in identity for out-of-process producers.
+  ///
+  /// The Share Extension cannot reach the app's auth state, so the main app
+  /// writes the active ownerScope/accountGeneration here on activation and
+  /// removes it on logout/deletion. Producers stamp the hint into every
+  /// queue entry at WRITE time; entries without a hint are never executed
+  /// (the JS drain drops them with a notice) — no first-reader claiming.
+  static func refreshOwnerHint() {
+    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
+    let defaults = UserDefaults(suiteName: appGroup) ?? .standard
+    guard identity.isBound else {
+      defaults.removeObject(forKey: ownerHintKey)
+      return
+    }
+    defaults.set([
+      "ownerScope": identity.ownerScope,
+      "accountGeneration": identity.accountGeneration,
+    ], forKey: ownerHintKey)
+    defaults.synchronize()
+  }
+
+  static func currentOwnerHint() -> [String: String]? {
+    let defaults = UserDefaults(suiteName: appGroup) ?? .standard
+    guard let value = defaults.dictionary(forKey: ownerHintKey) else { return nil }
+    guard let owner = value["ownerScope"] as? String,
+          let generation = value["accountGeneration"] as? String,
+          !owner.isEmpty, !generation.isEmpty else { return nil }
+    return ["ownerScope": owner, "accountGeneration": generation]
+  }
+
+  static func clearOwnerHint() {
+    let defaults = UserDefaults(suiteName: appGroup) ?? .standard
+    defaults.removeObject(forKey: ownerHintKey)
+    defaults.synchronize()
+  }
 
   static var shareAttachmentRoot: URL? {
     FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroup)?
@@ -133,21 +170,44 @@ final class HermesAgentTriggerStore {
     guard let root = spoolRoot,
           let files = try? FileManager.default.contentsOfDirectory(
             at: root,
-            includingPropertiesForKeys: nil,
+            includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles]
           ) else { return [] }
+    let now = Date().timeIntervalSince1970
     var entries: [[String: Any]] = []
+    var unreadable: [(URL, Date)] = []
     for file in files where file.pathExtension.lowercased() == "bin" {
+      let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?
+        .contentModificationDate ?? Date.distantPast
+      // Age GC: no spool file is meaningful after a week, and an envelope
+      // that still fails to decrypt after 48h is cipher-rotted junk from a
+      // restore — both classes are removed instead of filling the container.
+      if now - modified.timeIntervalSince1970 > 7 * 24 * 3600 {
+        try? FileManager.default.removeItem(at: file)
+        continue
+      }
       guard let envelope = try? Data(contentsOf: file),
             let parsed = HermesIntentQueueCipher.open(envelope).first else {
-        // Unreadable spool files are quarantined away rather than deleted:
-        // a cipher-key mismatch after a restore should not silently destroy
-        // pending shares until the app has definitively drained them once.
+        if now - modified.timeIntervalSince1970 > 48 * 3600 {
+          try? FileManager.default.removeItem(at: file)
+        } else {
+          unreadable.append((file, modified))
+        }
         continue
       }
       var entry = parsed
       entry["__spoolFile"] = file.lastPathComponent
       entries.append(entry)
+    }
+    _ = unreadable
+    // Quota: keep the newest 200 sealed files; anything older is dropped so
+    // a runaway producer can never exhaust the App Group container.
+    if entries.count > 200 {
+      let dropped = entries.prefix(entries.count - 200)
+      for entry in dropped {
+        deleteSpoolEntry(fileName: entry["__spoolFile"] as? String)
+      }
+      entries.removeFirst(entries.count - 200)
     }
     return entries.sorted { ($0["createdAt"] as? Double ?? 0) < ($1["createdAt"] as? Double ?? 0) }
   }
@@ -263,38 +323,18 @@ final class HermesAgentTriggerStore {
     let defaults = UserDefaults(suiteName: Self.appGroup) ?? .standard
     defaults.removeObject(forKey: key)
     defaults.removeObject(forKey: legacyKey)
+    Self.clearOwnerHint()
     drainQuarantinedSpool()
   }
 
   private func readStoredEntries(_ defaults: UserDefaults) -> [[String: Any]] {
-    migrateLegacyPlaintextEntries(defaults)
+    // The pre-fence v1 array predates identity stamping. It can never be
+    // attributed to an account safely, and first-reader claiming is exactly
+    // the cross-account hazard the fence exists for: drop it. The JS drain
+    // tells the user to re-share anything still needed.
+    defaults.removeObject(forKey: legacyKey)
     guard let envelope = defaults.data(forKey: key) else { return [] }
     return HermesIntentQueueCipher.open(envelope)
-  }
-
-  /// The pre-fence v1 array was written before the queue carried an account
-  /// identity. Bind those plaintext share requests to the account that
-  /// first drains the queue after the upgrade instead of discarding them:
-  /// they originate from this device's Share Extension, and the identity
-  /// fence exists to stop cross-ACCOUNT replay, not to lose local history.
-  private func migrateLegacyPlaintextEntries(_ defaults: UserDefaults) {
-    guard let legacy = defaults.array(forKey: legacyKey) as? [[String: Any]], !legacy.isEmpty else {
-      if defaults.data(forKey: legacyKey) != nil || defaults.array(forKey: legacyKey) != nil {
-        defaults.removeObject(forKey: legacyKey)
-      }
-      return
-    }
-    defaults.removeObject(forKey: legacyKey)
-    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
-    guard identity.isBound else { return }
-    let existing = (defaults.data(forKey: key)).flatMap { HermesIntentQueueCipher.open($0) } ?? []
-    let bound = legacy.map { entry -> [String: Any] in
-      var bound = entry
-      bound["ownerScope"] = identity.ownerScope
-      bound["accountGeneration"] = identity.accountGeneration
-      return bound
-    }
-    _ = writeEntries(Array((existing + bound).suffix(50)), defaults: defaults)
   }
 
   @discardableResult

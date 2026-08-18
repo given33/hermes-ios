@@ -29,6 +29,7 @@ export type NativeRouteId =
   | 'collaboration'
   | 'workflows'
   | 'approvals'
+  | 'agent-hub'
   | 'runtime-center';
 
 export interface NativeRouteDefinition {
@@ -66,6 +67,7 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'config', path: '/config', visibleInSidebar: true },
   { id: 'account', path: '/account', visibleInSidebar: true },
   { id: 'approvals', path: '/approvals', visibleInSidebar: true },
+  { id: 'agent-hub', path: '/agent-hub', visibleInSidebar: true },
   { id: 'runtime-center', path: '/runtime-center', visibleInSidebar: true },
   { id: 'env', path: '/env', visibleInSidebar: true },
   { id: 'docs', path: '/docs', visibleInSidebar: true },

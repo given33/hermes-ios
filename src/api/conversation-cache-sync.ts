@@ -115,6 +115,20 @@ export function mergeDownloadedConversations(
   return index.map((summary) => {
     const full = downloadedById.get(summary.id);
     if (!full) return cloneCachedConversation(summary);
+    // Server-side transcript SHRINK (context clear, compression, bulk
+    // retraction) is authoritative: when a full snapshot reports fewer
+    // messages than the cache holds, replace the local transcript instead
+    // of union-merging deleted history back in. The reset helper still
+    // preserves optimistic in-flight messages.
+    const cachedMessages = summary.messages?.length || 0;
+    const serverCount = Math.max(numberValue(full.message_count), full.messages.length);
+    if (full.messages.length > 0 && cachedMessages > serverCount) {
+      return resetCachedConversationTranscript(index, {
+        ...summary,
+        ...full,
+        message_count: serverCount,
+      }).find(({ id }) => id === summary.id) ?? cloneCachedConversation(summary);
+    }
     return cloneCachedConversation({
       ...summary,
       ...full,
@@ -185,7 +199,7 @@ export function resetCachedConversationTranscript(
   conversation: SingleConversation,
   replacedId = '',
 ): SingleConversation[] {
-  const existing = conversations.find(({ id }) => conversation.id);
+  const existing = conversations.find(({ id }) => id === conversation.id);
   const pendingOptimistic = (existing?.messages || [])
     .filter((message) => isOptimisticPendingMessage(message))
     .filter((message) => !conversation.messages.some((server) => server.id === message.id));

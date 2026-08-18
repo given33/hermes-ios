@@ -82,6 +82,7 @@ import {
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
 import { AgentGroupChatPage } from './agent-group/AgentGroupChatPage';
+import { AgentHubPage } from './hub/AgentHubPage';
 import { HermesStudioWorkflowPage } from './workflows/HermesStudioWorkflowPage';
 import { BuiltinBrowserPage } from '../browser/BuiltinBrowserPage';
 import { SkillsManagementPage } from '../skills/SkillsManagementPage';
@@ -486,7 +487,8 @@ function PreviewRoute({
     && route.routeId !== 'memory'
     && route.routeId !== 'account'
     && route.routeId !== 'chat'
-    && route.routeId !== 'agent-group';
+    && route.routeId !== 'agent-group'
+    && route.routeId !== 'agent-hub';
   useEffect(() => {
     if (usesNativeSwiftUIRoute) return undefined;
     const frame = requestAnimationFrame(() => reportRouteReady(route.path));
@@ -550,6 +552,7 @@ function PreviewRoute({
     !allowFixturePages
     && route.routeId !== 'chat'
     && route.routeId !== 'agent-group'
+    && route.routeId !== 'agent-hub'
     && route.routeId !== 'account'
     && route.routeId !== 'browser'
     && !(route.routeId === 'models' && client)
@@ -628,6 +631,18 @@ function PreviewRoute({
     );
     case 'files': return <FilesPreviewPage {...props} />;
     case 'analytics': return <AnalyticsPreviewPage {...props} />;
+    case 'agent-hub': return client
+      ? (
+        <AgentHubPage
+          client={client}
+          compact={compactNavigation}
+          isChinese={locale === 'zh'}
+          notify={notify}
+          onOpenNavigation={openNavigation}
+          profile={profile}
+        />
+      )
+      : <PerformancePreviewPage {...props} />;
     case 'runtime-center': return <PerformancePreviewPage {...props} />;
     case 'models': return client
       ? <ModelsManagementPage {...props} client={client} profile={profile} />
