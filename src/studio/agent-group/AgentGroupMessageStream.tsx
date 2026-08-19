@@ -10,7 +10,7 @@ import {
   Wrench,
 } from 'lucide-react-native';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Image, ScrollView, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { FlatList, Image, ScrollView, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 
 import type {
@@ -315,6 +315,7 @@ function AgentGroupMessageItem({
   userId: string;
 }) {
   const { tokens } = useTheme();
+  const markdownStyles = useMemo(() => createGroupMarkdownStyles(tokens), [tokens]);
   const agent = findAgent(agents, message);
   const isAgent = Boolean(agent) || message.role === 'assistant';
   // Ownership by senderId ONLY: `role === 'user'` also matched OTHER human
@@ -447,6 +448,7 @@ function ToolDetails({ isChinese, message }: { isChinese: boolean; message: Herm
 
 function ToolDetailBlock({ label, markdown = false, value }: { label: string; markdown?: boolean; value: string }) {
   const { tokens } = useTheme();
+  const markdownStyles = useMemo(() => createGroupMarkdownStyles(tokens), [tokens]);
   return (
     <View style={styles.toolDetailSection}>
       <Text style={[styles.toolDetailLabel, { color: tokens.colors.textTertiary }]}>{label}</Text>
@@ -632,17 +634,19 @@ function agentColor(seed: string, fallback: string): string {
   return fallback;
 }
 
-const markdownStyles = {
-  body: { color: '#1f2937', fontSize: 13, lineHeight: 21 },
-  paragraph: { marginTop: 0, marginBottom: 8 },
-  strong: { fontWeight: '700' as const },
-  code_inline: { backgroundColor: 'rgba(15,23,42,0.08)', borderRadius: 4, paddingHorizontal: 3 },
-  code_block: { backgroundColor: 'rgba(15,23,42,0.07)', borderRadius: 6, padding: 8 },
-  fence: { backgroundColor: 'rgba(15,23,42,0.07)', borderRadius: 6, padding: 8 },
-  bullet_list: { marginBottom: 6 },
-  ordered_list: { marginBottom: 6 },
-  list_item: { marginBottom: 3 },
-};
+function createGroupMarkdownStyles(tokens: ReturnType<typeof useTheme>['tokens']) {
+  return {
+    body: { color: tokens.colors.foreground, fontSize: 13, lineHeight: 21 },
+    paragraph: { marginTop: 0, marginBottom: 8 },
+    strong: { fontWeight: '700' as const },
+    code_inline: { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.08), borderRadius: 4, paddingHorizontal: 3 },
+    code_block: { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.07), borderColor: tokens.colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: 6, padding: 8 },
+    fence: { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.07), borderColor: tokens.colors.border, borderWidth: StyleSheet.hairlineWidth, borderRadius: 6, padding: 8 },
+    bullet_list: { marginBottom: 6 },
+    ordered_list: { marginBottom: 6 },
+    list_item: { marginBottom: 3 },
+  };
+}
 
 const styles = {
   choiceChip: { alignItems: 'center' as const, borderRadius: 8, borderWidth: 1, flexDirection: 'row' as const, gap: 8, paddingHorizontal: 10, paddingVertical: 7 },

@@ -436,7 +436,7 @@ export function PendingMessage({
     <Reanimated.View
       entering={motion.fade(
         FadeInUp
-          .delay(index * 35)
+          .delay(Math.min(index, 8) * 35)
           .duration(IOS_MOTION.duration.content)
           .easing(IOS_DECELERATE_EASING),
         FadeIn.duration(MOTION.fade.reduced),
