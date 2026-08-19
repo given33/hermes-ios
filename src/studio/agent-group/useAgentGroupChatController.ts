@@ -193,7 +193,7 @@ export interface AgentGroupChatController {
   interruptAgent(roomId: string, agentName: string): Promise<void>;
   respondApproval(roomId: string, approvalId: string, choice: HermesStudioPendingApproval['choices'][number]): Promise<void>;
   retractMessage(roomId: string, messageId: string): Promise<void>;
-  retryFailedMessage(roomId: string, messageId: string, content: string): Promise<void>;
+  retryFailedMessage(roomId: string, messageId: string, content: string, mentions?: HermesStudioGroupChatMention[]): Promise<void>;
   emitTyping(roomId: string): void;
   emitStopTyping(roomId: string): void;
   listWorkspaceFiles(roomId: string, path?: string): Promise<HermesStudioWorkspaceFileListing>;
@@ -297,6 +297,25 @@ export function useAgentGroupChatController({
               );
               return status !== 403 && status !== 401;
             },
+          onPermanentFailure: (item, error) => {
+            // The room stays on the server; without this the local hide was
+            // silently undone ~15s later with no explanation. The replay
+            // service hands a rendered message, so sniff both shapes.
+            const rendered = typeof error === 'string' ? error : String((error as { message?: unknown })?.message ?? error ?? '');
+            const status = Number(
+              (error as unknown as { status?: unknown })?.status
+                ?? (error as unknown as { statusCode?: unknown })?.statusCode
+                ?? 0,
+            );
+            const message = status === 403 || rendered.includes('403')
+              ? (isChinese
+                ? '没有权限删除该房间（可能需要房主身份），房间已恢复显示'
+                : 'No permission to delete this room (owner required); the room is visible again')
+              : (typeof error === 'string' ? error : errorMessage(error, isChinese));
+            setError(message);
+            notify(message);
+            void item;
+          },
           outbox: localStore,
           retryDelayMs: 60_000,
           workerId: 'agent-group:conversation-delete',
@@ -388,6 +407,10 @@ export function useAgentGroupChatController({
     const hydrationKey = cacheOwner + ':' + cacheRevision;
     if (!localStore || !cacheOwner || hydratedRoomOwnerRef.current === hydrationKey) return;
     const readRevision = pendingRoomDeletionRevisionRef.current;
+    // Capture the account epoch: a slow localStore read that resolves after
+    // an account switch must never project the previous account's cached
+    // rooms into the new account's visible state.
+    const epoch = bootstrapGenerationRef.current;
     const cached = await localStore.read(cacheOwner).catch(() => null);
     let pending: ReadonlySet<string>;
     try {
@@ -395,7 +418,8 @@ export function useAgentGroupChatController({
     } catch {
       return;
     }
-    if (!mountedRef.current || !cached) return;
+    if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
+    if (!cached) return;
     let latestPending: ReadonlySet<string>;
     try {
       latestPending = await localStore.readPendingConversationDeletionIds(cacheOwner);
@@ -512,9 +536,13 @@ export function useAgentGroupChatController({
     }
   }, [agentProfile, cacheOwner, localStore]);
 
+  const roomPersistenceKey = useCallback((snapshot: HermesStudioRoomSnapshot) => (
+    snapshot.room.conversationId?.trim()
+      || `chat_room_${snapshot.room.id.replace(/^room_/, '')}`
+  ), []);
+
   const queueRoomSnapshotPersistence = useCallback((snapshot: HermesStudioRoomSnapshot) => {
-    const key = snapshot.room.conversationId?.trim()
-      || `chat_room_${snapshot.room.id.replace(/^room_/, '')}`;
+    const key = roomPersistenceKey(snapshot);
     const previous = roomPersistenceQueueRef.current.get(key) || Promise.resolve();
     const task = previous.catch(() => undefined).then(() => persistRoomSnapshot(snapshot));
     roomPersistenceQueueRef.current.set(key, task);
@@ -523,11 +551,13 @@ export function useAgentGroupChatController({
         roomPersistenceQueueRef.current.delete(key);
       }
     }).catch(() => undefined);
-  }, [persistRoomSnapshot]);
+    return task;
+  }, [persistRoomSnapshot, roomPersistenceKey]);
 
-  const persistCurrentRoom = useCallback((roomId: string) => {
+  const persistCurrentRoom = useCallback((roomId: string): Promise<void> => {
     const snapshot = snapshotsRef.current.get(roomId);
-    if (snapshot) queueRoomSnapshotPersistence(snapshot);
+    if (!snapshot) return Promise.resolve();
+    return queueRoomSnapshotPersistence(snapshot).catch(() => undefined);
   }, [queueRoomSnapshotPersistence]);
 
   const applyJoin = useCallback((result: HermesStudioGroupChatJoinResult) => {
@@ -793,13 +823,16 @@ export function useAgentGroupChatController({
       return socketRef.current;
     }
     if (connectPromiseRef.current) return connectPromiseRef.current;
+    const epoch = bootstrapGenerationRef.current;
     const promise = studioApi.groupChat.connectRealtime({
       userId: stableUserId,
       userName: identity.name,
       description: identity.description,
       inviteCode: inviteCodeRef.current || undefined,
     }).then(async (socket) => {
-      if (!mountedRef.current) {
+      if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) {
+        // An in-flight connect that resolves after an account switch must
+        // not install the previous account's socket as the current one.
         socket.disconnect();
         return null;
       }
@@ -820,12 +853,17 @@ export function useAgentGroupChatController({
     if (joinedRoomIdsRef.current.has(roomId) && target.connected) return;
     const pending = joinPromisesRef.current.get(roomId);
     if (pending) return pending;
+    const epoch = bootstrapGenerationRef.current;
     const promise = (async () => {
       await waitForConnection(target);
+      if (bootstrapGenerationRef.current !== epoch) return;
       const result = await studioApi.groupChat.joinRoom(target, roomId, {
         ...identity,
         inviteCode: inviteCodeRef.current || undefined,
       });
+      // The join response belongs to the account that requested it; a
+      // same-id room under the new account must not adopt this snapshot.
+      if (bootstrapGenerationRef.current !== epoch) return;
       joinedRoomIdsRef.current.add(roomId);
       applyJoin(result);
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, connected: true, loading: false }));
@@ -1063,6 +1101,9 @@ export function useAgentGroupChatController({
         connected: true,
         summary: summaryResult?.summary || null,
         summaryAnchor: summaryResult?.anchor || null,
+        // Server typing state is authoritative on every refresh: the SSE bus
+        // only wakes the poll, so this is what keeps the indicator live.
+        typingNames: pagedDetail.typingUsers || [],
       });
       setConnected(true);
       const restoredFingerprint = roomStateFingerprint(restored.room);
@@ -1102,8 +1143,10 @@ export function useAgentGroupChatController({
         // In REST mode the room projection is authoritative for runtime state.
         // Empty arrays/objects are valid values, so using `||` here would keep
         // stale state or overwrite the freshly derived hosted-turn status with
-        // the empty defaults from the previous snapshot.
-        typingNames: socketRef.current ? (current?.typingNames || restored.typingNames) : restored.typingNames,
+        // the empty defaults from the previous snapshot. Typing always takes
+        // the fresh server value — preserving the old list froze the
+        // indicator at its join-time snapshot forever.
+        typingNames: restored.typingNames,
         runningAgents: restored.runningAgents,
         contextStatuses: restored.contextStatuses,
         pendingApprovals: socketRef.current
@@ -1230,6 +1273,7 @@ export function useAgentGroupChatController({
       return;
     }
     detailFingerprintRef.current.delete(roomId);
+    const epoch = bootstrapGenerationRef.current;
     try {
       // Mentions own server-side routing when present; the full roster is
       // only addressed for legacy broadcast sends without a resolved chip.
@@ -1238,12 +1282,14 @@ export function useAgentGroupChatController({
         ? []
         : snapshot.agents.map((agent) => agent.profile).filter(Boolean);
       await studioApi.groupChat.sendRoomMessage(roomId, id, content, profiles, undefined, resolvedMentions);
+      if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
       patchSnapshot(roomId, (current) => ({
         ...current,
         messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
       }));
       persistCurrentRoom(roomId);
     } catch (reason) {
+      if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
       const message = errorMessage(reason, isChinese);
       patchSnapshot(roomId, (current) => ({
         ...current,
@@ -1278,17 +1324,35 @@ export function useAgentGroupChatController({
     }
   }, [sendMessageInner]);
 
-  const retryFailedMessage = useCallback(async (roomId: string, messageId: string, content: string) => {
+  const retryFailedMessage = useCallback(async (
+    roomId: string,
+    messageId: string,
+    content: string,
+    mentions?: HermesStudioGroupChatMention[],
+  ) => {
     if (!roomId || !messageId || !content.trim()) return;
-    patchSnapshot(roomId, (current) => ({
-      ...current,
-      messages: current.messages.filter((message) => message.id !== messageId),
-      updatedAt: Date.now(),
-    }));
-    persistCurrentRoom(roomId);
-    // Call the inner body directly: the guard would silently swallow the
-    // retry if another send is in flight, losing the text we just removed.
-    await sendMessageInner(content.trim(), undefined, undefined, roomId);
+    // Serialize with normal sends through the same per-room lock: bypassing
+    // it interleaved the retry with an in-flight send and reordered/duplicated
+    // messages. Wait (bounded) for the current send to finish instead of
+    // dropping the retry.
+    const lockDeadline = Date.now() + 10_000;
+    while (sendingRoomIdsRef.current.has(roomId) && Date.now() < lockDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    sendingRoomIdsRef.current.add(roomId);
+    try {
+      patchSnapshot(roomId, (current) => ({
+        ...current,
+        messages: current.messages.filter((message) => message.id !== messageId),
+        updatedAt: Date.now(),
+      }));
+      persistCurrentRoom(roomId);
+      // Carry the original mentions: a content-only retry silently dropped
+      // the structured payload of the failed message.
+      await sendMessageInner(content.trim(), undefined, mentions, roomId);
+    } finally {
+      sendingRoomIdsRef.current.delete(roomId);
+    }
   }, [patchSnapshot, persistCurrentRoom, sendMessageInner]);
 
 
@@ -1335,6 +1399,7 @@ export function useAgentGroupChatController({
       return;
     }
     setCreating(true);
+    const epoch = bootstrapGenerationRef.current;
     try {
       // The upstream route treats `summary` as an all-or-nothing config.  The
       // mobile create form intentionally leaves provider/model blank until a
@@ -1367,6 +1432,7 @@ export function useAgentGroupChatController({
         allowRemoteWorkspaceAccess: options.allowRemoteWorkspaceAccess,
       });
       const nextRooms = [result.room, ...roomsRef.current.filter((room) => room.id !== result.room.id)];
+      if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
       applyRoomList(nextRooms);
       setSnapshot(result.room.id, snapshotFromDetail({
         room: result.room,
@@ -1396,7 +1462,9 @@ export function useAgentGroupChatController({
       return;
     }
     try {
+      const epoch = bootstrapGenerationRef.current;
       const result = await studioApi.groupChat.cloneRoom(roomId, { name: name.trim(), inviteCode });
+      if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
       applyRoomList([result.room, ...roomsRef.current.filter((room) => room.id !== result.room.id)]);
       setSnapshot(result.room.id, snapshotFromDetail({
         room: result.room,
@@ -1417,8 +1485,10 @@ export function useAgentGroupChatController({
     const trimmedCode = code.trim();
     if (!trimmedCode || !studioApi) return;
     try {
+      const epoch = bootstrapGenerationRef.current;
       inviteCodeRef.current = trimmedCode;
       const result = await studioApi.groupChat.joinRoomByCode(trimmedCode);
+      if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
       applyRoomList([result.room, ...roomsRef.current.filter((room) => room.id !== result.room.id)]);
       if (!snapshotsRef.current.has(result.room.id)) snapshotsRef.current.set(result.room.id, emptyRoomSnapshot(result.room));
       selectRoom(result.room.id);
@@ -1426,6 +1496,9 @@ export function useAgentGroupChatController({
       const message = errorMessage(reason, isChinese);
       setError(message);
       notify(message);
+      // Rethrow so the join modal can stay open with the code intact for a
+      // quick correction instead of closing and clearing on every failure.
+      throw reason;
     }
   }, [applyRoomList, isChinese, notify, selectRoom, studioApi]);
 
@@ -1468,7 +1541,9 @@ export function useAgentGroupChatController({
       return;
     }
     try {
+      const epoch = bootstrapGenerationRef.current;
       await studioApi.groupChat.updateInviteCode(roomId, inviteCode);
+      if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, room: { ...snapshot.room, inviteCode }, updatedAt: Date.now() }));
       setRooms((current) => current.map((room) => room.id === roomId ? { ...room, inviteCode } : room));
       roomsRef.current = roomsRef.current.map((room) => room.id === roomId ? { ...room, inviteCode } : room);
@@ -1799,11 +1874,28 @@ export function useAgentGroupChatController({
   }, [agentProfile, cacheOwner, conversationDeleteReplayService, isChinese, localStore, notify, removeRoomFromState, studioApi]);
 
   const clearRoom = useCallback(async (roomId: string) => {
+    const persistCleared = async () => {
+      const snapshot = snapshotsRef.current.get(roomId);
+      if (!snapshot) return;
+      try {
+        // Await the raw persistence task: persistCurrentRoom swallows
+        // failures for fire-and-forget callers, but a lost clear must be
+        // surfaced (a silent failure lets a restart resurrect old history).
+        await queueRoomSnapshotPersistence(snapshot);
+      } catch {
+        const persistError = isChinese
+          ? '上下文已清空，但本地缓存写入失败；刷新后会自动重试'
+          : 'Context cleared, but the local cache write failed; it retries on the next refresh';
+        setError(persistError);
+        notify(persistError);
+        detailFingerprintRef.current.delete(roomId);
+      }
+    };
     if (!studioApi) {
       // Offline preview clear is still a durable reset: persist the emptied
       // snapshot so a restart cannot resurrect the pre-clear history.
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, messages: [], updatedAt: Date.now() }));
-      persistCurrentRoom(roomId);
+      await persistCleared();
       roomHistoryCompleteRef.current.add(roomId);
       roomHistoryCountRef.current.set(roomId, 0);
       roomHistoryNextOffsetRef.current.delete(roomId);
@@ -1816,7 +1908,7 @@ export function useAgentGroupChatController({
       // cleared snapshot so the next offline hydration cannot resurrect the
       // pre-clear history from the local cache (union/max merge otherwise
       // keeps whatever was on disk).
-      persistCurrentRoom(roomId);
+      await persistCleared();
       detailFingerprintRef.current.delete(roomId);
       roomHistoryCompleteRef.current.add(roomId);
       roomHistoryCountRef.current.set(roomId, 0);
@@ -1826,7 +1918,7 @@ export function useAgentGroupChatController({
       patchSnapshot(roomId, (snapshot) => ({ ...snapshot, error: message }));
       notify(message);
     }
-  }, [applyEvent, isChinese, notify, patchSnapshot, persistCurrentRoom, studioApi]);
+  }, [applyEvent, isChinese, notify, patchSnapshot, queueRoomSnapshotPersistence, studioApi]);
 
   joinRoomOnSocketRef.current = joinRoomOnSocket;
 
@@ -1844,6 +1936,12 @@ export function useAgentGroupChatController({
     draftsRef.current = {};
     setDrafts({});
     detailFingerprintRef.current.clear();
+    // In-flight guards from the previous account must not pin a same-id room
+    // in the new account: clear the per-room locks and the earlier-loading
+    // markers so B's refresh/send/retry can never be short-circuited by A.
+    detailInFlightRef.current.clear();
+    sendingRoomIdsRef.current.clear();
+    setLoadingEarlierIds(new Set<string>());
     hydratedRoomOwnerRef.current = '';
     backgroundHydrationDoneRef.current = false;
     setConnected(false);

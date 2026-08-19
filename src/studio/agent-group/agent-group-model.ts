@@ -100,6 +100,7 @@ export function snapshotFromDetail(input: {
   connected?: boolean;
   summary?: HermesStudioRoomSummaryState | null;
   summaryAnchor?: HermesStudioRoomSummaryAnchor | null;
+  typingNames?: string[];
 }): HermesStudioRoomSnapshot {
   const runtime = roomRuntimeProjection(input.room);
   return {
@@ -107,7 +108,7 @@ export function snapshotFromDetail(input: {
     agents: input.agents,
     members: input.members,
     messages: attachWorkspaceDiffs(sortMessages(input.messages)),
-    typingNames: [],
+    typingNames: input.typingNames ?? [],
     runningAgents: runtime.runningAgents,
     contextStatuses: runtime.contextStatuses,
     summary: input.summary ?? null,

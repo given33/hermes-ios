@@ -8,7 +8,7 @@ import {
   Trash2,
   UserRoundPlus,
 } from 'lucide-react-native';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ScrollView, Text, TextInput, View } from 'react-native';
 
 import type {
@@ -79,9 +79,32 @@ export function AgentGroupRoomSettingsModal({
   const [agentForm, setAgentForm] = useState<AgentForm>(EMPTY_AGENT);
   const [agentEditorOpen, setAgentEditorOpen] = useState(false);
   const [deleteAgentId, setDeleteAgentId] = useState<string | null>(null);
+  // While the user is editing, their input wins over server refreshes; the
+  // flag resets on close and after a save so the next projection syncs in.
+  const formDirtyRef = useRef(false);
+  const markDirty = () => { formDirtyRef.current = true; };
+
+  const serverRoomFingerprint = activeRoom
+    ? [
+      activeRoom.room.id,
+      activeRoom.room.name,
+      activeRoom.room.inviteCode || '',
+      activeRoom.room.workspace || '',
+      activeRoom.room.summaryProfile || '',
+      activeRoom.room.summaryProvider || '',
+      activeRoom.room.summaryModel || '',
+      activeRoom.room.summaryApiMode || '',
+      String(activeRoom.room.summaryEveryTurns || 20),
+    ].join('\u0001')
+    : '';
 
   useEffect(() => {
-    if (!open || !roomId || !activeRoom) return;
+    if (!open) {
+      formDirtyRef.current = false;
+      return;
+    }
+    if (!roomId || !activeRoom) return;
+    if (formDirtyRef.current) return;
     const room = activeRoom.room;
     setRoomName(room.name);
     setInviteCode(room.inviteCode || '');
@@ -96,23 +119,33 @@ export function AgentGroupRoomSettingsModal({
     setAgentForm(EMPTY_AGENT);
     void controller.loadRoomSummary(roomId);
     setAgentEditorOpen(false);
-  }, [activeRoom?.room.id, open, roomId]);
+    // Re-run whenever the server projection changes (poll refresh, save
+    // response normalized server-side, another device editing the room) so
+    // the form never shows stale fields for the same room.
+  }, [open, roomId, serverRoomFingerprint]);
 
   useEffect(() => {
-    if (activeRoom?.room.id === roomId && activeRoom.summary) setSummaryDraft(activeRoom.summary.summary);
+    if (!formDirtyRef.current && activeRoom?.room.id === roomId && activeRoom.summary) setSummaryDraft(activeRoom.summary.summary);
   }, [activeRoom?.summary, activeRoom?.room.id, roomId]);
 
   if (!activeRoom) return null;
 
+  // Owner-only operations (rename, invite code, workspace, compression,
+  // agent roster, clone) are gated so members never see actionable 403s.
+  const canManage = activeRoom.room.canManage !== false;
+
   const updateAgentForm = (key: keyof AgentForm, value: string) => {
+    markDirty();
     setAgentForm((current) => ({ ...current, [key]: value }));
   };
 
   const saveRoomBasics = () => {
+    formDirtyRef.current = false;
     void controller.updateRoomConfig(roomId, { name: roomName.trim() });
   };
 
   const saveSummaryConfig = () => {
+    formDirtyRef.current = false;
     void controller.updateRoomConfig(roomId, {
       summaryProfile: summaryProfile.trim() || 'default',
       summaryProvider: summaryProvider.trim(),
@@ -172,43 +205,69 @@ export function AgentGroupRoomSettingsModal({
           </PreviewText>
 
           <Section isChinese={isChinese} title={isChinese ? '房间基础设置' : 'Room basics'}>
-            <Field label={isChinese ? '房间名称' : 'Room name'} value={roomName} onChangeText={setRoomName} />
-            <NativeButton disabled={!roomName.trim() || roomName.trim() === activeRoom.room.name} onPress={saveRoomBasics} prefix={<Save />} size="sm">
-              {isChinese ? '保存名称' : 'Save name'}
-            </NativeButton>
-            <Field label={isChinese ? '邀请码' : 'Invite code'} value={inviteCode} onChangeText={setInviteCode} />
-            <View style={styles.inlineButtons}>
-              <NativeButton ghost onPress={() => setInviteCode(generateInviteCode())} prefix={<RefreshCw />} size="sm">
-                {isChinese ? '生成' : 'Generate'}
-              </NativeButton>
-              <NativeButton disabled={!inviteCode.trim()} onPress={() => void controller.updateInviteCode(roomId, inviteCode.trim())} prefix={<Save />} size="sm">
-                {isChinese ? '保存邀请码' : 'Save invite code'}
-              </NativeButton>
-            </View>
-            <Field label={isChinese ? '工作区路径' : 'Workspace path'} value={workspace} onChangeText={setWorkspace} multiline />
-            <NativeButton onPress={() => void controller.updateRoomWorkspace(roomId, workspace.trim())} prefix={<Save />} size="sm">
-              {isChinese ? '保存工作区' : 'Save workspace'}
-            </NativeButton>
+            {canManage ? (
+              <>
+                <Field label={isChinese ? '房间名称' : 'Room name'} value={roomName} onChangeText={(value) => { markDirty(); setRoomName(value); }} />
+                <NativeButton disabled={!roomName.trim() || roomName.trim() === activeRoom.room.name} onPress={saveRoomBasics} prefix={<Save />} size="sm">
+                  {isChinese ? '保存名称' : 'Save name'}
+                </NativeButton>
+                <Field label={isChinese ? '邀请码' : 'Invite code'} value={inviteCode} onChangeText={(value) => { markDirty(); setInviteCode(value); }} />
+                <View style={styles.inlineButtons}>
+                  <NativeButton ghost onPress={() => { markDirty(); setInviteCode(generateInviteCode()); }} prefix={<RefreshCw />} size="sm">
+                    {isChinese ? '生成' : 'Generate'}
+                  </NativeButton>
+                  <NativeButton disabled={!inviteCode.trim()} onPress={() => { formDirtyRef.current = false; void controller.updateInviteCode(roomId, inviteCode.trim()); }} prefix={<Save />} size="sm">
+                    {isChinese ? '保存邀请码' : 'Save invite code'}
+                  </NativeButton>
+                </View>
+                <Field label={isChinese ? '工作区路径' : 'Workspace path'} value={workspace} onChangeText={(value) => { markDirty(); setWorkspace(value); }} multiline />
+                <NativeButton onPress={() => { formDirtyRef.current = false; void controller.updateRoomWorkspace(roomId, workspace.trim()); }} prefix={<Save />} size="sm">
+                  {isChinese ? '保存工作区' : 'Save workspace'}
+                </NativeButton>
+              </>
+            ) : (
+              <PreviewText variant="muted">
+                {isChinese ? '你是本房间成员：名称、邀请码与工作区由房主管理。' : 'You are a member here: the owner manages the name, invite code, and workspace.'}
+              </PreviewText>
+            )}
           </Section>
 
           <Section isChinese={isChinese} title={isChinese ? '上下文压缩设置' : 'Context compression'}>
-            <Field label={isChinese ? '摘要 Profile' : 'Summary profile'} value={summaryProfile} onChangeText={setSummaryProfile} />
-            <Field label={isChinese ? '摘要 Provider' : 'Summary provider'} value={summaryProvider} onChangeText={setSummaryProvider} />
-            <Field label={isChinese ? '摘要 Model' : 'Summary model'} value={summaryModel} onChangeText={setSummaryModel} />
-            <Field label={isChinese ? '摘要 API 模式' : 'Summary API mode'} value={summaryApiMode} onChangeText={setSummaryApiMode} />
-            <Field label={isChinese ? '每多少轮压缩' : 'Summarize every turns'} value={summaryEveryTurns} onChangeText={setSummaryEveryTurns} keyboardType="number-pad" />
-            <NativeButton onPress={saveSummaryConfig} prefix={<Save />} size="sm">
-              {isChinese ? '保存压缩配置' : 'Save compression settings'}
-            </NativeButton>
+            {canManage ? (
+              <>
+                <Field label={isChinese ? '摘要 Profile' : 'Summary profile'} value={summaryProfile} onChangeText={(value) => { markDirty(); setSummaryProfile(value); }} />
+                <Field label={isChinese ? '摘要 Provider' : 'Summary provider'} value={summaryProvider} onChangeText={(value) => { markDirty(); setSummaryProvider(value); }} />
+                <Field label={isChinese ? '摘要 Model' : 'Summary model'} value={summaryModel} onChangeText={(value) => { markDirty(); setSummaryModel(value); }} />
+                <Field label={isChinese ? '摘要 API 模式' : 'Summary API mode'} value={summaryApiMode} onChangeText={(value) => { markDirty(); setSummaryApiMode(value); }} />
+                <Field label={isChinese ? '每多少轮压缩' : 'Summarize every turns'} value={summaryEveryTurns} onChangeText={(value) => { markDirty(); setSummaryEveryTurns(value); }} keyboardType="number-pad" />
+                <NativeButton onPress={saveSummaryConfig} prefix={<Save />} size="sm">
+                  {isChinese ? '保存压缩配置' : 'Save compression settings'}
+                </NativeButton>
+              </>
+            ) : (
+              <PreviewText variant="muted">
+                {isChinese ? '压缩配置由房主管理。' : 'Compression settings are managed by the room owner.'}
+              </PreviewText>
+            )}
             <Text style={[styles.summaryMeta, { color: tokens.colors.textTertiary }]}>
               {activeRoom.summary
                 ? `${isChinese ? '状态' : 'Status'}: ${activeRoom.summary.status} · ${isChinese ? '已压缩轮数' : 'Summarized turns'}: ${activeRoom.summary.summarizedTurnCount}`
                 : (isChinese ? '尚未读取摘要状态' : 'Summary state has not been loaded')}
             </Text>
-            <Field label={isChinese ? '当前摘要（可编辑）' : 'Current summary (editable)'} value={summaryDraft} onChangeText={setSummaryDraft} multiline large />
-            <NativeButton onPress={() => void controller.updateRoomSummary(roomId, summaryDraft)} prefix={<Save />} size="sm">
-              {isChinese ? '保存摘要' : 'Save summary'}
-            </NativeButton>
+            {canManage ? (
+              <>
+                <Field label={isChinese ? '当前摘要（可编辑）' : 'Current summary (editable)'} value={summaryDraft} onChangeText={(value) => { markDirty(); setSummaryDraft(value); }} multiline large />
+                <NativeButton onPress={() => { formDirtyRef.current = false; void controller.updateRoomSummary(roomId, summaryDraft); }} prefix={<Save />} size="sm">
+                  {isChinese ? '保存摘要' : 'Save summary'}
+                </NativeButton>
+              </>
+            ) : (
+              activeRoom.summary?.summary ? (
+                <Text numberOfLines={12} style={[styles.summaryMeta, { color: tokens.colors.textSecondary }]}>
+                  {activeRoom.summary.summary}
+                </Text>
+              ) : null
+            )}
           </Section>
 
           <Section isChinese={isChinese} title={isChinese ? `房间 Agent · ${activeRoom.agents.length}` : `Room agents · ${activeRoom.agents.length}`}>
@@ -224,17 +283,27 @@ export function AgentGroupRoomSettingsModal({
                   </Text>
                   {agent.description ? <Text numberOfLines={1} style={[styles.agentMeta, { color: tokens.colors.textSecondary }]}>{agent.description}</Text> : null}
                 </View>
-                <IOSPressable accessibilityLabel={isChinese ? '编辑 Agent' : 'Edit Agent'} onPress={() => beginEditAgent(agent)} style={styles.smallIcon}>
-                  <Settings2 color={tokens.colors.textSecondary} size={15} />
-                </IOSPressable>
-                <IOSPressable accessibilityLabel={isChinese ? '删除 Agent' : 'Remove Agent'} onPress={() => setDeleteAgentId(agent.id)} style={styles.smallIcon}>
-                  <Trash2 color={tokens.colors.destructive} size={15} />
-                </IOSPressable>
+                {canManage ? (
+                  <IOSPressable accessibilityLabel={isChinese ? '编辑 Agent' : 'Edit Agent'} onPress={() => beginEditAgent(agent)} style={styles.smallIcon}>
+                    <Settings2 color={tokens.colors.textSecondary} size={15} />
+                  </IOSPressable>
+                ) : null}
+                {canManage ? (
+                  <IOSPressable accessibilityLabel={isChinese ? '删除 Agent' : 'Remove Agent'} onPress={() => setDeleteAgentId(agent.id)} style={styles.smallIcon}>
+                    <Trash2 color={tokens.colors.destructive} size={15} />
+                  </IOSPressable>
+                ) : null}
               </View>
             ))}
-            <NativeButton ghost onPress={() => { setEditingAgent(null); setAgentForm(EMPTY_AGENT); setAgentEditorOpen(true); }} prefix={<UserRoundPlus />} size="sm">
-              {isChinese ? '添加 Agent / 打开编辑器' : 'Add Agent / open editor'}
-            </NativeButton>
+            {canManage ? (
+              <NativeButton ghost onPress={() => { setEditingAgent(null); setAgentForm(EMPTY_AGENT); setAgentEditorOpen(true); }} prefix={<UserRoundPlus />} size="sm">
+                {isChinese ? '添加 Agent / 打开编辑器' : 'Add Agent / open editor'}
+              </NativeButton>
+            ) : (
+              <PreviewText variant="muted">
+                {isChinese ? 'Agent 名单由房主管理。' : 'The agent roster is managed by the room owner.'}
+              </PreviewText>
+            )}
             {agentEditorOpen ? (
               <View style={[styles.agentEditor, { borderColor: tokens.colors.border }]}>
                 <Text style={[styles.editorTitle, { color: tokens.colors.foreground }]}>
@@ -262,13 +331,21 @@ export function AgentGroupRoomSettingsModal({
           </Section>
 
           <Section isChinese={isChinese} title={isChinese ? '房间操作' : 'Room actions'}>
-            <Field label={isChinese ? '克隆后的名称' : 'Clone name'} value={cloneName} onChangeText={setCloneName} />
-            <Field label={isChinese ? '克隆邀请码（可选）' : 'Clone invite code (optional)'} value={cloneInviteCode} onChangeText={setCloneInviteCode} />
-            <NativeButton disabled={!cloneName.trim()} onPress={() => void controller.cloneRoom(roomId, cloneName.trim(), cloneInviteCode.trim() || undefined)} prefix={<Copy />} size="sm">
-              {isChinese ? '克隆房间' : 'Clone room'}
-            </NativeButton>
+            {canManage ? (
+              <>
+                <Field label={isChinese ? '克隆后的名称' : 'Clone name'} value={cloneName} onChangeText={setCloneName} />
+                <Field label={isChinese ? '克隆邀请码（可选）' : 'Clone invite code (optional)'} value={cloneInviteCode} onChangeText={setCloneInviteCode} />
+                <NativeButton disabled={!cloneName.trim()} onPress={() => void controller.cloneRoom(roomId, cloneName.trim(), cloneInviteCode.trim() || undefined)} prefix={<Copy />} size="sm">
+                  {isChinese ? '克隆房间' : 'Clone room'}
+                </NativeButton>
+              </>
+            ) : (
+              <PreviewText variant="muted">
+                {isChinese ? '克隆房间需要房主身份。' : 'Cloning a room requires the owner.'}
+              </PreviewText>
+            )}
             <Field label={isChinese ? '用邀请码加入其他房间' : 'Join another room by invite code'} value={joinCode} onChangeText={setJoinCode} />
-            <NativeButton disabled={!joinCode.trim()} onPress={() => void controller.joinRoomByCode(joinCode.trim())} prefix={<Link2 />} size="sm">
+            <NativeButton disabled={!joinCode.trim()} onPress={() => { void controller.joinRoomByCode(joinCode.trim()).catch(() => undefined); }} prefix={<Link2 />} size="sm">
               {isChinese ? '加入房间' : 'Join room'}
             </NativeButton>
           </Section>

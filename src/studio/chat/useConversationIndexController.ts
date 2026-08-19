@@ -358,12 +358,24 @@ export function useConversationIndexController({
       || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
       || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
     ) return;
+    // Merge the server's cross-device deletion tombstones into the local
+    // pending set: without this, a conversation deleted on another device
+    // survives here as a "local-only" row (preserveLocalOnly keeps it).
+    const remoteDeletedIds = new Set(
+      Array.isArray(result.deleted) ? result.deleted.filter((id): id is string => typeof id === 'string' && id.length > 0) : [],
+    );
     const remoteConversations = filterConversationDeletionTombstones(
       result.conversations,
-      pendingDeletionIds,
+      pendingDeletionIds.size || remoteDeletedIds.size
+        ? new Set([...pendingDeletionIds, ...remoteDeletedIds])
+        : pendingDeletionIds,
     );
     const reconciliation = reconcileConversationCache(
-      localConversations,
+      // Rows deleted on another device must also leave the local side of the
+      // comparison, or preserveLocalOnly resurrects them as "local-only".
+      remoteDeletedIds.size
+        ? localConversations.filter((conversation) => !remoteDeletedIds.has(conversation.id))
+        : localConversations,
       remoteConversations,
       true,
     );

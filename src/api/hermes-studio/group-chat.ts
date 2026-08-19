@@ -71,6 +71,18 @@ interface RoomStreamRecord {
 
 const ROOM_STREAM_RETRY_BASE_MS = 1_000;
 const ROOM_STREAM_RETRY_MAX_MS = 30_000;
+// Upper bound of simultaneously open room SSE streams (LRU-evicted above).
+const MAX_ROOM_STREAMS = 5;
+
+function streamFingerprint(value: string): string {
+  // djb2 digest: catches same-length edits that a bare length+status
+  // fingerprint silently dropped.
+  let hash = 5381;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash * 33) ^ value.charCodeAt(index)) >>> 0;
+  }
+  return `${value.length}:${hash.toString(36)}`;
+}
 
 /**
  * Event-bus socket backed by REST polling plus the hosted-event SSE stream.
@@ -112,7 +124,14 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
     const accountGeneration = room.accountGeneration?.trim();
     if (!conversationId || !accountGeneration || !this.client) return;
     const streamKey = `${conversationId}\u0000${accountGeneration}`;
-    if (this.streams.has(streamKey)) return;
+    if (this.streams.has(streamKey)) {
+      // Refresh LRU order so the cap below always evicts the room the user
+      // touched longest ago, never the one they just opened.
+      const existing = this.streams.get(streamKey)!;
+      this.streams.delete(streamKey);
+      this.streams.set(streamKey, existing);
+      return;
+    }
     for (const [key, stale] of [...this.streams.entries()]) {
       if (stale.conversationId === conversationId && key !== streamKey) {
         // Same conversation under a different account fence: retire the old
@@ -136,6 +155,21 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       retryWake: null,
     };
     this.streams.set(streamKey, record);
+    // Bound concurrent room streams: one SSE per joined room forever would
+    // exhaust the iOS HTTP pool and battery. Evict the least-recently-used
+    // stream; selectRoom re-attaches a room on demand.
+    while (this.streams.size > MAX_ROOM_STREAMS) {
+      const oldestKey = this.streams.keys().next().value as string | undefined;
+      if (oldestKey === undefined || oldestKey === streamKey) break;
+      const evicted = this.streams.get(oldestKey);
+      this.streams.delete(oldestKey);
+      if (evicted) {
+        evicted.stopped = true;
+        evicted.controller.abort();
+        evicted.retryWake?.();
+        if (evicted.retryTimer) clearTimeout(evicted.retryTimer);
+      }
+    }
     void this.runRoomStream(record);
   }
 
@@ -190,8 +224,24 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
         // closes without advancing (server EOF at HEAD) keeps the capped
         // schedule instead of reconnecting every second.
         if (record.cursor > cursorBefore) attempt = 0;
-      } catch {
-        // Fall through to the reconnect backoff; polling stays authoritative.
+      } catch (error) {
+        // Access/authorization boundaries (member stream the server
+        // refuses, deleted conversation, retired generation) can never
+        // succeed on retry: degrade this room to REST polling instead of
+        // reconnecting forever on the backoff schedule.
+        const status = Number(
+          (error as { status?: unknown } | null)?.status
+            ?? (error as { statusCode?: unknown } | null)?.statusCode
+            ?? 0,
+        );
+        if (status === 403 || status === 404 || status === 410) {
+          record.stopped = true;
+          this.streams.delete(record.streamKey);
+          this.emit('room_updated', { roomId: record.roomId });
+          break;
+        }
+        // Other failures fall through to the reconnect backoff; polling
+        // stays authoritative.
       }
       if (record.stopped || !this.connected) break;
       const delay = Math.min(
@@ -223,11 +273,12 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       const id = stringValue(raw.id);
       if (!id) continue;
       const content = stringValue(raw.content);
-      const revision = `${content.length}:${stringValue(raw.status)}`;
+      const attachments = Array.isArray(raw.attachments) ? raw.attachments.length : 0;
+      const revision = `${streamFingerprint(content)}:${stringValue(raw.status)}:${stringValue(raw.name)}:${stringValue(raw.role)}:${attachments}`;
       if (record.seen.get(id) === revision) continue;
       const known = record.seen.has(id);
       record.seen.set(id, revision);
-      if (known && !content) continue;
+      if (known && !content && !attachments) continue;
       this.emit('message', { ...raw, roomId: record.roomId });
     }
     // Bound the dedupe map: keep the newest ~500 message revisions so a

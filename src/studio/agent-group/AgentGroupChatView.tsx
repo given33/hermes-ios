@@ -273,8 +273,9 @@ export function AgentGroupChatView({
                 const snapshot = controller.roomSnapshots.find((item) => item.room.id === activeRoom.room.id);
                 const failed = snapshot?.messages.find((item) => item.id === messageId);
                 if (!failed) return;
-                // Remove the failed optimistic row and resend its text.
-                controller.retryFailedMessage(activeRoom.room.id, messageId, failed.content);
+                // Remove the failed optimistic row and resend its text plus
+                // the original mentions so targeted sends survive a retry.
+                controller.retryFailedMessage(activeRoom.room.id, messageId, failed.content, failed.mentions);
               } : undefined}
               running={Boolean(activeRoom?.runningAgents.length)}
               safeAreaBottom={safeAreaBottom}
@@ -360,7 +361,7 @@ export function AgentGroupChatView({
 
       <View style={[styles.bottomActions, { backgroundColor: tokens.colors.background, paddingLeft: 12 + safeAreaLeft }]}> 
         <NativeButton
-          disabled={!activeRoom}
+          disabled={!activeRoom || activeRoom.room.canManage === false}
           ghost
           onPress={() => activeRoom && setDeleteRoomId(activeRoom.room.id)}
           prefix={<Trash2 />}
@@ -457,12 +458,14 @@ export function AgentGroupChatView({
             if (!code || joinBusy) return;
             setJoinBusy(true);
             void controller.joinRoomByCode(code)
-              .catch(() => undefined)
-              .finally(() => {
-                setJoinBusy(false);
+              .then(() => {
+                // Close and clear only on success: a failed join keeps the
+                // modal open with the typed code so it can be corrected.
                 setJoinOpen(false);
                 setJoinCodeInput('');
-              });
+              })
+              .catch(() => undefined)
+              .finally(() => setJoinBusy(false));
           }}
           prefix={<UserRoundPlus />}
         >

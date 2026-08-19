@@ -697,6 +697,8 @@ test('session entries paginate to the leaf on full pages', async () => {
   };
   const result = await fetchSessionEntriesToLeaf(cloudApi as never, 'chat-1', 0);
   assert.deepEqual(requestedCursors, [0, 2000, 3000]);
-  assert.equal(result?.entries.length, SESSION_ENTRIES_PAGE_SIZE * 2 + 50);
-  assert.equal(result?.cursor, 3050);
+  assert.equal(result?.response.entries.length, SESSION_ENTRIES_PAGE_SIZE * 2 + 50);
+  assert.equal(result?.response.cursor, 3050);
+  assert.equal(result?.partial, false);
+  assert.equal(result?.truncated, false);
 });

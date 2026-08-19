@@ -457,7 +457,8 @@ export function useConversationSnapshotController({
     ) {
       throw new Error('Hermes conversation account generation changed');
     }
-    let entries = initialEntries;
+    let entries = initialEntries?.response ?? null;
+    let walkResult = initialEntries;
     if (
       entries
       && previousEntryState.cursor > 0
@@ -470,16 +471,23 @@ export function useConversationSnapshotController({
         )
       )
     ) {
-      entries = await fetchSessionEntriesToLeaf(cloudApi, conversationId, 0, signal);
+      walkResult = await fetchSessionEntriesToLeaf(cloudApi, conversationId, 0, signal);
+      entries = walkResult?.response ?? null;
       if (
         captureConversationDeletionRevision(cacheOwner) !== deletionRevision
         || !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
       ) return conversation;
     }
     if (entries) {
+      // Persist the cursor only when the walk actually reached the leaf;
+      // a partial/truncated window keeps the previous cursor so the next
+      // open resumes instead of believing it is complete.
+      const incomplete = Boolean(walkResult && (walkResult.partial || walkResult.truncated));
       conversation = reconcileConversationSessionEntries(conversation, entries);
       sessionEntryStateRef.current.set(conversationId, {
-        cursor: Math.max(0, entries.cursor || 0),
+        cursor: incomplete
+          ? Math.max(0, Math.floor(previousEntryState.cursor || 0))
+          : Math.max(0, entries.cursor || 0),
         generation: entries.account_generation || previousEntryState.generation,
       });
     }
