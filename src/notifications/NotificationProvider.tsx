@@ -305,8 +305,14 @@ export function NotificationProvider({ children }: PropsWithChildren) {
           {
             // The unified iOS coordinator owns the system sheet. Expo only
             // reads the resulting APNs status so parent/child effects cannot
-            // race two notification permission requests after login.
-            requestUndeterminedPermission: !coordinated,
+            // race two notification permission requests after login. When
+            // the native context bridge is degraded (resigned build without
+            // entitlements, circuit breaker open) the coordinator marks the
+            // permission 'unavailable' — it can never show the sheet, so
+            // expo must request it itself instead of silently unregistering
+            // APNs for a user who never saw a prompt.
+            requestUndeterminedPermission: !coordinated
+              || coordinated.permissions.notification === 'unavailable',
           },
         );
         if (!active) return;

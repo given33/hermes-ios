@@ -53,6 +53,12 @@ export function parseHermesDeepLink(url: string): HermesDeepLinkTarget | null {
       routePath: '/chat',
     };
   }
+  // `hermes-agent://weather` is the short form push payloads use; the
+  // Smart Weather page lives at /smart-weather, and an unaliased /weather
+  // fell through to the shell fallback (the chat page).
+  if (decoded[0] === 'weather') {
+    return { routePath: '/smart-weather' };
+  }
   return { routePath: `/${decoded.join('/')}` };
 }
 

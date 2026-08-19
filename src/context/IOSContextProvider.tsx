@@ -1602,161 +1602,180 @@ async function drainPendingAgentTriggers(
       await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID)).catch(() => false);
       continue;
     }
-    const kind = typeof trigger.kind === 'string' ? trigger.kind.trim().toLowerCase() : '';
-    const rawContent = typeof trigger.content === 'string' ? trigger.content.trim() : '';
-    const sessionID = typeof trigger.sessionID === 'string' ? trigger.sessionID.trim() : '';
-    const model = typeof trigger.model === 'string' ? trigger.model.trim() : '';
-    const triggerAttachments = Array.isArray(trigger.attachments) ? trigger.attachments : [];
-    if (!requestID) continue;
-    if (kind === 'voice-start') {
-      if (AppState.currentState !== 'active') continue;
-      const authorization = await runCurrent(() => HermesIOSContext.requestVoiceAuthorization());
-      if (authorization.microphone !== 'authorized' || authorization.speech !== 'authorized') {
-        throw new Error('voice permissions are not authorized');
-      }
-      await runCurrent(() => HermesIOSContext.startAgentVoiceCapture());
-      await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
-      continue;
-    }
-    let runtimeAttachments = triggerAttachments;
-    if (kind === 'camera-task') {
-      if (AppState.currentState !== 'active') continue;
-      const permission = await ImagePicker.requestCameraPermissionsAsync();
-      if (!permission.granted) throw new Error('camera permission is not authorized');
-      const capture = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1, exif: true });
-      if (capture.canceled || !capture.assets[0]?.uri) {
+    // One poison trigger (denied permission, missing vault, failed
+    // upload) must not wedge the queue head: every earlier error here
+    // threw out of the whole drain, the trigger was never consumed,
+    // and every later Siri/share/Action-Button request starved until
+    // restart. Isolate per trigger.
+    try {
+      const kind = typeof trigger.kind === 'string' ? trigger.kind.trim().toLowerCase() : '';
+      const rawContent = typeof trigger.content === 'string' ? trigger.content.trim() : '';
+      const sessionID = typeof trigger.sessionID === 'string' ? trigger.sessionID.trim() : '';
+      const model = typeof trigger.model === 'string' ? trigger.model.trim() : '';
+      const triggerAttachments = Array.isArray(trigger.attachments) ? trigger.attachments : [];
+      if (!requestID) continue;
+      if (kind === 'voice-start') {
+        if (AppState.currentState !== 'active') continue;
+        const authorization = await runCurrent(() => HermesIOSContext.requestVoiceAuthorization());
+        if (authorization.microphone !== 'authorized' || authorization.speech !== 'authorized') {
+          throw new Error('voice permissions are not authorized');
+        }
+        await runCurrent(() => HermesIOSContext.startAgentVoiceCapture());
         await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
         continue;
       }
-      const asset = capture.assets[0];
-      runtimeAttachments = [{
-        attachmentID: requestID,
-        bytes: asset.fileSize,
-        filename: asset.fileName || `camera-${requestID}.jpg`,
-        mimeType: asset.mimeType || 'image/jpeg',
-        uri: asset.uri,
-      }];
-    }
-    if (!rawContent && runtimeAttachments.length === 0) continue;
-    const content = kind === 'clipboard-to-email'
-      ? `请把以下剪贴板内容整理成一封可发送的邮件，补全主题、收件人建议和正文：\n\n${rawContent}`
-      : kind === 'summarize-meeting'
-        ? rawContent
-        : kind === 'daily-report'
+      let runtimeAttachments = triggerAttachments;
+      if (kind === 'camera-task') {
+        if (AppState.currentState !== 'active') continue;
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) throw new Error('camera permission is not authorized');
+        const capture = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 1, exif: true });
+        if (capture.canceled || !capture.assets[0]?.uri) {
+          await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
+          continue;
+        }
+        const asset = capture.assets[0];
+        runtimeAttachments = [{
+          attachmentID: requestID,
+          bytes: asset.fileSize,
+          filename: asset.fileName || `camera-${requestID}.jpg`,
+          mimeType: asset.mimeType || 'image/jpeg',
+          uri: asset.uri,
+        }];
+      }
+      if (!rawContent && runtimeAttachments.length === 0) continue;
+      const content = kind === 'clipboard-to-email'
+        ? `请把以下剪贴板内容整理成一封可发送的邮件，补全主题、收件人建议和正文：\n\n${rawContent}`
+        : kind === 'summarize-meeting'
           ? rawContent
-          : `请分析以下内容，并给出结构化结论、风险和下一步行动：\n\n${rawContent}`;
-    const title = kind === 'daily-report'
-      ? 'Hermes daily work report'
-      : kind === 'summarize-meeting'
-        ? 'Hermes meeting summary'
-        : kind === 'clipboard-to-email'
-          ? 'Hermes clipboard email'
-          : 'Hermes shared analysis';
-    const messageContent = ['send-prompt', 'ask', 'quick-task', 'follow-up'].includes(kind)
-      ? rawContent
-      : content;
-    const createdAt = Date.now();
-    const messageID = `ios-trigger-${requestID}`;
-    let conversationID = sessionID;
-    if (!conversationID) {
-      const response = await runCurrent(() => cloud.createConversation(
-        'default',
-        title,
-        `ios-trigger-${requestID}`,
-      ));
-      const conversation = (response as { conversation?: { id?: string } }).conversation;
-      conversationID = typeof conversation?.id === 'string' ? conversation.id.trim() : '';
-    }
-    if (!conversationID) throw new Error('agent trigger conversation was not created');
-    const message: CollaborationMessage = {
-      content: messageContent,
-      created_at: createdAt,
-      id: messageID,
-      kind: 'message',
-      meta: {
-        source: 'ios-agent-trigger',
-        trigger_kind: kind,
-        trigger_id: requestID,
-        ...(sessionID ? { session_id: sessionID } : {}),
-        ...(model ? { model } : {}),
-      },
-      name: 'You',
-      role: 'user',
-      sender_id: 'ios-agent-trigger',
-      sender_name: 'You',
-      status: 'completed',
-      updated_at: createdAt,
-    };
-    const uploadedAttachments: Array<Record<string, unknown>> = [];
-    const uploadedAttachmentOriginals: string[] = [];
-    const attachmentEntries = Array.isArray(runtimeAttachments)
-      ? runtimeAttachments.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-      : [];
-    const shareRoot = HermesIOSContext.getAgentShareAttachmentRootUri?.();
-    const encryptedRoot = HermesIOSContext.getAttachmentOutboxRootUri?.();
-    const shareAttachmentRoot = shareRoot ?? '';
-    const requiresShareRoot = attachmentEntries.some((attachment) => typeof attachment.uri !== 'string');
-    if (attachmentEntries.length > 0 && (!encryptedRoot || (requiresShareRoot && !shareRoot))) {
-      throw new Error('attachment vault is unavailable');
-    }
-    if (encryptedRoot && (!requiresShareRoot || shareRoot)) {
-      for (const attachment of attachmentEntries.slice(0, 10)) {
-        const filename = typeof attachment.attachmentPath === 'string' ? attachment.attachmentPath : '';
-        const directURI = typeof attachment.uri === 'string' ? attachment.uri : '';
-        if (!directURI && (!filename || filename.includes('/') || filename.includes('\\'))) continue;
-        const attachmentID = typeof attachment.attachmentID === 'string' ? attachment.attachmentID : requestID;
-        const name = typeof attachment.filename === 'string' && attachment.filename.trim()
-          ? attachment.filename.trim().slice(0, 160)
-          : `shared-${attachmentID}.bin`;
-        const sourceURI = directURI || `${shareAttachmentRoot.replace(/\/$/, '')}/${encodeURIComponent(filename)}`;
-        const targetURI = `${encryptedRoot.replace(/\/$/, '')}/agent-share-${encodeURIComponent(attachmentID)}.enc`;
-        let plaintextURI = '';
-        try {
-          await runCurrent(() => HermesIOSContext.encryptAttachment(ownerScope, sourceURI, targetURI));
-          plaintextURI = await runCurrent(() => HermesIOSContext.decryptAttachmentForUpload(ownerScope, targetURI, name));
-          const uploaded = await runCurrent(() => cloud.uploadConversationAttachment(
-            conversationID,
-            { name, uri: plaintextURI, size: typeof attachment.bytes === 'number' ? attachment.bytes : undefined },
-            { messageId: messageID, profile: 'default', turnId: `ios-trigger-turn-${requestID}`, uploadId: attachmentID },
-          ));
-          if (uploaded && typeof uploaded === 'object') {
-            const record = uploaded as Record<string, unknown>;
-            if (record.attachment && typeof record.attachment === 'object') uploadedAttachments.push(record.attachment as Record<string, unknown>);
+          : kind === 'daily-report'
+            ? rawContent
+            : `请分析以下内容，并给出结构化结论、风险和下一步行动：\n\n${rawContent}`;
+      const title = kind === 'daily-report'
+        ? 'Hermes daily work report'
+        : kind === 'summarize-meeting'
+          ? 'Hermes meeting summary'
+          : kind === 'clipboard-to-email'
+            ? 'Hermes clipboard email'
+            : 'Hermes shared analysis';
+      const messageContent = ['send-prompt', 'ask', 'quick-task', 'follow-up'].includes(kind)
+        ? rawContent
+        : content;
+      const createdAt = Date.now();
+      const messageID = `ios-trigger-${requestID}`;
+      let conversationID = sessionID;
+      if (!conversationID) {
+        const response = await runCurrent(() => cloud.createConversation(
+          'default',
+          title,
+          `ios-trigger-${requestID}`,
+        ));
+        const conversation = (response as { conversation?: { id?: string } }).conversation;
+        conversationID = typeof conversation?.id === 'string' ? conversation.id.trim() : '';
+      }
+      if (!conversationID) throw new Error('agent trigger conversation was not created');
+      const message: CollaborationMessage = {
+        content: messageContent,
+        created_at: createdAt,
+        id: messageID,
+        kind: 'message',
+        meta: {
+          source: 'ios-agent-trigger',
+          trigger_kind: kind,
+          trigger_id: requestID,
+          ...(sessionID ? { session_id: sessionID } : {}),
+          ...(model ? { model } : {}),
+        },
+        name: 'You',
+        role: 'user',
+        sender_id: 'ios-agent-trigger',
+        sender_name: 'You',
+        status: 'completed',
+        updated_at: createdAt,
+      };
+      const uploadedAttachments: Array<Record<string, unknown>> = [];
+      const uploadedAttachmentOriginals: string[] = [];
+      const attachmentEntries = Array.isArray(runtimeAttachments)
+        ? runtimeAttachments.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        : [];
+      const shareRoot = HermesIOSContext.getAgentShareAttachmentRootUri?.();
+      const encryptedRoot = HermesIOSContext.getAttachmentOutboxRootUri?.();
+      const shareAttachmentRoot = shareRoot ?? '';
+      const requiresShareRoot = attachmentEntries.some((attachment) => typeof attachment.uri !== 'string');
+      if (attachmentEntries.length > 0 && (!encryptedRoot || (requiresShareRoot && !shareRoot))) {
+        throw new Error('attachment vault is unavailable');
+      }
+      if (encryptedRoot && (!requiresShareRoot || shareRoot)) {
+        for (const attachment of attachmentEntries.slice(0, 10)) {
+          const filename = typeof attachment.attachmentPath === 'string' ? attachment.attachmentPath : '';
+          const directURI = typeof attachment.uri === 'string' ? attachment.uri : '';
+          if (!directURI && (!filename || filename.includes('/') || filename.includes('\\'))) continue;
+          const attachmentID = typeof attachment.attachmentID === 'string' ? attachment.attachmentID : requestID;
+          const name = typeof attachment.filename === 'string' && attachment.filename.trim()
+            ? attachment.filename.trim().slice(0, 160)
+            : `shared-${attachmentID}.bin`;
+          const sourceURI = directURI || `${shareAttachmentRoot.replace(/\/$/, '')}/${encodeURIComponent(filename)}`;
+          const targetURI = `${encryptedRoot.replace(/\/$/, '')}/agent-share-${encodeURIComponent(attachmentID)}.enc`;
+          let plaintextURI = '';
+          try {
+            await runCurrent(() => HermesIOSContext.encryptAttachment(ownerScope, sourceURI, targetURI));
+            plaintextURI = await runCurrent(() => HermesIOSContext.decryptAttachmentForUpload(ownerScope, targetURI, name));
+            const uploaded = await runCurrent(() => cloud.uploadConversationAttachment(
+              conversationID,
+              { name, uri: plaintextURI, size: typeof attachment.bytes === 'number' ? attachment.bytes : undefined },
+              { messageId: messageID, profile: 'default', turnId: `ios-trigger-turn-${requestID}`, uploadId: attachmentID },
+            ));
+            if (uploaded && typeof uploaded === 'object') {
+              const record = uploaded as Record<string, unknown>;
+              if (record.attachment && typeof record.attachment === 'object') uploadedAttachments.push(record.attachment as Record<string, unknown>);
+            }
+            await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI));
+            // The ORIGINAL share copy stays on disk until the hosted turn is
+            // durably accepted: an enqueue failure below retries the trigger,
+            // and that retry must still find its attachments.
+            if (filename) uploadedAttachmentOriginals.push(filename);
+          } catch {
+            if (plaintextURI) {
+              await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI)).catch(() => false);
+            }
+            // Keep the trigger durable when an attachment upload is transient.
+            throw new Error('shared attachment upload failed');
           }
-          await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI));
-          // The ORIGINAL share copy stays on disk until the hosted turn is
-          // durably accepted: an enqueue failure below retries the trigger,
-          // and that retry must still find its attachments.
-          if (filename) uploadedAttachmentOriginals.push(filename);
-        } catch {
-          if (plaintextURI) {
-            await runCurrent(() => HermesIOSContext.deleteDecryptedAttachment(plaintextURI)).catch(() => false);
-          }
-          // Keep the trigger durable when an attachment upload is transient.
-          throw new Error('shared attachment upload failed');
         }
       }
+      const attachmentIds = uploadedAttachments.flatMap((item) => typeof item.id === 'string' ? [item.id] : []);
+      const attachmentContext = uploadedAttachments.length
+        ? JSON.stringify(uploadedAttachments).slice(0, 8_000)
+        : '';
+      await runCurrent(() => cloud.enqueueHostedTurn(conversationID, {
+        attachmentIds,
+        attachmentContext,
+        deliveryContext: '由 iPhone Siri、分享菜单或 Action Button 触发的 Hermes 任务。',
+        message,
+        profiles: ['default'],
+        recentMessages: [],
+        requestId: requestID,
+        turnId: `ios-trigger-turn-${requestID}`,
+      }));
+      // Durable ACK received: the server owns the attachments now, so the
+      // plaintext share originals can finally be removed.
+      for (const filename of uploadedAttachmentOriginals) {
+        await runCurrent(() => HermesIOSContext.deleteAgentShareAttachment?.(filename) ?? Promise.resolve(false)).catch(() => false);
+      }
+      await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Permanent failures (denied permissions, unavailable vault) can
+      // never succeed on retry — drop the trigger so the queue drains.
+      // Transient failures (network, upload) stay queued for the next
+      // relay, but we still move on to the remaining triggers.
+      const permanent = /permission|not authorized|vault is unavailable/.test(message);
+      if (permanent) {
+        await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID)).catch(() => false);
+        console.warn(`[ios-context] dropped agent trigger ${requestID}: ${message}`);
+      }
+      continue;
     }
-    const attachmentIds = uploadedAttachments.flatMap((item) => typeof item.id === 'string' ? [item.id] : []);
-    const attachmentContext = uploadedAttachments.length
-      ? JSON.stringify(uploadedAttachments).slice(0, 8_000)
-      : '';
-    await runCurrent(() => cloud.enqueueHostedTurn(conversationID, {
-      attachmentIds,
-      attachmentContext,
-      deliveryContext: '由 iPhone Siri、分享菜单或 Action Button 触发的 Hermes 任务。',
-      message,
-      profiles: ['default'],
-      recentMessages: [],
-      requestId: requestID,
-      turnId: `ios-trigger-turn-${requestID}`,
-    }));
-    // Durable ACK received: the server owns the attachments now, so the
-    // plaintext share originals can finally be removed.
-    for (const filename of uploadedAttachmentOriginals) {
-      await runCurrent(() => HermesIOSContext.deleteAgentShareAttachment?.(filename) ?? Promise.resolve(false)).catch(() => false);
-    }
-    await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID));
   }
   if (droppedUnboundShares > 0) {
     // Unbound (pre-hint) share requests are never auto-claimed: surface the

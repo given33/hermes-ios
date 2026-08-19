@@ -150,7 +150,9 @@ export function useHermesVoice({
         notify(describeError(error));
       },
       onStopped: () => setSpeakingMessageId((current) => current === messageId ? '' : current),
-      rate: 0.5,
+      // expo-speech scale: 1.0 is normal pace (unlike AVSpeechUtterance
+      // where 0.5 is normal — the native path above is already correct).
+      rate: 1.0,
     });
   }, [describeError, isChinese, notify, stopCurrentSpeech]);
 
