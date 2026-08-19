@@ -27,6 +27,7 @@ import {
   partitionAttachmentsBySize,
 } from '../../api/attachment-size-policy';
 import { writeBoundedDownload } from '../../api/bounded-download';
+import { downloadDeadlineMs } from '../../api/upload-body';
 import { temporaryPlaintextFile } from '../../api/temporary-plaintext-files';
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
 import type { HermesChatAttachment as StoredChatAttachment } from '../../api/chat-view-model';
@@ -510,6 +511,10 @@ export function useChatAttachmentController({
               signal,
             }),
             abortController.signal,
+            // Scale the deadline by attachment size: the transport's fixed
+            // 120s budget wraps the whole streamed write and aborts any
+            // large download on a slow link mid-flight.
+            downloadDeadlineMs(attachment.size ?? 0),
           );
           ownsTarget = true;
         }

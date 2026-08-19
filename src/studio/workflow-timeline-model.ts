@@ -1,3 +1,4 @@
+import { truncateByCodePoints } from '../api/text-clamp';
 import {
   messageDurationMs,
   messageIsRunning,
@@ -208,7 +209,7 @@ export function clampActivityText(
   const lines = text.split('\n');
   let clampedText = lines.slice(0, limits.maxLines).join('\n');
   if (clampedText.length > limits.maxCharacters) {
-    clampedText = clampedText.slice(0, limits.maxCharacters);
+    clampedText = truncateByCodePoints(clampedText, limits.maxCharacters);
     const lastBreak = clampedText.lastIndexOf('\n');
     if (lastBreak > limits.maxCharacters / 2) clampedText = clampedText.slice(0, lastBreak);
   }

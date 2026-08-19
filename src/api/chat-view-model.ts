@@ -41,6 +41,7 @@ import {
   isChatRuntimeStatusActivity,
   latestChatRuntimeWaitingState,
 } from './chat-runtime-state';
+import { truncateByCodePoints } from './text-clamp';
 import { parseTodoItems, todoItemsFromActivity } from './chat-todo-model';
 
 export type {
@@ -1084,7 +1085,7 @@ export function streamEventToActivity(
         || `reasoning-${now}`,
       name: '模型思考',
       output: text,
-      preview: text.slice(0, 80),
+      preview: truncateByCodePoints(text, 80),
       startedAt: timestampValue(payload.started_at) || now,
       status: ['reasoning.available', 'thinking.completed'].includes(eventType)
         ? 'completed'
@@ -1523,6 +1524,15 @@ function deduplicateMessages(messages: HermesChatViewMessage[]): HermesChatViewM
 
 const CONTENT_DEDUP_WINDOW_MS = 60_000;
 
+function messageMemberIdentity(message: HermesChatViewMessage): string {
+  // Canonical member id when the event carried one; the raw role stage
+  // (e.g. worker:pc-worker:rework:1) identifies the producing member+phase
+  // for older records; name|profile is the single-chat fallback.
+  return message.memberId
+    || message.rawRoleStage
+    || `${message.name}|${message.profile || ''}`;
+}
+
 function deduplicateByContent(messages: HermesChatViewMessage[]): HermesChatViewMessage[] {
   const result: HermesChatViewMessage[] = [];
   for (const message of messages) {
@@ -1532,7 +1542,14 @@ function deduplicateByContent(messages: HermesChatViewMessage[]): HermesChatView
           if (existing.role !== message.role || existing.content !== message.content) return false;
           const sameRuntimeTurn = Boolean(existing.runtimeTurnId)
             && existing.runtimeTurnId === message.runtimeTurnId;
-          if (sameRuntimeTurn) return true;
+          if (sameRuntimeTurn) {
+            // Two projections of ONE message (snapshot + session journal)
+            // share the producing member's identity. Two DIFFERENT members
+            // of the same team turn replying with the same short text
+            // ("已收到" / "完成") do not — collapsing them silently
+            // dropped the second member's message.
+            return messageMemberIdentity(existing) === messageMemberIdentity(message);
+          }
           const existingTimestamp = existing.createdAt || existing.updatedAt || 0;
           const messageTimestamp = message.createdAt || message.updatedAt || 0;
           // A durable enqueue can be projected once from the conversation

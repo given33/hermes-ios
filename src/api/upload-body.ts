@@ -41,3 +41,15 @@ export async function boundedUploadBody(
 export function uploadDeadlineMs(byteSize: number): number {
   return Math.max(120_000, Math.ceil((Math.max(0, byteSize) / 25_000)) * 1_000);
 }
+
+/**
+ * Deadline for a single attachment download, scaled by payload size — the
+ * download twin of {@link uploadDeadlineMs}. The transport default (120s)
+ * wraps the whole streamed body write: a 64 MB attachment on a throttled
+ * cellular link needs several minutes, so the fixed deadline aborted every
+ * large download mid-flight, deleted the partial plaintext file, and
+ * restarted from zero on each retry.
+ */
+export function downloadDeadlineMs(byteSize: number): number {
+  return Math.max(120_000, Math.ceil((Math.max(0, byteSize) / 25_000)) * 1_000);
+}

@@ -1,4 +1,5 @@
 import type { HostedLifecycleEvent, HostedRuntimeMetadata } from './hosted-conversation-events';
+import { truncateByCodePoints } from './text-clamp';
 import type {
   HostedComponentLifecycle,
   HostedComponentProjection,
@@ -78,6 +79,10 @@ export function reduceHostedRuntimeEvents(
     state.terminal = false;
     state.hasGap = false;
     state.resetRequired = true;
+    // Clear the turn seed too: recovery must re-seed from the next event,
+    // otherwise every post-reset event is dropped by the turn filter and
+    // resetRequired latches true forever.
+    state.turnId = '';
     if (options.accountGeneration) state.accountGeneration = options.accountGeneration;
   } else {
     state.hasGap = Boolean(state.hasGap || options.hasGap);
@@ -92,7 +97,26 @@ export function reduceHostedRuntimeEvents(
   const ordered = [...events].sort((left, right) => left.cursor - right.cursor);
   for (const event of ordered) {
     if (seen.has(event.event_id)) continue;
-    if (state.turnId && event.turn_id !== state.turnId) continue;
+    if (event.turn_id && event.turn_id !== state.turnId) {
+      if (state.turnId) {
+        // A NEW turn begins. Per-turn projections (components, subagents,
+        // provider rings, the terminal latch) rotate; the trajectory is
+        // multi-turn by design and keeps appending. Without this rotation
+        // the projection is permanently locked onto the first turn and every
+        // later turn's subagent roster / timeline stays frozen (and stale
+        // terminal=true keeps rendering the finished turn as live).
+        state.components = {};
+        state.providers = {};
+        state.subagents = {};
+        state.terminal = false;
+      }
+      // Seed (or rotate) from cursor order — the batch may mix the tail of
+      // one turn with the head of the next, and the pre-sort `events[0]`
+      // seed could pick the wrong one.
+      state.turnId = event.turn_id;
+    } else if (!event.turn_id && state.turnId) {
+      continue;
+    }
     if (state.accountGeneration && event.account_generation !== state.accountGeneration) continue;
     if (!state.accountGeneration) state.accountGeneration = event.account_generation;
     const subagent = subagentProjectionFor(state, event);
@@ -234,7 +258,7 @@ function trajectoryStatus(
 function trajectorySummary(eventType: string, payload: Record<string, unknown>): string {
   for (const key of ['summary', 'preview', 'text', 'partial_summary', 'partial_result', 'name', 'tool_name']) {
     const value = stringValue(payload[key]);
-    if (value) return redactTrajectoryText(value).slice(0, 220);
+    if (value) return truncateByCodePoints(redactTrajectoryText(value), 220);
   }
   return eventType.replaceAll('.', ' / ');
 }
@@ -327,7 +351,7 @@ function subagentProjectionFor(
       cursor: event.cursor,
       occurredAt: event.occurred_at,
       kind: sourceType || event.event_type,
-      text: text.slice(0, 1600),
+      text: truncateByCodePoints(text, 1600),
     });
   }
   const boundedTranscript = transcript.slice(-80);

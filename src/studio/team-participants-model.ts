@@ -202,14 +202,20 @@ export function eventReworkRound(event: TeamTimelineEvent): number {
   const request = raw.match(/rework-request:(\d+)/);
   if (request) return Math.max(0, Number(request[1]) - 1);
   const match = raw.match(/rework:(\d+)/);
-  return match ? Number(match[1]) : 0;
+  if (match) return Number(match[1]);
+  // Unnumbered historical "supervisor.rework-request": we cannot know which
+  // round it preceded, so attribute it to the pre-first-round segment (same
+  // as request:1 → 0). The badge counter still records it as a rework.
+  return 0;
 }
 
 /** Badge value: how many rework rounds this member has been through. */
 export function eventReworkBadge(event: TeamTimelineEvent): number {
   const raw = (event.rawRoleStage || '').toLowerCase();
   const match = raw.match(/rework(?:-request)?:(\d+)/);
-  return match ? Number(match[1]) : 0;
+  if (match) return Number(match[1]);
+  // Unnumbered historical rework-request still means one rework happened.
+  return /rework-request/.test(raw) ? 1 : 0;
 }
 
 function memberLiveState(

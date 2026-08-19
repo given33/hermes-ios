@@ -419,11 +419,12 @@ export class HermesConversationsCloudApi {
     downloadUrl: string,
     consume: (response: Response, signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
+    deadlineMs?: number,
   ) {
     if (!isConversationAttachmentDownloadUrl(downloadUrl)) {
       throw new Error('Invalid conversation attachment URL');
     }
-    return this.transport.consumeDownload(downloadUrl, consume, { signal });
+    return this.transport.consumeDownload(downloadUrl, consume, { signal, deadlineMs });
   }
 }
 

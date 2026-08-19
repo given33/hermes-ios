@@ -5,6 +5,7 @@ import {
   type HostedRuntimeProjection,
 } from './hosted-runtime-reducer';
 import type { HermesChatRoleStage, HermesChatTodo } from './chat-view-types';
+import { truncateByCodePoints } from './text-clamp';
 import {
   avatarRoleFor,
   streamEventToActivity,
@@ -221,7 +222,7 @@ export function applyHostedLifecycleEvents(
         id,
         name: chinese ? '模型思考' : 'Model reasoning',
         output,
-        preview: lastNonEmptyLine(output).slice(0, 120),
+        preview: truncateByCodePoints(lastNonEmptyLine(output), 120),
         startedAt: existing?.startedAt || occurredAt,
         status,
       };

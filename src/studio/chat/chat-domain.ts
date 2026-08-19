@@ -6,6 +6,7 @@ import {
 } from '../../api/HermesCloudApi';
 import type { OptimisticConversationLedgerItem } from '../../api/conversation-local-store';
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
+import { truncateByCodePoints } from '../../api/text-clamp';
 import type { HermesChatActivity, HermesChatAttachment } from '../../api/chat-view-types';
 import { isTerminalStatus } from '../../api/chat-view-timing';
 
@@ -201,19 +202,22 @@ export function mergeLiveMessagesIntoSnapshot(
     else liveByKey.set(key, [message]);
   }
   if (!liveByKey.size) return [...persisted];
-  const consumed = new Set<string>();
   const merged = persisted.map((message) => {
     const key = liveMessageMergeKey(message);
     if (!key) return message;
     const bucket = liveByKey.get(key);
     if (!bucket?.length) return message;
-    consumed.add(key);
-    return mergeSnapshotMessage(message, bucket[bucket.length - 1]);
+    // Consume live entries 1:1 with matching persisted messages: one team
+    // turn can carry several persisted phase messages sharing a merge key,
+    // and folding the SAME live message into each of them duplicated the
+    // streaming text across adjacent bubbles until the turn ended.
+    const liveMessage = bucket.shift();
+    if (!liveMessage) return message;
+    return mergeSnapshotMessage(message, liveMessage);
   });
   const trailing: ChatMessage[] = [];
-  for (const [key, bucket] of liveByKey) {
-    if (consumed.has(key)) continue;
-    trailing.push(...bucket);
+  for (const bucket of liveByKey.values()) {
+    if (bucket.length) trailing.push(...bucket);
   }
   return trailing.length ? [...merged, ...trailing] : merged;
 }
@@ -223,7 +227,7 @@ export function optimisticConversationTitle(
   chinese: boolean,
 ): string {
   const firstUserContent = messages.find(({ role }) => role === 'user')?.content?.trim();
-  return firstUserContent?.slice(0, 36) || (chinese ? '新对话' : 'New conversation');
+  return (firstUserContent ? truncateByCodePoints(firstUserContent, 36) : '') || (chinese ? '新对话' : 'New conversation');
 }
 
 function numericTimestamp(value: unknown): number {

@@ -1041,8 +1041,9 @@ export class HermesCloudApi {
     downloadUrl: string,
     consume: (response: Response, signal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
+    deadlineMs?: number,
   ) {
-    return this.conversations.consumeConversationAttachment(downloadUrl, consume, signal);
+    return this.conversations.consumeConversationAttachment(downloadUrl, consume, signal, deadlineMs);
   }
 
   async loadRoute(
