@@ -296,7 +296,22 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
       nextSession.startActivity(with: startedAt)
       builder.beginCollection(withStart: startedAt) { [weak self] succeeded, error in
         Task { @MainActor in
-          guard let self, self.workoutBuilder === builder, self.isCurrent(fence) else { return }
+          guard let self, self.workoutBuilder === builder else { return }
+          if !self.isCurrent(fence) {
+            // Stale fence: clean up the workout/location resources but do
+            // NOT send the callback (the phone has moved to a new account
+            // generation). Leaving the workout session and Best-accuracy
+            // location running drains the watch battery until reconnect.
+            self.workoutSession?.end()
+            self.workoutBuilder?.discardWorkout()
+            self.workoutBuilder = nil
+            self.workoutSession = nil
+            self.activeOperationFence = nil
+            self.activeRelayMode = nil
+            self.activeRelay = false
+            self.locationManager.stopUpdatingLocation()
+            return
+          }
           self.send([
             "activity": activity,
             "error": error?.localizedDescription ?? "",
@@ -479,10 +494,16 @@ final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDeleg
     }
     if session.isReachable {
       session.sendMessage(envelope, replyHandler: { [weak self] reply in
+        // Rejected events are NOT re-delivered: the phone rejected the
+        // envelope for a reason (stale fence, collection suspended) and
+        // re-sending the same envelope via transferUserInfo would just be
+        // rejected again while adding a duplicate disk write + parse cycle.
+        // Only the errorHandler path (message genuinely failed to send)
+        // falls back to store-and-forward delivery.
         guard reply["accepted"] as? Bool != true else { return }
         Task { @MainActor in
-          guard let self, self.isCurrent(fence) else { return }
-          self.session.transferUserInfo(envelope)
+          guard let self else { return }
+          Self.logger.info("watch event rejected by phone; dropping (not re-delivering)")
         }
       }) { [weak self] _ in
         Task { @MainActor in

@@ -304,7 +304,13 @@ function memberFallbackActivities(
   ));
   if (claimants.length) return [];
   return activities.filter((activity) => (
-    (activity.memberId || '').trim().toLowerCase() === assignee
+    // The activity-level memberId field is optional and rarely populated
+    // by the view model (it lives on the HOST MESSAGE, not individual
+    // activities). Fall back to matching the activity's agentName against
+    // the assignee — teamMemberIdForEvent produces deterministic profile-
+    // based names that align with todo assignees.
+    (activity.memberId || activity.agentName || '').trim().toLowerCase() === assignee
+    || (activity.agentName || '').trim().toLowerCase().includes(assignee)
   ));
 }
 
