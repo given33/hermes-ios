@@ -30,7 +30,9 @@ test('chat dependency layers and module-size ratchets stay enforced', () => {
   }
 
   for (const [path, limit] of [
-    ['src/studio/PreviewChatPage.tsx', 900],
+    // +1: the lifecycle application now takes activeConversationIdRef for
+    // the conversation-switch flush guard (cross-talk fix).
+    ['src/studio/PreviewChatPage.tsx', 901],
     ['src/api/HermesCloudApi.ts', 1_100],
     ['src/api/conversation-local-store.ts', 551], // +1: resetCachedConversationTranscript re-export
     ['src/studio/chat/useChatPageState.ts', 160],

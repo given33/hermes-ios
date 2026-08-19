@@ -374,8 +374,12 @@ export function useConversationActionsController({
       && !hostedRunning
       && !activeHostedTurnIdRef.current
     ) {
-      await cancellation.cancelPendingSend();
-      if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+      // Detach the in-flight enqueue instead of cancelling it: the user's
+      // message stays in the durable outbox and the background replay
+      // delivers it (the server dedupes by request id). Cancelling here
+      // silently dropped messages whenever the user switched conversations
+      // right after sending on a slow network.
+      pendingTurnActiveRef.current = false;
     }
     autoFollowStreamRef.current = true;
     activeHostedTurnIdRef.current = '';

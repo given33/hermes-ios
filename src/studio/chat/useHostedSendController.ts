@@ -617,7 +617,14 @@ export function useHostedSendController({
     } catch (error) {
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
       if (!isCurrentSend() || error instanceof HostedTurnCancelledDuringDelivery) {
-        if (localStore && cacheOwner && queuedItem) {
+        // Only tear down the durable row when the user explicitly cancelled.
+        // A send detached by a conversation switch keeps its outbox item so
+        // the background replay can still deliver it idempotently.
+        const explicitlyCancelled = (
+          cancelledPendingSendKeysRef.current.has(sendKey)
+          || error instanceof HostedTurnCancelledDuringDelivery
+        );
+        if (explicitlyCancelled && localStore && cacheOwner && queuedItem) {
           const cancelled = await localStore.cancelPendingEnqueue(
             cacheOwner,
             userMessageId,

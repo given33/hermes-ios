@@ -10,7 +10,7 @@ import {
   Wrench,
 } from 'lucide-react-native';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, ScrollView, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { FlatList, Image, ScrollView, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 
 import type {
@@ -64,7 +64,7 @@ export function AgentGroupMessageStream({
   userId,
 }: AgentGroupMessageStreamProps) {
   const { tokens } = useTheme();
-  const scrollRef = useRef<ScrollView | null>(null);
+  const scrollRef = useRef<FlatList<HermesStudioGroupChatMessage> | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const displayMessages = useMemo(() => groupAgentRunMessages(
     showToolTrace
@@ -76,6 +76,12 @@ export function AgentGroupMessageStream({
           return runItems.length ? [{ ...message, runItems }] : [];
         }),
   ), [messages, showToolTrace]);
+  // Inverted list contract: index 0 renders at the visual bottom, so feed
+  // it newest-first.
+  const invertedMessages = useMemo(
+    () => [...displayMessages].reverse(),
+    [displayMessages],
+  );
   const followVersion = useMemo(
     () => displayMessages.map((message) => (
       [
@@ -91,7 +97,8 @@ export function AgentGroupMessageStream({
   );
 
   const scrollToBottom = useCallback((animated = false) => {
-    scrollRef.current?.scrollToEnd({ animated });
+    // Inverted list: offset 0 IS the latest message.
+    scrollRef.current?.scrollToOffset({ offset: 0, animated });
     setShowScrollToBottom(false);
   }, []);
 
@@ -105,31 +112,18 @@ export function AgentGroupMessageStream({
   }, [followVersion, scrollToBottom]);
 
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const distance = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    // Inverted list: contentOffset.y grows upwards, so it already IS the
+    // distance from the newest message.
+    const distance = event.nativeEvent.contentOffset.y;
     autoFollowRef.current = distance <= 72;
     setShowScrollToBottom(distance > 180);
   }, []);
 
   return (
     <View style={styles.root}>
-      <ScrollView
-        contentContainerStyle={[
-          styles.list,
-          { paddingHorizontal: compact ? 12 : 20, paddingBottom: 20 + safeAreaBottom },
-          !displayMessages.length && (compact ? styles.emptyListCompact : styles.emptyList),
-        ]}
-        keyboardDismissMode="interactive"
-        keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => {
-          if (autoFollowRef.current) scrollToBottom(false);
-        }}
-        onScroll={onScroll}
-        ref={scrollRef}
-        scrollEventThrottle={16}
-        showsVerticalScrollIndicator={false}
-      >
-        {hasEarlierHistory && displayMessages.length > 0 ? (
+      <FlatList
+        ListEmptyComponent={<GroupEmptyState agents={agents} isChinese={isChinese} />}
+        ListFooterComponent={hasEarlierHistory && displayMessages.length > 0 ? (
           <IOSPressable
             accessibilityLabel={isChinese ? '加载剩余历史消息' : 'Load remaining history'}
             disabled={loadingEarlier}
@@ -142,9 +136,9 @@ export function AgentGroupMessageStream({
               borderColor: multiplyAlpha(tokens.colors.primary, 0.25),
               borderRadius: 14,
               borderWidth: 1,
-              marginBottom: 8,
               paddingHorizontal: 14,
               paddingVertical: 7,
+              marginTop: 8,
             }}
           >
             <Text style={{ color: tokens.colors.primary, fontSize: 13 }}>
@@ -154,24 +148,40 @@ export function AgentGroupMessageStream({
             </Text>
           </IOSPressable>
         ) : null}
-        {!displayMessages.length ? (
-          <GroupEmptyState agents={agents} isChinese={isChinese} />
-        ) : displayMessages.map((message) => (
-          <Fragment key={message.id}>
-            {message.runItems?.length ? (
-              <AgentRunCard agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} onRetract={onRetractMessage} userId={userId} />
+        ListHeaderComponent={running && !displayMessages.some((message) => message.isStreaming) ? (
+          <GroupRunningIndicator agents={agents} isChinese={isChinese} />
+        ) : null}
+        contentContainerStyle={[
+          styles.list,
+          { paddingHorizontal: compact ? 12 : 20, paddingBottom: 20 + safeAreaBottom },
+          !displayMessages.length && (compact ? styles.emptyListCompact : styles.emptyList),
+        ]}
+        data={invertedMessages}
+        inverted
+        keyboardDismissMode="interactive"
+        keyboardShouldPersistTaps="handled"
+        keyExtractor={(message) => message.id}
+        onContentSizeChange={() => {
+          if (autoFollowRef.current) scrollToBottom(false);
+        }}
+        onScroll={onScroll}
+        ref={scrollRef}
+        renderItem={({ item }) => (
+          <Fragment key={item.id}>
+            {item.runItems?.length ? (
+              <AgentRunCard agents={agents} isChinese={isChinese} message={item} onQuickReply={onQuickReply} onRetract={onRetractMessage} userId={userId} />
             ) : (
-              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={message} onQuickReply={onQuickReply} onRetract={onRetractMessage} onRetryFailed={onRetryFailed} userId={userId} />
+              <AgentGroupMessageItem agents={agents} isChinese={isChinese} message={item} onQuickReply={onQuickReply} onRetract={onRetractMessage} onRetryFailed={onRetryFailed} userId={userId} />
             )}
-            {summaryAnchorId && containsMessageId(message, summaryAnchorId) ? (
+            {summaryAnchorId && containsMessageId(item, summaryAnchorId) ? (
               <SummaryAnchorDivider isChinese={isChinese} />
             ) : null}
           </Fragment>
-        ))}
-        {running && !displayMessages.some((message) => message.isStreaming) ? (
-          <GroupRunningIndicator agents={agents} isChinese={isChinese} />
-        ) : null}
-      </ScrollView>
+        )}
+        scrollEventThrottle={16}
+        showsVerticalScrollIndicator={false}
+        windowSize={9}
+      />
       {showScrollToBottom ? (
         <IOSPressable
           accessibilityLabel={isChinese ? '回到最新群聊消息' : 'Jump to latest group message'}
@@ -307,7 +317,10 @@ function AgentGroupMessageItem({
   const { tokens } = useTheme();
   const agent = findAgent(agents, message);
   const isAgent = Boolean(agent) || message.role === 'assistant';
-  const isSelf = message.senderId === userId || message.role === 'user';
+  // Ownership by senderId ONLY: `role === 'user'` also matched OTHER human
+  // members' messages, rendering them right-aligned with a retract button
+  // the server would reject.
+  const isSelf = message.senderId === userId;
   const isError = message.deliveryStatus === 'failed'
     || message.finish_reason === 'error'
     || /^Error:\s*/i.test(message.content || '');

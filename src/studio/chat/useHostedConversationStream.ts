@@ -31,7 +31,7 @@ interface HostedConversationStreamOptions {
     activateConversation?: boolean,
     deferCacheWrite?: boolean,
   ): void | Promise<void>;
-  applyLifecycleEvents(events: readonly HostedLifecycleEvent[]): void | Promise<void>;
+  applyLifecycleEvents(events: readonly HostedLifecycleEvent[], conversationId?: string): void | Promise<void>;
   resetLifecycleRuntime?(): void;
   cacheOwner: string;
   cloudApi: HermesCloudApi | null;
@@ -185,7 +185,7 @@ export function useHostedConversationStream({
             } else if (hasGap) {
               throw new Error('Hermes hosted event gap could not be recovered');
             } else if (events.length) {
-              await applyLifecycleEvents(events);
+              await applyLifecycleEvents(events, activeConversationId);
             }
             if (!lifecycleCurrent() || !generation.isActiveCurrent(activeGeneration)) return;
             cursorRef.current.set(activeConversationId, cursor);

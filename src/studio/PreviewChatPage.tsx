@@ -576,6 +576,7 @@ export function ChatPreviewPage({
   });
 
   const hostedLifecycleApplication = useHostedLifecycleEventApplication({
+    activeConversationIdRef,
     cacheOwner,
     firstTokenAtRef,
     isChinese,

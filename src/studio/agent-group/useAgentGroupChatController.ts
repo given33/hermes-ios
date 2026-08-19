@@ -246,6 +246,11 @@ export function useAgentGroupChatController({
   const joinPromisesRef = useRef(new Map<string, Promise<void>>());
   const typingTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const bootstrapGenerationRef = useRef(0);
+  // Refresh-race guard ONLY. bootstrapGenerationRef is the account epoch
+  // (bumped solely on account boundaries); overloading it for the 15s list
+  // refresh invalidated every in-flight request that straddled a tick —
+  // sends froze pending and large-room drains restarted from zero forever.
+  const refreshSeqRef = useRef(0);
   const backgroundHydrationDoneRef = useRef(false);
   const refreshRoomRef = useRef<((roomId?: string) => Promise<void>) | null>(null);
   const joinRoomOnSocketRef = useRef<(
@@ -894,7 +899,7 @@ export function useAgentGroupChatController({
       return;
     }
     await conversationDeleteReplayService?.replay().catch(() => undefined);
-    const generation = ++bootstrapGenerationRef.current;
+    const generation = ++refreshSeqRef.current;
     setLoading(true);
     try {
       const readRevision = pendingRoomDeletionRevisionRef.current;
@@ -925,7 +930,7 @@ export function useAgentGroupChatController({
           && !degradedTombstones.has(room.id)
           && (!conversationId || !pendingRoomConversationIdsRef.current.has(conversationId));
       });
-      if (generation !== bootstrapGenerationRef.current || !mountedRef.current) return;
+      if (generation !== refreshSeqRef.current || !mountedRef.current) return;
       for (const room of nextRooms) {
         const previous = roomsRef.current.find((candidate) => candidate.id === room.id);
         if (previous && roomStateFingerprint(previous) !== roomStateFingerprint(room)) {
@@ -988,12 +993,12 @@ export function useAgentGroupChatController({
         })();
       }
     } catch (reason) {
-      if (generation === bootstrapGenerationRef.current && mountedRef.current) {
+      if (generation === refreshSeqRef.current && mountedRef.current) {
         setConnected(false);
         setError(errorMessage(reason, isChinese));
       }
     } finally {
-      if (generation === bootstrapGenerationRef.current && mountedRef.current) setLoading(false);
+      if (generation === refreshSeqRef.current && mountedRef.current) setLoading(false);
     }
   }, [applyRoomList, cacheOwner, conversationDeleteReplayService, enabled, fixtureMode, hydrateCachedRooms, isChinese, localStore, studioApi]);
 
@@ -1091,6 +1096,11 @@ export function useAgentGroupChatController({
         };
         nextOffset += page.messages.length;
         pageCount += 1;
+        // Checkpoint after EVERY page: a long drain used to record the
+        // resume offset only after full success, so any interruption
+        // restarted the whole download from zero — forever, when the
+        // interruption itself was periodic.
+        roomHistoryNextOffsetRef.current.set(roomId, nextOffset);
         detail = page;
       }
       const restored = snapshotFromDetail({
@@ -1214,7 +1224,17 @@ export function useAgentGroupChatController({
     // Connect the REST+SSE wake bus on first room entry: typing presence,
     // instant message delivery, and room_updated refresh signals ride it.
     void connectSocket()
-      .then((socket) => (socket ? joinRoomOnSocket(roomId, socket) : undefined))
+      .then((socket) => {
+        if (!socket) return undefined;
+        void joinRoomOnSocket(roomId, socket).catch(() => undefined);
+        // Re-attach explicitly: a joined-but-LRU-evicted room never
+        // re-joins (joinRoomOnSocket dedupes), so without this the
+        // evicted room lost its stream forever while the header still
+        // claimed live mode.
+        const room = roomsRef.current.find((item) => item.id === roomId);
+        if (room) socket.attachRoomStream?.(room);
+        return undefined;
+      })
       .catch(() => undefined);
   }, [connectSocket, fixtureMode, joinRoomOnSocket, refreshRoom]);
 
@@ -1339,6 +1359,16 @@ export function useAgentGroupChatController({
     const lockDeadline = Date.now() + 10_000;
     while (sendingRoomIdsRef.current.has(roomId) && Date.now() < lockDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    if (sendingRoomIdsRef.current.has(roomId)) {
+      // The in-flight send never settled: bail out WITH feedback instead of
+      // running concurrent sends that interleave and double-deliver.
+      const busy = isChinese
+        ? '该房间仍在发送中，请稍后重试'
+        : 'A send is still in flight in this room; retry in a moment';
+      setError(busy);
+      notify(busy);
+      return;
     }
     sendingRoomIdsRef.current.add(roomId);
     try {

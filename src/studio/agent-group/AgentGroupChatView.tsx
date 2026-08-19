@@ -28,6 +28,10 @@ import { NativeButton } from '../../components/ui/NativeButton';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { multiplyAlpha } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
+import type {
+  HermesStudioGroupChatMention,
+  HermesStudioRoomAgent,
+} from '../../api/hermes-studio';
 import { PreviewModal, PreviewText } from '../PreviewPrimitives';
 import { latestRoomPreview, roomHasRunningWork } from './agent-group-model';
 import { AgentGroupMessageStream } from './AgentGroupMessageStream';
@@ -337,7 +341,7 @@ export function AgentGroupChatView({
                 if (value.trim()) controller.emitTyping(activeRoom.room.id);
                 else controller.emitStopTyping(activeRoom.room.id);
               }}
-              onSubmitEditing={() => { void controller.sendMessage(); }}
+              onSubmitEditing={() => { void controller.sendMessage(undefined, undefined, activeRoom ? parseDraftMentions(draft, activeRoom.agents) : undefined); }}
               placeholder={activeRoom
                 ? (isChinese ? '给 Agent 群聊发送消息，支持 @mention…' : 'Message the Agent group, @mention supported…')
                 : (isChinese ? '先选择或新建房间' : 'Select or create a room first')}
@@ -349,7 +353,7 @@ export function AgentGroupChatView({
             <IOSPressable
               accessibilityLabel={isChinese ? '发送 Agent 群聊消息' : 'Send Agent group message'}
               disabled={!activeRoom || !draft.trim()}
-              onPress={() => { void controller.sendMessage(); }}
+              onPress={() => { void controller.sendMessage(undefined, undefined, activeRoom ? parseDraftMentions(draft, activeRoom.agents) : undefined); }}
               pressedStyle={{ backgroundColor: tokens.colors.primary }}
               style={[styles.sendButton, { backgroundColor: tokens.colors.primary, opacity: activeRoom && draft.trim() ? 1 : 0.45 }]}
             >
@@ -567,4 +571,40 @@ function mentionOptions(agents: Array<{ name: string }>, draft: string): string[
 
 function replaceMention(draft: string, name: string): string {
   return draft.replace(/(?:^|\s)@([^\s]*)$/, (match) => `${match.startsWith(' ') ? ' ' : ''}@${name} `);
+}
+
+/**
+ * Resolve the draft's @tokens against the room roster. The mention chips
+ * insert exact agent names (or `all`), so exact matching is correct; the
+ * backend accepts the profile name or agent name as participantId.
+ * Returns undefined when the draft carries no resolvable mention — that
+ * keeps the legacy whole-roster broadcast for plain messages.
+ */
+function parseDraftMentions(
+  draft: string,
+  agents: readonly HermesStudioRoomAgent[],
+): HermesStudioGroupChatMention[] | undefined {
+  const tokens = new Set(
+    (draft.match(/(?:^|\s)@([^\s@]+)/g) || [])
+      .map((token) => token.trim().slice(1)),
+  );
+  if (!tokens.size) return undefined;
+  const mentions: HermesStudioGroupChatMention[] = [];
+  for (const token of tokens) {
+    if (token === 'all' || token === '所有人' || token === '全体') {
+      mentions.push({ type: 'all', displayName: token });
+      continue;
+    }
+    const agent = agents.find(
+      (candidate) => candidate.name === token || candidate.profile === token,
+    );
+    if (agent) {
+      mentions.push({
+        type: 'agent',
+        participantId: agent.profile,
+        displayName: agent.name || agent.profile,
+      });
+    }
+  }
+  return mentions.length ? mentions : undefined;
 }
