@@ -51,6 +51,7 @@ import { useTheme } from '../../design/ThemeProvider';
 import { ReasoningSection } from '../ReasoningSection';
 import { TodoSection } from './TodoSection';
 import { AnimatedChevron, WorkflowTimeline } from '../WorkflowTimeline';
+import { TodoListCard } from '../TodoListCard';
 import {
   activityElapsedLabel,
   activityIsRunning,
@@ -58,6 +59,7 @@ import {
   turnPhaseChip,
   turnTimingLine,
 } from '../workflow-timeline-model';
+import { todoListItemsForMessage } from '../todolist-card-model';
 import { formatAttachmentSize } from './chat-attachments';
 import { styles } from './chat-presentation-styles';
 import type { PendingPhase } from './chat-types';
@@ -150,6 +152,13 @@ export const UnifiedMessage = memo(function UnifiedMessage({
     resolveNativeFontStack(tokens.typography.fontSans, 700) || BODY_BOLD,
     resolveNativeFontStack(tokens.typography.fontMono, 400) || MONO_REGULAR,
   );
+  // 编排工作流:manager 的 meta 携带 todolist/manager_plan 计划时,
+  // 气泡内渲染任务分派卡片而非普通 Markdown;各项状态由本轮
+  // hosted turn 的执行轨迹(activities 与终态)推导。
+  const todoListItems = useMemo(
+    () => (isUser ? null : todoListItemsForMessage(message)),
+    [isUser, message],
+  );
   const metadataNode = metadata ? (
     <Text numberOfLines={1} style={[styles.messageTime, { color: tokens.colors.textTertiary }]}>
       {metadata}
@@ -159,7 +168,8 @@ export const UnifiedMessage = memo(function UnifiedMessage({
     isUser
       || message.content.trim()
       || message.attachments?.length
-      || message.todos?.length,
+      || message.todos?.length
+      || todoListItems?.length,
   );
   const messageBody = (
     <View
@@ -172,7 +182,9 @@ export const UnifiedMessage = memo(function UnifiedMessage({
         },
       ]}
     >
-      {message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
+      {todoListItems?.length ? (
+        <TodoListCard isChinese={isChinese} items={todoListItems} />
+      ) : message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
       {message.attachments?.length ? (
         <View style={styles.storedAttachments}>
           {message.attachments.map((attachment) => (
