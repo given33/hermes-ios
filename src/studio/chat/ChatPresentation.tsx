@@ -184,7 +184,8 @@ export const UnifiedMessage = memo(function UnifiedMessage({
     >
       {todoListItems?.length ? (
         <TodoListCard isChinese={isChinese} items={todoListItems} />
-      ) : message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
+      ) : null}
+      {message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
       {message.attachments?.length ? (
         <View style={styles.storedAttachments}>
           {message.attachments.map((attachment) => (

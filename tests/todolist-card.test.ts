@@ -311,10 +311,10 @@ test('ChatPresentation 在 meta 携带计划时渲染 TodoListCard 而非 Markdo
   );
   assert.match(source, /import \{ TodoListCard \} from '\.\.\/TodoListCard'/);
   assert.match(source, /todoListItemsForMessage/);
-  // 检测命中 → TodoListCard;未命中 → 回退 Markdown。
+  // 检测命中 → TodoListCard 与正文 Markdown 并存(卡片在上,正文在下)。
   assert.match(
     source,
-    /\{todoListItems\?\.length \? \(\s*<TodoListCard isChinese=\{isChinese\} items=\{todoListItems\} \/>\s*\) : message\.content\.trim\(\) \? <Markdown/,
+    /\{todoListItems\?\.length \? \(\s*<TodoListCard isChinese=\{isChinese\} items=\{todoListItems\} \/>\s*\) : null\}\s*\{message\.content\.trim\(\) \? <Markdown/,
   );
   // 气泡判定包含计划项,meta-only 计划消息也有气泡。
   assert.match(source, /todoListItems\?\.length,\s*\);/);

@@ -122,19 +122,20 @@ export function parseTodoListItems(value: unknown): TodoItem[] | null {
  * 数据层(src/api)不为此改动。
  */
 export function todoListItemsForMessage(
-  message: Pick<HermesChatViewMessage, 'activities' | 'status'>,
+  message: Pick<HermesChatViewMessage, 'activities' | 'status' | 'planItems'>,
 ): TodoItem[] | null {
-  const source = message as unknown as Record<string, unknown>;
-  const meta: Record<string, unknown> = {
-    ...(isRecord(source.meta) ? source.meta : {}),
-    ...(isRecord(source.metadata) ? source.metadata : {}),
-  };
-  const raw = meta.todolist
-    ?? meta.todo_list
-    ?? meta.manager_plan
-    ?? meta.plan
-    ?? source.todolist
-    ?? source.manager_plan;
+  // Primary: the typed planItems field set by collaborationMessageToView
+  // (reads server meta.todolist / meta.manager_plan). Fallback: defensive
+  // reads for messages constructed outside the standard pipeline.
+  const raw = message.planItems
+    ?? (() => {
+      const source = message as unknown as Record<string, unknown>;
+      const meta: Record<string, unknown> = {
+        ...(isRecord(source.meta) ? source.meta : {}),
+        ...(isRecord(source.metadata) ? source.metadata : {}),
+      };
+      return meta.todolist ?? meta.todo_list ?? meta.manager_plan ?? undefined;
+    })();
   const items = parseTodoListItems(raw);
   if (!items) return null;
   return deriveTodoListStatuses(items, {

@@ -926,7 +926,17 @@ final class HermesQRScannerService: NSObject, AVCaptureMetadataOutputObjectsDele
     preview.videoGravity = .resizeAspectFill
     preview.frame = UIScreen.main.bounds
     scanner.view.layer.addSublayer(preview)
-    presenter.present(scanner, animated: true) { captureSession.startRunning() }
+    // Present-failure guard (same family as the QuickLook fix): when the
+    // present collides with another transition UIKit silently drops it, the
+    // completion never runs, and the continuation would hang forever.
+    presenter.present(scanner, animated: true) { [weak self] in
+      guard let self else { return }
+      if presenter.presentedViewController !== scanner {
+        self.finish(error: "QR scanner presentation was blocked by another transition")
+        return
+      }
+      captureSession.startRunning()
+    }
     session = captureSession
     previewLayer = preview
     controller = scanner

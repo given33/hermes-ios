@@ -83,13 +83,13 @@ final class HermesLiveActivityService {
   private func storeWeatherActivity(_ id: String, _ activity: Activity<HermesWeatherActivityAttributes>) {
     stateLock.lock()
     defer { stateLock.unlock() }
-    storeWeatherActivity(id, activity)
+    activities[id] = activity
   }
 
   private func storeAgentActivity(_ id: String, _ activity: Activity<HermesAgentActivityAttributes>) {
     stateLock.lock()
     defer { stateLock.unlock() }
-    storeAgentActivity(id, activity)
+    agentActivities[id] = activity
   }
 
   private init() {

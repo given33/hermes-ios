@@ -646,6 +646,9 @@ export function collaborationMessageToView(
       || stringListValue(meta.handoff_target)
       || undefined,
     id: message.id,
+    // Manager todolist items from the server-side plan metadata; the
+    // TodoListCard component reads this typed field (not raw meta).
+    planItems: meta.todolist ?? meta.manager_plan ?? undefined,
     memberId: stringValue(message.member_id)
       || stringValue(meta.member_id)
       || undefined,
