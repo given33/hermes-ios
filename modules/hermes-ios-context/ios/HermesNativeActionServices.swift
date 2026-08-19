@@ -1009,6 +1009,12 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   private var scanTask: Task<Void, Never>?
   private var stateWaiters: [CheckedContinuation<CBManagerState, Never>] = []
   private var peripherals: [UUID: CBPeripheral] = [:]
+  // All mutable BLE state is confined to this serial queue: CBCentralManager
+  // delegate callbacks arrive on the main queue while Expo async functions
+  // run on concurrent threads — Swift dictionaries are not thread-safe and
+  // concurrent access crashes with EXC_BAD_ACCESS (same class of bug as the
+  // LiveActivityService fix).
+  private let bleStateQueue = DispatchQueue(label: "hermes.ble.state")
   private var connectContinuation: CheckedContinuation<[String: Any], Error>?
   private var serviceContinuation: CheckedContinuation<[[String: Any]], Error>?
   private var pendingCharacteristicServices: [CBService] = []
@@ -1019,6 +1025,11 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   private var notifyCharacteristic: CBCharacteristic?
   private var notifyTask: Task<Void, Never>?
   private var sessionOwner = ""
+
+  /// Execute a closure on the BLE state queue and return its result.
+  private func onBLEStateQueue<T>(_ body: () -> T) -> T {
+    bleStateQueue.sync(execute: body)
+  }
 
   private override init() {
     super.init()
@@ -1094,7 +1105,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
       throw HermesNativeActionError.invalidInput("deviceID")
     }
     if sessionOwner != normalizedOwner { disconnect() }
-    guard connectContinuation == nil else { throw HermesNativeActionError.unavailable("bluetooth-connect-busy") }
+    guard onBLEStateQueue({ connectContinuation }) == nil else { throw HermesNativeActionError.unavailable("bluetooth-connect-busy") }
     sessionOwner = normalizedOwner
     let peripheral = peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
     guard let peripheral else { throw HermesNativeActionError.unavailable("bluetooth-device") }
@@ -1102,14 +1113,19 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     peripheral.delegate = self
     if peripheral.state == .connected { return ["connected": true, "id": uuid.uuidString] }
     return try await withCheckedThrowingContinuation { continuation in
-      connectContinuation = continuation
+      onBLEStateQueue { connectContinuation = continuation }
       manager.connect(peripheral, options: nil)
       DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak peripheral] in
-        guard let self, let peripheral, self.connectContinuation != nil else { return }
+        guard let self, let peripheral else { return }
+        let pending = self.onBLEStateQueue { () -> CheckedContinuation<[String: Any], Error>? in
+          guard self.connectContinuation != nil else { return nil }
+          let pending = self.connectContinuation
+          self.connectContinuation = nil
+          return pending
+        }
+        guard let pending else { return }
         self.manager.cancelPeripheralConnection(peripheral)
-        let pending = self.connectContinuation
-        self.connectContinuation = nil
-        pending?.resume(throwing: HermesNativeActionError.unavailable("bluetooth-connect-timeout"))
+        pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-connect-timeout"))
       }
     }
   }
@@ -1118,13 +1134,14 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     peripherals.values
       .filter { $0.state == .connected || $0.state == .connecting }
       .forEach { manager.cancelPeripheralConnection($0) }
-    connectContinuation?.resume(throwing: CancellationError())
-    connectContinuation = nil
-    serviceContinuation?.resume(throwing: CancellationError())
-    serviceContinuation = nil
-    pendingCharacteristicServices.removeAll()
-    readContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
-    readContinuations.removeAll()
+    onBLEStateQueue {
+      connectContinuation?.resume(throwing: CancellationError())
+      connectContinuation = nil
+      serviceContinuation?.resume(throwing: CancellationError())
+      serviceContinuation = nil
+      pendingCharacteristicServices.removeAll()
+      readContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
+      readContinuations.removeAll()
     writeContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
     writeContinuations.removeAll()
     notifyTask?.cancel()
@@ -1133,6 +1150,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     notifyContinuation = nil
     notifyCharacteristic = nil
     sessionOwner = ""
+    }
   }
 
   func services(owner: String, identifier: String) async throws -> [[String: Any]] {
