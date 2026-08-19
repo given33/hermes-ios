@@ -600,11 +600,19 @@ export function NativeShell({
                   )?.label ?? route.path;
                   const chatRoute = route.routeId === 'chat';
                   const jsParityRoute = route.routeId === 'agent-group';
+                  // Must mirror FrontendPreviewApp's usesNativeSwiftUIRoute
+                  // exclusion list exactly: browser/memory/agent-hub render
+                  // as RN pages (no SwiftUI toolbar), so hiding the native
+                  // header left them with NO back affordance on signed
+                  // iPhone builds — only the hidden 28pt edge swipe.
                   const swiftUIRoute = nativeRouteChrome
                     && !jsParityRoute
                     && route.routeId !== 'chat'
                     && route.routeId !== 'smart-weather'
-                    && route.routeId !== 'account';
+                    && route.routeId !== 'account'
+                    && route.routeId !== 'browser'
+                    && route.routeId !== 'memory'
+                    && route.routeId !== 'agent-hub';
                   return (
                     <CompactStack.Screen
                       key={route.path}

@@ -30,3 +30,14 @@ export async function boundedUploadBody(
   }
   return body;
 }
+
+/**
+ * Deadline for a single upload request, scaled by payload size.
+ *
+ * The transport default (30s) is tuned for JSON calls: a 64 MB attachment on
+ * a 5-20 Mbps cellular uplink needs 30-100s, so every large upload was
+ * aborted mid-flight. Floor of 2 minutes, then ~25 KB/s worst-case budget.
+ */
+export function uploadDeadlineMs(byteSize: number): number {
+  return Math.max(120_000, Math.ceil((Math.max(0, byteSize) / 25_000)) * 1_000);
+}

@@ -42,6 +42,11 @@ export async function withDecryptedAttachment<T>(
     encryptedUri,
     filename,
   );
+  if (!plaintextUri || typeof plaintextUri !== 'string') {
+    // Degraded bridge (parity/resign build) returns null: surface a clear
+    // failure instead of dereferencing it inside `operation`.
+    throw new Error('Attachment decryption is unavailable in this app build.');
+  }
   try {
     return await operation(plaintextUri);
   } finally {

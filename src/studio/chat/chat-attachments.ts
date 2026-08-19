@@ -96,6 +96,12 @@ export async function persistPendingAttachments(
       if (!target.exists) {
         if (!sourceUri) throw new Error(`Attachment source is unavailable: ${attachment.name}`);
         const encrypted = await HermesIOSContext.encryptAttachment(owner, sourceUri, targetUri);
+        // Degraded bridge (parity/resign build): the degrade table has no
+        // entry for this method and yields null — fail with a clear message
+        // instead of a TypeError on `.sha256`.
+        if (!encrypted || typeof encrypted.sha256 !== 'string') {
+          throw new Error('Attachment encryption is unavailable in this app build.');
+        }
         sha256 = encrypted.sha256;
         installedTargets.add(targetUri);
       }

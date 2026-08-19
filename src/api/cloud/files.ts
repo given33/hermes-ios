@@ -1,4 +1,4 @@
-import { boundedUploadBody } from '../upload-body';
+import { boundedUploadBody, uploadDeadlineMs } from '../upload-body';
 import type {
   AccountFileEntry,
   AccountFilesQuery,
@@ -230,6 +230,7 @@ export class HermesFilesCloudApi {
     const body = await boundedUploadBody(upload.uri, upload.name);
     return this.transport.request<{ file: AccountFileEntry }>(`${COLLABORATION}/files`, {
       body,
+      deadlineMs: uploadDeadlineMs(body.size),
       headers: {
         'Content-Type': upload.mimeType || 'application/octet-stream',
         'X-Filename': encodeURIComponent(upload.name),

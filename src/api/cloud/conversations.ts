@@ -2,7 +2,7 @@ import { normalizeOfficialSessionMessages } from '../official-session-adoption';
 import {
   parseOfficialConversationPlaceholderId,
 } from '../conversation-identifiers';
-import { boundedUploadBody } from '../upload-body';
+import { boundedUploadBody, uploadDeadlineMs } from '../upload-body';
 import type {
   CollaborationMessage,
   ConversationAttachmentUploadContext,
@@ -398,6 +398,7 @@ export class HermesConversationsCloudApi {
     return this.transport.request<JsonRecord>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/attachments`,
       {
+        deadlineMs: uploadDeadlineMs(body.size),
         method: 'POST',
         headers: {
           'Content-Type': upload.mimeType || 'application/octet-stream',

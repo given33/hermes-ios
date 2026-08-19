@@ -109,6 +109,8 @@ const REMOTE_LOGOUT_DEADLINE_MS = 8_000;
 const SAVED_SESSION_RETRY_DELAY_MS = 5_000;
 const CONNECTION_ERROR = '无法验证 Hermes 连接，请重试。';
 const LOGOUT_ERROR = '无法移除已保存的连接，请重试。';
+const refreshTokenInFlight = new Map<string, Promise<MobileAuthSession>>();
+
 const SESSION_EXPIRED_ERROR = '登录已过期，请重新登录。';
 const CLEARTEXT_BASEURL_ERROR = '保存的服务器地址使用了不安全的 http://，已被安全策略拒绝。'
   + '请改用 https:// 服务器地址重新登录；如确需 http（仅限本地开发），'
@@ -683,6 +685,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
         },
       },
       async refresh(refreshToken) {
+        // Single-flight per token: concurrent 401s (parallel requests
+        // failing together) used to double-send the refresh — the losing
+        // call then hit the server's replay protection, revoking the
+        // session and disabling APNs on a single race.
+        const existing = refreshTokenInFlight.get(refreshToken);
+        if (existing) return existing;
+        const operation = (async () => {
         try {
           return await mobileAuth.refresh(refreshToken);
         } catch (error) {
@@ -708,6 +717,13 @@ export function AuthProvider({ children }: PropsWithChildren) {
             }
           }
           throw error;
+        }
+        })();
+        refreshTokenInFlight.set(refreshToken, operation);
+        try {
+          return await operation;
+        } finally {
+          refreshTokenInFlight.delete(refreshToken);
         }
       },
       onSessionRefreshed(session) {
