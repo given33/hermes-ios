@@ -485,6 +485,13 @@ function normalizeLiveRoleStage(value: string): HermesChatRoleStage {
   if (normalized === 'worker' || normalized.startsWith('worker.')) return 'worker';
   if (normalized === 'reviewer' || normalized.startsWith('reviewer.')) return 'reviewer';
   if (normalized === 'reporter' || normalized.startsWith('reporter.')) return 'reporter';
+  // Keep the same stage names the snapshot-side normalizer uses
+  // (chat-view-model.ts normalizeRoleStage) so live and persisted bubbles
+  // share a fold key — mismatched keys caused the live bubble to be
+  // re-appended at the tail instead of merging with its snapshot twin.
+  if (normalized.startsWith('manager')) return 'dispatcher';
+  if (normalized === 'dispatch' || normalized.startsWith('dispatch.')) return 'dispatcher';
+  if (normalized === 'supervisor' || normalized.startsWith('supervisor.')) return 'supervisor';
   return 'chat';
 }
 
