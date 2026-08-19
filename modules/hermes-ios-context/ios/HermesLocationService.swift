@@ -46,6 +46,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   private var stableSamples: [CLLocation] = []
   private var stableRegion: CLCircularRegion?
   private var requestedAlwaysUpgrade = false
+  private var awaitingSystemAuthorizationPrompt = false
   private var predictedDepartureAt: Date?
   private var predictedDepartureActivation: DispatchWorkItem?
   private var predictedDepartureReset: DispatchWorkItem?
@@ -85,6 +86,9 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
           return
         }
         if status == .notDetermined {
+          stateLock.lock()
+          awaitingSystemAuthorizationPrompt = true
+          stateLock.unlock()
           self.manager.requestWhenInUseAuthorization()
         } else {
           self.requestedAlwaysUpgrade = true
@@ -374,12 +378,38 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   }
 
   func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-    guard manager === self.manager, activeCollectorToken != nil else {
+    // Authorization state is system-level and account-independent: it must
+    // NOT be gated on an active collector token. The answer to the system
+    // permission sheet can arrive while owner scoping is still activating;
+    // dropping it here left the authorization gate (and every queued
+    // waiter, plus the JS await) suspended forever and kept the whole
+    // context pipeline disabled until restart.
+    guard manager === self.manager else {
       Self.logger.error("Authorization callback rejected: inactive manager")
       return
     }
     let status = manager.authorizationStatus
-    guard status != .notDetermined else { return }
+    guard status != .notDetermined else {
+      // A .notDetermined transition after we presented the system prompt
+      // means the user dismissed it without choosing. Resolve the pending
+      // gate with the CURRENT (still undetermined) status — never an
+      // invented one — so callers get a terminal answer instead of hanging.
+      stateLock.lock()
+      let promptWasShown = awaitingSystemAuthorizationPrompt
+      let gate = authorizationGate
+      let waiters = authorizationWaiters
+      if promptWasShown && gate != nil {
+        awaitingSystemAuthorizationPrompt = false
+        authorizationGate = nil
+        authorizationWaiters.removeAll()
+      }
+      stateLock.unlock()
+      if promptWasShown, let gate {
+        gate.resolve(HermesAuthorization.location(.notDetermined))
+        waiters.forEach { $0.resolve(HermesAuthorization.location(.notDetermined)) }
+      }
+      return
+    }
     if status == .authorizedWhenInUse && !requestedAlwaysUpgrade {
       requestedAlwaysUpgrade = true
       Task { await requestTemporaryFullAccuracyIfNeeded() }
@@ -402,6 +432,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
       let waiters = authorizationWaiters
       authorizationGate = nil
       authorizationWaiters.removeAll()
+      awaitingSystemAuthorizationPrompt = false
       stateLock.unlock()
       gate?.resolve(HermesAuthorization.location(status))
       waiters.forEach { $0.resolve(HermesAuthorization.location(status)) }

@@ -25,7 +25,19 @@ public final class HermesQuickLookModule: Module {
       preview.dataSource = source
       preview.delegate = source
       self.dataSource = source
-      presenter.present(preview, animated: true)
+      presenter.present(preview, animated: true) { [weak self] in
+        // UIKit silently drops a present that collides with another
+        // transition (confirm dialog dismissing, share sheet collapsing).
+        // Without this check the dismiss callback never fired, the promise
+        // hung open, the caller's `finally { delete plaintext }` never ran
+        // (decrypted file stayed on disk), and dataSource stayed occupied
+        // so every later preview resolved false until restart.
+        if presenter.presentedViewController !== preview {
+          self?.dataSource = nil
+          source.cancel()
+          promise.resolve(false)
+        }
+      }
     }.runOnQueue(.main)
   }
 
@@ -79,6 +91,13 @@ private final class HermesQuickLookDataSource: NSObject,
     let completion = onDismiss
     onDismiss = nil
     completion?()
+  }
+
+  /// Presentation failed after the fact: drop the pending callback so a
+  /// stray dismissal of some other controller can never resolve the
+  /// already-failed promise a second time.
+  func cancel() {
+    onDismiss = nil
   }
 }
 

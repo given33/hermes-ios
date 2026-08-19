@@ -51,6 +51,46 @@ final class HermesLiveActivityService {
   static let isAvailable = true
   private var activities: [String: Activity<HermesWeatherActivityAttributes>] = [:]
   private var agentActivities: [String: Activity<HermesAgentActivityAttributes>] = [:]
+  // Expo async functions run concurrently; Swift dictionaries are not thread
+  // safe and concurrent update/end calls on the two maps could crash with
+  // EXC_BAD_ACCESS. Every map access goes through these accessors.
+  private let stateLock = NSLock()
+
+  private func takeWeatherActivity(_ id: String) -> Activity<HermesWeatherActivityAttributes>? {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return activities.removeValue(forKey: id)
+  }
+
+  private func takeAgentActivity(_ id: String) -> Activity<HermesAgentActivityAttributes>? {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return agentActivities.removeValue(forKey: id)
+  }
+
+  private func readWeatherActivity(_ id: String) -> Activity<HermesWeatherActivityAttributes>? {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return activities[id]
+  }
+
+  private func readAgentActivity(_ id: String) -> Activity<HermesAgentActivityAttributes>? {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    return agentActivities[id]
+  }
+
+  private func storeWeatherActivity(_ id: String, _ activity: Activity<HermesWeatherActivityAttributes>) {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    storeWeatherActivity(id, activity)
+  }
+
+  private func storeAgentActivity(_ id: String, _ activity: Activity<HermesAgentActivityAttributes>) {
+    stateLock.lock()
+    defer { stateLock.unlock() }
+    storeAgentActivity(id, activity)
+  }
 
   private init() {
     for activity in Activity<HermesWeatherActivityAttributes>.activities {
@@ -66,10 +106,10 @@ final class HermesLiveActivityService {
       ?? UUID().uuidString.lowercased()
     let action = (payload["action"] as? String ?? "update").lowercased()
     if action == "end" {
-      if let activity = activities.removeValue(forKey: id) {
+      if let activity = takeWeatherActivity(id) {
         await activity.end(nil, dismissalPolicy: .immediate)
       }
-      if let activity = agentActivities.removeValue(forKey: id) {
+      if let activity = takeAgentActivity(id) {
         await activity.end(nil, dismissalPolicy: .immediate)
       }
       return ["action": "ended", "id": id]
@@ -78,12 +118,12 @@ final class HermesLiveActivityService {
     let kind = normalizedString(payload["kind"] ?? payload["type"])
       ?? (taskID == nil ? "weather" : "agent-task")
     if kind == "agent-task" || taskID != nil || payload["sessions"] != nil {
-      if let legacy = activities.removeValue(forKey: id) {
+      if let legacy = takeWeatherActivity(id) {
         await legacy.end(nil, dismissalPolicy: .immediate)
       }
       return try await updateAgent(payload: payload, id: id, taskID: taskID)
     }
-    if let agent = agentActivities.removeValue(forKey: id) {
+    if let agent = takeAgentActivity(id) {
       await agent.end(nil, dismissalPolicy: .immediate)
     }
     let content = HermesWeatherActivityAttributes.ContentState(
@@ -101,7 +141,7 @@ final class HermesLiveActivityService {
         taskID: taskID
       )
     )
-    if let activity = activities[id] {
+    if let activity = readWeatherActivity(id) {
       await activity.update(ActivityContent(state: content, staleDate: content.expiresAt))
       return ["action": "updated", "id": id]
     }
@@ -110,7 +150,7 @@ final class HermesLiveActivityService {
       content: ActivityContent(state: content, staleDate: content.expiresAt),
       pushType: nil
     )
-    activities[id] = activity
+    storeWeatherActivity(id, activity)
     return ["action": "started", "id": id]
   }
 
@@ -153,7 +193,7 @@ final class HermesLiveActivityService {
       ttsEnabled: payload["ttsEnabled"] as? Bool ?? payload["tts_enabled"] as? Bool ?? false,
       actionDeepLink: safeTaskDeepLink(payload["actionDeepLink"] ?? payload["action_deep_link"], taskID: taskID)
     )
-    if let activity = agentActivities[id] {
+    if let activity = readAgentActivity(id) {
       await activity.update(ActivityContent(state: state, staleDate: staleDate))
       return ["action": "updated", "id": id, "kind": "agent-task", "privacyMode": privacyMode]
     }
@@ -162,7 +202,7 @@ final class HermesLiveActivityService {
       content: ActivityContent(state: state, staleDate: staleDate),
       pushType: nil
     )
-    agentActivities[id] = activity
+    storeAgentActivity(id, activity)
     return ["action": "started", "id": id, "kind": "agent-task", "privacyMode": privacyMode]
   }
 

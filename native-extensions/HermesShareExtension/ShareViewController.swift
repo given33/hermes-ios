@@ -151,9 +151,29 @@ final class ShareViewController: UIViewController {
   private func load(provider: NSItemProvider, root: URL?, completion: @escaping ([String: Any]?, Int) -> Void) {
     let requestID = UUID().uuidString.lowercased()
     if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
-      provider.loadDataRepresentation(forTypeIdentifier: UTType.plainText.identifier) { data, _ in
-        let text = data.flatMap { String(data: $0, encoding: .utf8) }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        completion(text.isEmpty ? nil : ["content": String(text.prefix(20_000)), "kind": "analyze-text", "requestID": requestID, "createdAt": Date().timeIntervalSince1970 * 1000], text.utf8.count)
+      provider.loadFileRepresentation(forTypeIdentifier: UTType.plainText.identifier) { temporaryURL, _ in
+        guard let temporaryURL else { completion(nil, 0); return }
+        // Stream only the head of the file. loadDataRepresentation loaded
+        // the WHOLE item into memory before prefix() could truncate, so a
+        // multi-hundred-MB .txt blew the extension's ~120MB cap and the
+        // jetsammed share failed silently with nothing enqueued.
+        let maxTextBytes = 1_048_576
+        guard
+          let handle = try? FileHandle(forReadingFrom: temporaryURL),
+          var head = try? handle.read(upToCount: maxTextBytes)
+        else { completion(nil, 0); return }
+        try? handle.close()
+        // A 1MB read can split a multi-byte UTF-8 scalar at the boundary;
+        // shed trailing continuation bytes so the decode still succeeds.
+        var text = String(data: head, encoding: .utf8)?
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        if text == nil, head.count > 3 {
+          head.removeLast(3)
+          text = String(data: head, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let trimmed = text ?? ""
+        completion(trimmed.isEmpty ? nil : ["content": String(trimmed.prefix(20_000)), "kind": "analyze-text", "requestID": requestID, "createdAt": Date().timeIntervalSince1970 * 1000], trimmed.utf8.count)
       }
       return
     }
