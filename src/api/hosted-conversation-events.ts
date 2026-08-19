@@ -258,7 +258,11 @@ async function parseSseFrame(
   const idCursor = nonNegativeInteger(eventId);
   const eventCursor = events.reduce((latest, event) => Math.max(latest, event.cursor), 0);
   const authoritativeCursor = Math.max(payloadCursor, idCursor, eventCursor);
-  if (!resetCursor && authoritativeCursor < cursor) {
+  // A snapshot-only frame legitimately carries NO cursor fields; every
+  // source then collapses to 0 and would false-trigger "regressed" on any
+  // client past cursor 0. Only judge regression when a cursor is present.
+  const hasCursorSource = payloadCursor > 0 || idCursor > 0 || eventCursor > 0;
+  if (!resetCursor && hasCursorSource && authoritativeCursor < cursor) {
     throw new Error('Hermes hosted event stream cursor regressed');
   }
   if (resetCursor && !conversation) {
@@ -421,10 +425,16 @@ function preflightFrameIntegrity(
     }
     const eventCursor = optionalNonNegativeInteger(rawEvent.cursor);
     if (eventCursor !== undefined) {
-      if (eventCursor <= previousEventCursor) {
+      // A reconnect that resumes AT the last delivered cursor legitimately
+      // replays that boundary event once more: equal is idempotent and
+      // skipped, never a strict-ordering error. Rejecting it forced the live
+      // stream into a permanent reconnect -> rethrow -> 1s-poll loop.
+      if (eventCursor < previousEventCursor) {
         throw new Error('Hermes hosted lifecycle events are not strictly ordered');
       }
-      previousEventCursor = eventCursor;
+      if (eventCursor > previousEventCursor) {
+        previousEventCursor = eventCursor;
+      }
       rawEventCursors.push(eventCursor);
     }
   }

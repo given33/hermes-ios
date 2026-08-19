@@ -29,14 +29,23 @@ export function reconcileConversationSessionEntries(
       continue;
     }
     const existing = messages[existingIndex];
+    // Newer-wins guard: a replay from an overlapping/stale cursor appends
+    // OLD entry bodies; without this the visible content was rolled back
+    // while updated_at kept the newer timestamp. Entry fields replace the
+    // existing message only when the entry is strictly newer.
+    const entryTime = numericMessageTime(message.updated_at);
+    const existingTime = numericMessageTime(existing.updated_at);
+    const entryNewer = entryTime > existingTime;
     messages[existingIndex] = {
       ...existing,
-      ...message,
+      ...(entryNewer ? message : {}),
+      content: entryNewer ? message.content : existing.content,
+      name: entryNewer ? message.name : existing.name,
+      status: entryNewer ? message.status : existing.status,
+      kind: entryNewer ? message.kind : existing.kind,
       created_at: existing.created_at || message.created_at,
-      updated_at: Math.max(
-        numericMessageTime(existing.updated_at),
-        numericMessageTime(message.updated_at),
-      ) || message.updated_at || existing.updated_at,
+      updated_at: Math.max(existingTime, entryTime)
+        || message.updated_at || existing.updated_at,
       meta: {
         ...(existing.meta || {}),
         ...(message.meta || {}),

@@ -97,6 +97,12 @@ export function applyHostedLifecycleEvents(
         occurredAt,
         chinese,
       );
+    // P1-1 terminal latch: once the final answer reached message.completed,
+    // trailing execution/supervision events must merge activities but never
+    // flip the delivered bubble back to "running".
+    const wasMessageCompleted = Boolean(
+      message.completedAt != null || message.status === 'completed',
+    );
     const sourceEventType = stringValue(payload.source_event_type).toLowerCase();
     const requestAccepted = sourceEventType === 'request.accepted'
       || (!sourceEventType && stringValue(payload.status).toLowerCase() === 'started');
@@ -233,8 +239,8 @@ export function applyHostedLifecycleEvents(
         activities: upsertActivity(message.activities, activity),
         modelStartedAt,
         startedAt: message.startedAt || occurredAt,
-        status: 'running',
-        timingLabel: chinese ? '正在思考' : 'Thinking',
+        status: wasMessageCompleted ? undefined : 'running',
+        timingLabel: wasMessageCompleted ? undefined : (chinese ? '正在思考' : 'Thinking'),
         updatedAt: occurredAt,
       };
     } else if (
@@ -297,8 +303,8 @@ export function applyHostedLifecycleEvents(
           firstTokenAt: message.firstTokenAt,
           modelStartedAt,
           startedAt: message.startedAt || occurredAt,
-          status: 'running',
-          timingLabel: chinese ? '正在执行' : 'Executing',
+          status: wasMessageCompleted ? undefined : 'running',
+          timingLabel: wasMessageCompleted ? undefined : (chinese ? '正在执行' : 'Executing'),
           updatedAt: occurredAt,
         };
       }

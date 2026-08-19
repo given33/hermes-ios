@@ -215,7 +215,14 @@ function shouldHideSupersededChatMessage(
   const meta = messageMetadata(message);
   const turnId = messageRuntimeTurnId(message, meta);
   if (!turnId) return false;
-  if (cancelledTurnIds.has(turnId) && chatMessageBaseStage(meta) === 'chat') return true;
+  if (cancelledTurnIds.has(turnId) && chatMessageBaseStage(meta) === 'chat') {
+    // Cancel hides only in-flight progress bubbles. A final answer that
+    // already reached completion is delivered work the user read — hiding
+    // it deleted their response. Keep completed finals visible; the caller's
+    // terminal-authority block still degrades any running bubble.
+    return !(isFinalChatMessage(message, meta)
+      || terminalStatus(message.status || meta.status));
+  }
   const finalIndex = finalChatIndices.get(turnId);
   if (isFinalChatMessage(message, meta)) return finalIndex !== index;
   return terminalTurnIds.has(turnId) && isSupersededChatProgress(message, meta);

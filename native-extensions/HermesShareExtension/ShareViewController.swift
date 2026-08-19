@@ -105,7 +105,10 @@ final class ShareViewController: UIViewController {
   // extension, App Intents, and the main app can enqueue concurrently without
   // any cross-process lock; the main app binds and consumes files on drain.
   private static let spoolDirectory = "agent-trigger-inbox-v3"
-  private static let maxItems = 20
+  // Keep in lock-step with the JS drain (IOSContextProvider processes only
+  // 10): staging more than the consumer uploads silently dropped attachments
+  // 11-20 and left their app-group copies orphaned forever.
+  private static let maxItems = 10
   private static let maxBytes = 50 * 1024 * 1024
 
   override func viewDidAppear(_ animated: Bool) {
