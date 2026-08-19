@@ -584,22 +584,25 @@ function parseDraftMentions(
   draft: string,
   agents: readonly HermesStudioRoomAgent[],
 ): HermesStudioGroupChatMention[] | undefined {
-  const tokens = new Set(
-    (draft.match(/(?:^|\s)@([^\s@]+)/g) || [])
-      .map((token) => token.trim().slice(1)),
-  );
-  if (!tokens.size) return undefined;
+  // Match full roster names (they may contain spaces — a @token scanner
+  // would truncate "Data Analyst" to "Data" and silently fall back to a
+  // whole-roster broadcast). Word boundaries keep @datal out of @data.
   const mentions: HermesStudioGroupChatMention[] = [];
-  for (const token of tokens) {
-    if (token === 'all' || token === '所有人' || token === '全体') {
-      mentions.push({ type: 'all', displayName: token });
-      continue;
+  const push = (mention: HermesStudioGroupChatMention) => {
+    if (!mentions.some((item) => item.type === mention.type && item.participantId === mention.participantId)) {
+      mentions.push(mention);
     }
-    const agent = agents.find(
-      (candidate) => candidate.name === token || candidate.profile === token,
-    );
-    if (agent) {
-      mentions.push({
+  };
+  if (/(?:^|\s)@(all|所有人|全体)(?=\s|$)/.test(draft)) {
+    push({ type: 'all', displayName: 'all' });
+  }
+  for (const agent of agents) {
+    const matched = [agent.name, agent.profile].filter(Boolean).some((name) => {
+      const escaped = String(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(?:^|\\s)@${escaped}(?=\\s|$)`).test(draft);
+    });
+    if (matched) {
+      push({
         type: 'agent',
         participantId: agent.profile,
         displayName: agent.name || agent.profile,
