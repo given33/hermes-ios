@@ -427,6 +427,7 @@ export function useAgentGroupChatController({
       return;
     }
     pending = latestPending;
+    if (bootstrapGenerationRef.current !== epoch) return;
     pendingRoomConversationIdsRef.current = pendingRoomDeletionRevisionRef.current === readRevision
       ? new Set(pending)
       : new Set([...pendingRoomConversationIdsRef.current, ...pending]);
