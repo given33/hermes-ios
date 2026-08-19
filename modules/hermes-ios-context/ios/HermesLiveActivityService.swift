@@ -266,18 +266,27 @@ final class HermesLiveActivityService {
     return components.url
   }
 
-  func endAll() async {
-    let active = Array(activities.values)
-    activities.removeAll()
-    for activity in active {
-      await activity.end(nil, dismissalPolicy: .immediate)
+    func endAll() async {
+        // Snapshot + clear under the lock (matching the accessor pattern);
+        // the async end() calls run outside it.
+        let (active, activeAgents) = takeAllActivities()
+        for activity in active {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        for activity in activeAgents {
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
     }
-    let activeAgents = Array(agentActivities.values)
-    agentActivities.removeAll()
-    for activity in activeAgents {
-      await activity.end(nil, dismissalPolicy: .immediate)
+
+    private func takeAllActivities() -> ([Activity<HermesWeatherActivityAttributes>], [Activity<HermesAgentActivityAttributes>]) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let active = Array(activities.values)
+        let activeAgents = Array(agentActivities.values)
+        activities.removeAll()
+        agentActivities.removeAll()
+        return (active, activeAgents)
     }
-  }
 }
 #else
 

@@ -90,6 +90,22 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
           awaitingSystemAuthorizationPrompt = true
           stateLock.unlock()
           self.manager.requestWhenInUseAuthorization()
+          // Fallback timer for the notDetermined branch: if the system
+          // suppresses the prompt (app in background, cooldown after double
+          // denial), locationManagerDidChangeAuthorization never fires and
+          // the gate + waiters hang forever — the exact symptom the token
+          // gate fix was meant to eliminate. Resolve with the current real
+          // status (never an invented one).
+          DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self, weak gate] in
+            guard let self, let gate else { return }
+            self.stateLock.lock()
+            let wasWaiting = self.awaitingSystemAuthorizationPrompt
+            self.awaitingSystemAuthorizationPrompt = false
+            self.stateLock.unlock()
+            guard wasWaiting else { return }
+            let resolved = HermesAuthorization.location(self.manager.authorizationStatus)
+            gate.resolve(resolved)
+          }
         } else {
           self.requestedAlwaysUpgrade = true
           self.manager.requestAlwaysAuthorization()
