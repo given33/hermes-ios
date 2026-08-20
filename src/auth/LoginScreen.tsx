@@ -1,3 +1,5 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { StatusBar } from 'expo-status-bar';
 import { useEffect, useReducer, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -11,18 +13,17 @@ import {
   TextInput,
   useWindowDimensions,
   View,
-  type LayoutChangeEvent,
+  type StyleProp,
   type TextInput as TextInputHandle,
+  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, {
+  Circle,
   Defs,
-  FeComposite,
-  FeFlood,
-  FeGaussianBlur,
-  FeOffset,
-  Filter,
-  Pattern,
+  LinearGradient,
+  Line,
+  Path,
   RadialGradient,
   Rect,
   Stop,
@@ -36,22 +37,31 @@ import { MAX_FACE_ID_ATTEMPTS } from './auth-state';
 import {
   INITIAL_PROVIDER_BUTTON_INTERACTION,
   LOGIN_VISUAL_CONTRACT,
+  isLoginColorScheme,
+  loginPalette,
   providerButtonLayerTargets,
   reduceProviderButtonInteraction,
+  type LoginColorScheme,
+  type LoginPalette,
 } from './login-visual-contract';
 
 const {
-  cardShadow: LOGIN_CARD_SHADOW,
-  colors: LOGIN_COLORS,
-  dither: LOGIN_DITHER,
+  appearanceStorageKey,
+  button: LOGIN_BUTTON,
+  card: LOGIN_CARD,
   entrance: LOGIN_ENTRANCE,
-  glow: LOGIN_GLOW,
+  input: LOGIN_INPUT,
+  monogram: LOGIN_MONOGRAM,
   providerButton: PROVIDER_BUTTON,
+  segmented: LOGIN_SEGMENTED,
+  toggle: LOGIN_TOGGLE,
 } = LOGIN_VISUAL_CONTRACT;
 const LOGIN_EASE_OUT = Easing.bezier(...IOS_MOTION.curve.decelerate);
 const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
   ...IOS_MOTION.curve.standard,
 );
+
+type LoginFieldKey = 'email' | 'verificationCode' | 'username' | 'password';
 
 export function LoginScreen() {
   const {
@@ -73,20 +83,20 @@ export function LoginScreen() {
   const verificationCodeInput = useRef<TextInputHandle>(null);
   const entranceOpacity = useRef(new Animated.Value(0)).current;
   const entranceOffset = useRef(new Animated.Value(LOGIN_ENTRANCE.translateY)).current;
+  const [scheme, setScheme] = useState<LoginColorScheme>(LOGIN_VISUAL_CONTRACT.defaultScheme);
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [rememberLogin, setRememberLogin] = useState(false);
   const [sendingCode, setSendingCode] = useState(false);
   const [codeCooldown, setCodeCooldown] = useState(0);
   const [codeMessage, setCodeMessage] = useState('');
-  const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
-  const [focusedField, setFocusedField] = useState<
-    'email' | 'verificationCode' | 'username' | 'password' | null
-  >(null);
+  const [focusedField, setFocusedField] = useState<LoginFieldKey | null>(null);
 
+  const palette = loginPalette(scheme);
   const loading = state.status === 'loading';
   const locked = state.status === 'locked';
   const busy = state.status !== 'loading' && state.status !== 'authenticated' && state.busy;
@@ -109,6 +119,28 @@ export function LoginScreen() {
   const rememberedLoginApplied = useRef(false);
 
   useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(appearanceStorageKey)
+      .then((stored) => {
+        if (!cancelled && stored && isLoginColorScheme(stored)) setScheme(stored);
+      })
+      .catch(() => {
+        // A missing or failing store simply keeps the light default.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleScheme = () => {
+    const next: LoginColorScheme = scheme === 'light' ? 'dark' : 'light';
+    setScheme(next);
+    void AsyncStorage.setItem(appearanceStorageKey, next).catch(() => {
+      // Preference persistence is best-effort; the in-memory scheme stays.
+    });
+  };
+
+  useEffect(() => {
     if (rememberedLoginApplied.current || state.status !== 'provisioning') return;
     rememberedLoginApplied.current = true;
     setUsername(rememberedLogin.username);
@@ -119,13 +151,13 @@ export function LoginScreen() {
   useEffect(() => {
     const animation = Animated.parallel([
       Animated.timing(entranceOpacity, {
-        duration: IOS_MOTION.duration.content,
+        duration: LOGIN_ENTRANCE.durationMs,
         easing: LOGIN_EASE_OUT,
         toValue: 1,
         useNativeDriver: true,
       }),
       Animated.timing(entranceOffset, {
-        duration: IOS_MOTION.duration.content,
+        duration: LOGIN_ENTRANCE.durationMs,
         easing: LOGIN_EASE_OUT,
         toValue: 0,
         useNativeDriver: true,
@@ -140,6 +172,12 @@ export function LoginScreen() {
     const timer = setTimeout(() => setCodeCooldown((value) => Math.max(0, value - 1)), 1000);
     return () => clearTimeout(timer);
   }, [codeCooldown]);
+
+  // The segmented register tab only exists while registration is open; if the
+  // status flips closed while the user is on it, fall back to the login form.
+  useEffect(() => {
+    if (mode === 'register' && !registrationOpen) setMode('login');
+  }, [mode, registrationOpen]);
 
   const submit = () => {
     if (state.status === 'provisioning' && canSubmit) {
@@ -179,8 +217,15 @@ export function LoginScreen() {
   };
 
   return (
-    <View style={styles.root}>
-      <LoginBackdrop />
+    <View style={[styles.root, { backgroundColor: palette.backgroundBottom }]}>
+      <LoginBackdrop palette={palette} />
+      <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
+      <AppearanceToggle
+        icon={scheme === 'light' ? 'moon' : 'sun'}
+        palette={palette}
+        style={{ top: Math.max(insets.top, 16) + 2 }}
+        onPress={toggleScheme}
+      />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.keyboardArea}
@@ -208,288 +253,379 @@ export function LoginScreen() {
               },
             ]}
           >
-            <View accessibilityRole="header" style={styles.brand}>
-              <Text style={styles.brandText}>HERMES AGENT</Text>
-            </View>
+            <BrandMark palette={palette} />
 
-            <View style={styles.cardShell}>
-              <CardShadow height={cardSize.height} width={cardSize.width} />
-              <View
-                onLayout={(event) => updateCardSize(event, setCardSize)}
-                style={styles.card}
-              >
-                <View pointerEvents="none" style={styles.cardHighlight} />
-                <Text style={styles.heading}>
-                  {locked ? '解锁' : mode === 'register' ? '注册' : '登录'}
-                </Text>
-                <Text style={styles.subtitle}>
-                  {loading
-                    ? '正在读取 Hermes 安全连接。'
-                    : locked
-                      ? '使用 Face ID 解锁受保护的 Hermes 连接。'
-                      : mode === 'register'
-                        ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
-                        : '登录后继续使用 Hermes Agent 管理面板。'}
-                </Text>
+            <View
+              style={[
+                styles.card,
+                {
+                  backgroundColor: palette.card,
+                  borderColor: palette.cardBorder,
+                  shadowColor: palette.shadow,
+                },
+              ]}
+            >
+              <Text accessibilityRole="header" style={[styles.heading, { color: palette.text }]}>
+                {locked ? '解锁' : mode === 'register' ? '创建账号' : '欢迎回来'}
+              </Text>
+              <Text style={[styles.subtitle, { color: palette.textSecondary }]}>
+                {loading
+                  ? '正在读取 Hermes 安全连接。'
+                  : locked
+                    ? '使用 Face ID 解锁受保护的 Hermes 连接。'
+                    : mode === 'register'
+                      ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
+                      : '登录后继续使用 Hermes Agent 管理面板。'}
+              </Text>
 
-                {loading ? (
-                  <View accessibilityRole="progressbar" style={styles.loadingRow}>
-                    <ActivityIndicator color={LOGIN_COLORS.accent} size="small" />
-                    <Text style={styles.loadingText}>正在准备</Text>
+              {loading ? (
+                <View accessibilityRole="progressbar" style={styles.loadingRow}>
+                  <ActivityIndicator color={palette.accent} size="small" />
+                  <Text style={[styles.loadingText, { color: palette.textSecondary }]}>
+                    正在准备
+                  </Text>
+                </View>
+              ) : locked ? (
+                <View style={styles.form}>
+                  <View style={[styles.lockGlyph, { backgroundColor: palette.accentSoft }]}>
+                    <LockGlyph color={palette.accent} />
                   </View>
-                ) : locked ? (
-                  <View style={styles.form}>
-                    <Text style={styles.formTitle}>已保存的 HERMES 连接</Text>
-                    {lockError ? (
-                      <Text accessibilityRole="alert" style={styles.errorText}>
+                  <Text style={[styles.formTitle, { color: palette.text }]}>
+                    已保存的 Hermes 连接
+                  </Text>
+                  {lockError ? (
+                    <View style={[styles.errorChip, { backgroundColor: palette.errorSoft }]}>
+                      <Text accessibilityRole="alert" style={[styles.errorText, { color: palette.error }]}>
                         {lockError}
                       </Text>
-                    ) : null}
-                    {lockAttempts > 0 ? (
-                      <Text style={styles.attemptText}>
-                        {`解锁失败 ${lockAttempts}/${MAX_FACE_ID_ATTEMPTS} 次`}
-                      </Text>
-                    ) : null}
-                    <ProviderButton
-                      busy={busy}
-                      disabled={busy}
-                      label={busy ? '正在解锁' : '使用 Face ID 解锁'}
-                      onPress={() => void unlock()}
-                    />
-                    <IOSPressable
-                      accessibilityRole="button"
-                      disabled={busy}
-                      onPress={() => void logout()}
-                      pressedStyle={styles.buttonPressed}
-                      style={styles.secondaryButton}
-                    >
-                      <Text style={styles.secondaryButtonText}>使用密码登录</Text>
-                    </IOSPressable>
-                  </View>
-                ) : (
-                  <View style={styles.form}>
-                    <Text style={styles.formTitle}>
-                      {mode === 'register' ? '创建 HERMES 账号' : '使用账号密码登录'}
+                    </View>
+                  ) : null}
+                  {lockAttempts > 0 ? (
+                    <Text style={[styles.attemptText, { color: palette.textTertiary }]}>
+                      {`解锁失败 ${lockAttempts}/${MAX_FACE_ID_ATTEMPTS} 次`}
                     </Text>
-                    {mode === 'register' ? (
-                      <>
-                        {!registrationOpen ? (
-                          <Text accessibilityRole="alert" style={styles.registrationNotice}>
-                            注册暂未开放
-                          </Text>
-                        ) : null}
-                        <View style={styles.field}>
-                          <Text style={styles.fieldLabel}>QQ 邮箱</Text>
-                          <View style={styles.inputContainer}>
+                  ) : null}
+                  <ProviderButton
+                    accent={palette.accent}
+                    accentActive={palette.accentActive}
+                    accentHover={palette.accentHover}
+                    accentText={palette.accentText}
+                    busy={busy}
+                    disabled={busy}
+                    label={busy ? '正在解锁' : '使用 Face ID 解锁'}
+                    onPress={() => void unlock()}
+                  />
+                  <IOSPressable
+                    accessibilityRole="button"
+                    disabled={busy}
+                    onPress={() => void logout()}
+                    pressedStyle={styles.buttonPressed}
+                    style={[
+                      styles.secondaryButton,
+                      { borderColor: palette.separator },
+                    ]}
+                  >
+                    <Text style={[styles.secondaryButtonText, { color: palette.textSecondary }]}>
+                      使用密码登录
+                    </Text>
+                  </IOSPressable>
+                </View>
+              ) : (
+                <View style={styles.form}>
+                  {registrationOpen ? (
+                    <SegmentedControl
+                      palette={palette}
+                      value={mode}
+                      onChange={(next) => {
+                        setMode(next);
+                        setCodeMessage('');
+                        setFocusedField(null);
+                      }}
+                    />
+                  ) : null}
+                  {mode === 'register' ? (
+                    <>
+                      <View style={styles.field}>
+                        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+                          QQ 邮箱
+                        </Text>
+                        <View style={styles.inputContainer}>
+                          <TextInput
+                            ref={emailInput}
+                            accessibilityLabel="QQ 邮箱"
+                            autoComplete="email"
+                            autoCapitalize="none"
+                            autoCorrect={false}
+                            editable={!busy && registrationOpen}
+                            keyboardType="email-address"
+                            onBlur={() => setFocusedField(null)}
+                            onChangeText={setEmail}
+                            onFocus={() => setFocusedField('email')}
+                            onSubmitEditing={() => verificationCodeInput.current?.focus()}
+                            placeholder="QQ 邮箱"
+                            placeholderTextColor={palette.inputPlaceholder}
+                            returnKeyType="next"
+                            style={[
+                              styles.input,
+                              { backgroundColor: palette.inputFill, color: palette.text },
+                              focusedField === 'email' && {
+                                borderColor: palette.accent,
+                              },
+                            ]}
+                            textContentType="emailAddress"
+                            value={email}
+                          />
+                          {focusedField === 'email' ? (
+                            <View
+                              pointerEvents="none"
+                              style={[
+                                styles.inputFocusRing,
+                                { borderColor: palette.accent },
+                              ]}
+                            />
+                          ) : null}
+                        </View>
+                      </View>
+                      <View style={styles.field}>
+                        <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+                          邮箱验证码
+                        </Text>
+                        <View style={styles.verificationRow}>
+                          <View style={[styles.inputContainer, styles.verificationInput]}>
                             <TextInput
-                              ref={emailInput}
-                              accessibilityLabel="QQ 邮箱"
-                              autoComplete="email"
-                              autoCapitalize="none"
-                              autoCorrect={false}
+                              ref={verificationCodeInput}
+                              accessibilityLabel="邮箱验证码"
+                              autoComplete="one-time-code"
                               editable={!busy && registrationOpen}
-                              keyboardType="email-address"
+                              keyboardType="number-pad"
+                              maxLength={6}
                               onBlur={() => setFocusedField(null)}
-                              onChangeText={setEmail}
-                              onFocus={() => setFocusedField('email')}
-                              onSubmitEditing={() => verificationCodeInput.current?.focus()}
-                              placeholder="QQ 邮箱"
-                              placeholderTextColor="rgba(255, 255, 255, 0.32)"
+                              onChangeText={(value) => setVerificationCode(value.replace(/\D/g, ''))}
+                              onFocus={() => setFocusedField('verificationCode')}
+                              onSubmitEditing={() => usernameInput.current?.focus()}
+                              placeholder="6 位数字"
+                              placeholderTextColor={palette.inputPlaceholder}
                               returnKeyType="next"
                               style={[
                                 styles.input,
-                                focusedField === 'email' && styles.inputFocused,
+                                { backgroundColor: palette.inputFill },
+                                focusedField === 'verificationCode' && {
+                                  borderColor: palette.accent,
+                                },
                               ]}
-                              textContentType="emailAddress"
-                              value={email}
+                              textContentType="oneTimeCode"
+                              value={verificationCode}
                             />
-                            {focusedField === 'email' ? (
-                              <View pointerEvents="none" style={styles.inputFocusRing} />
+                            {focusedField === 'verificationCode' ? (
+                              <View
+                                pointerEvents="none"
+                                style={[
+                                  styles.inputFocusRing,
+                                  { borderColor: palette.accent },
+                                ]}
+                              />
                             ) : null}
                           </View>
-                        </View>
-                        <View style={styles.field}>
-                          <Text style={styles.fieldLabel}>邮箱验证码</Text>
-                          <View style={styles.verificationRow}>
-                            <View style={[styles.inputContainer, styles.verificationInput]}>
-                              <TextInput
-                                ref={verificationCodeInput}
-                                accessibilityLabel="邮箱验证码"
-                                autoComplete="one-time-code"
-                                editable={!busy && registrationOpen}
-                                keyboardType="number-pad"
-                                maxLength={6}
-                                onBlur={() => setFocusedField(null)}
-                                onChangeText={(value) => setVerificationCode(value.replace(/\D/g, ''))}
-                                onFocus={() => setFocusedField('verificationCode')}
-                                onSubmitEditing={() => usernameInput.current?.focus()}
-                                returnKeyType="next"
-                                style={[
-                                  styles.input,
-                                  focusedField === 'verificationCode' && styles.inputFocused,
-                                ]}
-                                textContentType="oneTimeCode"
-                                value={verificationCode}
-                              />
-                              {focusedField === 'verificationCode' ? (
-                                <View pointerEvents="none" style={styles.inputFocusRing} />
-                              ) : null}
-                            </View>
-                            <IOSPressable
-                              accessibilityRole="button"
-                              disabled={
+                          <IOSPressable
+                            accessibilityRole="button"
+                            disabled={
+                              !registrationOpen
+                              || sendingCode
+                              || codeCooldown > 0
+                              || !email.trim()
+                            }
+                            onPress={() => void sendRegistrationCode()}
+                            pressedStyle={styles.buttonPressed}
+                            style={[
+                              styles.codeButton,
+                              { backgroundColor: palette.accentSoft },
+                              (
                                 !registrationOpen
                                 || sendingCode
                                 || codeCooldown > 0
                                 || !email.trim()
-                              }
-                              onPress={() => void sendRegistrationCode()}
-                              pressedStyle={styles.buttonPressed}
-                              style={[
-                                styles.codeButton,
-                                (
-                                  !registrationOpen
-                                  || sendingCode
-                                  || codeCooldown > 0
-                                  || !email.trim()
-                                ) && styles.codeButtonDisabled,
-                              ]}
-                            >
-                              <Text style={styles.codeButtonText}>
-                                {sendingCode
-                                  ? '发送中'
-                                  : codeCooldown > 0 ? `${codeCooldown}秒` : '发送验证码'}
-                              </Text>
-                            </IOSPressable>
-                          </View>
-                          {codeMessage ? (
-                            <Text style={styles.codeMessage}>{codeMessage}</Text>
-                          ) : null}
+                              ) && styles.codeButtonDisabled,
+                            ]}
+                          >
+                            <Text style={[styles.codeButtonText, { color: palette.accentLabel }]}>
+                              {sendingCode
+                                ? '发送中'
+                                : codeCooldown > 0 ? `${codeCooldown}秒` : '发送验证码'}
+                            </Text>
+                          </IOSPressable>
                         </View>
-                      </>
-                    ) : null}
-                    <View style={styles.field}>
-                      <Text style={styles.fieldLabel}>账号</Text>
-                      <View style={styles.inputContainer}>
-                        <TextInput
-                          ref={usernameInput}
-                          accessibilityLabel="账号"
-                          autoComplete="username"
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          editable={!busy && (mode === 'login' || registrationOpen)}
-                          onBlur={() => setFocusedField(null)}
-                          onChangeText={setUsername}
-                          onFocus={() => setFocusedField('username')}
-                          onSubmitEditing={() => passwordInput.current?.focus()}
-                          returnKeyType="next"
-                          style={[
-                            styles.input,
-                            focusedField === 'username' && styles.inputFocused,
-                          ]}
-                          textContentType="username"
-                          value={username}
-                        />
-                        {focusedField === 'username' ? (
-                          <View pointerEvents="none" style={styles.inputFocusRing} />
+                        {codeMessage ? (
+                          <Text style={[styles.codeMessage, { color: palette.textTertiary }]}>
+                            {codeMessage}
+                          </Text>
                         ) : null}
                       </View>
-                    </View>
-                    <View style={styles.field}>
-                      <Text style={styles.fieldLabel}>密码</Text>
-                      <View style={styles.inputContainer}>
-                        <TextInput
-                          ref={passwordInput}
-                          accessibilityLabel="密码"
-                          autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          editable={!busy && (mode === 'login' || registrationOpen)}
-                          onBlur={() => setFocusedField(null)}
-                          onChangeText={setPassword}
-                          onFocus={() => setFocusedField('password')}
-                          onSubmitEditing={submit}
-                          returnKeyType="done"
-                          secureTextEntry
+                    </>
+                  ) : null}
+                  <View style={styles.field}>
+                    <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+                      账号
+                    </Text>
+                    <View style={styles.inputContainer}>
+                      <TextInput
+                        ref={usernameInput}
+                        accessibilityLabel="账号"
+                        autoComplete="username"
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        editable={!busy && (mode === 'login' || registrationOpen)}
+                        onBlur={() => setFocusedField(null)}
+                        onChangeText={setUsername}
+                        onFocus={() => setFocusedField('username')}
+                        onSubmitEditing={() => passwordInput.current?.focus()}
+                        placeholder="账号"
+                        placeholderTextColor={palette.inputPlaceholder}
+                        returnKeyType="next"
+                        style={[
+                          styles.input,
+                          { backgroundColor: palette.inputFill, color: palette.text },
+                          focusedField === 'username' && {
+                            borderColor: palette.accent,
+                          },
+                        ]}
+                        textContentType="username"
+                        value={username}
+                      />
+                      {focusedField === 'username' ? (
+                        <View
+                          pointerEvents="none"
                           style={[
-                            styles.input,
-                            focusedField === 'password' && styles.inputFocused,
+                            styles.inputFocusRing,
+                            { borderColor: palette.accent },
                           ]}
-                          textContentType={mode === 'register' ? 'newPassword' : 'password'}
-                          value={password}
                         />
-                        {focusedField === 'password' ? (
-                          <View pointerEvents="none" style={styles.inputFocusRing} />
-                        ) : null}
-                      </View>
+                      ) : null}
                     </View>
-                    {mode === 'login' ? (
+                  </View>
+                  <View style={styles.field}>
+                    <Text style={[styles.fieldLabel, { color: palette.textSecondary }]}>
+                      密码
+                    </Text>
+                    <View style={styles.inputContainer}>
+                      <TextInput
+                        ref={passwordInput}
+                        accessibilityLabel="密码"
+                        autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                        editable={!busy && (mode === 'login' || registrationOpen)}
+                        onBlur={() => setFocusedField(null)}
+                        onChangeText={setPassword}
+                        onFocus={() => setFocusedField('password')}
+                        onSubmitEditing={submit}
+                        placeholder="密码"
+                        placeholderTextColor={palette.inputPlaceholder}
+                        returnKeyType="done"
+                        secureTextEntry={!passwordVisible}
+                        style={[
+                          styles.input,
+                          styles.inputWithAccessory,
+                          { backgroundColor: palette.inputFill },
+                          focusedField === 'password' && {
+                            borderColor: palette.accent,
+                          },
+                        ]}
+                        textContentType={mode === 'register' ? 'newPassword' : 'password'}
+                        value={password}
+                      />
+                      {focusedField === 'password' ? (
+                        <View
+                          pointerEvents="none"
+                          style={[
+                            styles.inputFocusRing,
+                            styles.inputAccessoryRing,
+                            { borderColor: palette.accent },
+                          ]}
+                        />
+                      ) : null}
                       <IOSPressable
-                        accessibilityLabel="记住账号和密码"
-                        accessibilityRole="checkbox"
-                        accessibilityState={{ checked: rememberLogin }}
-                        disabled={busy}
-                        onPress={() => setRememberLogin((current) => !current)}
-                        opacityTo={0.72}
-                        style={styles.rememberRow}
-                      >
-                        <View style={[
-                          styles.rememberCheckbox,
-                          rememberLogin && styles.rememberCheckboxChecked,
-                        ]}>
-                          {rememberLogin ? <Text style={styles.rememberCheckmark}>✓</Text> : null}
-                        </View>
-                        <Text style={styles.rememberText}>记住账号和密码</Text>
-                      </IOSPressable>
-                    ) : null}
-                    {mode === 'login' && rememberedLogin.enabled && !password ? (
-                      <IOSPressable
+                        accessibilityLabel={passwordVisible ? '隐藏密码' : '显示密码'}
                         accessibilityRole="button"
                         disabled={busy}
-                        onPress={() => void fillRememberedPassword()}
-                        pressedStyle={styles.buttonPressed}
-                        style={styles.modeSwitch}
+                        haptic="selection"
+                        onPress={() => setPasswordVisible((current) => !current)}
+                        style={styles.passwordToggle}
                       >
-                        <Text style={styles.modeSwitchText}>使用 Face ID 填充已保存的密码</Text>
+                        <EyeGlyph color={palette.textTertiary} visible={passwordVisible} />
                       </IOSPressable>
-                    ) : null}
-                    {error ? (
-                      <Text accessibilityRole="alert" style={styles.errorText}>
-                        {error}
+                    </View>
+                  </View>
+                  {mode === 'login' ? (
+                    <IOSPressable
+                      accessibilityLabel="记住账号和密码"
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: rememberLogin }}
+                      disabled={busy}
+                      onPress={() => setRememberLogin((current) => !current)}
+                      opacityTo={0.72}
+                      style={styles.rememberRow}
+                    >
+                      <View
+                        style={[
+                          styles.rememberCheckbox,
+                          { borderColor: rememberLogin ? palette.accent : palette.separator },
+                          rememberLogin && { backgroundColor: palette.accent },
+                        ]}
+                      >
+                        {rememberLogin ? (
+                          <CheckmarkGlyph color={palette.accentText} />
+                        ) : null}
+                      </View>
+                      <Text style={[styles.rememberText, { color: palette.textSecondary }]}>
+                        记住账号和密码
                       </Text>
-                    ) : null}
-                    <ProviderButton
-                      busy={busy}
-                      disabled={!canSubmit}
-                      label={busy
-                        ? mode === 'register' ? '正在注册' : '正在登录'
-                        : mode === 'register' ? '注册并登录' : '登录'}
-                      onPress={submit}
-                    />
+                    </IOSPressable>
+                  ) : null}
+                  {mode === 'login' && rememberedLogin.enabled && !password ? (
                     <IOSPressable
                       accessibilityRole="button"
                       disabled={busy}
-                      onPress={() => {
-                        setMode((current) => current === 'login' ? 'register' : 'login');
-                        setCodeMessage('');
-                        setFocusedField(null);
-                      }}
+                      onPress={() => void fillRememberedPassword()}
                       pressedStyle={styles.buttonPressed}
-                      style={styles.modeSwitch}
+                      style={[
+                        styles.softAction,
+                        { backgroundColor: palette.accentSoft },
+                      ]}
                     >
-                      <Text style={styles.modeSwitchText}>
-                        {mode === 'login' ? '还没有账号？注册' : '已有账号？登录'}
+                      <Text style={[styles.softActionText, { color: palette.accentLabel }]}>
+                        使用 Face ID 填充已保存的密码
                       </Text>
                     </IOSPressable>
-                  </View>
-                )}
-              </View>
+                  ) : null}
+                  {error ? (
+                    <View style={[styles.errorChip, { backgroundColor: palette.errorSoft }]}>
+                      <Text accessibilityRole="alert" style={[styles.errorText, { color: palette.error }]}>
+                        {error}
+                      </Text>
+                    </View>
+                  ) : null}
+                  <ProviderButton
+                    accent={palette.accent}
+                    accentActive={palette.accentActive}
+                    accentHover={palette.accentHover}
+                    accentText={palette.accentText}
+                    busy={busy}
+                    disabled={!canSubmit}
+                    label={busy
+                      ? mode === 'register' ? '正在注册' : '正在登录'
+                      : mode === 'register' ? '注册并登录' : '登录'}
+                    onPress={submit}
+                  />
+                </View>
+              )}
             </View>
 
             <View style={styles.footer}>
-              <View style={styles.footerLine} />
-              <Text style={styles.footerText}>公网访问 · 需要身份验证</Text>
-              <View style={styles.footerLine} />
+              <View style={[styles.footerLine, { backgroundColor: palette.separator }]} />
+              <Text style={[styles.footerText, { color: palette.textTertiary }]}>
+                公网访问 · 需要身份验证
+              </Text>
+              <View style={[styles.footerLine, { backgroundColor: palette.separator }]} />
             </View>
           </Animated.View>
         </ScrollView>
@@ -498,12 +634,172 @@ export function LoginScreen() {
   );
 }
 
+function BrandMark({ palette }: { palette: LoginPalette }) {
+  return (
+    <View style={styles.brandColumn}>
+      <View
+        style={[
+          styles.monogram,
+          {
+            borderRadius: LOGIN_MONOGRAM.radius,
+            overflow: 'hidden' as const,
+          },
+        ]}
+      >
+          <Svg
+            height={LOGIN_MONOGRAM.size}
+            pointerEvents="none"
+            style={styles.monogramGradient}
+            width={LOGIN_MONOGRAM.size}
+          >
+            <Defs>
+              <LinearGradient id="login-monogram-gradient" x1="0" x2="0" y1="0" y2="1">
+                <Stop offset="0%" stopColor={palette.accent} />
+                <Stop offset="100%" stopColor={palette.accentDeep} />
+              </LinearGradient>
+            </Defs>
+            <Rect
+              fill="url(#login-monogram-gradient)"
+              height={LOGIN_MONOGRAM.size}
+              width={LOGIN_MONOGRAM.size}
+              x={0}
+              y={0}
+            />
+          </Svg>
+          <Text style={[styles.monogramLetter, { color: palette.accentText }]}>
+            {LOGIN_MONOGRAM.letter}
+          </Text>
+      </View>
+      <Text accessibilityRole="header" style={[styles.brandText, { color: palette.text }]}>
+        HERMES AGENT
+      </Text>
+      <Text style={[styles.brandTagline, { color: palette.textTertiary }]}>
+        智能体工作台
+      </Text>
+    </View>
+  );
+}
+
+function AppearanceToggle({
+  icon,
+  palette,
+  onPress,
+  style,
+}: {
+  icon: 'sun' | 'moon';
+  palette: LoginPalette;
+  onPress(): void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  return (
+    <View style={[styles.toggleSlot, style]}>
+      <IOSPressable
+        accessibilityLabel={icon === 'sun' ? '切换到亮色外观' : '切换到深色外观'}
+        accessibilityRole="button"
+        haptic="selection"
+        onPress={onPress}
+        style={[
+          styles.toggle,
+          {
+            backgroundColor: palette.toggleFill,
+            borderColor: palette.toggleBorder,
+          },
+        ]}
+      >
+        {icon === 'sun' ? (
+          <SunGlyph color={palette.toggleIcon} />
+        ) : (
+          <MoonGlyph color={palette.toggleIcon} />
+        )}
+      </IOSPressable>
+    </View>
+  );
+}
+
+function SegmentedControl({
+  palette,
+  value,
+  onChange,
+}: {
+  palette: LoginPalette;
+  value: 'login' | 'register';
+  onChange(next: 'login' | 'register'): void;
+}) {
+  const indicatorProgress = useRef(new Animated.Value(value === 'register' ? 1 : 0)).current;
+  const [trackWidth, setTrackWidth] = useState(0);
+
+  useEffect(() => {
+    const animation = Animated.timing(indicatorProgress, {
+      duration: IOS_MOTION.duration.control,
+      easing: PROVIDER_BUTTON_EASE_OUT,
+      toValue: value === 'register' ? 1 : 0,
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [indicatorProgress, value]);
+
+  // The pill slides one half-track; the inset (3) matches the indicator's
+  // top/bottom/left/right inset in styles.
+  const halfSlide = Math.max(0, (trackWidth - 6) / 2);
+
+  return (
+    <View
+      onLayout={(event) => setTrackWidth(event.nativeEvent.layout.width)}
+      style={[
+        styles.segmentedTrack,
+        { backgroundColor: palette.inputFill },
+      ]}
+    >
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.segmentedIndicator,
+          {
+            backgroundColor: palette.card,
+            width: Math.max(0, trackWidth / 2 - 3),
+            transform: [{
+              translateX: Animated.multiply(indicatorProgress, halfSlide),
+            }],
+          },
+        ]}
+      />
+      {(['login', 'register'] as const).map((segment) => (
+        <IOSPressable
+          accessibilityRole="tab"
+          accessibilityState={{ selected: value === segment }}
+          key={segment}
+          onPress={() => onChange(segment)}
+          style={styles.segmentedOption}
+        >
+          <Text
+            style={[
+              styles.segmentedLabel,
+              { color: value === segment ? palette.text : palette.textTertiary },
+            ]}
+          >
+            {segment === 'login' ? '登录' : '注册'}
+          </Text>
+        </IOSPressable>
+      ))}
+    </View>
+  );
+}
+
 function ProviderButton({
+  accent,
+  accentActive,
+  accentHover,
+  accentText,
   busy,
   disabled,
   label,
   onPress,
 }: {
+  accent: string;
+  accentActive: string;
+  accentHover: string;
+  accentText: string;
   busy: boolean;
   disabled: boolean;
   label: string;
@@ -560,38 +856,19 @@ function ProviderButton({
       onPress={onPress}
       onPressIn={() => dispatchInteraction('press-in')}
       onPressOut={() => dispatchInteraction('press-out')}
+      scaleTo={0.99}
       style={styles.providerButtonFrame}
     >
       <View
         accessibilityElementsHidden
         accessible={false}
         importantForAccessibility="no-hide-descendants"
-        style={[
-          styles.primaryButton,
-          { backgroundColor: PROVIDER_BUTTON.base.backgroundColor },
-        ]}
+        style={[styles.primaryButton, { backgroundColor: accent }]}
       >
-        <View
-          pointerEvents="none"
-          style={[
-            styles.buttonBevel,
-            {
-              borderTopColor: PROVIDER_BUTTON.base.bevel.top,
-              borderRightColor: PROVIDER_BUTTON.base.bevel.right,
-              borderBottomColor: PROVIDER_BUTTON.base.bevel.bottom,
-              borderLeftColor: PROVIDER_BUTTON.base.bevel.left,
-            },
-          ]}
-        />
         {busy ? (
-          <ActivityIndicator color={PROVIDER_BUTTON.base.textColor} size="small" />
+          <ActivityIndicator color={accentText} size="small" />
         ) : null}
-        <Text
-          style={[
-            styles.primaryButtonText,
-            { color: PROVIDER_BUTTON.base.textColor },
-          ]}
-        >
+        <Text style={[styles.primaryButtonText, { color: accentText }]}>
           {label}
         </Text>
         <Animated.View
@@ -601,30 +878,10 @@ function ProviderButton({
           pointerEvents="none"
           style={[
             styles.providerButtonVisualLayer,
-            {
-              backgroundColor: PROVIDER_BUTTON.hover.backgroundColor,
-              opacity: hoverOpacity,
-            },
+            { backgroundColor: accentHover, opacity: hoverOpacity },
           ]}
         >
-          <View
-            pointerEvents="none"
-            style={[
-              styles.buttonBevel,
-              {
-                borderTopColor: PROVIDER_BUTTON.hover.bevel.top,
-                borderRightColor: PROVIDER_BUTTON.hover.bevel.right,
-                borderBottomColor: PROVIDER_BUTTON.hover.bevel.bottom,
-                borderLeftColor: PROVIDER_BUTTON.hover.bevel.left,
-              },
-            ]}
-          />
-          <Text
-            style={[
-              styles.primaryButtonText,
-              { color: PROVIDER_BUTTON.hover.textColor },
-            ]}
-          >
+          <Text style={[styles.primaryButtonText, { color: accentText }]}>
             {label}
           </Text>
         </Animated.View>
@@ -635,148 +892,173 @@ function ProviderButton({
           pointerEvents="none"
           style={[
             styles.providerButtonVisualLayer,
-            {
-              backgroundColor: PROVIDER_BUTTON.active.backgroundColor,
-              opacity: activeOpacity,
-            },
+            { backgroundColor: accentActive, opacity: activeOpacity },
           ]}
         >
-          <View
-            pointerEvents="none"
-            style={[
-              styles.buttonBevel,
-              {
-                borderTopColor: PROVIDER_BUTTON.active.bevel.top,
-                borderRightColor: PROVIDER_BUTTON.active.bevel.right,
-                borderBottomColor: PROVIDER_BUTTON.active.bevel.bottom,
-                borderLeftColor: PROVIDER_BUTTON.active.bevel.left,
-              },
-            ]}
-          />
-          <Text
-            style={[
-              styles.primaryButtonText,
-              { color: PROVIDER_BUTTON.active.textColor },
-            ]}
-          >
+          <Text style={[styles.primaryButtonText, { color: accentText }]}>
             {label}
           </Text>
         </Animated.View>
       </View>
       {focusVisible ? (
-        <View pointerEvents="none" style={styles.providerButtonFocusRing} />
+        <View
+          pointerEvents="none"
+          style={[
+            styles.providerButtonFocusRing,
+            { borderColor: accent },
+          ]}
+        />
       ) : null}
     </IOSPressable>
   );
 }
 
-function CardShadow({ height, width }: { height: number; width: number }) {
-  const shadowWidth = Math.max(0, width - LOGIN_CARD_SHADOW.spread * 2);
-  const shadowHeight = Math.max(0, height - LOGIN_CARD_SHADOW.spread * 2);
-  if (!shadowWidth || !shadowHeight) return null;
-
-  return (
-    <Svg
-      height={height}
-      pointerEvents="none"
-      style={styles.cardShadow}
-      width={width}
-    >
-      <Defs>
-        <Filter height="400%" id="login-card-shadow" width="300%" x="-100%" y="-100%">
-          <FeGaussianBlur
-            in="SourceAlpha"
-            result="blurred-shadow"
-            stdDeviation={LOGIN_CARD_SHADOW.blurSigma}
-          />
-          <FeOffset
-            dy={LOGIN_CARD_SHADOW.offsetY}
-            in="blurred-shadow"
-            result="offset-shadow"
-          />
-          <FeFlood
-            floodColor="#000000"
-            floodOpacity={LOGIN_CARD_SHADOW.opacity}
-            result="shadow-color"
-          />
-          <FeComposite
-            in="shadow-color"
-            in2="offset-shadow"
-            operator="in"
-            result="card-shadow"
-          />
-        </Filter>
-      </Defs>
-      <Rect
-        fill="#000000"
-        filter="url(#login-card-shadow)"
-        height={shadowHeight}
-        width={shadowWidth}
-        x={LOGIN_CARD_SHADOW.spread}
-        y={LOGIN_CARD_SHADOW.spread}
-      />
-    </Svg>
-  );
-}
-
-function updateCardSize(
-  event: LayoutChangeEvent,
-  setCardSize: (size: { width: number; height: number }) => void,
-) {
-  const { height, width } = event.nativeEvent.layout;
-  setCardSize({ height, width });
-}
-
-function LoginBackdrop() {
+function LoginBackdrop({ palette }: { palette: LoginPalette }) {
   return (
     <View pointerEvents="none" style={styles.backdrop}>
       <Svg height="100%" width="100%">
         <Defs>
-          <Pattern
-            height={LOGIN_DITHER.size}
-            id="login-dither"
-            patternUnits="userSpaceOnUse"
-            width={LOGIN_DITHER.size}
-          >
-            {LOGIN_DITHER.cells.map((cell, index) => (
-              <Rect
-                fill={LOGIN_COLORS.accent}
-                fillOpacity={LOGIN_DITHER.opacity}
-                key={`login-dither-${index}`}
-                {...cell}
-              />
-            ))}
-          </Pattern>
+          <LinearGradient id="login-canvas" x1="0" x2="0" y1="0" y2="1">
+            <Stop offset="0%" stopColor={palette.backgroundTop} />
+            <Stop offset="100%" stopColor={palette.backgroundBottom} />
+          </LinearGradient>
           <RadialGradient
             cx="50%"
             cy="0%"
             id="login-top-glow"
-            rx={LOGIN_GLOW.radiusX}
-            ry={LOGIN_GLOW.radiusY}
+            rx="70.710678%"
+            ry="55%"
           >
-            <Stop
-              offset="0%"
-              stopColor={LOGIN_COLORS.accent}
-              stopOpacity={LOGIN_GLOW.opacity}
-            />
-            <Stop
-              offset={LOGIN_GLOW.stop}
-              stopColor={LOGIN_COLORS.accent}
-              stopOpacity={0}
-            />
+            <Stop offset="0%" stopColor={palette.glow} />
+            <Stop offset="100%" stopColor={palette.glow} stopOpacity={0} />
           </RadialGradient>
         </Defs>
-        <Rect fill="url(#login-dither)" height="100%" width="100%" />
+        <Rect fill="url(#login-canvas)" height="100%" width="100%" />
         <Rect fill="url(#login-top-glow)" height="100%" width="100%" />
       </Svg>
     </View>
   );
 }
 
+function SunGlyph({ color }: { color: string }) {
+  return (
+    <Svg
+      fill="none"
+      height={20}
+      pointerEvents="none"
+      stroke={color}
+      strokeLinecap="round"
+      strokeWidth={1.8}
+      width={20}
+    >
+      <Circle cx={10} cy={10} r={3.4} />
+      {[
+        [10, 1.6, 10, 3.6],
+        [10, 16.4, 10, 18.4],
+        [1.6, 10, 3.6, 10],
+        [16.4, 10, 18.4, 10],
+        [4.2, 4.2, 5.6, 5.6],
+        [14.4, 14.4, 15.8, 15.8],
+        [15.8, 4.2, 14.4, 5.6],
+        [4.2, 15.8, 5.6, 14.4],
+      ].map(([x1, y1, x2, y2]) => (
+        <Line key={`sun-ray-${x1}-${y1}`} x1={x1} x2={x2} y1={y1} y2={y2} />
+      ))}
+    </Svg>
+  );
+}
+
+function MoonGlyph({ color }: { color: string }) {
+  return (
+    <Svg
+      fill="none"
+      height={20}
+      pointerEvents="none"
+      stroke={color}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.8}
+      width={20}
+    >
+      <Path d="M 15.6 12.4 A 6.2 6.2 0 1 1 7.6 4.4 A 5 5 0 0 0 15.6 12.4 Z" />
+    </Svg>
+  );
+}
+
+function EyeGlyph({ color, visible }: { color: string; visible: boolean }) {
+  if (visible) {
+    return (
+      <Svg
+        fill="none"
+        height={20}
+        pointerEvents="none"
+        stroke={color}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.6}
+        width={20}
+      >
+        <Path d="M 1.8 10 C 4.4 5.6 7.2 3.6 10 3.6 C 12.8 3.6 15.6 5.6 18.2 10 C 15.6 14.4 12.8 16.4 10 16.4 C 7.2 16.4 4.4 14.4 1.8 10 Z" />
+        <Circle cx={10} cy={10} r={2.6} />
+      </Svg>
+    );
+  }
+  return (
+    <Svg
+      fill="none"
+      height={20}
+      pointerEvents="none"
+      stroke={color}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.6}
+      width={20}
+    >
+      <Path d="M 1.8 10 C 4.4 5.6 7.2 3.6 10 3.6 C 12.8 3.6 15.6 5.6 18.2 10 C 15.6 14.4 12.8 16.4 10 16.4 C 7.2 16.4 4.4 14.4 1.8 10 Z" />
+      <Line x1={3.4} x2={16.6} y1={16.8} y2={3.2} />
+    </Svg>
+  );
+}
+
+function CheckmarkGlyph({ color }: { color: string }) {
+  return (
+    <Svg
+      fill="none"
+      height={12}
+      pointerEvents="none"
+      stroke={color}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={2.2}
+      width={12}
+    >
+      <Path d="M 2 6.4 L 4.8 9.2 L 10 3.2" />
+    </Svg>
+  );
+}
+
+function LockGlyph({ color }: { color: string }) {
+  return (
+    <Svg
+      fill="none"
+      height={28}
+      pointerEvents="none"
+      stroke={color}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth={1.8}
+      width={28}
+    >
+      <Rect height={10} rx={2.4} width={16} x={6} y={12} />
+      <Path d="M 9.4 12 V 9.2 A 4.6 4.6 0 0 1 18.6 9.2 V 12" />
+      <Circle cx={14} cy={17} r={1.4} />
+    </Svg>
+  );
+}
+
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: LOGIN_COLORS.background,
   },
   backdrop: {
     position: 'absolute',
@@ -784,6 +1066,19 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     left: 0,
+  },
+  toggleSlot: {
+    position: 'absolute',
+    right: 20,
+    zIndex: 2,
+  },
+  toggle: {
+    width: LOGIN_TOGGLE.size,
+    height: LOGIN_TOGGLE.size,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderRadius: LOGIN_TOGGLE.radius,
   },
   keyboardArea: {
     flex: 1,
@@ -798,67 +1093,60 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 416,
   },
-  brand: {
-    flexDirection: 'row',
+  brandColumn: {
+    alignItems: 'center',
+    marginBottom: 28,
+    gap: 10,
+  },
+  monogram: {
+    width: LOGIN_MONOGRAM.size,
+    height: LOGIN_MONOGRAM.size,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 28,
+  },
+  monogramGradient: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+  },
+  monogramLetter: {
+    fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
+    fontSize: 30,
+    lineHeight: 34,
   },
   brandText: {
-    color: LOGIN_COLORS.accent,
     fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
-    fontSize: 16.8,
+    fontSize: 19,
     letterSpacing: 5.376,
     lineHeight: 25.2,
   },
-  cardShell: {
-    position: 'relative',
-  },
-  cardShadow: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    overflow: 'visible',
+  brandTagline: {
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontSize: 12.8,
+    letterSpacing: 1.6,
+    lineHeight: 18,
   },
   card: {
-    position: 'relative',
-    paddingTop: 36,
-    paddingHorizontal: 32,
-    paddingBottom: 32,
     borderWidth: 1,
-    borderColor: 'rgba(255, 172, 2, 0.18)',
-    borderRadius: 0,
-    backgroundColor: '#1c1207',
-  },
-  cardHighlight: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    borderTopWidth: 1,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderLeftWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.05)',
-    borderLeftColor: 'rgba(255, 255, 255, 0.05)',
-    borderRightColor: 'rgba(0, 0, 0, 0.4)',
-    borderBottomColor: 'rgba(0, 0, 0, 0.4)',
+    borderRadius: LOGIN_CARD.radius,
+    padding: LOGIN_CARD.padding,
+    shadowOffset: { width: 0, height: LOGIN_CARD.shadowOffsetY },
+    shadowOpacity: LOGIN_CARD.shadowOpacity,
+    shadowRadius: LOGIN_CARD.shadowRadius,
+    elevation: 8,
   },
   heading: {
-    marginBottom: 6.4,
-    color: LOGIN_COLORS.foreground,
+    marginBottom: 6,
     fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
-    fontSize: 29.6,
-    letterSpacing: 1.48,
-    lineHeight: 44.4,
+    fontSize: 27,
+    letterSpacing: 1.2,
+    lineHeight: 34,
   },
   subtitle: {
-    marginBottom: 28,
-    color: 'rgba(255, 255, 255, 0.65)',
+    marginBottom: 22,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 15.2,
-    lineHeight: 22.8,
+    fontSize: 14.4,
+    lineHeight: 21.6,
   },
   loadingRow: {
     minHeight: 72,
@@ -867,59 +1155,102 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   loadingText: {
-    color: 'rgba(255, 255, 255, 0.65)',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 14,
     lineHeight: 21,
   },
   form: {
-    gap: 12,
+    gap: 14,
   },
   formTitle: {
-    color: 'rgba(255, 255, 255, 0.70)',
+    textAlign: 'center',
     fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
-    fontSize: 11.52,
-    letterSpacing: 2.0736,
-    lineHeight: 17.28,
+    fontSize: 15,
+    letterSpacing: 1.2,
+    lineHeight: 22,
+  },
+  lockGlyph: {
+    width: 64,
+    height: 64,
+    alignSelf: 'center',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 32,
+    marginBottom: 2,
+  },
+  segmentedTrack: {
+    height: LOGIN_SEGMENTED.height,
+    flexDirection: 'row',
+    borderRadius: LOGIN_SEGMENTED.radius,
+    position: 'relative',
+  },
+  segmentedIndicator: {
+    position: 'absolute',
+    top: 3,
+    bottom: 3,
+    left: 3,
+    borderRadius: LOGIN_SEGMENTED.indicatorRadius,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  segmentedOption: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  segmentedLabel: {
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
+    fontSize: 13.2,
+    lineHeight: 18,
   },
   field: {
-    gap: 4.8,
-  },
-  registrationNotice: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 172, 2, 0.35)',
-    color: LOGIN_COLORS.accent,
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 13.12,
-    lineHeight: 19.68,
-    textAlign: 'center',
+    gap: 6,
   },
   fieldLabel: {
-    color: 'rgba(255, 255, 255, 0.55)',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 11.52,
-    letterSpacing: 1.3824,
-    lineHeight: 17.28,
+    fontSize: 12.4,
+    letterSpacing: 0.6,
+    lineHeight: 17,
   },
   input: {
-    paddingHorizontal: 12.8,
-    paddingVertical: 11.2,
+    paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: 'rgba(255, 172, 2, 0.35)',
-    borderRadius: 0,
-    backgroundColor: '#110a02',
-    color: LOGIN_COLORS.foreground,
+    borderRadius: LOGIN_INPUT.radius,
+    minHeight: LOGIN_INPUT.minHeight,
+    borderColor: 'transparent',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 15.2,
     lineHeight: 22.8,
   },
-  inputFocused: {
-    borderColor: LOGIN_COLORS.accent,
+  inputWithAccessory: {
+    paddingRight: 48,
   },
   inputContainer: {
     position: 'relative',
+  },
+  inputFocusRing: {
+    position: 'absolute',
+    top: -LOGIN_INPUT.focusRingWidth,
+    right: -LOGIN_INPUT.focusRingWidth,
+    bottom: -LOGIN_INPUT.focusRingWidth,
+    left: -LOGIN_INPUT.focusRingWidth,
+    borderWidth: LOGIN_INPUT.focusRingWidth,
+    borderRadius: LOGIN_INPUT.radius + LOGIN_INPUT.focusRingWidth,
+    opacity: 0.9,
+  },
+  inputAccessoryRing: {
+    right: 44,
+  },
+  passwordToggle: {
+    position: 'absolute',
+    right: 4,
+    top: 0,
+    bottom: 0,
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   verificationRow: {
     flexDirection: 'row',
@@ -930,67 +1261,56 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   codeButton: {
-    minWidth: 104,
-    minHeight: 48,
+    minWidth: 108,
+    minHeight: LOGIN_INPUT.minHeight,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 172, 2, 0.55)',
-    backgroundColor: '#1c1207',
+    paddingHorizontal: 14,
+    borderRadius: LOGIN_INPUT.radius,
   },
   codeButtonDisabled: {
     opacity: 0.45,
   },
   codeButtonText: {
-    color: LOGIN_COLORS.accent,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
-    fontSize: 11.52,
-    lineHeight: 17.28,
+    fontSize: 12.4,
+    lineHeight: 17,
     textAlign: 'center',
   },
   codeMessage: {
-    color: 'rgba(255, 255, 255, 0.62)',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 12,
     lineHeight: 18,
   },
-  inputFocusRing: {
-    position: 'absolute',
-    top: -1,
-    right: -1,
-    bottom: -1,
-    left: -1,
-    borderWidth: 1,
-    borderColor: LOGIN_COLORS.accent,
+  errorChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: LOGIN_INPUT.radius,
   },
   errorText: {
-    color: LOGIN_COLORS.error,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 13.12,
-    letterSpacing: 0.2624,
     lineHeight: 19.68,
   },
   providerButtonFrame: {
     position: 'relative',
-    marginTop: 4,
+    marginTop: 6,
   },
   primaryButton: {
-    minHeight: 48,
+    minHeight: LOGIN_BUTTON.minHeight,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 9,
     paddingHorizontal: 16,
-    paddingVertical: 15.2,
-    borderRadius: 0,
+    borderRadius: LOGIN_VISUAL_CONTRACT.button.radius,
   },
   primaryButtonText: {
     flexShrink: 1,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
-    fontSize: 12.48,
-    letterSpacing: 2.496,
-    lineHeight: 18.72,
+    fontSize: 14.4,
+    letterSpacing: 2.2,
+    lineHeight: 20,
     textAlign: 'center',
   },
   providerButtonVisualLayer: {
@@ -1004,19 +1324,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 9,
     paddingHorizontal: 16,
-    paddingVertical: 15.2,
-    borderRadius: 0,
-  },
-  buttonBevel: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    borderTopWidth: 1,
-    borderRightWidth: 1,
-    borderBottomWidth: 1,
-    borderLeftWidth: 1,
+    borderRadius: LOGIN_VISUAL_CONTRACT.button.radius,
   },
   providerButtonFocusRing: {
     position: 'absolute',
@@ -1025,8 +1333,9 @@ const styles = StyleSheet.create({
     bottom: -(PROVIDER_BUTTON.focusVisible.offset + PROVIDER_BUTTON.focusVisible.width),
     left: -(PROVIDER_BUTTON.focusVisible.offset + PROVIDER_BUTTON.focusVisible.width),
     borderWidth: PROVIDER_BUTTON.focusVisible.width,
-    borderColor: PROVIDER_BUTTON.focusVisible.color,
-    borderRadius: 0,
+    borderRadius: LOGIN_VISUAL_CONTRACT.button.radius
+      + PROVIDER_BUTTON.focusVisible.offset
+      + PROVIDER_BUTTON.focusVisible.width,
   },
   secondaryButton: {
     minHeight: 44,
@@ -1035,21 +1344,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 172, 2, 0.35)',
-    borderRadius: 0,
+    borderRadius: LOGIN_VISUAL_CONTRACT.button.radius - 2,
   },
   secondaryButtonText: {
-    color: LOGIN_COLORS.accent,
     fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
     fontSize: 12.48,
-    letterSpacing: 2.496,
+    letterSpacing: 2.2,
     lineHeight: 18.72,
+  },
+  softAction: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: LOGIN_INPUT.radius,
+  },
+  softActionText: {
+    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontSize: 13.12,
+    lineHeight: 19.68,
+    textAlign: 'center',
   },
   buttonPressed: {
     opacity: 0.78,
   },
   attemptText: {
-    color: 'rgba(255, 255, 255, 0.58)',
+    textAlign: 'center',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 12,
     lineHeight: 18,
@@ -1065,54 +1386,28 @@ const styles = StyleSheet.create({
     height: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 172, 2, 0.5)',
-  },
-  rememberCheckboxChecked: {
-    backgroundColor: LOGIN_COLORS.accent,
-    borderColor: LOGIN_COLORS.accent,
-  },
-  rememberCheckmark: {
-    color: '#080604',
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
-    fontSize: 14,
-    lineHeight: 17,
+    borderWidth: 1.5,
+    borderRadius: 6,
   },
   rememberText: {
-    color: 'rgba(255, 255, 255, 0.76)',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 13.12,
     lineHeight: 19.68,
-  },
-  modeSwitch: {
-    minHeight: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  modeSwitchText: {
-    color: LOGIN_COLORS.accent,
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 13.12,
-    lineHeight: 19.68,
-    textAlign: 'center',
   },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 28,
+    gap: 14.4,
   },
   footerLine: {
     width: 24,
     height: 1,
-    marginHorizontal: 7.2,
     marginBottom: 2.4,
-    backgroundColor: 'rgba(255, 172, 2, 0.35)',
   },
   footerText: {
     flexShrink: 1,
-    color: 'rgba(255, 255, 255, 0.45)',
     fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
     fontSize: 12,
     letterSpacing: 1.2,

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Hermes 登录界面重设计 — 设计预览</title>
+<style>
+  /* Tokens mirrored 1:1 from src/auth/login-visual-contract.ts — design
+     reference only; the native screen is the source of truth. */
+  :root {
+    --bg-top: #f7f8fb; --bg-bottom: #e9edf5; --glow: rgba(0,83,253,0.10);
+    --card: #ffffff; --card-border: rgba(15,18,22,0.06);
+    --text: #0f1216; --text-2: rgba(15,18,22,0.62); --text-3: rgba(15,18,22,0.42);
+    --input-fill: #f2f4f8; --input-border: rgba(15,18,22,0.08);
+    --ph: rgba(15,18,22,0.36);
+    --accent: #0053fd; --accent-hover: #1a66fd; --accent-active: #0049df;
+    --accent-deep: #0040c8; --accent-text: #ffffff; --accent-label: #0053fd;
+    --accent-soft: rgba(0,83,253,0.10);
+    --error: #d92d20; --error-soft: rgba(217,45,32,0.08);
+    --sep: rgba(15,18,22,0.08);
+    --toggle-fill: #ffffff; --toggle-border: rgba(15,18,22,0.10); --toggle-icon: #3c4654;
+    --shadow: rgba(15,23,42,0.10);
+  }
+  .dark {
+    --bg-top: #101217; --bg-bottom: #08090c; --glow: rgba(58,106,222,0.14);
+    --card: #191c23; --card-border: rgba(255,255,255,0.07);
+    --text: #f3f5f9; --text-2: rgba(243,245,249,0.64); --text-3: rgba(243,245,249,0.42);
+    --input-fill: #22262f; --input-border: rgba(255,255,255,0.08);
+    --ph: rgba(243,245,249,0.38);
+    --accent: #3a6ade; --accent-hover: #4d7ce8; --accent-active: #3160c4;
+    --accent-deep: #2c55a4; --accent-text: #ffffff; --accent-label: #9bb9f9;
+    --accent-soft: rgba(58,106,222,0.16);
+    --error: #f97066; --error-soft: rgba(249,112,102,0.12);
+    --sep: rgba(255,255,255,0.08);
+    --toggle-fill: #1d212a; --toggle-border: rgba(255,255,255,0.10); --toggle-icon: #dfe4ee;
+    --shadow: rgba(0,0,0,0.45);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    display: flex; gap: 32px; padding: 32px; justify-content: center; flex-wrap: wrap;
+    background: #2a2d33; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .phone {
+    width: 390px; height: 780px; border-radius: 40px; overflow: hidden; position: relative;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: linear-gradient(var(--bg-top), var(--bg-bottom)); padding: 24px 20px;
+  }
+  .phone::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 60%;
+    background: radial-gradient(70.7% 100% at 50% 0%, var(--glow), transparent);
+    pointer-events: none;
+  }
+  .phone-label {
+    position: absolute; top: 14px; left: 0; right: 0; text-align: center;
+    color: rgba(255,255,255,0.55); font-size: 12px; letter-spacing: 2px;
+  }
+  .toggle {
+    position: absolute; top: 64px; right: 20px; width: 40px; height: 40px;
+    border-radius: 20px; background: var(--toggle-fill); border: 1px solid var(--toggle-border);
+    display: flex; align-items: center; justify-content: center; font-size: 17px;
+    color: var(--toggle-icon);
+  }
+  .brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 24px; }
+  .monogram {
+    width: 56px; height: 56px; border-radius: 18px;
+    background: linear-gradient(180deg, var(--accent), var(--accent-deep));
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent-text); font-size: 30px; font-weight: 600;
+  }
+  .wordmark { letter-spacing: 5.4px; font-size: 19px; color: var(--text); }
+  .tagline { font-size: 12.8px; letter-spacing: 1.6px; color: var(--text-3); }
+  .card {
+    width: 100%; max-width: 350px; background: var(--card);
+    border: 1px solid var(--card-border); border-radius: 24px; padding: 24px;
+    box-shadow: 0 16px 32px var(--shadow);
+  }
+  .heading { font-size: 27px; letter-spacing: 1.2px; color: var(--text); margin-bottom: 6px; }
+  .subtitle { font-size: 14.4px; color: var(--text-2); margin-bottom: 20px; }
+  .segmented {
+    height: 40px; background: var(--input-fill); border-radius: 12px;
+    display: flex; position: relative; margin-bottom: 14px;
+  }
+  .seg-pill {
+    position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px);
+    background: var(--card); border-radius: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  }
+  .seg-opt { flex: 1; display: flex; align-items: center; justify-content: center;
+    font-size: 13.2px; color: var(--text); font-weight: 600; }
+  .seg-opt.off { color: var(--text-3); }
+  .field { margin-bottom: 12px; }
+  .label { font-size: 12.4px; color: var(--text-2); margin-bottom: 6px; }
+  .input {
+    min-height: 48px; background: var(--input-fill); border: 2px solid transparent;
+    border-radius: 12px; display: flex; align-items: center; padding: 0 14px;
+    color: var(--text); font-size: 15.2px;
+  }
+  .input.focus { border-color: var(--accent); }
+  .input .ph { color: var(--ph); }
+  .input .eye { margin-left: auto; color: var(--text-3); font-size: 14px; }
+  .row { display: flex; gap: 8px; }
+  .row .input { flex: 1; }
+  .code-btn {
+    min-width: 108px; background: var(--accent-soft); border-radius: 12px;
+    display: flex; align-items: center; justify-content: center; font-size: 12.4px;
+    color: var(--accent-label); font-weight: 600;
+  }
+  .remember { display: flex; align-items: center; gap: 10px; margin: 4px 0 10px; }
+  .checkbox {
+    width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--sep);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--accent-text); font-size: 12px;
+  }
+  .checkbox.on { background: var(--accent); border-color: var(--accent); }
+  .remember span { font-size: 13.12px; color: var(--text-2); }
+  .cta {
+    height: 50px; border-radius: 14px; background: var(--accent); color: var(--accent-text);
+    display: flex; align-items: center; justify-content: center; letter-spacing: 2.2px;
+    font-size: 14.4px; font-weight: 600; margin-top: 6px;
+  }
+  .footer { display: flex; align-items: center; gap: 14px; margin-top: 24px; }
+  .footer .line { width: 24px; height: 1px; background: var(--sep); }
+  .footer .txt { font-size: 12px; letter-spacing: 1.2px; color: var(--text-3); }
+</style>
+</head>
+<body>
+  <div class="phone" id="light">
+    <div class="phone-label">LIGHT（默认）</div>
+    <div class="toggle">☾</div>
+    <div class="brand">
+      <div class="monogram">H</div>
+      <div class="wordmark">HERMES AGENT</div>
+      <div class="tagline">智能体工作台</div>
+    </div>
+    <div class="card">
+      <div class="heading">欢迎回来</div>
+      <div class="subtitle">登录后继续使用 Hermes Agent 管理面板。</div>
+      <div class="segmented">
+        <div class="seg-pill"></div>
+        <div class="seg-opt">登录</div>
+        <div class="seg-opt off">注册</div>
+      </div>
+      <div class="field">
+        <div class="label">账号</div>
+        <div class="input"><span class="ph">账号</span></div>
+      </div>
+      <div class="field">
+        <div class="label">密码</div>
+        <div class="input focus"><span class="ph">••••••••</span><span class="eye">👁</span></div>
+      </div>
+      <div class="remember">
+        <div class="checkbox on">✓</div><span>记住账号和密码</span>
+      </div>
+      <div class="cta">登 录</div>
+    </div>
+    <div class="footer"><div class="line"></div><div class="txt">公网访问 · 需要身份验证</div><div class="line"></div></div>
+  </div>
+
+  <div class="phone dark" id="dark">
+    <div class="phone-label">DARK（切换）</div>
+    <div class="toggle">☀</div>
+    <div class="brand">
+      <div class="monogram">H</div>
+      <div class="wordmark">HERMES AGENT</div>
+      <div class="tagline">智能体工作台</div>
+    </div>
+    <div class="card">
+      <div class="heading">创建账号</div>
+      <div class="subtitle">使用 QQ 邮箱验证码创建 Hermes 账号。</div>
+      <div class="segmented">
+        <div class="seg-pill" style="left:50%"></div>
+        <div class="seg-opt off">登录</div>
+        <div class="seg-opt">注册</div>
+      </div>
+      <div class="field">
+        <div class="label">QQ 邮箱</div>
+        <div class="input"><span class="ph">QQ 邮箱</span></div>
+      </div>
+      <div class="field">
+        <div class="label">邮箱验证码</div>
+        <div class="row">
+          <div class="input"><span class="ph">6 位数字</span></div>
+          <div class="code-btn">发送验证码</div>
+        </div>
+      </div>
+      <div class="field">
+        <div class="label">密码</div>
+        <div class="input"><span class="ph">••••••••</span><span class="eye">👁</span></div>
+      </div>
+      <div class="cta">注册并登录</div>
+    </div>
+    <div class="footer"><div class="line"></div><div class="txt">公网访问 · 需要身份验证</div><div class="line"></div></div>
+  </div>
+</body>
+</html>

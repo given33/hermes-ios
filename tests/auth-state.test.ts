@@ -921,38 +921,21 @@ test('native auth gates the saved session behind the Face ID lock and keeps the 
   assert.match(loginSource, /KeyboardAvoidingView/);
   assert.match(loginSource, /react-native-svg/);
   assert.match(loginSource, /RadialGradient/);
-  assert.match(loginSource, /Pattern/);
-  assert.match(loginSource, /borderRadius:\s*0/);
+  assert.match(loginSource, /LinearGradient/);
+  assert.match(loginSource, /loginPalette\(scheme\)/);
   assert.match(loginSource, /minHeight:\s*(?:44|4[5-9]|[5-9]\d)/);
   assert.match(loginSource, /maxWidth:\s*416/);
-  assert.match(loginSource, /buttonBevel/);
   assert.match(loginSource, /login-visual-contract/);
-  assert.match(loginSource, /fontSize:\s*16\.8/);
   assert.match(loginSource, /letterSpacing:\s*5\.376/);
-  assert.match(loginSource, /fontSize:\s*29\.6/);
-  assert.match(loginSource, /letterSpacing:\s*1\.48/);
   assert.match(loginSource, /fontSize:\s*15\.2/);
   assert.match(loginSource, /lineHeight:\s*22\.8/);
-  assert.match(loginSource, /fontSize:\s*11\.52/);
-  assert.match(loginSource, /letterSpacing:\s*2\.0736/);
-  assert.match(loginSource, /letterSpacing:\s*1\.3824/);
-  assert.match(loginSource, /paddingVertical:\s*11\.2/);
-  assert.match(loginSource, /paddingHorizontal:\s*12\.8/);
-  assert.match(loginSource, /fontSize:\s*12\.48/);
-  assert.match(loginSource, /letterSpacing:\s*2\.496/);
   assert.match(loginSource, /fontSize:\s*13\.12/);
-  assert.match(loginSource, /letterSpacing:\s*0\.2624/);
   assert.match(loginSource, /Animated\.Value\(0\)/);
   assert.match(loginSource, /useNativeDriver:\s*true/);
   assert.match(loginSource, /height\s*\*\s*0\.06/);
   assert.match(loginSource, /Math\.min\(96/);
   assert.match(loginSource, /Math\.max\(24/);
-  assert.doesNotMatch(loginSource, /input:\s*\{[^}]*minHeight/s);
   assert.match(loginSource, /inputFocusRing/);
-  assert.match(loginSource, /FeGaussianBlur/);
-  assert.match(loginSource, /FeOffset/);
-  assert.match(loginSource, /FeFlood/);
-  assert.match(loginSource, /FeComposite/);
   assert.doesNotMatch(
     `${providerSource}\n${appSource}\n${loginSource}`,
     /WebView|\bdocument\b|\bwindow\b/,

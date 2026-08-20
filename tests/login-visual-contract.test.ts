@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 
 import {
   INITIAL_PROVIDER_BUTTON_INTERACTION,
+  LOGIN_DARK_PALETTE,
+  LOGIN_LIGHT_PALETTE,
   LOGIN_VISUAL_CONTRACT,
+  isLoginColorScheme,
+  loginPalette,
   providerButtonLayerTargets,
   providerButtonVisualState,
   reduceProviderButtonInteraction,
@@ -14,87 +18,59 @@ import {
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-test('login contract freezes the shared source colors, glow, motion, and shadow', () => {
-  assert.deepEqual(LOGIN_VISUAL_CONTRACT.colors, {
-    background: '#170d02',
-    accent: '#ffac02',
-    foreground: '#ffffff',
-    error: '#ff6b6b',
-  });
-  assert.deepEqual(LOGIN_VISUAL_CONTRACT.glow, {
-    opacity: 0.06,
-    stop: '55%',
-    radiusX: '70.710678%',
-    radiusY: '141.421356%',
-  });
-  assert.deepEqual(LOGIN_VISUAL_CONTRACT.entrance, {
-    durationMs: 600,
-    translateY: 6,
-    easing: [0, 0, 0.58, 1],
-  });
-  assert.deepEqual(LOGIN_VISUAL_CONTRACT.cardShadow, {
-    spread: 20,
-    blurSigma: 30,
-    offsetY: 24,
-    opacity: 0.6,
-  });
+test('login contract ships light as the default and persists the toggle choice', () => {
+  assert.equal(LOGIN_VISUAL_CONTRACT.defaultScheme, 'light');
+  assert.equal(LOGIN_VISUAL_CONTRACT.appearanceStorageKey, 'hermes.login.appearance');
+  assert.equal(loginPalette('light'), LOGIN_LIGHT_PALETTE);
+  assert.equal(loginPalette('dark'), LOGIN_DARK_PALETTE);
+  assert.equal(isLoginColorScheme('light'), true);
+  assert.equal(isLoginColorScheme('dark'), true);
+  assert.equal(isLoginColorScheme('amber'), false);
 });
 
-test('login dither uses the repeating-conic top-right and bottom-left phase', () => {
-  assert.deepEqual(LOGIN_VISUAL_CONTRACT.dither, {
-    size: 3,
-    opacity: 0.04,
-    cells: [
-      { x: 1.5, y: 0, width: 1.5, height: 1.5 },
-      { x: 0, y: 1.5, width: 1.5, height: 1.5 },
-    ],
-  });
+test('light palette is a legible elevated-card scheme around the Nous accent', () => {
+  assert.equal(LOGIN_LIGHT_PALETTE.backgroundTop, '#f7f8fb');
+  assert.equal(LOGIN_LIGHT_PALETTE.backgroundBottom, '#e9edf5');
+  assert.equal(LOGIN_LIGHT_PALETTE.card, '#ffffff');
+  assert.equal(LOGIN_LIGHT_PALETTE.text, '#0f1216');
+  assert.equal(LOGIN_LIGHT_PALETTE.accent, '#0053fd');
+  assert.equal(LOGIN_LIGHT_PALETTE.accentDeep, '#0040c8');
+  assert.equal(LOGIN_LIGHT_PALETTE.accentText, '#ffffff');
+  assert.equal(LOGIN_LIGHT_PALETTE.inputFill, '#f2f4f8');
+  assert.equal(LOGIN_LIGHT_PALETTE.error, '#d92d20');
 });
 
-test('provider button contract preserves base, hover brightness, active invert, and timing', () => {
-  const button = LOGIN_VISUAL_CONTRACT.providerButton;
+test('dark palette mirrors every light key with an elevated dark card', () => {
+  assert.deepEqual(Object.keys(LOGIN_DARK_PALETTE).sort(), Object.keys(LOGIN_LIGHT_PALETTE).sort());
+  assert.equal(LOGIN_DARK_PALETTE.backgroundTop, '#101217');
+  assert.equal(LOGIN_DARK_PALETTE.backgroundBottom, '#08090c');
+  assert.equal(LOGIN_DARK_PALETTE.card, '#191c23');
+  assert.equal(LOGIN_DARK_PALETTE.text, '#f3f5f9');
+  assert.equal(LOGIN_DARK_PALETTE.accent, '#3a6ade');
+  assert.equal(LOGIN_LIGHT_PALETTE.accentLabel, '#0053fd');
+  assert.equal(LOGIN_DARK_PALETTE.accentLabel, '#9bb9f9');
+  assert.equal(LOGIN_DARK_PALETTE.accentText, '#ffffff');
+  assert.equal(LOGIN_DARK_PALETTE.error, '#f97066');
+  // Every palette channel must be present — no partially defined scheme can
+  // leave a control painting an undefined color.
+  for (const [name, palette] of [['light', LOGIN_LIGHT_PALETTE], ['dark', LOGIN_DARK_PALETTE]] as const) {
+    for (const [key, value] of Object.entries(palette)) {
+      assert.equal(typeof value, 'string', `${name}.${key} must be a string`);
+      assert.ok(value.length > 0, `${name}.${key} must not be empty`);
+    }
+  }
+});
 
-  assert.deepEqual(button.base, {
-    backgroundColor: '#ffac02',
-    textColor: '#170d02',
-    bevel: {
-      top: 'rgba(255, 255, 255, 0.5)',
-      right: 'rgba(0, 0, 0, 0.5)',
-      bottom: 'rgba(0, 0, 0, 0.5)',
-      left: 'rgba(255, 255, 255, 0.5)',
-    },
-  });
-  assert.deepEqual(button.active, {
-    backgroundColor: '#0053fd',
-    textColor: '#e8f2fd',
-    bevel: {
-      top: 'rgba(0, 0, 0, 0.5)',
-      right: 'rgba(255, 255, 255, 0.5)',
-      bottom: 'rgba(255, 255, 255, 0.5)',
-      left: 'rgba(0, 0, 0, 0.5)',
-    },
-  });
-  assert.deepEqual(button.hover, {
-    brightness: 1.08,
-    backgroundColor: '#ffba02',
-    textColor: '#190e02',
-    bevel: {
-      top: 'rgb(255, 231, 139)',
-      right: 'rgb(138, 93, 1)',
-      bottom: 'rgb(138, 93, 1)',
-      left: 'rgb(255, 231, 139)',
-    },
-  });
-  assert.deepEqual(button.filterTransition, {
-    durationMs: 120,
-    easing: [0, 0, 0.58, 1],
-  });
-  assert.deepEqual(button.focusVisible, {
-    color: '#ffac02',
-    width: 2,
-    offset: 3,
-  });
-  assert.equal(button.disabledVisualOverride, null);
+test('login shape and motion tokens stay modern-iOS: soft card, pill inputs, spring press', () => {
+  assert.equal(LOGIN_VISUAL_CONTRACT.card.radius, 24);
+  assert.equal(LOGIN_VISUAL_CONTRACT.input.radius, 12);
+  assert.equal(LOGIN_VISUAL_CONTRACT.button.radius, 14);
+  assert.equal(LOGIN_VISUAL_CONTRACT.button.minHeight, 50);
+  assert.equal(LOGIN_VISUAL_CONTRACT.segmented.radius, 12);
+  assert.equal(LOGIN_VISUAL_CONTRACT.entrance.durationMs, 280);
+  assert.equal(LOGIN_VISUAL_CONTRACT.entrance.translateY, 14);
+  assert.equal(LOGIN_VISUAL_CONTRACT.providerButton.filterTransition.durationMs, 120);
+  assert.equal(LOGIN_VISUAL_CONTRACT.providerButton.focusVisible.width, 2);
 });
 
 test('provider button interaction keeps active above hover and restores the right state', () => {
@@ -161,17 +137,16 @@ test('LoginScreen consumes the pure visual contract instead of duplicating sourc
 
   assert.match(source, /from '.\/login-visual-contract'/);
   assert.match(source, /LOGIN_VISUAL_CONTRACT/);
+  assert.match(source, /loginPalette\(scheme\)/);
   assert.match(source, /providerButtonLayerTargets/);
   assert.match(source, /Animated\.timing\(hoverOpacity/);
   assert.match(source, /Animated\.timing\(activeOpacity/);
-  assert.match(source, /PROVIDER_BUTTON\.active\.bevel\.top/);
-  assert.match(source, /PROVIDER_BUTTON\.hover\.backgroundColor/);
   assert.match(source, /onHoverIn=/);
   assert.match(source, /onHoverOut=/);
   assert.match(source, /onPressIn=/);
   assert.match(source, /onPressOut=/);
   assert.match(source, /reduceProviderButtonInteraction/);
-  assert.match(source, /IOS_MOTION\.duration\.content/);
+  assert.match(source, /IOS_MOTION\.duration\.content|LOGIN_ENTRANCE\.durationMs/);
   assert.match(source, /IOS_MOTION\.duration\.press/);
   assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
   assert.match(source, /providerButtonFocusRing/);
@@ -184,6 +159,45 @@ test('LoginScreen consumes the pure visual contract instead of duplicating sourc
   assert.doesNotMatch(source, /(?:hoverOpacity|activeOpacity)\.setValue/);
   assert.doesNotMatch(source, /enableNativeCSSParsing/);
   assert.doesNotMatch(source, /inputRange:\s*\[0,\s*1,\s*2\]/);
-  assert.doesNotMatch(source, /const LOGIN_DITHER_SIZE/);
-  assert.doesNotMatch(source, /buttonDisabled:\s*\{[^}]*opacity/s);
+});
+
+test('LoginScreen paints through the palette — no literal colors in the component', () => {
+  const source = readFileSync(resolve(projectRoot, 'src/auth/LoginScreen.tsx'), 'utf8');
+
+  // Every painted color routes through the palette object; hex/rgb literals
+  // belong to the contract file only.
+  assert.doesNotMatch(source, /#[0-9a-fA-F]{3,8}\b/);
+  assert.doesNotMatch(source, /rgba?\(/);
+  assert.match(source, /palette\.accent\b/);
+  assert.match(source, /palette\.inputFill/);
+  assert.match(source, /palette\.errorSoft/);
+});
+
+test('LoginScreen keeps the appearance toggle wired to the persisted scheme', () => {
+  const source = readFileSync(resolve(projectRoot, 'src/auth/LoginScreen.tsx'), 'utf8');
+
+  assert.match(source, /appearanceStorageKey/);
+  assert.match(source, /AsyncStorage\.getItem\(appearanceStorageKey\)/);
+  assert.match(source, /AsyncStorage\.setItem\(appearanceStorageKey, next\)/);
+  assert.match(source, /const next: LoginColorScheme = scheme === 'light' \? 'dark' : 'light'/);
+  assert.match(source, /style=\{scheme === 'light' \? 'dark' : 'light'\}/);
+  assert.match(source, /SunGlyph/);
+  assert.match(source, /MoonGlyph/);
+});
+
+test('LoginScreen preserves the auth flow affordances of the previous screen', () => {
+  const source = readFileSync(resolve(projectRoot, 'src/auth/LoginScreen.tsx'), 'utf8');
+
+  // Face ID lock surface
+  assert.match(source, /使用 Face ID 解锁/);
+  assert.match(source, /MAX_FACE_ID_ATTEMPTS/);
+  assert.match(source, /revealRememberedPassword/);
+  // Registration verification flow
+  assert.match(source, /requestRegistrationCode/);
+  assert.match(source, /textContentType="oneTimeCode"/);
+  assert.match(source, /发送验证码/);
+  // Credential autofill chains
+  assert.match(source, /textContentType=\{mode === 'register' \? 'newPassword' : 'password'\}/);
+  assert.match(source, /autoComplete=\{mode === 'register' \? 'new-password' : 'current-password'\}/);
+  assert.match(source, /scrollEventThrottle=\{8\}/);
 });
