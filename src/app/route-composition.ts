@@ -179,6 +179,13 @@ const AGENT_GROUP_NAV_ITEM: BuiltinNavigationDefinition = {
   icon: 'Users',
 };
 
+const AGENT_WORKSPACE_NAV_ITEM: BuiltinNavigationDefinition = {
+  routeId: 'agent-workspace',
+  path: '/agent-workspace',
+  labels: { en: 'Agent Workspace', zh: 'Agent 空间' },
+  icon: 'Sparkles',
+};
+
 const BUILTIN_NAV_REST = [
   {
     routeId: 'analytics',
@@ -365,7 +372,7 @@ function getBuiltinNavigation(
   locale: NativeRouteLocale,
 ): ComposedNavigationItem[] {
   const definitions = embeddedChat
-    ? [CHAT_NAV_ITEM, AGENT_GROUP_NAV_ITEM, ...BUILTIN_NAV_REST]
+    ? [CHAT_NAV_ITEM, AGENT_GROUP_NAV_ITEM, AGENT_WORKSPACE_NAV_ITEM, ...BUILTIN_NAV_REST]
     : [...BUILTIN_NAV_REST];
   const visibleDefinitions = showTokenAnalytics
     ? definitions

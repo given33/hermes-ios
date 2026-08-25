@@ -2,6 +2,13 @@ import CoreMotion
 import Foundation
 import OSLog
 
+// CMMotionActivityManager callbacks fire on the operation queue passed at
+// start time; HermesMotionService immediately rebroadcasts to the bridge
+// and the location service, both of which require main-thread execution.
+// Marking the class @MainActor makes that boundary part of the type system
+// and prevents future contributors from invoking a CoreMotion API off
+// main (a class of Apple-documented undefined behavior).
+@MainActor
 final class HermesMotionService {
   static let shared = HermesMotionService()
   private static let logger = Logger(subsystem: "app.hermes", category: "motion-collector")

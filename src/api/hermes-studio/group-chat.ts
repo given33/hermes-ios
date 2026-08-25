@@ -50,6 +50,13 @@ export interface HermesStudioGroupChatSocket {
     conversationId?: string;
     accountGeneration?: string;
   }): void;
+  /** True when the requested room has an attached live SSE cycle. */
+  hasHealthyRoomStream?(roomId?: string): boolean;
+  /** REST+SSE transport only: stop every attached room stream (abort in-flight
+   *  SSE cycles, clear retry timers) without tearing down the event bus. The
+   *  sole implementer (RestPollingSocket) always provides this; exposing it on
+   *  the interface lets callers release the iOS HTTP pool on room exit. */
+  detachRoomStreams(): void;
 }
 
 type SocketListener = (...args: any[]) => void;
@@ -65,6 +72,7 @@ interface RoomStreamRecord {
   stopped: boolean;
   cursor: number;
   seen: Map<string, string>;
+  healthy: boolean;
   retryTimer: ReturnType<typeof setTimeout> | null;
   retryWake: (() => void) | null;
 }
@@ -151,6 +159,7 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       stopped: false,
       cursor: 0,
       seen: new Map(),
+      healthy: false,
       retryTimer: null,
       retryWake: null,
     };
@@ -185,6 +194,15 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
     this.streams.clear();
   }
 
+  hasHealthyRoomStream(roomId?: string): boolean {
+    return [...this.streams.values()].some(
+      (record) => (!roomId || record.roomId === roomId)
+        && record.healthy
+        && !record.stopped
+        && !record.controller.signal.aborted,
+    );
+  }
+
   private async runRoomStream(record: RoomStreamRecord): Promise<void> {
     let attempt = 0;
     while (!record.stopped && this.connected && this.client) {
@@ -209,6 +227,10 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
         ),
       };
       const cursorBefore = record.cursor;
+      // A stream is healthy only while its reader is still attached.  Set the
+      // flag from the activity hook instead of waiting for the async generator
+      // to return (which a healthy SSE connection normally never does).
+      record.healthy = false;
       try {
         record.cursor = await consumeHostedConversationEvents(
           source,
@@ -216,15 +238,21 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
           record.cursor,
           record.accountGeneration,
           record.controller.signal,
-          (frame) => this.consumeRoomFrame(record, frame),
+          (frame) => this.consumeRoomFrame(record, frame, frame.resetCursor),
           undefined,
           5_000,
+          () => {
+            if (!record.stopped && !record.controller.signal.aborted) {
+              record.healthy = true;
+            }
+          },
         );
         // Only real progress justifies resetting the backoff: a stream that
         // closes without advancing (server EOF at HEAD) keeps the capped
         // schedule instead of reconnecting every second.
         if (record.cursor > cursorBefore) attempt = 0;
       } catch (error) {
+        record.healthy = false;
         // Access/authorization boundaries (member stream the server
         // refuses, deleted conversation, retired generation) can never
         // succeed on retry: degrade this room to REST polling instead of
@@ -244,6 +272,10 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
         // stays authoritative.
       }
       if (record.stopped || !this.connected) break;
+      // EOF means the live reader is gone, even if this cycle received a
+      // keepalive first. REST polling remains the freshness fallback while
+      // the reconnect backoff is pending.
+      record.healthy = false;
       const delay = Math.min(
         ROOM_STREAM_RETRY_BASE_MS * 2 ** attempt,
         ROOM_STREAM_RETRY_MAX_MS,
@@ -264,7 +296,52 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       conversation?: { messages?: unknown[] };
       events?: unknown[];
     },
+    resetCursor = false,
   ): void {
+    if (resetCursor) {
+      // The parser only sets this after snapshot and account checks pass.
+      this.emit('low_latency_event', {
+        schema_version: 'hermes.low-latency.v1',
+        event_id: `sequence-reset:${record.conversationId}:${record.accountGeneration}`,
+        // The controller derives the target room from the top-level roomId
+        // before consulting the nested payload; without this stamp the reset
+        // never reaches the room's OrderedLowLatencyReducer.
+        roomId: record.roomId,
+        sequence: 0,
+        cursor: 0,
+        request_id: '',
+        turn_id: '',
+        node_id: 'server',
+        type: 'sequence.reset',
+        payload: {},
+      });
+    }
+    for (const rawEvent of frame.events || []) {
+      if (!isRecord(rawEvent)) continue;
+      const eventType = stringValue(rawEvent.type || rawEvent.event_type);
+      if (!eventType) continue;
+      // Preserve the server envelope so one ordered reducer can handle
+      // manager/worker/tool/model events without a parallel UI state path.
+      this.emit('low_latency_event', {
+        schema_version: stringValue(rawEvent.schema_version, 'hermes.low-latency.v1'),
+        event_id: stringValue(rawEvent.event_id || rawEvent.id),
+        // Stamp the room so envelopes whose nested payload omits room_id
+        // still pass the controller's roomId gate instead of being dropped.
+        roomId: record.roomId,
+        // ``sequence`` is scoped to ``turn_id:role_stage`` on the server.
+        // The room reducer has one ordering window, so use the conversation
+        // cursor for the transport sequence whenever it is present. Without
+        // this, a worker event whose per-role sequence starts at 1 after a
+        // manager event at 3 is silently discarded as stale.
+        sequence: numberValue(rawEvent.cursor, numberValue(rawEvent.sequence, record.cursor)),
+        cursor: numberValue(rawEvent.cursor, record.cursor),
+        request_id: stringValue(rawEvent.request_id),
+        turn_id: stringValue(rawEvent.turn_id),
+        node_id: stringValue(rawEvent.node_id, 'server'),
+        type: eventType,
+        payload: isRecord(rawEvent.payload) ? rawEvent.payload : rawEvent,
+      });
+    }
     const messages = Array.isArray(frame.conversation?.messages)
       ? frame.conversation!.messages
       : [];
@@ -483,10 +560,14 @@ export class HermesStudioGroupChatApi {
     return { room: detail.room };
   }
 
-  async listWorkspaceFiles(roomId: string, path = ''): Promise<HermesStudioWorkspaceFileListing> {
+  async listWorkspaceFiles(
+    roomId: string,
+    path = '',
+    options: { signal?: AbortSignal } = {},
+  ): Promise<HermesStudioWorkspaceFileListing> {
     const response = await this.client.request<{ entries?: unknown[]; truncated?: boolean }>(
       `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/files`,
-      { query: path ? { path } : undefined },
+      { query: path ? { path } : undefined, signal: options.signal },
     );
     const entries = (Array.isArray(response.entries) ? response.entries : [])
       .map((entry) => {
@@ -504,14 +585,17 @@ export class HermesStudioGroupChatApi {
         };
       })
       .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-    void response.truncated;
-    return { entries, path };
+    return { entries, path, truncated: response.truncated === true };
   }
 
-  async readWorkspaceFile(roomId: string, path: string): Promise<HermesStudioWorkspaceFileContent> {
+  async readWorkspaceFile(
+    roomId: string,
+    path: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<HermesStudioWorkspaceFileContent> {
     const response = await this.client.request<{ path?: string; name?: string; content?: string; size?: number }>(
       `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/workspace/file`,
-      { query: { path } },
+      { query: { path }, signal: options.signal },
     );
     const content = stringValue(response.content);
     return {
@@ -522,13 +606,12 @@ export class HermesStudioGroupChatApi {
   }
 
   async downloadWorkspaceFile(roomId: string, path: string, options: { signal?: AbortSignal; download?: boolean } = {}): Promise<Blob> {
-    const content = await this.readWorkspaceFile(roomId, path);
-    void options;
+    const content = await this.readWorkspaceFile(roomId, path, { signal: options.signal });
     return new Blob([content.content], { type: 'text/plain' });
   }
 
-  async readWorkspaceFileText(roomId: string, path: string, _signal?: AbortSignal): Promise<{ content: string; size: number }> {
-    const file = await this.readWorkspaceFile(roomId, path);
+  async readWorkspaceFileText(roomId: string, path: string, signal?: AbortSignal): Promise<{ content: string; size: number }> {
+    const file = await this.readWorkspaceFile(roomId, path, { signal });
     return { content: file.content, size: file.size };
   }
 
@@ -684,6 +767,7 @@ export class HermesStudioGroupChatApi {
     profiles: string[] = [],
     signal?: AbortSignal,
     mentions?: HermesStudioGroupChatMention[],
+    attachments?: unknown[],
   ): Promise<Record<string, unknown>> {
     const requestId = id.trim() || `room-request-${Date.now().toString(36)}`;
     const turnId = `room-turn-${requestId.replace(/^room-request-/, '')}`;
@@ -707,6 +791,7 @@ export class HermesStudioGroupChatApi {
               })),
             }
             : {}),
+          ...(attachments?.length ? { attachments } : {}),
           request_id: requestId,
           turn_id: turnId,
         }),
@@ -723,7 +808,7 @@ export class HermesStudioGroupChatApi {
     _attachments?: unknown[],
     mentions?: HermesStudioGroupChatMention[],
   ): Promise<string> {
-    const response = await this.sendRoomMessage(roomId, id, content, [], undefined, mentions);
+    const response = await this.sendRoomMessage(roomId, id, content, [], undefined, mentions, _attachments);
     const message = isRecord(response.message) ? response.message : null;
     return stringValue(message?.id, stringValue(response.request_id, id));
   }
@@ -987,11 +1072,13 @@ export function normalizeGroupMessage(value: unknown, fallbackRoomId = ''): Herm
   const senderName = stringValue(alias(value, 'senderName', 'sender_name', 'name', 'profile'), role || 'Agent');
   const status = stringValue(value.status).toLowerCase();
   const meta = isRecord(value.meta) ? value.meta : isRecord(value.metadata) ? value.metadata : {};
-  const timestamp = numberValue(alias(value, 'timestamp', 'created_at', 'createdAt', 'updated_at'), Date.now());
+  // Missing server timestamps must be stable across repeated projections;
+  // Date.now() would make the same historical row look like a new revision.
+  const timestamp = numberValue(alias(value, 'timestamp', 'created_at', 'createdAt', 'updated_at'), 0);
   return {
     id,
     roomId: stringValue(alias(value, 'roomId', 'room_id'), fallbackRoomId),
-    senderId: stringValue(alias(value, 'senderId', 'sender_id', 'member_id'), senderName),
+    senderId: stringValue(alias(value, 'senderId', 'sender_id', 'member_id')),
     senderName,
     senderType: role,
     senderAgentProfile: stringValue(value.profile),

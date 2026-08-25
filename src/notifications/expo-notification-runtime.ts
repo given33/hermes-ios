@@ -103,7 +103,11 @@ export async function clearExpoAccountNotifications(): Promise<void> {
 export function currentApnsRegistrationConfig(): ApnsRegistrationConfig {
   const bundleId = Constants.expoConfig?.ios?.bundleIdentifier
     ?? 'app.sunstone1029.fig1171';
-  const environment: ApnsEnvironment = __DEV__ ? 'sandbox' : 'production';
+  const configured = Constants.expoConfig?.extra?.hermesApnsEnvironment;
+  const environment: ApnsEnvironment = configured === 'development'
+    || configured === 'production'
+    ? configured
+    : (__DEV__ ? 'sandbox' : 'production');
   return { bundleId, environment };
 }
 

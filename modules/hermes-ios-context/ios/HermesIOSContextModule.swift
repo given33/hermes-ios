@@ -1,5 +1,6 @@
 import CoreLocation
 import CoreMotion
+import CryptoKit
 import EventKit
 import ExpoModulesCore
 import HealthKit
@@ -11,6 +12,7 @@ import WatchConnectivity
 
 private let hermesFileProviderGroup = "group.app.sunstone1029.fig1171.hermes"
 private let hermesFileProviderOwnerKey = "hermes-file-provider-owner-v1"
+private let hermesVoiceNarrationEnabledKey = "app.hermes.voice-narration-enabled"
 
 struct HermesCalendarEventInput: Record {
   @Field var title: String = ""
@@ -82,12 +84,34 @@ public final class HermesIOSContextModule: Module {
   private static func setFileProviderOwnerScope(_ scope: String) {
     let defaults = UserDefaults(suiteName: hermesFileProviderGroup)
     let normalized = scope.trimmingCharacters(in: .whitespacesAndNewlines)
+    let previous = defaults?.string(forKey: hermesFileProviderOwnerKey)
+      .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     if normalized.isEmpty {
       defaults?.removeObject(forKey: hermesFileProviderOwnerKey)
     } else {
       defaults?.set(normalized, forKey: hermesFileProviderOwnerKey)
     }
     defaults?.synchronize()
+    // Swift has no `casefold` API.  Owner scopes are protocol identifiers,
+    // so the locale-independent lowercased comparison is the right boundary
+    // for deciding whether the previous account's file-provider root is stale.
+    if !previous.isEmpty, previous.lowercased() != normalized.lowercased() {
+      removeFileProviderRoot(ownerScope: previous)
+    }
+  }
+
+  private static func removeFileProviderRoot(ownerScope: String) {
+    guard !ownerScope.isEmpty,
+          let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: hermesFileProviderGroup
+          ) else { return }
+    let digest = SHA256.hash(data: Data(ownerScope.utf8))
+      .map { String(format: "%02x", $0) }
+      .joined()
+    let root = container
+      .appendingPathComponent("HermesFiles", isDirectory: true)
+      .appendingPathComponent(digest, isDirectory: true)
+    try? FileManager.default.removeItem(at: root)
   }
 
   public func definition() -> ModuleDefinition {
@@ -361,6 +385,22 @@ public final class HermesIOSContextModule: Module {
         "recording": self.voice.isRecording,
         "speaking": self.voice.isSpeaking,
       ]
+    }.runOnQueue(.main)
+
+    // Durable device-local narration switch. The Live Activity Speak/Mute
+    // control routes through the pending-task-control queue into this
+    // preference so the choice survives relaunches; disabling also silences
+    // any utterance already in flight.
+    AsyncFunction("getVoiceNarrationEnabled") { () -> Bool in
+      UserDefaults.standard.bool(forKey: hermesVoiceNarrationEnabledKey)
+    }.runOnQueue(.main)
+
+    AsyncFunction("setVoiceNarrationEnabled") { (enabled: Bool) -> Bool in
+      UserDefaults.standard.set(enabled, forKey: hermesVoiceNarrationEnabledKey)
+      if !enabled {
+        _ = self.voice.stopSpeaking()
+      }
+      return enabled
     }.runOnQueue(.main)
   }
 
@@ -1081,12 +1121,18 @@ public final class HermesIOSContextModule: Module {
       self.resolveAsync(promise) {
         let normalizedCommandID = try Self.requireCommandID(commandID)
         if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
-        let result = try await HermesBrowserService.shared.execute(
-          ownerScope: ownerScope,
-          action: action,
-          payload: payload ?? [:],
-          includeBase64: includeBase64 ?? false
-        )
+        // HermesBrowserService is @MainActor and owns WKWebView, which is
+        // documented as main-actor-isolated. Hop to main so the Swift
+        // concurrency check passes and the WKWebView is never touched
+        // off-thread.
+        let result = try await MainActor.run {
+          try HermesBrowserService.shared.execute(
+            ownerScope: ownerScope,
+            action: action,
+            payload: payload ?? [:],
+            includeBase64: includeBase64 ?? false
+          )
+        }
         self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
         return result
       }
@@ -1151,6 +1197,10 @@ public final class HermesIOSContextModule: Module {
 
   @ModuleDefinitionBuilder
   private func taskControlDefinitions() -> ModuleDefinition {
+    AsyncFunction("enqueueTaskControl") { (taskID: String, action: String) -> String? in
+      HermesTaskControlStore.shared.enqueue(taskID: taskID, action: action)
+    }
+
     AsyncFunction("readPendingTaskControls") { () -> [[String: Any]] in
       HermesTaskControlStore.shared.pending()
     }

@@ -11,6 +11,17 @@ export function normalizeBrowserInput(value: string): string {
   return `https://${input}`;
 }
 
+const EXTERNAL_BROWSER_SCHEMES = new Set(['http', 'https', 'mailto', 'sms', 'tel']);
+
+export function isSafeExternalBrowserUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.username === '' && parsed.password === '' && EXTERNAL_BROWSER_SCHEMES.has(parsed.protocol.slice(0, -1).toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export function browserDomainLabel(value: string): string {
   try {
     return new URL(value).hostname.replace(/^www\./i, '') || 'New Tab';

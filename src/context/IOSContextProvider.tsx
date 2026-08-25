@@ -599,6 +599,10 @@ export function IOSContextProvider({
       clearIOSPermissionRun(ownerScope);
       if (nativeContextAvailableRef.current) {
         void HermesIOSContext.stopMotionUpdates().catch(() => undefined);
+        // ScreenTime is account-scoped observation; unlike Always location it
+        // has no product reason to continue after the owning session ends.
+        void HermesIOSContext.stopScreenTimeMonitoring('hermes-daily-context')
+          .catch(() => undefined);
       }
       // Product boundary: while the process is alive (foreground or background,
       // including after logout / session expiry back to the login screen), Always
@@ -1551,6 +1555,29 @@ async function drainPendingTaskControls(
       continue;
     }
     const taskID = typeof control.taskID === 'string' ? control.taskID : '';
+    if (requestId && taskID && control.action === 'speak-toggle') {
+      // Narration is a device-local preference: the runtime control endpoint
+      // only accepts run mutations, so the Live Activity Speak/Mute request is
+      // applied here against the persisted native switch and never forwarded.
+      let enabled = false;
+      try {
+        enabled = !(await runCurrent(() => HermesIOSContext.getVoiceNarrationEnabled()));
+        await runCurrent(() => HermesIOSContext.setVoiceNarrationEnabled(enabled));
+      } catch {
+        // An externally re-signed build without the narration bridge must not
+        // wedge the queue; fall through and consume below.
+        enabled = false;
+      }
+      await runCurrent(() => HermesIOSContext.consumePendingTaskControl(requestId)).catch(() => false);
+      await runCurrent(() => HermesIOSContext.enqueueContextEvents([{
+        id: `ios-task-control:${requestId}`,
+        kind: 'ios-task-control-audit',
+        timestamp: Date.now(),
+        payload: { action: 'speak-toggle', enabled, request_id: requestId, task_id: taskID, status: 'completed' },
+      }]));
+      await runCurrent(flushPendingEvents);
+      continue;
+    }
     const action = control.action === 'cancel'
       || control.action === 'retry'
       || control.action === 'pause'
@@ -1593,12 +1620,32 @@ async function drainPendingAgentTriggers(
 ): Promise<void> {
   const pending = await runCurrent(() => HermesIOSContext.readPendingAgentTriggers());
   let droppedUnboundShares = 0;
-  for (const trigger of pending.slice(0, 10)) {
+  // Rotate the batch window when the first ten triggers remain queued after a
+  // transient failure; otherwise poison-ish network items at the head could
+  // starve every later Siri/share request until app restart.
+  const queueKey = `${ownerScope}\u0000${accountGeneration}\u0000${deviceId}`;
+  const start = pending.length > 10
+    ? (agentTriggerBatchCursors.get(queueKey) ?? 0) % pending.length
+    : 0;
+  const batch = pending.length > 10
+    ? [...pending.slice(start), ...pending.slice(0, start)].slice(0, 10)
+    : pending.slice(0, 10);
+  agentTriggerBatchCursors.set(
+    queueKey,
+    (start + Math.max(1, batch.length)) % Math.max(1, pending.length),
+  );
+  if (agentTriggerBatchCursors.size > 32) agentTriggerBatchCursors.clear();
+  for (const trigger of batch) {
     const requestID = typeof trigger.requestID === 'string' ? trigger.requestID.trim() : '';
     if (requestID && !queuedIntentMatchesOwner(trigger, ownerScope, accountGeneration)) {
       // A queue item from a previous account (or an old unscoped build) is
       // consumed and dropped; it must never reuse its sessionID in this one.
       if (!trigger.ownerScope && !trigger.accountGeneration) droppedUnboundShares += 1;
+      // Share Extension attachments live in the shared App Group and are not
+      // covered by the native account queue purge. Remove them before ACKing a
+      // stale trigger, otherwise every account switch leaves the old account's
+      // plaintext copies behind indefinitely.
+      await deleteQueuedShareAttachments(runCurrent, trigger);
       await runCurrent(() => HermesIOSContext.consumePendingAgentTrigger(requestID)).catch(() => false);
       continue;
     }
@@ -1784,6 +1831,27 @@ async function drainPendingAgentTriggers(
       `[ios-context] dropped ${droppedUnboundShares} unbound share request(s); `
       + 'share again while signed in to attach them to this account',
     );
+  }
+}
+
+const agentTriggerBatchCursors = new Map<string, number>();
+
+async function deleteQueuedShareAttachments(
+  runCurrent: <T>(operation: () => Promise<T>) => Promise<T>,
+  trigger: Record<string, unknown>,
+): Promise<void> {
+  const attachments = Array.isArray(trigger.attachments)
+    ? trigger.attachments.filter((value): value is Record<string, unknown> => Boolean(value && typeof value === 'object'))
+    : [];
+  for (const attachment of attachments) {
+    const filename = typeof attachment.attachmentPath === 'string'
+      ? attachment.attachmentPath.trim()
+      : '';
+    if (!filename || filename.includes('/') || filename.includes('\\') || filename === '.' || filename === '..') {
+      continue;
+    }
+    await runCurrent(() => HermesIOSContext.deleteAgentShareAttachment?.(filename) ?? Promise.resolve(false))
+      .catch(() => false);
   }
 }
 

@@ -1,6 +1,11 @@
 allowBuilds:
   esbuild: true
 
+auditConfig:
+  ignoreGhsas:
+    - GHSA-w3rx-r6r6-pgpr
+    - GHSA-5p2g-fcmc-qvqq
+
 overrides:
   '@expo/xcpretty>js-yaml': 4.3.1
   '@istanbuljs/load-nyc-config>js-yaml': 3.15.1

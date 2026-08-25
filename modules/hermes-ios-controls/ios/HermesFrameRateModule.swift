@@ -1,5 +1,4 @@
 import ExpoModulesCore
-import ObjectiveC.runtime
 import QuartzCore
 import UIKit
 
@@ -70,8 +69,6 @@ final class HermesFrameRateController: NSObject {
   private var callbackCount = 0
   private var measuredCallbacksPerSecond = 0.0
   private var lastCallbackTimestamp: CFTimeInterval = 0
-  private var didInstallDisplayLinkPolicy = false
-
   func start() {
     guard Thread.isMainThread else {
       DispatchQueue.main.async { [weak self] in
@@ -81,7 +78,6 @@ final class HermesFrameRateController: NSObject {
     }
 
     screenMaximumFramesPerSecond = UIScreen.main.maximumFramesPerSecond
-    installDisplayLinkPolicyIfNeeded()
 
     let link: CADisplayLink
     if let displayLink {
@@ -153,7 +149,7 @@ final class HermesFrameRateController: NSObject {
       requestedFramesPerSecond: screenMaximumFramesPerSecond >= 120 ? 120 : screenMaximumFramesPerSecond,
       measuredCallbacksPerSecond: measuredCallbacksPerSecond,
       displayLinkActive: displayLink != nil,
-      displayLinkPolicyInstalled: didInstallDisplayLinkPolicy,
+      displayLinkPolicyInstalled: false,
       lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
       thermalState: ProcessInfo.processInfo.thermalState.rawValue,
       lastCallbackTimestamp: lastCallbackTimestamp
@@ -176,23 +172,6 @@ final class HermesFrameRateController: NSObject {
     }
   }
 
-  private func installDisplayLinkPolicyIfNeeded() {
-    guard !didInstallDisplayLinkPolicy else { return }
-    guard
-      let original = class_getInstanceMethod(
-        CADisplayLink.self,
-        #selector(CADisplayLink.add(to:forMode:))
-      ),
-      let replacement = class_getInstanceMethod(
-        CADisplayLink.self,
-        #selector(CADisplayLink.hermes_add(to:forMode:))
-      )
-    else {
-      return
-    }
-    method_exchangeImplementations(original, replacement)
-    didInstallDisplayLinkPolicy = true
-  }
 }
 
 struct HermesFrameRateSnapshot {
@@ -204,11 +183,4 @@ struct HermesFrameRateSnapshot {
   let lowPowerMode: Bool
   let thermalState: Int
   let lastCallbackTimestamp: CFTimeInterval
-}
-
-private extension CADisplayLink {
-  @objc dynamic func hermes_add(to runLoop: RunLoop, forMode mode: RunLoop.Mode) {
-    HermesFrameRateController.shared.configure(self)
-    hermes_add(to: runLoop, forMode: mode)
-  }
 }

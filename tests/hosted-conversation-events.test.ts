@@ -430,6 +430,48 @@ test('hosted event envelopes reject empty generation and cross-conversation even
   );
 });
 
+test('hosted SSE rejects boolean and non-decimal lifecycle cursors', async () => {
+  const event = {
+    event_id: 'evt-invalid-cursor',
+    cursor: true,
+    account_generation: 'generation-numeric',
+    conversation_id: 'chat-numeric',
+    turn_id: 'turn-1',
+    role_stage: 'worker',
+    event_type: 'message.delta',
+    sequence: '1e3',
+    occurred_at: 1,
+    idempotency_key: 'invalid-cursor',
+    payload: { delta: 'must not project' },
+    schema_version: 'hermes.hosted-event.v1',
+  };
+  const api = {
+    openHostedConversationEvents() {
+      return Promise.resolve(streamResponse([
+        `id: 2\nevent: conversation\ndata: ${JSON.stringify({
+          cursor: 2,
+          account_generation: 'generation-numeric',
+          events: [event],
+        })}\n\n`,
+      ]));
+    },
+  } as unknown as HermesCloudApi;
+  const reports: string[] = [];
+
+  const cursor = await consumeHostedConversationEvents(
+    api,
+    'chat-numeric',
+    1,
+    'generation-numeric',
+    new AbortController().signal,
+    () => { throw new Error('invalid lifecycle event was projected'); },
+    (error) => { reports.push(error.message); },
+  );
+
+  assert.equal(cursor, 1);
+  assert.match(reports[0] || '', /invalid event cursor/);
+});
+
 test('hosted event cursor is not accepted when durable frame application fails', async () => {
   const api = {
     openHostedConversationEvents() {

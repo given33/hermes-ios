@@ -240,7 +240,8 @@ final class HermesAttachmentVault {
   }
 
   private var plaintextCacheRoot: URL {
-    FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    (FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+      ?? FileManager.default.temporaryDirectory)
       .appendingPathComponent(Self.plaintextCacheDirectory, isDirectory: true)
   }
 
@@ -248,12 +249,14 @@ final class HermesAttachmentVault {
     // Application Support is never listed by UIFileSharingEnabled, unlike
     // Documents, where the Files app would show (and let the user delete or
     // copy) every encrypted envelope in the outbox.
-    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+      ?? FileManager.default.temporaryDirectory)
       .appendingPathComponent("hermes-outbox", isDirectory: true)
   }
 
   private var legacyEncryptedOutboxRoot: URL {
-    FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    (FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
+      ?? FileManager.default.temporaryDirectory)
       .appendingPathComponent("hermes-outbox", isDirectory: true)
   }
 
@@ -284,7 +287,8 @@ final class HermesAttachmentVault {
     )
     let allowedRoots = [
       ownerRoot,
-      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0],
+      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        ?? FileManager.default.temporaryDirectory,
       URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
     ]
     guard allowedRoots.contains(where: { isDescendant(source, of: $0) }) else {
@@ -302,7 +306,8 @@ final class HermesAttachmentVault {
   // container paths would let hijacked JS exfiltrate any local file.
   private func requireAllowedSource(_ source: URL) throws {
     let allowedRoots = [
-      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0],
+      FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        ?? FileManager.default.temporaryDirectory,
       URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true),
       encryptedOutboxRoot,
       legacyEncryptedOutboxRoot,

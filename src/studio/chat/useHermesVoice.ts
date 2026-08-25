@@ -368,6 +368,7 @@ export function useHermesVoice({
   const toggleReadRepliesAloud = useCallback(() => {
     if (readRepliesAloud) {
       setReadRepliesAloud(false);
+      void HermesIOSContext.setVoiceNarrationEnabled(false).catch(() => undefined);
       void stopCurrentSpeech().catch(() => undefined);
       return;
     }
@@ -375,8 +376,22 @@ export function useHermesVoice({
       .reverse()
       .find((message) => message.role === 'assistant' && message.status === 'completed')
       ?.id || '';
+    void HermesIOSContext.setVoiceNarrationEnabled(true).catch(() => undefined);
     setReadRepliesAloud(true);
   }, [messages, readRepliesAloud, stopCurrentSpeech]);
+
+  // The Live Activity Speak/Mute control flips the persisted narration switch
+  // outside React; adopt whatever value is stored when the hook mounts.
+  useEffect(() => {
+    if (!hasNativeIOSContext) return undefined;
+    let cancelled = false;
+    void HermesIOSContext.getVoiceNarrationEnabled()
+      .then((enabled) => {
+        if (!cancelled) setReadRepliesAloud(enabled);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     if (

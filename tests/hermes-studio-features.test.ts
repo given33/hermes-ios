@@ -18,6 +18,7 @@ import {
   mergeRoomHistoryMessages,
   upsertGroupMessage,
 } from '../src/studio/agent-group/agent-group-model';
+import { OrderedLowLatencyReducer } from '../src/studio/agent-group/low-latency-event-reducer';
 
 function readSource(path: string): string {
   return readFileSync(
@@ -125,9 +126,11 @@ test('Agent group controller polls room detail and sends without a socket transp
     'utf8',
   );
   // Mention-aware sends route server-side; broadcast sends keep the roster.
-  assert.match(source, /sendRoomMessage\(roomId, id, content, profiles, undefined, resolvedMentions\)/);
+  assert.match(source, /sendRoomMessage\(roomId, id, content, profiles, undefined, resolvedMentions, attachments\)/);
   assert.match(source, /setInterval\(\(\) =>/);
   assert.match(source, /2_500/);
+  assert.match(source, /hasHealthyRoomStream/);
+  assert.match(source, /pollCount % 24 !== 0/);
   assert.match(source, /roomActivityTimestamp\(room, existing\.messages\)/);
   assert.doesNotMatch(source, /setSnapshot\(room\.id, \{ \.\.\.existing, room, updatedAt: Date\.now\(\) \}\)/);
   assert.doesNotMatch(source, /new URL\('\/group-chat'|socket\.io-client/);
@@ -173,6 +176,7 @@ test('Hermes Studio group and workflow clients include upstream membership and s
   );
   assert.match(groupSource, /api\/plugins\/collaboration/);
   assert.match(groupSource, /RestPollingSocket/);
+  assert.match(groupSource, /hasHealthyRoomStream/);
   assert.doesNotMatch(groupSource, /socket\.io-client|\/api\/hermes\/group-chat/);
 
   const calls: Array<{ url: string; init?: RequestInit }> = [];
@@ -583,6 +587,197 @@ test('Agent group socket streams hosted-event frames as message events', async (
   assert.ok(wakes.includes('room-1'));
 });
 
+test('Agent group socket does not mark an immediate head EOF as healthy', async () => {
+  const emptySseResponse = () => new Response('', {
+    headers: { 'Content-Type': 'text/event-stream' },
+    status: 200,
+  });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'test-token',
+    async () => emptySseResponse(),
+    emptySseResponse as unknown as typeof fetch,
+  );
+  const api = new HermesStudioGroupChatApi(client);
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+  socket.attachRoomStream?.({
+    id: 'room-empty',
+    conversationId: 'chat-empty',
+    accountGeneration: 'gen-empty',
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(socket.hasHealthyRoomStream?.(), false);
+  socket.disconnect();
+});
+
+test('Agent group socket marks an open keepalive stream healthy and falls back after EOF', async () => {
+  let closeBody: (() => void) | null = null;
+  const liveSseResponse = () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(': keepalive\n\n'));
+        closeBody = () => controller.close();
+      },
+    });
+    return new Response(body, {
+      headers: { 'Content-Type': 'text/event-stream' },
+      status: 200,
+    });
+  };
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'test-token',
+    async () => liveSseResponse(),
+    liveSseResponse as unknown as typeof fetch,
+  );
+  const api = new HermesStudioGroupChatApi(client);
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+  socket.attachRoomStream?.({
+    id: 'room-live',
+    conversationId: 'chat-live',
+    accountGeneration: 'gen-live',
+  });
+
+  for (let attempt = 0; attempt < 20 && !closeBody; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  const close = closeBody as (() => void) | null;
+  assert.ok(close, 'SSE body did not open');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(socket.hasHealthyRoomStream?.(), true);
+
+  if (!close) throw new Error('SSE body did not open');
+  close();
+  for (let attempt = 0; attempt < 20 && socket.hasHealthyRoomStream?.(); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  assert.equal(socket.hasHealthyRoomStream?.(), false);
+  socket.disconnect();
+});
+
+test('Agent group health fallback is scoped to the active room', async () => {
+  let closeHealthyBody: (() => void) | null = null;
+  const healthyResponse = () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(': keepalive\n\n'));
+        closeHealthyBody = () => controller.close();
+      },
+    });
+    return new Response(body, {
+      headers: { 'Content-Type': 'text/event-stream' },
+      status: 200,
+    });
+  };
+  const streamFetch = async (input: unknown): Promise<Response> => String(input).includes('chat-good')
+    ? healthyResponse()
+    : new Response('', {
+      headers: { 'Content-Type': 'text/event-stream' },
+      status: 200,
+    });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'test-token',
+    streamFetch as unknown as typeof fetch,
+    streamFetch as unknown as typeof fetch,
+  );
+  const api = new HermesStudioGroupChatApi(client);
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+  socket.attachRoomStream?.({
+    id: 'room-good',
+    conversationId: 'chat-good',
+    accountGeneration: 'gen-good',
+  });
+  socket.attachRoomStream?.({
+    id: 'room-bad',
+    conversationId: 'chat-bad',
+    accountGeneration: 'gen-bad',
+  });
+
+  for (let attempt = 0; attempt < 20 && !closeHealthyBody; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  assert.ok(closeHealthyBody, 'healthy SSE body did not open');
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(socket.hasHealthyRoomStream?.('room-good'), true);
+  assert.equal(socket.hasHealthyRoomStream?.('room-bad'), false);
+
+  socket.disconnect();
+});
+
+test('Agent group low-latency projection orders events by the conversation cursor across roles', async () => {
+  const accountGeneration = 'gen-roles';
+  const events = [
+    {
+      event_id: 'manager-event',
+      cursor: 5,
+      account_generation: accountGeneration,
+      conversation_id: 'chat_room_roles',
+      turn_id: 'turn-roles',
+      role_stage: 'manager',
+      event_type: 'assistant.message',
+      sequence: 3,
+      occurred_at: 1,
+      idempotency_key: 'manager-key',
+      payload: {
+        room_id: 'room-roles',
+        message: { id: 'assistant-roles', role: 'assistant', content: '' },
+      },
+      schema_version: 'hermes.hosted-event.v1',
+    },
+    {
+      event_id: 'worker-event',
+      cursor: 6,
+      account_generation: accountGeneration,
+      conversation_id: 'chat_room_roles',
+      turn_id: 'turn-roles',
+      role_stage: 'worker',
+      event_type: 'assistant.delta',
+      sequence: 1,
+      occurred_at: 2,
+      idempotency_key: 'worker-key',
+      payload: { room_id: 'room-roles', message_id: 'assistant-roles', delta: 'worker output' },
+      schema_version: 'hermes.hosted-event.v1',
+    },
+  ];
+  const frame = `id: 6\nevent: conversation\ndata: ${JSON.stringify({
+    account_generation: accountGeneration,
+    cursor: 6,
+    events,
+  })}\n\n`;
+  const sseResponse = () => new Response(frame, {
+    headers: { 'Content-Type': 'text/event-stream' },
+    status: 200,
+  });
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'test-token',
+    async () => sseResponse(),
+    sseResponse as unknown as typeof fetch,
+  );
+  const api = new HermesStudioGroupChatApi(client);
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+  const lowLatencyEvents: Array<Record<string, unknown>> = [];
+  socket.on('low_latency_event', (event: Record<string, unknown>) => lowLatencyEvents.push(event));
+  socket.attachRoomStream?.({
+    id: 'room-roles',
+    conversationId: 'chat_room_roles',
+    accountGeneration,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  socket.disconnect();
+
+  assert.deepEqual(lowLatencyEvents.map((event) => event.sequence), [5, 6]);
+  const reducer = new OrderedLowLatencyReducer();
+  let snapshot = emptyRoomSnapshot({
+    id: 'room-roles', name: 'Roles', ownerId: 'owner', createdAt: 1, updatedAt: 1,
+    profiles: [], hostedTurns: {}, members: [], agents: [],
+  } as any);
+  for (const event of lowLatencyEvents) snapshot = reducer.reduce(snapshot, event as any);
+  assert.equal(snapshot.messages[0]?.content, 'worker output');
+});
+
 test('remote deletion tombstones drop cached conversations instead of preserving them', async () => {
   const { synchronizeConversationCache } = await import('../src/api/conversation-cache-sync');
   const { HermesApiClient } = await import('../src/api/HermesApiClient');
@@ -701,4 +896,70 @@ test('session entries paginate to the leaf on full pages', async () => {
   assert.equal(result?.response.cursor, 3050);
   assert.equal(result?.partial, false);
   assert.equal(result?.truncated, false);
+});
+
+test('room SSE envelopes stamp top-level roomId so every event passes the controller gate', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const api = new HermesStudioGroupChatApi(testClient(calls, () => ({})));
+  const socket = await api.connectRealtime({ userId: 'mobile', userName: 'Mobile' });
+
+  const events: Array<Record<string, unknown>> = [];
+  socket.on('low_latency_event', (event: unknown) => events.push(event as Record<string, unknown>));
+
+  // Drive the frame consumer directly so no background stream loop runs.
+  const record = {
+    roomId: 'room-1',
+    conversationId: 'chat-1',
+    accountGeneration: 'gen-1',
+    cursor: 7,
+    seen: new Map<string, string>(),
+  };
+  const consume = (socket as unknown as {
+    consumeRoomFrame: (record: unknown, frame: unknown, resetCursor?: boolean) => void;
+  }).consumeRoomFrame.bind(socket);
+
+  consume(record, {}, true);
+  consume(record, {
+    events: [{
+      type: 'assistant.delta',
+      event_id: 'delta-1',
+      payload: { message_id: 'm1', delta: 'hi' }, // no nested room_id
+    }],
+  });
+  socket.detachRoomStreams();
+
+  // Mirror the controller's roomId derivation exactly: top-level first,
+  // then the nested payload. Every envelope must survive the gate.
+  const gateRoomId = (event: Record<string, unknown>): string => {
+    const nested = (event.payload && typeof event.payload === 'object' ? event.payload : {}) as Record<string, unknown>;
+    return String(event.roomId || nested.roomId || nested.room_id || '');
+  };
+  assert.ok(events.length >= 2, 'reset plus delta must both be emitted');
+  for (const event of events) {
+    const label = String(event.type);
+    assert.equal(gateRoomId(event), 'room-1', label + ' envelope must carry a routable roomId');
+  }
+
+  // With the gate passing, the emitted reset envelope must clear the
+  // reducer's dedupe/sequence window so a lower-sequence replay applies.
+  const reducer = new OrderedLowLatencyReducer();
+  let snapshot = emptyRoomSnapshot({
+    id: 'room-1', name: 'Room', ownerId: 'owner', createdAt: 1, updatedAt: 1,
+    profiles: [], hostedTurns: {}, members: [], agents: [],
+  } as never);
+  snapshot = reducer.reduce(snapshot, {
+    sequence: 9, event_id: 'old', type: 'assistant.message',
+    payload: { message: { id: 'old-message', role: 'assistant', content: 'old', timestamp: 1 } },
+  });
+  const resetEnvelope = events.find((event) => event.type === 'sequence.reset');
+  assert.ok(resetEnvelope, 'sequence.reset envelope must be emitted on cursor reset');
+  snapshot = reducer.reduce(snapshot, resetEnvelope as never);
+  assert.equal(reducer.sequence, 0, 'emitted reset envelope must reset the reducer window');
+
+  // And a replayed lower-sequence event is accepted again after the reset.
+  snapshot = reducer.reduce(snapshot, {
+    sequence: 1, event_id: 'replayed', type: 'assistant.message',
+    payload: { message: { id: 'new-message', role: 'assistant', content: 'fresh', timestamp: 2 } },
+  });
+  assert.equal(snapshot.messages.at(-1)?.content, 'fresh');
 });

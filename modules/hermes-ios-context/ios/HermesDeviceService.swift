@@ -1,6 +1,13 @@
 import Foundation
 import UIKit
 
+// HermesDeviceService uses UIApplication.shared, UIDevice, and UIScreen
+// across most of its surface. These APIs are documented as main-thread-only
+// and calling them off-main is undefined behavior. Marking the class
+// @MainActor makes that boundary part of the type system and eliminates a
+// category of intermittent crashes when bridge methods are invoked from a
+// background queue.
+@MainActor
 final class HermesDeviceService {
   static let shared = HermesDeviceService()
 

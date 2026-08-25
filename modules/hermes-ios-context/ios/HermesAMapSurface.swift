@@ -129,10 +129,16 @@ final class HermesAMapSurface: UIView, HermesMapRendering, MAMapViewDelegate {
     onLocationPress?()
     Task { @MainActor [weak self] in
       guard let self else { return }
-      let authorization = await HermesLocationService.shared.requestAlwaysAuthorization()
+      // Centering must not escalate to Always; that prompt belongs to the
+      // explicit permission coordinator.
+      let service = HermesLocationService.shared
+      let current = service.currentAuthorization
+      let authorization = current == .notDetermined
+        ? await service.requestAlwaysAuthorization()
+        : HermesAuthorization.location(current)
       guard authorization == "authorized" || authorization == "limited" else { return }
       self.mapView.showsUserLocation = true
-      _ = await HermesLocationService.shared.requestPreciseAuthorization()
+      _ = await service.requestPreciseAuthorization()
       guard let payload = await HermesLocationService.shared.requestCurrent(forceFresh: true),
             let latitude = payload["latitude"] as? Double,
             let longitude = payload["longitude"] as? Double,

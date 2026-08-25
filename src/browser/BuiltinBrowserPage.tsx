@@ -43,6 +43,7 @@ import { useTheme } from '../design/ThemeProvider';
 import {
   browserDomainLabel,
   HERMES_BROWSER_HOME_URL,
+  isSafeExternalBrowserUrl,
   normalizeBrowserInput,
 } from './browser-url';
 
@@ -146,8 +147,16 @@ export function BuiltinBrowserPage({
 
   const openExternal = useCallback(async () => {
     if (!activeTab) return;
-    await Linking.openURL(activeTab.currentUrl);
-  }, [activeTab]);
+    if (!isSafeExternalBrowserUrl(activeTab.currentUrl)) {
+      notify(chinese ? '此链接类型不支持在外部打开。' : 'This link type cannot be opened externally.');
+      return;
+    }
+    try {
+      await Linking.openURL(activeTab.currentUrl);
+    } catch {
+      notify(chinese ? '无法打开外部链接。' : 'Could not open the external link.');
+    }
+  }, [activeTab, chinese, notify]);
 
   const handoffToHermes = useCallback(async () => {
     if (!activeTab) return;
@@ -407,13 +416,18 @@ function BrowserSurface({
       javaScriptEnabled
       mediaPlaybackRequiresUserAction={false}
       onError={(event) => onError(event.nativeEvent.description)}
-      onFileDownload={(event) => { void Linking.openURL(event.nativeEvent.downloadUrl); }}
+      onFileDownload={(event) => {
+        const downloadUrl = event.nativeEvent.downloadUrl;
+        if (isSafeExternalBrowserUrl(downloadUrl)) {
+          void Linking.openURL(downloadUrl).catch(() => undefined);
+        }
+      }}
       onHttpError={(event) => onError(`HTTP ${event.nativeEvent.statusCode}`)}
       onLoadProgress={(event) => onProgress(event.nativeEvent.progress)}
       onNavigationStateChange={onNavigation}
       onShouldStartLoadWithRequest={(request) => {
         if (/^https?:/i.test(request.url) || request.url === 'about:blank') return true;
-        void Linking.openURL(request.url).catch(() => undefined);
+        if (isSafeExternalBrowserUrl(request.url)) void Linking.openURL(request.url).catch(() => undefined);
         return false;
       }}
       originWhitelist={['http://*', 'https://*']}

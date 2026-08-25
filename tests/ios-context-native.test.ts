@@ -356,7 +356,9 @@ test('native browser bridge exposes bounded OpenMinis-compatible actions', () =>
   assert.match(service, /case "set_cookies"/);
   assert.match(service, /maxFetchBytes = 10 \* 1024 \* 1024/);
   assert.match(service, /scheme == "http" \|\| scheme == "https"/);
-  assert.match(service, /websiteDataStore = \.nonPersistent\(\)/);
+  assert.match(service, /websiteDataStore\(forOwnerKey: ownerKey\)/);
+  assert.match(service, /WKWebsiteDataStore\(forIdentifier: identifier\)/);
+  assert.doesNotMatch(service, /websiteDataStore = \.nonPersistent\(\)/);
   assert.match(service, /let domain = \(item\["domain"\].*webView\.url\?\.host/s);
   assert.match(service, /ownerKey: String/);
   assert.match(service, /tab\.ownerKey == ownerKey/);
@@ -660,6 +662,20 @@ test('native relay covers durable cursors, background services, health, watch, n
   const appIntents = read('ios/HermesAppIntents.swift');
   assert.match(watch, /currentCollectorGenerationToken\(\)/);
   assert.match(watch, /matches\(message, token: token\)/);
+  // Terminal Live Activities are really dismissed, not just marked stale;
+  // pending dismissals stay lock-guarded and cancellable like every map access.
+  assert.match(liveActivity, /terminalDismissalDelay/);
+  assert.match(liveActivity, /func scheduleAgentEnd\(_ id: String, after delay: TimeInterval\)/);
+  assert.match(liveActivity, /func cancelScheduledAgentEnd\(_ id: String\)/);
+  assert.match(liveActivity, /pruneRehydratedActivities\(\)/);
+  // The widget Speak/Mute control applies a device-local narration switch in
+  // the control drain instead of forwarding an unsupported runtime action.
+  assert.match(provider, /control\.action === 'speak-toggle'/);
+  assert.match(provider, /getVoiceNarrationEnabled/);
+  assert.doesNotMatch(
+    provider,
+    /controlRuntimeTask\([\s\S]{0,400}'speak-toggle'/,
+  );
   assert.match(watch, /enqueueBatch\(events\)/);
   assert.match(watch, /accountResetAt/);
   assert.match(watch, /accountUUID/);
@@ -680,6 +696,8 @@ test('native relay covers durable cursors, background services, health, watch, n
     'readPendingTaskControls',
     'consumePendingTaskControl',
     'clearPendingTaskControls',
+    'getVoiceNarrationEnabled',
+    'setVoiceNarrationEnabled',
     'setOwnerScope',
     'activateOwnerScope',
     'deleteOwnerScope',
@@ -843,6 +861,7 @@ test('native relay covers durable cursors, background services, health, watch, n
   assert.match(appIntents, /func pending()/);
   assert.match(appIntents, /func consume\(requestID: String\)/);
   assert.match(appIntents, /allowedActions/);
+  assert.match(appIntents, /allowedActions[^\n]*"speak-toggle"/);
   assert.match(appIntents, /AES\.GCM\.seal/);
   assert.match(appIntents, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.match(appIntents, /HermesSharedKeychainAccessGroup/);
@@ -988,8 +1007,9 @@ test('HealthKit background delivery advances generation-scoped anchors after dur
   assert.match(health, /private static let initialBackfillLimit = 5_000/);
   assert.match(health, /initialBackfillDays: TimeInterval = 7/);
   assert.match(health, /token\.regionNamespace[\s\S]*typeIdentifier/);
-  assert.match(health, /NSKeyedArchiver\.archivedData/);
-  assert.match(health, /NSKeyedUnarchiver\.unarchiveTopLevelObjectWithData/);
+  assert.match(health, /NSKeyedArchiver\.archivedData[\s\S]*requiringSecureCoding: true/);
+  assert.match(health, /requiresSecureCoding = true/);
+  assert.match(health, /decodeObject\(of: HKQueryAnchor\.self/);
   assert.match(health, /backfill-progress/);
   assert.match(health, /backfill-complete/);
   assert.match(health, /"id": "health-sample:\\\(sample\.uuid\.uuidString\.lowercased\(\)\)"/);

@@ -114,10 +114,16 @@ final class HermesMapKitSurface: UIView, HermesMapRendering, MKMapViewDelegate {
     onLocationPress?()
     Task { @MainActor [weak self] in
       guard let self else { return }
-      let authorization = await HermesLocationService.shared.requestAlwaysAuthorization()
+      // Map centering only needs foreground location; Always is an explicit
+      // permission-coordinator decision, not a side effect of opening a map.
+      let service = HermesLocationService.shared
+      let current = service.currentAuthorization
+      let authorization = current == .notDetermined
+        ? await service.requestAlwaysAuthorization()
+        : HermesAuthorization.location(current)
       guard authorization == "authorized" || authorization == "limited" else { return }
       self.mapView.showsUserLocation = true
-      _ = await HermesLocationService.shared.requestPreciseAuthorization()
+      _ = await service.requestPreciseAuthorization()
       guard let location = await Self.currentLocation() else { return }
       self.centerOnUser(animated: self.hasCenteredOnUser, location: location)
     }

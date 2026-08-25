@@ -1,6 +1,7 @@
 import CoreLocation
 import CoreMotion
 import HealthKit
+import OSLog
 import SwiftUI
 import WatchConnectivity
 
@@ -81,6 +82,7 @@ struct HermesWatchApp: App {
 @MainActor
 final class HermesWatchRelay: NSObject, ObservableObject, CLLocationManagerDelegate,
   WCSessionDelegate, HKWorkoutSessionDelegate, HKLiveWorkoutBuilderDelegate {
+  private static let logger = Logger(subsystem: "app.sunstone1029.fig1171", category: "watch-relay")
   @Published private(set) var activeRelay = false
   @Published private(set) var reachable = false
 

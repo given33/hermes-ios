@@ -221,7 +221,7 @@ export function NotificationProvider({ children }: PropsWithChildren) {
     if (!runtime.available) return undefined;
     let active = true;
     let unsubscribe: () => void = () => undefined;
-    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const retryTimers = new Set<ReturnType<typeof setTimeout>>();
     const processResponse = async (response: unknown, clearOnSettle = false) => {
       const outcome = await acceptResponse(response);
       if (!active) return;
@@ -229,10 +229,11 @@ export function NotificationProvider({ children }: PropsWithChildren) {
         await runtime.clearLastResponse().catch(() => undefined);
       }
       if (outcome === 'retry') {
-        retryTimer = setTimeout(() => {
-          retryTimer = undefined;
+        const retryTimer = setTimeout(() => {
+          retryTimers.delete(retryTimer);
           if (active) void processResponse(response, clearOnSettle);
         }, 30_000);
+        retryTimers.add(retryTimer);
       }
     };
     void runtime.configureForegroundPresentation().catch(() => undefined);
@@ -250,7 +251,8 @@ export function NotificationProvider({ children }: PropsWithChildren) {
     }).catch(() => undefined);
     return () => {
       active = false;
-      if (retryTimer) clearTimeout(retryTimer);
+      for (const retryTimer of retryTimers) clearTimeout(retryTimer);
+      retryTimers.clear();
       unsubscribe();
     };
   }, [acceptResponse, runtime]);

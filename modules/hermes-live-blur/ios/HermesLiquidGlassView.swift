@@ -126,18 +126,24 @@ final class HermesLiquidGlassView: ExpoView, UIGestureRecognizerDelegate {
     interactionActive = active
     interactionAnimator?.stopAnimation(true)
 
-    let animations = {
-      self.tintView.alpha = active ? 1.18 : 1
-      self.highlightView.alpha = active ? 1 : 0.78
-      self.transform = active
-        ? CGAffineTransform(scaleX: 0.996, y: 0.996)
-        : .identity
-    }
+    // Pre-compute target values so the animations block does not need to
+    // capture self — the previous version retained self via the closure
+    // and pinned every HermesLiquidGlassView in memory for the lifetime
+    // of the host VC.
+    let tintAlpha: CGFloat = active ? 1.18 : 1
+    let highlightAlpha: CGFloat = active ? 1 : 0.78
+    let viewTransform: CGAffineTransform = active
+      ? CGAffineTransform(scaleX: 0.996, y: 0.996)
+      : .identity
     let animator = UIViewPropertyAnimator(
       duration: active ? 0.18 : 0.36,
-      dampingRatio: active ? 1 : 0.86,
-      animations: animations
-    )
+      dampingRatio: active ? 1 : 0.86
+    ) { [weak self] in
+      guard let self else { return }
+      self.tintView.alpha = tintAlpha
+      self.highlightView.alpha = highlightAlpha
+      self.transform = viewTransform
+    }
     interactionAnimator = animator
     animator.addCompletion { [weak self, weak animator] _ in
       guard self?.interactionAnimator === animator else { return }
@@ -164,6 +170,7 @@ final class HermesLiquidGlassView: ExpoView, UIGestureRecognizerDelegate {
   }
 
   private func installGaussianFilter() {
+    #if DEBUG
     let className = String("retliFAC".reversed())
     let selectorName = String(":epyThtiWretlif".reversed())
     let filterName = String("rulBnaissuag".reversed())
@@ -186,5 +193,6 @@ final class HermesLiquidGlassView: ExpoView, UIGestureRecognizerDelegate {
     if let displayScale = window?.traitCollection.displayScale {
       backdropLayer.setValue(displayScale, forKey: "scale")
     }
+    #endif
   }
 }

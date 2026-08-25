@@ -279,7 +279,7 @@ export function AgentGroupChatView({
                 if (!failed) return;
                 // Remove the failed optimistic row and resend its text plus
                 // the original mentions so targeted sends survive a retry.
-                controller.retryFailedMessage(activeRoom.room.id, messageId, failed.content, failed.mentions);
+                controller.retryFailedMessage(activeRoom.room.id, messageId, failed.content, failed.mentions, failed.attachments);
               } : undefined}
               running={Boolean(activeRoom?.runningAgents.length)}
               safeAreaBottom={safeAreaBottom}

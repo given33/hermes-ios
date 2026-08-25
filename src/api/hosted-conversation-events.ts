@@ -468,8 +468,8 @@ function parseConversation(value: unknown): SingleConversation {
 }
 
 function strictNonNegativeInteger(value: unknown): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+  const parsed = protocolInteger(value);
+  if (parsed === undefined || parsed < 0) {
     throw new RecoverableHostedFrameError(
       'Hermes hosted event stream returned an invalid event cursor',
     );
@@ -478,15 +478,23 @@ function strictNonNegativeInteger(value: unknown): number {
 }
 
 function nonNegativeInteger(value: unknown): number {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0;
+  const parsed = protocolInteger(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : 0;
 }
 
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (typeof value === 'string' && !value.trim()) return undefined;
-  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
+  const parsed = protocolInteger(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
+function protocolInteger(value: unknown): number | undefined {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? value : undefined;
+  }
+  if (typeof value !== 'string' || !/^[+-]?\d+$/.test(value.trim())) return undefined;
   const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function stringValue(value: unknown): string {

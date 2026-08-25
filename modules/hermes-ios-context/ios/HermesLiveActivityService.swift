@@ -56,6 +56,13 @@ final class HermesLiveActivityService {
   // EXC_BAD_ACCESS. Every map access goes through these accessors.
   private let stateLock = NSLock()
 
+  // Terminal agent updates only mark content stale ~30s out. ActivityKit never
+  // dismisses on staleDate alone, so every terminal update schedules a real
+  // end() that fires when the grace window closes; a later non-terminal update
+  // for the same id cancels its pending dismissal.
+  private static let terminalDismissalDelay: TimeInterval = 30
+  private var pendingAgentEnds: [String: Task<Void, Never>] = [:]
+
   private func takeWeatherActivity(_ id: String) -> Activity<HermesWeatherActivityAttributes>? {
     stateLock.lock()
     defer { stateLock.unlock() }
@@ -92,6 +99,40 @@ final class HermesLiveActivityService {
     agentActivities[id] = activity
   }
 
+  private func scheduleAgentEnd(_ id: String, after delay: TimeInterval) {
+    let task = Task { [weak self] in
+      try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+      guard !Task.isCancelled else { return }
+      guard let self else { return }
+      if let activity = self.takeAgentActivity(id) {
+        await activity.end(nil, dismissalPolicy: .immediate)
+      }
+    }
+    stateLock.lock()
+    pendingAgentEnds[id]?.cancel()
+    pendingAgentEnds[id] = task
+    stateLock.unlock()
+  }
+
+  private func cancelScheduledAgentEnd(_ id: String) {
+    stateLock.lock()
+    let task = pendingAgentEnds.removeValue(forKey: id)
+    stateLock.unlock()
+    task?.cancel()
+  }
+
+  private func cancelAllScheduledEnds() {
+    stateLock.lock()
+    let tasks = Array(pendingAgentEnds.values)
+    pendingAgentEnds.removeAll()
+    stateLock.unlock()
+    for task in tasks { task.cancel() }
+  }
+
+  private static func isTerminalAgentStatus(_ status: String) -> Bool {
+    status == "completed" || status == "cancelled" || status == "failed"
+  }
+
   private init() {
     for activity in Activity<HermesWeatherActivityAttributes>.activities {
       activities[activity.attributes.activityID] = activity
@@ -99,12 +140,44 @@ final class HermesLiveActivityService {
     for activity in Activity<HermesAgentActivityAttributes>.activities {
       agentActivities[activity.attributes.activityID] = activity
     }
+    pruneRehydratedActivities()
+  }
+
+  // A previous process can die between a terminal update and its scheduled
+  // end(); drop anything already stale or terminal at launch so Lock Screen
+  // surfaces from the old run do not survive the restart.
+  private func pruneRehydratedActivities() {
+    let now = Date()
+    let expiredWeather = activities
+      .filter { Self.isPastStaleDate($0.value.content.staleDate, now: now) }
+      .map(\.key)
+    for id in expiredWeather {
+      guard let activity = takeWeatherActivity(id) else { continue }
+      Task { await activity.end(nil, dismissalPolicy: .immediate) }
+    }
+    let finishedAgents = agentActivities
+      .filter {
+        Self.isTerminalAgentStatus($0.value.content.state.status.lowercased())
+          || Self.isPastStaleDate($0.value.content.staleDate, now: now)
+      }
+      .map(\.key)
+    for id in finishedAgents {
+      guard let activity = takeAgentActivity(id) else { continue }
+      Task { await activity.end(nil, dismissalPolicy: .immediate) }
+    }
+  }
+
+  private static func isPastStaleDate(_ staleDate: Date?, now: Date) -> Bool {
+    guard let staleDate else { return false }
+    return staleDate < now
   }
 
   func update(payload: [String: Any]) async throws -> [String: Any] {
     let id = (payload["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
       ?? UUID().uuidString.lowercased()
     let action = (payload["action"] as? String ?? "update").lowercased()
+    // A live update (or explicit end) supersedes any scheduled dismissal.
+    cancelScheduledAgentEnd(id)
     if action == "end" {
       if let activity = takeWeatherActivity(id) {
         await activity.end(nil, dismissalPolicy: .immediate)
@@ -163,6 +236,7 @@ final class HermesLiveActivityService {
     let sessions = (payload["sessions"] as? [[String: Any]] ?? []).prefix(12)
     let sessionCount = max(1, payload["sessionCount"] as? Int ?? payload["session_count"] as? Int ?? sessions.count)
     let status = normalizedString(payload["status"])?.lowercased() ?? "running"
+    let isTerminal = Self.isTerminalAgentStatus(status)
     let title = privacyMode ? "Hermes task" : (normalizedString(payload["title"]) ?? "Hermes task")
     let body = privacyMode ? "Task in progress" : (normalizedString(payload["body"]) ?? "")
     let currentTool = privacyMode ? nil : normalizedString(payload["currentTool"] ?? payload["current_tool"])
@@ -195,6 +269,9 @@ final class HermesLiveActivityService {
     )
     if let activity = readAgentActivity(id) {
       await activity.update(ActivityContent(state: state, staleDate: staleDate))
+      if isTerminal {
+        scheduleAgentEnd(id, after: Self.terminalDismissalDelay)
+      }
       return ["action": "updated", "id": id, "kind": "agent-task", "privacyMode": privacyMode]
     }
     let activity = try Activity.request(
@@ -203,6 +280,9 @@ final class HermesLiveActivityService {
       pushType: nil
     )
     storeAgentActivity(id, activity)
+    if isTerminal {
+      scheduleAgentEnd(id, after: Self.terminalDismissalDelay)
+    }
     return ["action": "started", "id": id, "kind": "agent-task", "privacyMode": privacyMode]
   }
 
@@ -267,6 +347,7 @@ final class HermesLiveActivityService {
   }
 
     func endAll() async {
+        cancelAllScheduledEnds()
         // Snapshot + clear under the lock (matching the accessor pattern);
         // the async end() calls run outside it.
         let (active, activeAgents) = takeAllActivities()

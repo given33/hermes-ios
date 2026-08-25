@@ -153,6 +153,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     items: [
       { path: '/chat', labels: { en: 'Chat', zh: '聊天' }, symbol: 'message.fill', fallback: 'MessageSquare' },
       { path: '/agent-group', labels: { en: 'Agent Rooms', zh: 'Agent 房间' }, symbol: 'person.3.fill', fallback: 'Users' },
+      { path: '/agent-workspace', labels: { en: 'Agent Workspace', zh: 'Agent 空间' }, symbol: 'sparkles.rectangle.stack', fallback: 'Sparkles' },
       { path: '/workflows', labels: { en: 'Workflows', zh: '工作流' }, symbol: 'arrow.triangle.branch', fallback: 'Zap' },
       { path: '/cron', labels: { en: 'Jobs', zh: '任务' }, symbol: 'clock.arrow.circlepath', fallback: 'Clock' },
       { path: '/kanban', labels: { en: 'Kanban', zh: '看板' }, symbol: 'rectangle.3.group', fallback: 'Database' },

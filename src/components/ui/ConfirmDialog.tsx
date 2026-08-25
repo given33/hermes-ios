@@ -3,6 +3,7 @@ import {
   Animated,
   Easing,
   Modal,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -52,7 +53,7 @@ export function ConfirmDialog({
   open,
   title,
 }: ConfirmDialogProps) {
-  const { width } = useWindowDimensions();
+  const { height, width } = useWindowDimensions();
   const { tokens } = useTheme();
   const { t } = useNativeLocalization();
   const colors = resolveControlColors(tokens).dialog;
@@ -159,66 +160,69 @@ export function ConfirmDialog({
                 },
               ],
               width: contentWidth,
+              maxHeight: Math.max(220, height - 48),
             },
           ]}
         >
-          <View
-            style={[
-              styles.header,
-              {
-                borderBottomColor: colors.border,
-                gap: metrics.headerGap,
-                padding: metrics.headerPadding,
-              },
-            ]}
-          >
-            {destructive ? (
-              <View
-                accessibilityElementsHidden
-                style={{
-                  flexShrink: 0,
-                  marginTop: metrics.warningIconMarginTop,
-                }}
-              >
-                <TriangleAlert
-                  color={tokens.colors.destructive}
-                  size={metrics.warningIconSize}
-                  strokeWidth={2}
-                />
-              </View>
-            ) : null}
+          <ScrollView bounces={false}>
+            <View
+              style={[
+                styles.header,
+                {
+                  borderBottomColor: colors.border,
+                  gap: metrics.headerGap,
+                  padding: metrics.headerPadding,
+                },
+              ]}
+            >
+              {destructive ? (
+                <View
+                  accessibilityElementsHidden
+                  style={{
+                    flexShrink: 0,
+                    marginTop: metrics.warningIconMarginTop,
+                  }}
+                >
+                  <TriangleAlert
+                    color={tokens.colors.destructive}
+                    size={metrics.warningIconSize}
+                    strokeWidth={2}
+                  />
+                </View>
+              ) : null}
 
-            <View style={[styles.copy, { gap: metrics.contentGap }]}>
-              <Text
-                accessibilityRole="header"
-                style={[
-                  styles.title,
-                  {
-                    color: colors.foregroundBase,
-                    fontSize: metrics.titleFontSize,
-                    letterSpacing: metrics.titleLetterSpacing,
-                    lineHeight: metrics.titleLineHeight,
-                  },
-                ]}
-              >
-                {t(title).toUpperCase()}
-              </Text>
-              {description ? (
+              <View style={[styles.copy, { gap: metrics.contentGap }]}>
                 <Text
+                  accessibilityRole="header"
                   style={[
-                    styles.description,
+                    styles.title,
                     {
-                      color: colors.description,
-                      fontSize: metrics.descriptionFontSize,
-                      lineHeight: metrics.descriptionLineHeight,
+                      color: colors.foregroundBase,
+                      fontSize: metrics.titleFontSize,
+                      letterSpacing: metrics.titleLetterSpacing,
+                      lineHeight: metrics.titleLineHeight,
                     },
                   ]}
                 >
-                  {t(description)}
+                  {t(title).toUpperCase()}
                 </Text>
-              ) : null}
+                {description ? (
+                  <Text
+                    style={[
+                      styles.description,
+                      {
+                        color: colors.description,
+                        fontSize: metrics.descriptionFontSize,
+                        lineHeight: metrics.descriptionLineHeight,
+                      },
+                    ]}
+                  >
+                    {t(description)}
+                  </Text>
+                ) : null}
+              </View>
             </View>
-          </View>
+          </ScrollView>
 
           <View
             style={[

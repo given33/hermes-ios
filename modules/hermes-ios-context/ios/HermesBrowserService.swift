@@ -37,6 +37,7 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
   }
 
   private let processPool = WKProcessPool()
+  private var ownerDataStores: [String: WKWebsiteDataStore] = [:]
   private var tabs: [Int: Tab] = [:]
   private var nextTabID = 0
   private var navigationWaiters: [ObjectIdentifier: CheckedContinuation<Void, Error>] = [:]
@@ -182,13 +183,7 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     case "close_tab":
       let id = try requiredInt(payload["tab_id"] ?? payload["tabID"], field: "tab_id")
       guard let tab = tabs[id], tab.ownerKey == ownerKey(owner) else { throw HermesBrowserServiceError.unavailable("tab") }
-      tabs.removeValue(forKey: id)
-      let webViewKey = ObjectIdentifier(tab.webView)
-      tab.webView.stopLoading()
-      navigationTimeouts.removeValue(forKey: webViewKey)?.cancel()
-      if let waiter = navigationWaiters.removeValue(forKey: webViewKey) {
-        waiter.resume(throwing: HermesBrowserServiceError.navigationFailed("tab closed"))
-      }
+      close(tabID: id)
       return ["closed": true, "tabID": id, "tabs": tabSummaries(ownerKey: ownerKey(owner))]
     case "list_tabs":
       return ["tabs": tabSummaries(ownerKey: ownerKey(owner))]
@@ -224,9 +219,10 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
     let configuration = WKWebViewConfiguration()
     configuration.processPool = processPool
-    // Keep cookies and website data isolated from the user's normal Safari
-    // store. Tabs are additionally checked against their owner scope below.
-    configuration.websiteDataStore = .nonPersistent()
+    // The system-wide ephemeral store is shared by every WKWebView in this
+    // process. Give each owner its own persistent identifier so cookies and
+    // site storage cannot cross a local account boundary.
+    configuration.websiteDataStore = websiteDataStore(forOwnerKey: ownerKey)
     let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: configuration)
     webView.navigationDelegate = self
     webView.uiDelegate = self
@@ -255,10 +251,62 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
     SHA256.hash(data: Data(ownerScope.utf8)).map { String(format: "%02x", $0) }.joined()
   }
 
+  private func websiteDataStore(forOwnerKey ownerKey: String) -> WKWebsiteDataStore {
+    if let existing = ownerDataStores[ownerKey] { return existing }
+    let defaults = UserDefaults.standard
+    let key = "hermes.browser.owner-data-store.\(ownerKey)"
+    let identifier: UUID
+    if let raw = defaults.string(forKey: key), let stored = UUID(uuidString: raw) {
+      identifier = stored
+    } else {
+      identifier = UUID()
+      defaults.set(identifier.uuidString, forKey: key)
+    }
+    let store = WKWebsiteDataStore(forIdentifier: identifier)
+    ownerDataStores[ownerKey] = store
+    return store
+  }
+
+  func removeOwnerData(ownerScope: String) async {
+    let key = ownerKey(ownerScope)
+    for tab in tabs.values.filter({ $0.ownerKey == key }) {
+      close(tabID: tab.id)
+    }
+    let defaults = UserDefaults.standard
+    let persistedKey = "hermes.browser.owner-data-store.\(key)"
+    // The in-memory map is empty after a process restart, but the UUID in
+    // UserDefaults still identifies the account's persistent WKWebsiteDataStore.
+    // Reconstruct that store before removing its data; otherwise logout/delete
+    // leaves cookies and local storage behind for the next installation.
+    let store = ownerDataStores.removeValue(forKey: key)
+      ?? defaults.string(forKey: persistedKey)
+        .flatMap(UUID.init(uuidString:))
+        .map { WKWebsiteDataStore(forIdentifier: $0) }
+    guard let store else {
+      defaults.removeObject(forKey: persistedKey)
+      return
+    }
+    try? await store.removeData(
+      ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(),
+      modifiedSince: .distantPast
+    )
+    defaults.removeObject(forKey: persistedKey)
+  }
+
   private func touch(tabID: Int) {
     guard var tab = tabs[tabID] else { return }
     tab.lastUsedAt = Date()
     tabs[tabID] = tab
+  }
+
+  private func close(tabID: Int) {
+    guard let tab = tabs.removeValue(forKey: tabID) else { return }
+    let webViewKey = ObjectIdentifier(tab.webView)
+    tab.webView.stopLoading()
+    navigationTimeouts.removeValue(forKey: webViewKey)?.cancel()
+    if let waiter = navigationWaiters.removeValue(forKey: webViewKey) {
+      waiter.resume(throwing: HermesBrowserServiceError.navigationFailed("tab closed"))
+    }
   }
 
   private func validatedURL(_ raw: Any?) throws -> URL {
@@ -507,8 +555,20 @@ final class HermesBrowserService: NSObject, WKNavigationDelegate, WKUIDelegate {
   }
 
   private static func jsString(_ value: String) -> String {
-    let data = try? JSONSerialization.data(withJSONObject: value)
-    return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+    // The previous implementation called JSONSerialization.data(withJSONObject:)
+    // with a bare String. JSONObject-typed APIs require an Array or Dictionary
+    // root, so every selector/text passed to the WKWebView was being turned
+    // into the empty literal "" and clicks/types/hover/selectors silently
+    // matched nothing. JSONEncoder on a string fragment gives a proper
+    // JS string literal (with surrounding quotes and the right escape
+    // characters for embedded backslashes, quotes, and control bytes).
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.withoutEscapingSlashes]
+    guard let data = try? encoder.encode(value),
+          let literal = String(data: data, encoding: .utf8) else {
+      return "\"\""
+    }
+    return literal
   }
 
   private static func serializable(_ value: Any?) -> Any {

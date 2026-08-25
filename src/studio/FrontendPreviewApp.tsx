@@ -82,6 +82,7 @@ import {
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
 import { AgentGroupChatPage } from './agent-group/AgentGroupChatPage';
+import { AgentWorkspacePage } from './agent-group/AgentWorkspacePage';
 import { AgentHubPage } from './hub/AgentHubPage';
 import { HermesStudioWorkflowPage } from './workflows/HermesStudioWorkflowPage';
 import { BuiltinBrowserPage } from '../browser/BuiltinBrowserPage';
@@ -607,6 +608,16 @@ function PreviewRoute({
         notify={notify}
         onOpenNavigation={openNavigation}
         profile={profile}
+      />
+    );
+    case 'agent-workspace': return (
+      <AgentWorkspacePage
+        client={client}
+        compact={compactNavigation}
+        fixtureMode={allowFixturePages}
+        isChinese={locale === 'zh'}
+        navigate={navigate}
+        notify={notify}
       />
     );
     case 'workflows': return (

@@ -53,6 +53,7 @@ module.exports = () => {
       ...base.extra,
       hermesUrl,
       hermesExpoGoParity: expoGoParityBuild,
+      hermesApnsEnvironment: apnsEnvironment,
       hermesResignCompatible: resignCompatibleBuild,
       ...(expoProjectId
         ? { eas: { ...base.extra?.eas, projectId: expoProjectId } }

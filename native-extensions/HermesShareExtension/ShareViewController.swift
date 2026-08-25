@@ -34,7 +34,11 @@ private enum HermesShareQueueCipher {
       return SymmetricKey(data: existing)
     }
     var bytes = Data(count: 32)
-    guard SecRandomCopyBytes(kSecRandomDefault, 32, &bytes) == errSecSuccess else {
+    let status = bytes.withUnsafeMutableBytes { buffer in
+      guard let baseAddress = buffer.baseAddress else { return errSecParam }
+      return SecRandomCopyBytes(kSecRandomDefault, buffer.count, baseAddress)
+    }
+    guard status == errSecSuccess else {
       throw HermesShareCipherError.keyUnavailable
     }
     if let accessGroup = sharedAccessGroup() {
@@ -143,7 +147,7 @@ final class ShareViewController: UIViewController {
       }
     }
     work.notify(queue: .main) { [weak self] in
-      self?.enqueue(entries: entries)
+      self?.enqueue(entries: entries, attachmentRoot: root)
       self?.extensionContext?.completeRequest(returningItems: nil)
     }
   }
@@ -153,6 +157,8 @@ final class ShareViewController: UIViewController {
     if provider.hasItemConformingToTypeIdentifier(UTType.plainText.identifier) {
       provider.loadFileRepresentation(forTypeIdentifier: UTType.plainText.identifier) { temporaryURL, _ in
         guard let temporaryURL else { completion(nil, 0); return }
+        let accessed = temporaryURL.startAccessingSecurityScopedResource()
+        defer { if accessed { temporaryURL.stopAccessingSecurityScopedResource() } }
         // Stream only the head of the file. loadDataRepresentation loaded
         // the WHOLE item into memory before prefix() could truncate, so a
         // multi-hundred-MB .txt blew the extension's ~120MB cap and the
@@ -202,7 +208,7 @@ final class ShareViewController: UIViewController {
     }
   }
 
-  private func enqueue(entries: [[String: Any]]) {
+  private func enqueue(entries: [[String: Any]], attachmentRoot: URL?) {
     guard !entries.isEmpty else { return }
     let text = entries.compactMap { $0["content"] as? String }.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
     let attachments = entries.filter { ($0["kind"] as? String) == "attachment" }
@@ -224,8 +230,31 @@ final class ShareViewController: UIViewController {
       merged["ownerScope"] = owner
       merged["accountGeneration"] = generation
     }
+    func discardStagedAttachments() {
+      for attachment in attachments {
+        if let filename = attachment["attachmentPath"] as? String, let attachmentRoot {
+          try? FileManager.default.removeItem(at: attachmentRoot.appendingPathComponent(filename))
+        }
+      }
+    }
+
+    // Without an owner hint the main app must drop the entry; keeping its
+    // staged copies would only create permanent App Group orphans.
+    guard let hint = defaults.dictionary(forKey: "agent-trigger-owner-hint"),
+          let owner = hint["ownerScope"] as? String,
+          let generation = hint["accountGeneration"] as? String,
+          !owner.isEmpty, !generation.isEmpty else {
+      discardStagedAttachments()
+      return
+    }
+    merged["ownerScope"] = owner
+    merged["accountGeneration"] = generation
+
     guard let envelope = HermesShareQueueCipher.seal(merged),
-          let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else { return }
+          let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup) else {
+      discardStagedAttachments()
+      return
+    }
     let spool = group.appendingPathComponent(Self.spoolDirectory, isDirectory: true)
     do {
       try FileManager.default.createDirectory(at: spool, withIntermediateDirectories: true)
@@ -234,6 +263,7 @@ final class ShareViewController: UIViewController {
       let target = spool.appendingPathComponent("\(UUID().uuidString.lowercased()).bin")
       try envelope.write(to: target, options: [.atomic])
     } catch {
+      discardStagedAttachments()
       // A failed spool write drops this share request rather than falling
       // back to the plaintext legacy key: silently downgrading the queue's
       // confidentiality is never the right recovery.

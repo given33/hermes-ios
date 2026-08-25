@@ -41,6 +41,7 @@ final class HermesLiveBlurView: ExpoView {
   }
 
   private func installGaussianFilter() {
+    #if DEBUG
     let className = String("retliFAC".reversed())
     let selectorName = String(":epyThtiWretlif".reversed())
     let filterName = String("rulBnaissuag".reversed())
@@ -67,5 +68,6 @@ final class HermesLiveBlurView: ExpoView {
     for tintView in effectView.subviews.dropFirst() {
       tintView.alpha = 0
     }
+    #endif
   }
 }

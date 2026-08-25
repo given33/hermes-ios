@@ -24,6 +24,7 @@ export type NativeRouteId =
   | 'docs'
   | 'chat'
   | 'agent-group'
+  | 'agent-workspace'
   | 'achievements'
   | 'kanban'
   | 'collaboration'
@@ -72,6 +73,7 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'env', path: '/env', visibleInSidebar: true },
   { id: 'docs', path: '/docs', visibleInSidebar: true },
   { id: 'agent-group', path: '/agent-group', visibleInSidebar: true },
+  { id: 'agent-workspace', path: '/agent-workspace', visibleInSidebar: true },
   { id: 'chat', path: '/chat', visibleInSidebar: true },
 ] as const satisfies readonly NativeRouteDefinition[];
 

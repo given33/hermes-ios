@@ -216,6 +216,7 @@ export interface HermesStudioWorkspaceFileListing {
   entries: HermesStudioWorkspaceFileEntry[];
   path: string;
   absolutePath?: string;
+  truncated?: boolean;
 }
 
 export interface HermesStudioWorkspaceFileContent {

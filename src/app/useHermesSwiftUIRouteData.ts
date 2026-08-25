@@ -16,7 +16,10 @@ import {
   createConversationDeleteReplayService,
   synchronizeConversationCache,
 } from '../api/conversation-local-store';
-import { captureConversationStorageEpoch } from '../api/conversation-storage-coordinator';
+import {
+  captureConversationStorageEpoch,
+  isConversationStorageEpochCurrent,
+} from '../api/conversation-storage-coordinator';
 import {
   hermesCloudApiFor,
   sharedConversationLocalStore,
@@ -169,16 +172,26 @@ export function useHermesSwiftUIRouteData({
     if (!api || !localStore || !cacheOwner || routeId !== 'collaboration') return '';
     if (collaborationReplay.current) return collaborationReplay.current;
     const replay = (async () => {
+      const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
       let lastAcknowledged = '';
       let discarded = 0;
       const pending = await localStore.readPendingRoomMessages(cacheOwner);
       for (const item of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
         try {
+          if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+            return lastAcknowledged;
+          }
           await sendCollaborationRoomMessageWithDeadline(api, item);
+          if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+            return lastAcknowledged;
+          }
           await localStore.removePendingRoomMessage(cacheOwner, item.requestId);
           lastAcknowledged = item.requestId;
         } catch (error) {
           if (!isPermanentRoomSendError(error)) throw error;
+          if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+            return lastAcknowledged;
+          }
           await localStore.removePendingRoomMessage(cacheOwner, item.requestId);
           discarded += 1;
         }
@@ -367,6 +380,7 @@ export function useHermesSwiftUIRouteData({
     lastSuccessfulReloadAt.current = 0;
     selectedItemId.current = '';
     operationRef.current = undefined;
+    acknowledgedRoomRequestId.current = '';
     setDataJson(encodeHermesSwiftUIRouteSnapshot({
       version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
       route: routeId,

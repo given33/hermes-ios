@@ -63,23 +63,36 @@ final class HermesSelectionView: ExpoView {
 
   private func updateSelection(animated: Bool) {
     animator?.stopAnimation(true)
-    let changes = {
-      self.backgroundColor = .hermes(
-        self.selected ? self.selectedBackground : self.unselectedBackground
-      )
-      self.layer.borderColor = UIColor.hermes(
-        self.selected ? self.selectedBorder : self.unselectedBorder
-      ).cgColor
-      self.checkmarkBackground.alpha = self.selected ? 1 : 0
-      self.checkmarkBackground.transform = self.selected
-        ? .identity
-        : CGAffineTransform(scaleX: 0.72, y: 0.72)
+    // Compute the target values up front so the animations block does not
+    // need to capture self. Storing self.animator while the closure
+    // retains self would otherwise pin every HermesSelectionView in
+    // memory for the lifetime of the host VC.
+    let targetBackground: UIColor = .hermes(selected ? selectedBackground : unselectedBackground)
+    let targetBorderCGColor: CGColor = UIColor.hermes(
+      selected ? selectedBorder : unselectedBorder
+    ).cgColor
+    let targetCheckmarkAlpha: CGFloat = selected ? 1 : 0
+    let targetCheckmarkTransform: CGAffineTransform = selected
+      ? .identity
+      : CGAffineTransform(scaleX: 0.72, y: 0.72)
+    let apply = { [weak self] in
+      guard let self else { return }
+      self.backgroundColor = targetBackground
+      self.layer.borderColor = targetBorderCGColor
+      self.checkmarkBackground.alpha = targetCheckmarkAlpha
+      self.checkmarkBackground.transform = targetCheckmarkTransform
     }
     guard animated else {
-      changes()
+      apply()
       return
     }
-    let animator = UIViewPropertyAnimator(duration: 0.34, dampingRatio: 0.82, animations: changes)
+    let animator = UIViewPropertyAnimator(duration: 0.34, dampingRatio: 0.82) {
+      apply()
+    }
+    animator.addCompletion { [weak self] _ in
+      guard self?.animator === animator else { return }
+      self?.animator = nil
+    }
     self.animator = animator
     animator.startAnimation()
   }

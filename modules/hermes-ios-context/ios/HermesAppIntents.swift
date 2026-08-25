@@ -144,6 +144,21 @@ final class HermesAgentTriggerStore {
     return ["ownerScope": owner, "accountGeneration": generation]
   }
 
+  /// Resolve the identity for a producer that may run outside the host app.
+  /// The relay state lives in the app container, while the owner hint is in
+  /// the App Group and is therefore visible to Siri/shortcut processes too.
+  static func producerOwnerIdentity() -> HermesOwnerIdentity {
+    if let hint = currentOwnerHint(),
+       let ownerScope = hint["ownerScope"],
+       let accountGeneration = hint["accountGeneration"] {
+      return HermesOwnerIdentity(
+        ownerScope: ownerScope,
+        accountGeneration: accountGeneration
+      )
+    }
+    return HermesContextEventQueue.shared.currentOwnerIdentity
+  }
+
   static func clearOwnerHint() {
     let defaults = UserDefaults(suiteName: appGroup) ?? .standard
     defaults.removeObject(forKey: ownerHintKey)
@@ -254,7 +269,7 @@ final class HermesAgentTriggerStore {
     guard allowed.contains(normalizedKind), (!normalizedContent.isEmpty || !attachments.isEmpty), normalizedContent.count <= 20_000 else {
       return nil
     }
-    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
+    let identity = Self.producerOwnerIdentity()
     guard identity.isBound else { return nil }
     let requestID = UUID().uuidString.lowercased()
     var entry: [String: Any] = [
@@ -364,7 +379,13 @@ final class HermesTaskControlStore {
   private let lock = NSLock()
   private let key = "app.hermes.pending-task-controls-v2"
   private let legacyKey = "app.hermes.pending-task-controls"
-  private let allowedActions: Set<String> = ["pause", "resume", "cancel", "retry"]
+  private let allowedActions: Set<String> = ["pause", "resume", "cancel", "retry", "speak-toggle"]
+
+  // App Intents run in an extension process.  Standard defaults are isolated
+  // per bundle, so use the App Group container shared with the host app.
+  private var defaults: UserDefaults {
+    UserDefaults(suiteName: HermesAgentTriggerStore.appGroup) ?? .standard
+  }
 
   private init() {}
 
@@ -375,7 +396,7 @@ final class HermesTaskControlStore {
     guard !normalizedID.isEmpty, normalizedID.count <= 256,
           !normalizedID.contains("/"), !normalizedID.contains("\\"),
           allowedActions.contains(normalizedAction) else { return nil }
-    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
+    let identity = HermesAgentTriggerStore.producerOwnerIdentity()
     guard identity.isBound else { return nil }
     let requestID = UUID().uuidString.lowercased()
     lock.lock()
@@ -429,21 +450,21 @@ final class HermesTaskControlStore {
   func clear() {
     lock.lock()
     defer { lock.unlock() }
-    UserDefaults.standard.removeObject(forKey: key)
-    UserDefaults.standard.removeObject(forKey: legacyKey)
+    defaults.removeObject(forKey: key)
+    defaults.removeObject(forKey: legacyKey)
   }
 
   private func readEntries() -> [[String: Any]] {
-    UserDefaults.standard.removeObject(forKey: legacyKey)
-    guard let envelope = UserDefaults.standard.data(forKey: key) else { return [] }
+    defaults.removeObject(forKey: legacyKey)
+    guard let envelope = defaults.data(forKey: key) else { return [] }
     return HermesIntentQueueCipher.open(envelope)
   }
 
   @discardableResult
   private func writeEntries(_ entries: [[String: Any]]) -> Bool {
     guard let envelope = HermesIntentQueueCipher.seal(entries) else { return false }
-    UserDefaults.standard.set(envelope, forKey: key)
-    UserDefaults.standard.synchronize()
+    defaults.set(envelope, forKey: key)
+    defaults.synchronize()
     return true
   }
 }
@@ -453,6 +474,7 @@ struct HermesRefreshContextIntent: AppIntent {
   static var description = IntentDescription("Collect a current location and device context snapshot.")
   static var openAppWhenRun = false
 
+  @MainActor
   func perform() async throws -> some IntentResult {
     guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return .result() }
     _ = await HermesLocationService.shared.requestCurrent()
@@ -466,6 +488,7 @@ struct HermesCurrentLocationIntent: AppIntent {
   static var description = IntentDescription("Refresh the current iPhone location for Hermes.")
   static var openAppWhenRun = false
 
+  @MainActor
   func perform() async throws -> some IntentResult {
     guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return .result() }
     _ = await HermesLocationService.shared.requestCurrent()
@@ -595,8 +618,10 @@ struct HermesVoiceCaptureIntent: AppIntent {
   static var description = IntentDescription("Start Hermes voice capture and send the transcript to the agent.")
   static var openAppWhenRun = true
 
+  @MainActor
   func perform() async throws -> some IntentResult {
-    try await HermesVoiceService.shared.startAgentCapture(localeIdentifier: nil)
+    guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else { return .result() }
+    try HermesVoiceService.shared.startAgentCapture(localeIdentifier: nil)
     return .result()
   }
 }

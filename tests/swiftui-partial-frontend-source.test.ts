@@ -267,7 +267,7 @@ test('the JS sidebar remains authoritative while native page navigation stays av
   assert.match(frameRate, /Name\("HermesFrameRate"\)/);
   assert.match(frameRate, /Thread\.isMainThread/);
   assert.match(frameRate, /DispatchQueue\.main\.async/);
-  assert.match(frameRate, /method_exchangeImplementations/);
+  assert.doesNotMatch(frameRate, /method_exchangeImplementations/);
   assert.match(frameRate, /HermesFrameRateAppDelegateSubscriber/);
   assert.match(frameRate, /subscriberDidRegister/);
   assert.match(frameRate, /getDiagnostics/);

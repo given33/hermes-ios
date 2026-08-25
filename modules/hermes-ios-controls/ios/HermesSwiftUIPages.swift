@@ -1001,10 +1001,20 @@ private struct HermesRemoteRoutePage: View {
           allowsMultipleSelection: false
         ) { result in
           guard case let .success(urls) = result, let url = urls.first else { return }
-          let accessed = url.startAccessingSecurityScopedResource()
-          defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-          guard let content = try? String(contentsOf: url, encoding: .utf8) else { return }
-          onAction(.configImport, HermesRouteActionPayload(route: "config", value: content))
+          DispatchQueue.global(qos: .userInitiated).async {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            guard
+              let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let fileSize = values.fileSize,
+              fileSize > 0,
+              fileSize <= 1_048_576,
+              let content = try? String(contentsOf: url, encoding: .utf8)
+            else { return }
+            DispatchQueue.main.async {
+              onAction(.configImport, HermesRouteActionPayload(route: "config", value: content))
+            }
+          }
         }
     case .env:
       List(data.environment) { secret in
@@ -1713,6 +1723,7 @@ private struct HermesFileSection: Identifiable {
 private enum HermesFileImportStaging {
   private static let directoryName = "HermesFileImports"
   private static let maximumFileBytes = 64 * 1024 * 1024
+  private static let maximumBatchBytes = 128 * 1024 * 1024
   private static let maximumAge: TimeInterval = 24 * 60 * 60
 
   static func stage(_ sourceURLs: [URL]) -> [URL] {
@@ -1730,20 +1741,38 @@ private enum HermesFileImportStaging {
       return []
     }
 
-    let staged = sourceURLs.compactMap { stage($0, in: batch) }
+    var remainingBudget = maximumBatchBytes
+    var staged: [URL] = []
+    for sourceURL in sourceURLs {
+      guard remainingBudget > 0,
+            let destination = stage($0, in: batch, remainingBudget: remainingBudget)
+      else { continue }
+      if let size = fileSize(at: destination) {
+        remainingBudget -= size
+      }
+      staged.append(destination)
+    }
     if staged.isEmpty { try? FileManager.default.removeItem(at: batch) }
     scheduleCleanup()
     return staged
   }
 
-  private static func stage(_ sourceURL: URL, in batch: URL) -> URL? {
+  private static func stage(
+    _ sourceURL: URL,
+    in batch: URL,
+    remainingBudget: Int
+  ) -> URL? {
     let hasSecurityScope = sourceURL.startAccessingSecurityScopedResource()
     defer {
       if hasSecurityScope { sourceURL.stopAccessingSecurityScopedResource() }
     }
-    if let values = try? sourceURL.resourceValues(forKeys: [.fileSizeKey]),
-       let size = values.fileSize,
-       size > maximumFileBytes {
+    // Fail closed when a provider hides its size: coordinated copies can be
+    // arbitrarily large and must not run on the caller's UI thread.
+    guard let size = fileSize(at: sourceURL),
+          size > 0,
+          size <= maximumFileBytes,
+          size <= remainingBudget
+    else {
       return nil
     }
 
@@ -1772,6 +1801,11 @@ private enum HermesFileImportStaging {
       return nil
     }
     return destination
+  }
+
+  private static func fileSize(at url: URL) -> Int? {
+    (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize
+      ?? (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? nil
   }
 
   private static func stagingRoot() -> URL? {
@@ -1988,17 +2022,21 @@ private struct HermesFilesPage: View {
     return toolbarContent
       .fileImporter(isPresented: $importerOpen, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
       if case let .success(urls) = result {
-        let stagedURLs = HermesFileImportStaging.stage(urls)
-        guard !stagedURLs.isEmpty else { return }
-        onAction(
-          .fileImport,
-          HermesRouteActionPayload(
-            route: "files",
-            requestId: "file-import-\(UUID().uuidString.lowercased())",
-            fields: ["stagedImport": "true"],
-            uris: stagedURLs.map(\.absoluteString)
-          )
-        )
+        DispatchQueue.global(qos: .userInitiated).async {
+          let stagedURLs = HermesFileImportStaging.stage(urls)
+          guard !stagedURLs.isEmpty else { return }
+          DispatchQueue.main.async {
+            onAction(
+              .fileImport,
+              HermesRouteActionPayload(
+                route: "files",
+                requestId: "file-import-\(UUID().uuidString.lowercased())",
+                fields: ["stagedImport": "true"],
+                uris: stagedURLs.map(\.absoluteString)
+              )
+            )
+          }
+        }
       }
     }
   }

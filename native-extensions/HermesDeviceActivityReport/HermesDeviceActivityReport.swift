@@ -40,10 +40,15 @@ struct HermesActivityReportScene: DeviceActivityReportScene {
       }
     }
     if let generation {
+      let observedAt = Date().timeIntervalSince1970 * 1000
+      // Coalesce repeated renders of the same reporting window; the sequence
+      // allocator still gives a fresh envelope if the summarized value changes.
+      let bucket = Int(observedAt / 900_000)
+      let eventID = "activity-summary-\(generation.lifecycleEpoch)-\(bucket)-\(Int(seconds.rounded()))"
       _ = HermesScreenTimeSpool.append([
         "durationSeconds": max(0, seconds),
-        "eventId": UUID().uuidString.lowercased(),
-        "observedAt": Date().timeIntervalSince1970 * 1000,
+        "eventId": eventID,
+        "observedAt": observedAt,
         "state": "activity-summary",
       ], generation: generation)
     }

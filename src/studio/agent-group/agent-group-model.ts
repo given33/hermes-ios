@@ -469,7 +469,9 @@ function eventBelongsToRoom(event: AgentGroupEvent, roomId: string): boolean {
 
 function sortMessages(messages: HermesStudioGroupChatMessage[]): HermesStudioGroupChatMessage[] {
   return [...messages].sort((left, right) => {
-    const timestampDelta = left.timestamp - right.timestamp;
+    const leftAt = Number.isFinite(left.timestamp) ? left.timestamp : 0;
+    const rightAt = Number.isFinite(right.timestamp) ? right.timestamp : 0;
+    const timestampDelta = leftAt - rightAt;
     return timestampDelta || left.id.localeCompare(right.id);
   });
 }

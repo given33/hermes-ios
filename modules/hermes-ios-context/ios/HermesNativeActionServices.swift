@@ -62,6 +62,16 @@ final class HermesNFCService: NSObject, NFCNDEFReaderSessionDelegate {
 
   private override init() {}
 
+  // NFCNDEFReaderSession retains its delegate for the lifetime of the
+  // session. The shared instance never deallocates in practice, but if a
+  // future refactor ever makes the service per-view or per-controller,
+  // failing to invalidate the session here would pin the delegate in
+  // memory until the OS force-killed the extension. Invalidating on deinit
+  // is a no-op for the singleton and a safety net everywhere else.
+  deinit {
+    session?.invalidate()
+  }
+
   func scan() async throws -> [String: Any] {
     guard NFCNDEFReaderSession.readingAvailable else {
       throw HermesNativeActionError.unavailable("nfc-reader-session")
@@ -531,13 +541,35 @@ enum HermesPhotosService {
         "mediaType": "video",
       ]
     }
+    // isSynchronous on PHImageRequestOptions only blocks the Photos
+    // internal queue — it does not block the calling thread, so the
+    // callback-style request below still returns immediately and "data"
+    // would be nil when checked. Use a checked continuation that resolves
+    // exactly once on whichever delivery mode Photos eventually chooses.
     let options = PHImageRequestOptions()
-    options.isSynchronous = true
+    options.isSynchronous = false
     options.isNetworkAccessAllowed = false
     options.deliveryMode = original ? .highQualityFormat : .fastFormat
-    var data: Data?
-    PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) { imageData, _, _, _ in data = imageData }
-    guard let data else { throw HermesNativeActionError.unavailable("photo-asset-data") }
+    let data: Data = try await withCheckedThrowingContinuation { continuation in
+      var resumed = false
+      PHImageManager.default().requestImageDataAndOrientation(
+        for: asset,
+        options: options
+      ) { imageData, _, _, error in
+        // requestImageDataAndOrientation can deliver twice on degraded assets
+        // (fastFormat then highQualityFormat). Resume only on the first
+        // non-error result so the continuation cannot be resumed twice.
+        guard !resumed else { return }
+        if let error {
+          resumed = true
+          continuation.resume(throwing: error)
+          return
+        }
+        guard let imageData else { return }
+        resumed = true
+        continuation.resume(returning: imageData)
+      }
+    }
     try data.write(to: target, options: .completeFileProtection)
     return [
       "uri": target.absoluteString,
@@ -574,16 +606,32 @@ enum HermesPhotosService {
             let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject else {
         throw HermesNativeActionError.invalidInput("imageURL")
       }
+      // See HermesPhotosService.recognizeText: isSynchronous is internal
+      // only; use a checked continuation and guard against the
+      // double-delivery that requestImageDataAndOrientation can perform on
+      // degraded assets.
       let options = PHImageRequestOptions()
-      options.isSynchronous = true
+      options.isSynchronous = false
       options.isNetworkAccessAllowed = false
       options.deliveryMode = .highQualityFormat
-      var imageData: Data?
-      PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) {
-        data, _, _, _ in
-        imageData = data
+      let imageData: Data = try await withCheckedThrowingContinuation { continuation in
+        var resumed = false
+        PHImageManager.default().requestImageDataAndOrientation(
+          for: asset,
+          options: options
+        ) { data, _, _, error in
+          guard !resumed else { return }
+          if let error {
+            resumed = true
+            continuation.resume(throwing: error)
+            return
+          }
+          guard let data else { return }
+          resumed = true
+          continuation.resume(returning: data)
+        }
       }
-      guard let imageData, let image = CIImage(data: imageData) else {
+      guard let image = CIImage(data: imageData) else {
         throw HermesNativeActionError.unavailable("photo-asset-data")
       }
       return image
@@ -645,16 +693,34 @@ enum HermesPhotosService {
             let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetID], options: nil).firstObject else {
         throw HermesNativeActionError.invalidInput("imageURL")
       }
+      // The previous implementation used isSynchronous + a captured
+      // variable, which is a data race: requestImageDataAndOrientation is
+      // callback-based, isSynchronous only blocks the internal Photos queue
+      // (not the caller), so the captured variable was frequently nil by
+      // the time it was read. Use a checked continuation that resumes
+      // exactly once.
       let options = PHImageRequestOptions()
-      options.isSynchronous = true
+      options.isSynchronous = false
       options.isNetworkAccessAllowed = false
       options.deliveryMode = .highQualityFormat
-      var imageData: Data?
-      PHImageManager.default().requestImageDataAndOrientation(for: asset, options: options) {
-        data, _, _, _ in
-        imageData = data
+      let imageData: Data = try await withCheckedThrowingContinuation { continuation in
+        var resumed = false
+        PHImageManager.default().requestImageDataAndOrientation(
+          for: asset,
+          options: options
+        ) { data, _, _, error in
+          guard !resumed else { return }
+          if let error {
+            resumed = true
+            continuation.resume(throwing: error)
+            return
+          }
+          guard let data else { return }
+          resumed = true
+          continuation.resume(returning: data)
+        }
       }
-      guard let imageData, let loaded = CIImage(data: imageData) else {
+      guard let loaded = CIImage(data: imageData) else {
         throw HermesNativeActionError.unavailable("photo-asset-data")
       }
       image = loaded
@@ -932,7 +998,7 @@ final class HermesQRScannerService: NSObject, AVCaptureMetadataOutputObjectsDele
     presenter.present(scanner, animated: true) { [weak self] in
       guard let self else { return }
       if presenter.presentedViewController !== scanner {
-        self.finish(error: "QR scanner presentation was blocked by another transition")
+        self.finish(error: HermesNativeActionError.unavailable("qr-presentation"))
         return
       }
       captureSession.startRunning()
@@ -1009,11 +1075,14 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   private var scanTask: Task<Void, Never>?
   private var stateWaiters: [CheckedContinuation<CBManagerState, Never>] = []
   private var peripherals: [UUID: CBPeripheral] = [:]
-  // All mutable BLE state is confined to this serial queue: CBCentralManager
-  // delegate callbacks arrive on the main queue while Expo async functions
-  // run on concurrent threads — Swift dictionaries are not thread-safe and
-  // concurrent access crashes with EXC_BAD_ACCESS (same class of bug as the
-  // LiveActivityService fix).
+  // Every mutable BLE structure below is confined to this serial queue:
+  // CBCentralManager delegate callbacks arrive on the main queue, Expo async
+  // functions run on concurrent threads, and timeout closures fire from other
+  // schedulers — Swift dictionaries/arrays are not thread-safe and concurrent
+  // access crashes with EXC_BAD_ACCESS (same class of bug as the
+  // LiveActivityService fix). Continuations are claimed (removed under the
+  // queue) before being resumed so each resumes exactly once even when a
+  // delegate callback races a timeout or disconnect.
   private let bleStateQueue = DispatchQueue(label: "hermes.ble.state")
   private var connectContinuation: CheckedContinuation<[String: Any], Error>?
   private var serviceContinuation: CheckedContinuation<[[String: Any]], Error>?
@@ -1026,9 +1095,69 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   private var notifyTask: Task<Void, Never>?
   private var sessionOwner = ""
 
-  /// Execute a closure on the BLE state queue and return its result.
+  /// Execute a closure on the BLE state queue and return its result. Callers
+  /// must never already be running on `bleStateQueue`, and closures executed
+  /// here must never synchronously wait on another queue.
   private func onBLEStateQueue<T>(_ body: () -> T) -> T {
     bleStateQueue.sync(execute: body)
+  }
+
+  /// Register a definitive-state waiter on the state queue, then re-check the
+  /// live state: CoreBluetooth can publish the initial state between the first
+  /// read and the delegate callback, so a fast transition must not leave the
+  /// newly registered waiter suspended forever.
+  private func registerStateWaiter(_ continuation: CheckedContinuation<CBManagerState, Never>) {
+    onBLEStateQueue {
+      stateWaiters.append(continuation)
+      let stateAfterRegistration = manager.state
+      if stateAfterRegistration != .unknown && stateAfterRegistration != .resetting {
+        let waiters = stateWaiters
+        stateWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: stateAfterRegistration) }
+      }
+    }
+  }
+
+  /// Claim-and-clear helpers: removing a continuation under the queue before
+  /// resuming guarantees exactly one racer (delegate callback, timeout,
+  /// disconnect) can resume it.
+  private func claimConnectContinuation() -> CheckedContinuation<[String: Any], Error>? {
+    onBLEStateQueue {
+      defer { connectContinuation = nil }
+      return connectContinuation
+    }
+  }
+
+  private func claimServiceContinuation() -> CheckedContinuation<[[String: Any]], Error>? {
+    onBLEStateQueue {
+      defer { serviceContinuation = nil }
+      pendingCharacteristicServices.removeAll()
+      return serviceContinuation
+    }
+  }
+
+  private func claimReadContinuation(_ uuid: CBUUID) -> CheckedContinuation<[String: Any], Error>? {
+    onBLEStateQueue { readContinuations.removeValue(forKey: uuid) }
+  }
+
+  private func claimWriteContinuation(_ uuid: CBUUID) -> CheckedContinuation<[String: Any], Error>? {
+    onBLEStateQueue { writeContinuations.removeValue(forKey: uuid) }
+  }
+
+  private func claimAllReadContinuations() -> [CheckedContinuation<[String: Any], Error>] {
+    onBLEStateQueue {
+      let pending = Array(readContinuations.values)
+      readContinuations.removeAll()
+      return pending
+    }
+  }
+
+  private func claimAllWriteContinuations() -> [CheckedContinuation<[String: Any], Error>] {
+    onBLEStateQueue {
+      let pending = Array(writeContinuations.values)
+      writeContinuations.removeAll()
+      return pending
+    }
   }
 
   private override init() {
@@ -1039,45 +1168,37 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   func state() -> String { bluetoothState(manager.state) }
 
   func scan(seconds: Double) async throws -> [[String: Any]] {
-    if scanContinuation != nil || scanTask != nil {
+    if onBLEStateQueue({ scanContinuation != nil || scanTask != nil }) {
       finishScan(error: CancellationError())
     }
     let currentState = manager.state
     let resolvedState: CBManagerState
     if currentState == .unknown || currentState == .resetting {
-      resolvedState = await withCheckedContinuation { continuation in
-        stateWaiters.append(continuation)
-        // CoreBluetooth can publish the initial state between the first read
-        // and delegate callback. Re-check after registering the waiter so a
-        // fast state transition cannot leave the command suspended forever.
-        let stateAfterRegistration = manager.state
-        if stateAfterRegistration != .unknown && stateAfterRegistration != .resetting {
-          let waiters = stateWaiters
-          stateWaiters.removeAll()
-          waiters.forEach { $0.resume(returning: stateAfterRegistration) }
-        }
-      }
+      resolvedState = await withCheckedContinuation(registerStateWaiter)
     } else {
       resolvedState = currentState
     }
     guard resolvedState == .poweredOn else { throw HermesNativeActionError.unavailable("bluetooth") }
     return try await withTaskCancellationHandler {
       try await withCheckedThrowingContinuation { continuation in
-        scanContinuation = continuation
+        onBLEStateQueue {
+          scanContinuation = continuation
+          scanResults = []
+        }
         // Install the continuation before starting CoreBluetooth so a caller
         // that cancels at the boundary cannot leave an unresumable scan.
         guard !Task.isCancelled else {
           finishScan(error: CancellationError())
           return
         }
-        scanResults = []
         manager.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
-        scanTask = Task { [weak self] in
+        let task = Task { [weak self] in
           let nanoseconds = UInt64(max(1, min(seconds, 15)) * 1_000_000_000)
           try? await Task.sleep(nanoseconds: nanoseconds)
           guard !Task.isCancelled else { return }
           self?.finishScan()
         }
+        onBLEStateQueue { scanTask = task }
       }
     } onCancel: { [weak self] in
       self?.finishScan(error: CancellationError())
@@ -1085,16 +1206,20 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   }
 
   func centralManagerDidUpdateState(_ central: CBCentralManager) {
-    guard !stateWaiters.isEmpty else { return }
-    let waiters = stateWaiters
-    stateWaiters.removeAll()
+    let waiters = onBLEStateQueue { () -> [CheckedContinuation<CBManagerState, Never>] in
+      let pending = stateWaiters
+      stateWaiters.removeAll()
+      return pending
+    }
     waiters.forEach { $0.resume(returning: central.state) }
   }
 
   func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-    peripherals[peripheral.identifier] = peripheral
-    guard scanResults.first(where: { $0["id"] as? String == peripheral.identifier.uuidString }) == nil else { return }
-    scanResults.append(["id": peripheral.identifier.uuidString, "name": peripheral.name ?? "", "rssi": RSSI.intValue])
+    onBLEStateQueue {
+      peripherals[peripheral.identifier] = peripheral
+      guard scanResults.first(where: { $0["id"] as? String == peripheral.identifier.uuidString }) == nil else { return }
+      scanResults.append(["id": peripheral.identifier.uuidString, "name": peripheral.name ?? "", "rssi": RSSI.intValue])
+    }
   }
 
   func connect(owner: String, identifier: String) async throws -> [String: Any] {
@@ -1104,12 +1229,15 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
     guard let uuid = UUID(uuidString: identifier.trimmingCharacters(in: .whitespacesAndNewlines)) else {
       throw HermesNativeActionError.invalidInput("deviceID")
     }
-    if sessionOwner != normalizedOwner { disconnect() }
+    if onBLEStateQueue({ sessionOwner }) != normalizedOwner { disconnect() }
     guard onBLEStateQueue({ connectContinuation }) == nil else { throw HermesNativeActionError.unavailable("bluetooth-connect-busy") }
-    sessionOwner = normalizedOwner
-    let peripheral = peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
-    guard let peripheral else { throw HermesNativeActionError.unavailable("bluetooth-device") }
-    peripherals[uuid] = peripheral
+    onBLEStateQueue { sessionOwner = normalizedOwner }
+    let resolvedPeripheral = onBLEStateQueue { () -> CBPeripheral? in
+      let stored = peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
+      if let stored { peripherals[uuid] = stored }
+      return stored
+    }
+    guard let peripheral = resolvedPeripheral else { throw HermesNativeActionError.unavailable("bluetooth-device") }
     peripheral.delegate = self
     if peripheral.state == .connected { return ["connected": true, "id": uuid.uuidString] }
     return try await withCheckedThrowingContinuation { continuation in
@@ -1117,13 +1245,7 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
       manager.connect(peripheral, options: nil)
       DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self, weak peripheral] in
         guard let self, let peripheral else { return }
-        let pending = self.onBLEStateQueue { () -> CheckedContinuation<[String: Any], Error>? in
-          guard self.connectContinuation != nil else { return nil }
-          let pending = self.connectContinuation
-          self.connectContinuation = nil
-          return pending
-        }
-        guard let pending else { return }
+        guard let pending = self.claimConnectContinuation() else { return }
         self.manager.cancelPeripheralConnection(peripheral)
         pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-connect-timeout"))
       }
@@ -1131,75 +1253,84 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   }
 
   func disconnect() {
-    peripherals.values
-      .filter { $0.state == .connected || $0.state == .connecting }
-      .forEach { manager.cancelPeripheralConnection($0) }
-    onBLEStateQueue {
-      connectContinuation?.resume(throwing: CancellationError())
-      connectContinuation = nil
-      serviceContinuation?.resume(throwing: CancellationError())
-      serviceContinuation = nil
-      pendingCharacteristicServices.removeAll()
-      readContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
-      readContinuations.removeAll()
-    writeContinuations.values.forEach { $0.resume(throwing: CancellationError()) }
-    writeContinuations.removeAll()
-    notifyTask?.cancel()
-    notifyTask = nil
-    notifyContinuation?.resume(throwing: CancellationError())
-    notifyContinuation = nil
-    notifyCharacteristic = nil
-    sessionOwner = ""
+    let active = onBLEStateQueue {
+      peripherals.values.filter { $0.state == .connected || $0.state == .connecting }
     }
+    active.forEach { manager.cancelPeripheralConnection($0) }
+    claimConnectContinuation()?.resume(throwing: CancellationError())
+    claimServiceContinuation()?.resume(throwing: CancellationError())
+    claimAllReadContinuations().forEach { $0.resume(throwing: CancellationError()) }
+    claimAllWriteContinuations().forEach { $0.resume(throwing: CancellationError()) }
+    let notify = onBLEStateQueue { () -> (task: Task<Void, Never>?, continuation: CheckedContinuation<[String: Any], Error>?) in
+      let task = notifyTask
+      notifyTask = nil
+      let continuation = notifyContinuation
+      notifyContinuation = nil
+      notifyCharacteristic = nil
+      return (task, continuation)
+    }
+    notify.task?.cancel()
+    notify.continuation?.resume(throwing: CancellationError())
+    onBLEStateQueue { sessionOwner = "" }
   }
 
   func services(owner: String, identifier: String) async throws -> [[String: Any]] {
-    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+    let expectedOwner = onBLEStateQueue { sessionOwner }
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == expectedOwner,
           let peripheral = peripheral(identifier) else {
       throw HermesNativeActionError.unavailable("bluetooth-session")
     }
-    guard serviceContinuation == nil else { throw HermesNativeActionError.unavailable("bluetooth-services-busy") }
+    guard onBLEStateQueue({ serviceContinuation }) == nil else { throw HermesNativeActionError.unavailable("bluetooth-services-busy") }
     if let services = peripheral.services, services.allSatisfy({ $0.characteristics != nil }) {
       return serializeServices(services)
     }
     return try await withCheckedThrowingContinuation { continuation in
-      serviceContinuation = continuation
+      onBLEStateQueue { serviceContinuation = continuation }
       peripheral.delegate = self
       peripheral.discoverServices(nil)
       DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-        guard let self, let pending = self.serviceContinuation else { return }
-        self.serviceContinuation = nil
-        self.pendingCharacteristicServices.removeAll()
+        guard let self, let pending = self.claimServiceContinuation() else { return }
         pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-services-timeout"))
       }
     }
   }
 
   func read(owner: String, identifier: String, serviceUUID: String, characteristicUUID: String) async throws -> [String: Any] {
-    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+    let expectedOwner = onBLEStateQueue { sessionOwner }
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == expectedOwner,
           let characteristic = characteristic(identifier, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID) else {
       throw HermesNativeActionError.unavailable("bluetooth-characteristic")
     }
     guard characteristic.properties.contains(.read) else { throw HermesNativeActionError.invalidInput("characteristic") }
     let uuid = characteristic.uuid
-    guard readContinuations[uuid] == nil else { throw HermesNativeActionError.unavailable("bluetooth-read-busy") }
+    guard onBLEStateQueue({ readContinuations[uuid] }) == nil else { throw HermesNativeActionError.unavailable("bluetooth-read-busy") }
     return try await withCheckedThrowingContinuation { continuation in
-      readContinuations[uuid] = continuation
+      // Atomic install under the queue: two concurrent reads of one
+      // characteristic can no longer both pass the outer busy check.
+      let installed = onBLEStateQueue { () -> Bool in
+        guard readContinuations[uuid] == nil else { return false }
+        readContinuations[uuid] = continuation
+        return true
+      }
+      guard installed else {
+        continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-read-busy"))
+        return
+      }
       guard let peripheral = characteristic.service?.peripheral else {
-        readContinuations.removeValue(forKey: uuid)
-        continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
+        claimReadContinuation(uuid)?.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
         return
       }
       peripheral.readValue(for: characteristic)
       DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-        guard let self, let pending = self.readContinuations.removeValue(forKey: uuid) else { return }
-        pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-read-timeout"))
+        guard let self else { return }
+        self.claimReadContinuation(uuid)?.resume(throwing: HermesNativeActionError.unavailable("bluetooth-read-timeout"))
       }
     }
   }
 
   func write(owner: String, identifier: String, serviceUUID: String, characteristicUUID: String, data: Data, withResponse: Bool) async throws -> [String: Any] {
-    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+    let expectedOwner = onBLEStateQueue { sessionOwner }
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == expectedOwner,
           let characteristic = characteristic(identifier, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID) else {
       throw HermesNativeActionError.unavailable("bluetooth-characteristic")
     }
@@ -1214,126 +1345,139 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
       return ["written": true, "bytes": data.count]
     }
     let uuid = characteristic.uuid
-    guard writeContinuations[uuid] == nil else { throw HermesNativeActionError.unavailable("bluetooth-write-busy") }
+    guard onBLEStateQueue({ writeContinuations[uuid] }) == nil else { throw HermesNativeActionError.unavailable("bluetooth-write-busy") }
     return try await withCheckedThrowingContinuation { continuation in
-      writeContinuations[uuid] = continuation
+      // Atomic install under the queue: two concurrent writes of one
+      // characteristic can no longer both pass the outer busy check.
+      let installed = onBLEStateQueue { () -> Bool in
+        guard writeContinuations[uuid] == nil else { return false }
+        writeContinuations[uuid] = continuation
+        return true
+      }
+      guard installed else {
+        continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-write-busy"))
+        return
+      }
       guard let peripheral = characteristic.service?.peripheral else {
-        writeContinuations.removeValue(forKey: uuid)
-        continuation.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
+        claimWriteContinuation(uuid)?.resume(throwing: HermesNativeActionError.unavailable("bluetooth-peripheral"))
         return
       }
       peripheral.writeValue(data, for: characteristic, type: .withResponse)
       DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
-        guard let self, let pending = self.writeContinuations.removeValue(forKey: uuid) else { return }
-        pending.resume(throwing: HermesNativeActionError.unavailable("bluetooth-write-timeout"))
+        guard let self else { return }
+        self.claimWriteContinuation(uuid)?.resume(throwing: HermesNativeActionError.unavailable("bluetooth-write-timeout"))
       }
     }
   }
 
   func notify(owner: String, identifier: String, serviceUUID: String, characteristicUUID: String, seconds: Double) async throws -> [String: Any] {
-    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == sessionOwner,
+    let expectedOwner = onBLEStateQueue { sessionOwner }
+    guard owner.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == expectedOwner,
           let characteristic = characteristic(identifier, serviceUUID: serviceUUID, characteristicUUID: characteristicUUID) else {
       throw HermesNativeActionError.unavailable("bluetooth-characteristic")
     }
     guard characteristic.properties.contains(.notify) || characteristic.properties.contains(.indicate) else {
       throw HermesNativeActionError.invalidInput("characteristic")
     }
-    guard notifyContinuation == nil else { throw HermesNativeActionError.unavailable("bluetooth-notify-busy") }
-    notifySamples = []
-    notifyCharacteristic = characteristic
+    guard onBLEStateQueue({ notifyContinuation }) == nil else { throw HermesNativeActionError.unavailable("bluetooth-notify-busy") }
+    onBLEStateQueue {
+      notifySamples = []
+      notifyCharacteristic = characteristic
+    }
     guard let peripheral = characteristic.service?.peripheral else {
       throw HermesNativeActionError.unavailable("bluetooth-peripheral")
     }
     peripheral.setNotifyValue(true, for: characteristic)
     return try await withCheckedThrowingContinuation { continuation in
-      notifyContinuation = continuation
-      notifyTask = Task { [weak self] in
+      onBLEStateQueue { notifyContinuation = continuation }
+      let task = Task { [weak self] in
         let nanoseconds = UInt64(max(1, min(seconds, 60)) * 1_000_000_000)
         try? await Task.sleep(nanoseconds: nanoseconds)
         guard !Task.isCancelled else { return }
         await MainActor.run { self?.finishNotify() }
       }
+      onBLEStateQueue { notifyTask = task }
     }
   }
 
   func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-    connectContinuation?.resume(returning: ["connected": true, "id": peripheral.identifier.uuidString])
-    connectContinuation = nil
+    claimConnectContinuation()?.resume(returning: ["connected": true, "id": peripheral.identifier.uuidString])
     peripheral.delegate = self
   }
 
   func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
-    let continuation = connectContinuation
-    connectContinuation = nil
-    continuation?.resume(throwing: error ?? HermesNativeActionError.unavailable("bluetooth-connect"))
+    claimConnectContinuation()?.resume(throwing: error ?? HermesNativeActionError.unavailable("bluetooth-connect"))
   }
 
   func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
-    let continuation = connectContinuation
-    connectContinuation = nil
-    continuation?.resume(throwing: error ?? HermesNativeActionError.unavailable("bluetooth-disconnected"))
+    claimConnectContinuation()?.resume(throwing: error ?? HermesNativeActionError.unavailable("bluetooth-disconnected"))
   }
 
   func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-    guard serviceContinuation != nil else { return }
+    guard onBLEStateQueue({ serviceContinuation != nil }) else { return }
     if let error { finishServices(error: error); return }
-    pendingCharacteristicServices = peripheral.services ?? []
+    onBLEStateQueue { pendingCharacteristicServices = peripheral.services ?? [] }
     discoverNextCharacteristics(for: peripheral)
   }
 
   func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-    guard serviceContinuation != nil else { return }
+    guard onBLEStateQueue({ serviceContinuation != nil }) else { return }
     if let error { finishServices(error: error); return }
     discoverNextCharacteristics(for: peripheral)
   }
 
   func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-    if let continuation = readContinuations.removeValue(forKey: characteristic.uuid) {
+    if let continuation = claimReadContinuation(characteristic.uuid) {
       if let error { continuation.resume(throwing: error) }
       else { continuation.resume(returning: ["uuid": characteristic.uuid.uuidString, "data": characteristic.value?.base64EncodedString() ?? ""]) }
     }
-    if notifyCharacteristic?.uuid == characteristic.uuid, let value = characteristic.value {
+    onBLEStateQueue {
+      guard notifyCharacteristic?.uuid == characteristic.uuid, let value = characteristic.value else { return }
       notifySamples.append(["uuid": characteristic.uuid.uuidString, "data": value.base64EncodedString()])
     }
   }
 
   func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
-    guard let continuation = writeContinuations.removeValue(forKey: characteristic.uuid) else { return }
+    guard let continuation = claimWriteContinuation(characteristic.uuid) else { return }
     if let error { continuation.resume(throwing: error) }
     else { continuation.resume(returning: ["written": true, "uuid": characteristic.uuid.uuidString]) }
   }
 
   private func finishNotify() {
-    notifyTask = nil
-    if let characteristic = notifyCharacteristic {
+    let finished = onBLEStateQueue { () -> (task: Task<Void, Never>?, continuation: CheckedContinuation<[String: Any], Error>?, characteristic: CBCharacteristic?, samples: [[String: Any]]) in
+      let task = notifyTask
+      notifyTask = nil
+      let continuation = notifyContinuation
+      notifyContinuation = nil
+      let characteristic = notifyCharacteristic
+      notifyCharacteristic = nil
+      return (task, continuation, characteristic, notifySamples)
+    }
+    finished.task?.cancel()
+    if let characteristic = finished.characteristic {
       characteristic.service?.peripheral?.setNotifyValue(false, for: characteristic)
     }
-    let continuation = notifyContinuation
-    notifyContinuation = nil
-    notifyCharacteristic = nil
-    continuation?.resume(returning: ["samples": notifySamples])
+    finished.continuation?.resume(returning: ["samples": finished.samples])
   }
 
   private func ensurePoweredOn() async throws {
     let current = manager.state
     if current == .poweredOn { return }
     let resolved = current == .unknown || current == .resetting
-      ? await withCheckedContinuation { (continuation: CheckedContinuation<CBManagerState, Never>) in
-        stateWaiters.append(continuation)
-        let state = manager.state
-        if state != .unknown && state != .resetting {
-          let waiters = stateWaiters
-          stateWaiters.removeAll()
-          waiters.forEach { $0.resume(returning: state) }
-        }
-      }
+      ? await withCheckedContinuation(registerStateWaiter)
       : current
     guard resolved == .poweredOn else { throw HermesNativeActionError.unavailable("bluetooth") }
   }
 
   private func peripheral(_ identifier: String) -> CBPeripheral? {
     guard let uuid = UUID(uuidString: identifier.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
-    return peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first
+    // Discovery mutates the dictionary on bleStateQueue; service/read/write
+    // callers arrive from arbitrary tasks, so resolve and cache on that queue.
+    return onBLEStateQueue { () -> CBPeripheral? in
+      let stored = self.peripherals[uuid] ?? self.manager.retrievePeripherals(withIdentifiers: [uuid]).first
+      if let stored { self.peripherals[uuid] = stored }
+      return stored
+    }
   }
 
   private func characteristic(_ identifier: String, serviceUUID: String, characteristicUUID: String) -> CBCharacteristic? {
@@ -1350,15 +1494,18 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   }
 
   private func discoverNextCharacteristics(for peripheral: CBPeripheral) {
-    guard serviceContinuation != nil else {
-      pendingCharacteristicServices.removeAll()
+    guard onBLEStateQueue({ serviceContinuation != nil }) else {
+      onBLEStateQueue { pendingCharacteristicServices.removeAll() }
       return
     }
-    guard !pendingCharacteristicServices.isEmpty else {
+    let next = onBLEStateQueue { () -> CBService? in
+      guard !pendingCharacteristicServices.isEmpty else { return nil }
+      return pendingCharacteristicServices.removeFirst()
+    }
+    guard let service = next else {
       finishServices(result: serializeServices(peripheral.services ?? []))
       return
     }
-    let service = pendingCharacteristicServices.removeFirst()
     if service.characteristics != nil {
       discoverNextCharacteristics(for: peripheral)
     } else {
@@ -1367,23 +1514,24 @@ final class HermesBluetoothService: NSObject, CBCentralManagerDelegate, CBPeriph
   }
 
   private func finishServices(result: [[String: Any]]? = nil, error: Error? = nil) {
-    pendingCharacteristicServices.removeAll()
-    let continuation = serviceContinuation
-    serviceContinuation = nil
-    if let error { continuation?.resume(throwing: error) }
-    else { continuation?.resume(returning: result ?? []) }
+    let pending = claimServiceContinuation()
+    if let error { pending?.resume(throwing: error) }
+    else { pending?.resume(returning: result ?? []) }
   }
 
   private func finishScan(error: Error? = nil) {
+    let finished = onBLEStateQueue { () -> (continuation: CheckedContinuation<[[String: Any]], Error>?, results: [[String: Any]]) in
+      let continuation = scanContinuation
+      scanContinuation = nil
+      scanTask?.cancel()
+      scanTask = nil
+      return (continuation, scanResults)
+    }
     manager.stopScan()
-    scanTask?.cancel()
-    scanTask = nil
-    let continuation = scanContinuation
-    scanContinuation = nil
     if let error {
-      continuation?.resume(throwing: error)
+      finished.continuation?.resume(throwing: error)
     } else {
-      continuation?.resume(returning: scanResults)
+      finished.continuation?.resume(returning: finished.results)
     }
   }
 

@@ -785,7 +785,12 @@ final class HermesHealthService {
   ) -> HKQueryAnchor? {
     let key = anchorKey(token: token, typeIdentifier: typeIdentifier)
     guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-    return (try? NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(data)) as? HKQueryAnchor
+    let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data)
+    guard let unarchiver else { return nil }
+    unarchiver.requiresSecureCoding = true
+    unarchiver.decodingFailurePolicy = .raiseException
+    defer { unarchiver.finishDecoding() }
+    return try? unarchiver.decodeObject(of: HKQueryAnchor.self, forKey: NSKeyedArchiveRootObjectKey)
   }
 
   private func saveAnchor(
@@ -797,7 +802,7 @@ final class HermesHealthService {
   ) -> Bool {
     let data = try? NSKeyedArchiver.archivedData(
       withRootObject: anchor,
-      requiringSecureCoding: false
+      requiringSecureCoding: true
     )
     guard let data else { return false }
     let defaults = UserDefaults.standard

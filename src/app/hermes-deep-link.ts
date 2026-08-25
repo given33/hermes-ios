@@ -3,6 +3,8 @@ import { isHermesNavigation } from '../config';
 export interface HermesDeepLinkTarget {
   conversationId?: string;
   routePath: string;
+  taskId?: string;
+  taskAction?: 'cancel' | 'pause' | 'resume' | 'retry' | 'speak-toggle';
 }
 
 export interface AccountBoundHermesDeepLinkTarget {
@@ -16,6 +18,9 @@ export function reconcileHermesDeepLinkAccount(
 ): AccountBoundHermesDeepLinkTarget | null {
   if (!current) return null;
   if (current.accountKey === null && accountKey !== null) {
+    // Task controls are mutations. A pre-auth link must not silently arm
+    // itself against whichever account happens to unlock the device next.
+    if (current.target.taskId || current.target.taskAction) return null;
     return { ...current, accountKey };
   }
   return current.accountKey === accountKey ? current : null;
@@ -58,6 +63,23 @@ export function parseHermesDeepLink(url: string): HermesDeepLinkTarget | null {
   // fell through to the shell fallback (the chat page).
   if (decoded[0] === 'weather') {
     return { routePath: '/smart-weather' };
+  }
+  if (decoded[0] === 'task' && decoded[1]) {
+    const rawAction = parsed.searchParams.get('action')?.trim().toLowerCase();
+    // speak-toggle comes from the Live Activity Speak/Mute button; it is a
+    // device-local narration preference applied by the control drain rather
+    // than a runtime run mutation sent to the server.
+    const taskAction = rawAction === 'cancel'
+      || rawAction === 'pause'
+      || rawAction === 'resume'
+      || rawAction === 'retry'
+      || rawAction === 'speak-toggle'
+      ? rawAction
+      : undefined;
+    return {
+      ...(taskAction ? { taskId: decoded[1], taskAction } : {}),
+      routePath: '/chat',
+    };
   }
   return { routePath: `/${decoded.join('/')}` };
 }

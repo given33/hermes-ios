@@ -8,6 +8,11 @@ import type { PendingPhase } from './chat-types';
 
 const HOSTED_EVENT_BATCH_WINDOW_MS = 80;
 
+interface QueuedHostedLifecycleEvent {
+  conversationId: string;
+  event: HostedLifecycleEvent;
+}
+
 interface HostedLifecycleEventApplicationOptions {
   activeConversationIdRef: MutableRefObject<string>;
   cacheOwner: string;
@@ -43,8 +48,7 @@ export function useHostedLifecycleEventApplication({
   setSending,
   updatePendingPhase,
 }: HostedLifecycleEventApplicationOptions) {
-  const eventQueueRef = useRef<HostedLifecycleEvent[]>([]);
-  const queueConversationRef = useRef('');
+  const eventQueueRef = useRef<QueuedHostedLifecycleEvent[]>([]);
   const runtimeRef = useRef<HostedRuntimeProjection | undefined>(undefined);
   const [runtime, setRuntime] = useState<HostedRuntimeProjection | undefined>(undefined);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -53,25 +57,18 @@ export function useHostedLifecycleEventApplication({
     if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
     flushTimerRef.current = null;
     eventQueueRef.current = [];
-    queueConversationRef.current = '';
     runtimeRef.current = undefined;
     setRuntime(undefined);
   }, []);
 
   const flush = useCallback(() => {
     flushTimerRef.current = null;
-    const events = eventQueueRef.current;
+    const activeConversationId = activeConversationIdRef.current;
+    const events = eventQueueRef.current
+      .filter((queued) => queued.conversationId === activeConversationId)
+      .map((queued) => queued.event);
     eventQueueRef.current = [];
-    const queuedFor = queueConversationRef.current;
-    queueConversationRef.current = '';
     if (!events.length) return;
-    // The batch window (80ms) can straddle a conversation switch: applying a
-    // detached stream's events here merged conversation A's live messages
-    // into conversation B's transcript. Drop the stale batch — the stream's
-    // own cursor tracking re-syncs from the durable snapshot.
-    if (queuedFor && activeConversationIdRef.current !== queuedFor) {
-      return;
-    }
 
     const result = applyHostedLifecycleEvents(
       messagesRef.current,
@@ -121,8 +118,9 @@ export function useHostedLifecycleEventApplication({
     conversationId?: string,
   ) => {
     if (!events.length) return;
-    if (conversationId) queueConversationRef.current = conversationId;
-    eventQueueRef.current.push(...events);
+    const owner = conversationId || activeConversationIdRef.current;
+    if (!owner) return;
+    eventQueueRef.current.push(...events.map((event) => ({ conversationId: owner, event })));
     const terminalEvent = events.some((event) => {
       const eventType = event.event_type.toLowerCase();
       return eventType === 'message.completed'

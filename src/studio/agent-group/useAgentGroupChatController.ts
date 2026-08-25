@@ -59,6 +59,12 @@ import {
   snapshotFromDetail,
   upsertGroupMessage,
 } from './agent-group-model';
+import {
+  OrderedLowLatencyReducer,
+  removeThinkingPlaceholders,
+  thinkingPlaceholderId,
+  type HermesLowLatencyEvent,
+} from './low-latency-event-reducer';
 
 const MOBILE_GROUP_USER_ID_PREFIX = 'hermes-mobile-group-user';
 
@@ -193,7 +199,7 @@ export interface AgentGroupChatController {
   interruptAgent(roomId: string, agentName: string): Promise<void>;
   respondApproval(roomId: string, approvalId: string, choice: HermesStudioPendingApproval['choices'][number]): Promise<void>;
   retractMessage(roomId: string, messageId: string): Promise<void>;
-  retryFailedMessage(roomId: string, messageId: string, content: string, mentions?: HermesStudioGroupChatMention[]): Promise<void>;
+  retryFailedMessage(roomId: string, messageId: string, content: string, mentions?: HermesStudioGroupChatMention[], attachments?: unknown[]): Promise<void>;
   emitTyping(roomId: string): void;
   emitStopTyping(roomId: string): void;
   listWorkspaceFiles(roomId: string, path?: string): Promise<HermesStudioWorkspaceFileListing>;
@@ -272,6 +278,7 @@ export function useAgentGroupChatController({
   const hydratedRoomOwnerRef = useRef('');
   const persistedRoomFingerprintRef = useRef(new Map<string, string>());
   const roomPersistenceQueueRef = useRef(new Map<string, Promise<void>>());
+  const lowLatencyReducersRef = useRef(new Map<string, OrderedLowLatencyReducer>());
 
   const conversationDeleteReplayService = useMemo(() => (
     studioApi && localStore && cacheOwner
@@ -352,7 +359,10 @@ export function useAgentGroupChatController({
         : event.type === 'approval-requested'
           ? event.approval.roomId
           : event.roomId;
-    patchSnapshot(roomId, (snapshot) => applyAgentGroupEvent(snapshot, event));
+    patchSnapshot(roomId, (snapshot) => {
+      const next = applyAgentGroupEvent(snapshot, event);
+      return { ...next, messages: removeThinkingPlaceholders(next.messages) };
+    });
   }, [patchSnapshot]);
 
   const identity = useMemo(() => ({
@@ -395,6 +405,10 @@ export function useAgentGroupChatController({
     for (const roomId of snapshotsRef.current.keys()) {
       if (!roomIds.has(roomId)) {
         snapshotsRef.current.delete(roomId);
+        // A room recreated under the same id must start a fresh ordered
+        // window: an orphaned reducer keeps the dead room's cursor and event
+        // ids and would silently drop every event of the new room as stale.
+        lowLatencyReducersRef.current.delete(roomId);
         roomHistoryCompleteRef.current.delete(roomId);
         roomHistoryCountRef.current.delete(roomId);
         roomHistoryNextOffsetRef.current.delete(roomId);
@@ -704,6 +718,21 @@ export function useAgentGroupChatController({
         detailFingerprintRef.current.delete(roomId);
       }
     };
+    const onLowLatencyEvent = (payload: unknown) => {
+      if (!isRecord(payload)) return;
+      const nested = isRecord(payload.payload) ? payload.payload : {};
+      const roomId = stringValue(payload.roomId || nested.roomId || nested.room_id);
+      if (!roomId) return;
+      let reducer = lowLatencyReducersRef.current.get(roomId);
+      if (!reducer) {
+        reducer = new OrderedLowLatencyReducer();
+        lowLatencyReducersRef.current.set(roomId, reducer);
+      }
+      patchSnapshot(roomId, (snapshot) => {
+        const next = reducer!.reduce(snapshot, payload as HermesLowLatencyEvent);
+        return { ...next, messages: removeThinkingPlaceholders(next.messages) };
+      });
+    };
     const onRoomCleared = (payload: unknown) => {
       if (!isRecord(payload)) return;
       const roomId = stringValue(payload.roomId);
@@ -798,6 +827,7 @@ export function useAgentGroupChatController({
     socket.on('approval.resolved', onApprovalResolved);
     socket.on('room_updated', onRoomUpdated);
     socket.on('room_cleared', onRoomCleared);
+    socket.on('low_latency_event', onLowLatencyEvent);
     // `connectRealtime()` starts the socket before returning.  A local or
     // low-latency server can therefore emit `connect` before these listeners
     // are attached; synchronize the already-connected state explicitly.
@@ -1259,12 +1289,14 @@ export function useAgentGroupChatController({
     attachments: unknown[] | undefined,
     mentions: HermesStudioGroupChatMention[] | undefined,
     roomId: string,
+    existingRequestId?: string,
   ) => {
     emitStopTyping(roomId);
     const snapshot = snapshotsRef.current.get(roomId);
     if (!snapshot) return;
     const previousDraft = draftsRef.current[roomId] ?? '';
-    const id = `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = existingRequestId?.trim()
+      || `mobile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     const optimistic: HermesStudioGroupChatMessage = {
       id,
       roomId,
@@ -1276,9 +1308,24 @@ export function useAgentGroupChatController({
       deliveryStatus: 'pending',
       ...(mentions?.length ? { mentions } : {}),
     };
+    const thinking: HermesStudioGroupChatMessage = {
+      id: thinkingPlaceholderId(id),
+      roomId,
+      senderId: 'hermes-manager',
+      senderName: 'Hermes Manager',
+      content: '',
+      reasoning: '',
+      timestamp: optimistic.timestamp,
+      role: 'assistant',
+      isStreaming: true,
+      deliveryStatus: 'pending',
+    };
     patchSnapshot(roomId, (current) => ({
       ...current,
-      messages: upsertGroupMessage(current.messages, optimistic),
+      messages: upsertGroupMessage(
+        upsertGroupMessage(current.messages, optimistic),
+        thinking,
+      ),
       error: null,
       updatedAt: Date.now(),
     }));
@@ -1287,7 +1334,9 @@ export function useAgentGroupChatController({
     if (!studioApi) {
       patchSnapshot(roomId, (current) => ({
         ...current,
-        messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
+        messages: removeThinkingPlaceholders(
+          upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
+        ),
       }));
       persistCurrentRoom(roomId);
       notify(isChinese ? '预览模式：已加入 Agent 群聊时间线' : 'Preview: added to the Agent group timeline');
@@ -1302,11 +1351,13 @@ export function useAgentGroupChatController({
       const profiles = resolvedMentions
         ? []
         : snapshot.agents.map((agent) => agent.profile).filter(Boolean);
-      await studioApi.groupChat.sendRoomMessage(roomId, id, content, profiles, undefined, resolvedMentions);
+      await studioApi.groupChat.sendRoomMessage(roomId, id, content, profiles, undefined, resolvedMentions, attachments);
       if (!mountedRef.current || bootstrapGenerationRef.current !== epoch) return;
       patchSnapshot(roomId, (current) => ({
         ...current,
-        messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
+        messages: removeThinkingPlaceholders(
+          upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'sent' }),
+        ),
       }));
       persistCurrentRoom(roomId);
     } catch (reason) {
@@ -1314,7 +1365,9 @@ export function useAgentGroupChatController({
       const message = errorMessage(reason, isChinese);
       patchSnapshot(roomId, (current) => ({
         ...current,
-        messages: upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'failed' }),
+        messages: removeThinkingPlaceholders(
+          upsertGroupMessage(current.messages, { ...optimistic, deliveryStatus: 'failed' }),
+        ),
         error: message,
       }));
       persistCurrentRoom(roomId);
@@ -1350,8 +1403,9 @@ export function useAgentGroupChatController({
     messageId: string,
     content: string,
     mentions?: HermesStudioGroupChatMention[],
+    attachments?: unknown[],
   ) => {
-    if (!roomId || !messageId || !content.trim()) return;
+    if (!roomId || !messageId || (!content.trim() && !attachments?.length)) return;
     // Serialize with normal sends through the same per-room lock: bypassing
     // it interleaved the retry with an in-flight send and reordered/duplicated
     // messages. Wait (bounded) for the current send to finish instead of
@@ -1372,15 +1426,25 @@ export function useAgentGroupChatController({
     }
     sendingRoomIdsRef.current.add(roomId);
     try {
-      patchSnapshot(roomId, (current) => ({
-        ...current,
-        messages: current.messages.filter((message) => message.id !== messageId),
-        updatedAt: Date.now(),
-      }));
+      patchSnapshot(roomId, (current) => {
+        const failed = current.messages.find((message) => message.id === messageId);
+        if (!failed || failed.deliveryStatus !== 'failed') return { ...current };
+        return {
+          ...current,
+          messages: upsertGroupMessage(current.messages, {
+            ...failed,
+            content: content.trim(),
+            deliveryStatus: 'pending',
+          }),
+          updatedAt: Date.now(),
+        };
+      });
       persistCurrentRoom(roomId);
       // Carry the original mentions: a content-only retry silently dropped
       // the structured payload of the failed message.
-      await sendMessageInner(content.trim(), undefined, mentions, roomId);
+      // Reuse the original request identity: the first attempt may have been
+      // committed by the server even though its response was lost.
+      await sendMessageInner(content.trim(), attachments, mentions, roomId, messageId);
     } finally {
       sendingRoomIdsRef.current.delete(roomId);
     }
@@ -1779,6 +1843,10 @@ export function useAgentGroupChatController({
     persistedRoomFingerprintRef.current.delete(conversationId);
     joinedRoomIdsRef.current.delete(roomId);
     snapshotsRef.current.delete(roomId);
+    // Same orphan risk as the list-refresh prune: deleting/leaving a room
+    // must retire its ordered window so a later room with the same id is not
+    // fenced by the previous room's sequence and dedupe state.
+    lowLatencyReducersRef.current.delete(roomId);
     detailFingerprintRef.current.delete(roomId);
     detailInFlightRef.current.delete(roomId);
     roomHistoryCompleteRef.current.delete(roomId);
@@ -1964,6 +2032,7 @@ export function useAgentGroupChatController({
     roomsRef.current = [];
     setRooms([]);
     snapshotsRef.current.clear();
+    lowLatencyReducersRef.current.clear();
     draftsRef.current = {};
     setDrafts({});
     detailFingerprintRef.current.clear();
@@ -1987,6 +2056,7 @@ export function useAgentGroupChatController({
       connectPromiseRef.current = null;
       joinedRoomIdsRef.current.clear();
       joinPromisesRef.current.clear();
+      lowLatencyReducersRef.current.clear();
       hydratedRoomOwnerRef.current = '';
       pendingRoomConversationIdsRef.current.clear();
       pendingRoomDeletionRevisionRef.current = 0;
@@ -2049,6 +2119,15 @@ export function useAgentGroupChatController({
     const timer = setInterval(() => {
       pollCount += 1;
       void (async () => {
+        // SSE is authoritative when healthy; REST becomes a slow safety net
+        // instead of competing with every live frame for radio and locks.
+        const socket = socketRef.current;
+        const activeStreamRoomId = activeRoomIdRef.current;
+        const liveStream = Boolean(
+          activeStreamRoomId
+          && socket?.hasHealthyRoomStream?.(activeStreamRoomId) === true,
+        );
+        if (liveStream && pollCount % 24 !== 0) return;
         // The room list is a small projection and carries message/turn
         // revisions. Refresh it periodically; only fetch the full transcript
         // when that fingerprint changes, avoiding repeated O(n) downloads for

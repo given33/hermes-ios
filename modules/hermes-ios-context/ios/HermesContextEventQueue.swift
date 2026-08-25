@@ -20,10 +20,14 @@ final class HermesContextEventQueue {
   private var cachedRelayState: [String: Any]?
 
   private init() {
+    // The system normally always supplies an Application Support URL, but an
+    // extension or a constrained test host can return an empty array. Keep the
+    // encrypted queue alive in a private temporary directory instead of
+    // crashing the process during singleton initialization.
     let applicationSupport = FileManager.default.urls(
       for: .applicationSupportDirectory,
       in: .userDomainMask
-    ).first!
+    ).first ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
     let directory = applicationSupport.appendingPathComponent("HermesContext", isDirectory: true)
     try? FileManager.default.createDirectory(
       at: directory,

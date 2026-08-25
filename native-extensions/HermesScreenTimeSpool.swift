@@ -6,6 +6,7 @@ import Security
 enum HermesScreenTimeSpool {
   private static let appGroup = "group.app.sunstone1029.fig1171.hermes"
   private static let associatedData = Data("hermes-screen-time-v2".utf8)
+  private static let maxChunksPerGeneration = 500
   private static let generationKey = "account-generation"
   private static let serverGenerationKey = "server-account-generation"
 
@@ -54,9 +55,26 @@ enum HermesScreenTimeSpool {
     let target = directory.appendingPathComponent(filename)
     do {
       try data.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+      prune(directory)
       return true
     } catch {
       return false
+    }
+  }
+
+  private static func prune(_ directory: URL, keep: Int = maxChunksPerGeneration) {
+    guard
+      let urls = try? FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: [.isRegularFileKey],
+        options: [.skipsHiddenFiles]
+      )
+    else { return }
+    let chunks = urls
+      .filter { $0.pathExtension == "chunk" }
+      .sorted { $0.lastPathComponent > $1.lastPathComponent }
+    for stale in chunks.dropFirst(max(0, keep)) {
+      try? FileManager.default.removeItem(at: stale)
     }
   }
 

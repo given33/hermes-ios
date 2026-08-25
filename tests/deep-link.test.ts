@@ -19,6 +19,22 @@ test('registered app deep links resolve routes and conversation identity', () =>
   assert.deepEqual(parseHermesDeepLink('hermes-agent://skills'), {
     routePath: '/skills',
   });
+  assert.deepEqual(parseHermesDeepLink('hermes-agent://task/runtime-1?action=pause'), {
+    routePath: '/chat',
+    taskAction: 'pause',
+    taskId: 'runtime-1',
+  });
+  assert.deepEqual(parseHermesDeepLink('hermes-agent://task/runtime-1?action=speak-toggle'), {
+    routePath: '/chat',
+    taskAction: 'speak-toggle',
+    taskId: 'runtime-1',
+  });
+  assert.deepEqual(parseHermesDeepLink('hermes-agent://task/runtime-1?action=unknown-action'), {
+    routePath: '/chat',
+  });
+  assert.deepEqual(parseHermesDeepLink('hermes-agent://task/runtime-1'), {
+    routePath: '/chat',
+  });
   assert.equal(parseHermesDeepLink('https://example.com/chat/conversation-1'), null);
   assert.equal(parseHermesDeepLink('https://user:pass@daxueshenmai.top/chat'), null);
   assert.equal(parseHermesDeepLink('hermes-agent://chat/%E0%A4%A'), null);
@@ -67,6 +83,22 @@ test('cold-start deep links bind once and clear across logout or account replace
   assert.equal(reconcileHermesDeepLinkAccount(accountA, 'account-a'), accountA);
   assert.equal(reconcileHermesDeepLinkAccount(accountA, null), null);
   assert.equal(reconcileHermesDeepLinkAccount(accountA, 'account-b'), null);
+});
+
+test('unauthenticated deep-link task controls do not arm after login', () => {
+  const pending = {
+    accountKey: null,
+    target: { requestId: 2, routePath: '/chat', taskId: 'runtime-1', taskAction: 'cancel' },
+  } as const;
+  assert.equal(reconcileHermesDeepLinkAccount(pending, 'account-a'), null);
+});
+
+test('unauthenticated speak-toggle deep links do not arm after login either', () => {
+  const pending = {
+    accountKey: null,
+    target: { requestId: 3, routePath: '/chat', taskId: 'runtime-1', taskAction: 'speak-toggle' },
+  } as const;
+  assert.equal(reconcileHermesDeepLinkAccount(pending, 'account-a'), null);
 });
 
 function deferred<T>() {

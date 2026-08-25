@@ -109,6 +109,7 @@ enum HermesAccountLifecycle {
       ])
       guard queue.accountGeneration == deletion.lifecycleEpoch else { return }
       await HermesLiveActivityService.shared.endAll()
+      await HermesBrowserService.shared.removeOwnerData(ownerScope: ownerScope)
     }
     return deletion
   }

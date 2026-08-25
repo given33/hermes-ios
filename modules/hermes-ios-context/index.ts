@@ -266,8 +266,11 @@ export interface IOSContextNativeModule {
   readPendingCommands(): Promise<Array<Record<string, unknown>>>;
   removePendingCommand(id: string): Promise<void>;
   readPendingTaskControls?(): Promise<Array<Record<string, unknown>>>;
+  enqueueTaskControl?(taskID: string, action: string): Promise<string | null>;
   consumePendingTaskControl?(requestId: string): Promise<boolean>;
   clearPendingTaskControls?(): Promise<boolean>;
+  getVoiceNarrationEnabled?(): Promise<boolean>;
+  setVoiceNarrationEnabled?(enabled: boolean): Promise<boolean>;
   requestHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthAuthorization(): Promise<IOSAuthorizationState>;
   getHealthSummary(start: number, end: number): Promise<IOSHealthSummary>;
@@ -618,10 +621,16 @@ export const HermesIOSContext = {
   readPendingCommands: () => requireContextModule().readPendingCommands(),
   removePendingCommand: (id: string) => requireContextModule().removePendingCommand(id),
   readPendingTaskControls: () => requireContextModule().readPendingTaskControls?.() ?? Promise.resolve([]),
+  enqueueTaskControl: (taskID: string, action: string) =>
+    requireContextModule().enqueueTaskControl?.(taskID, action) ?? Promise.resolve(null),
   consumePendingTaskControl: (requestId: string) =>
     requireContextModule().consumePendingTaskControl?.(requestId) ?? Promise.resolve(false),
   clearPendingTaskControls: () =>
     requireContextModule().clearPendingTaskControls?.() ?? Promise.resolve(false),
+  getVoiceNarrationEnabled: () =>
+    requireContextModule().getVoiceNarrationEnabled?.() ?? Promise.resolve(false),
+  setVoiceNarrationEnabled: (enabled: boolean) =>
+    requireContextModule().setVoiceNarrationEnabled?.(enabled) ?? Promise.resolve(enabled),
   requestHealthAuthorization: () => requireContextModule().requestHealthAuthorization(),
   getHealthAuthorization: () => requireContextModule().getHealthAuthorization(),
   getHealthSummary: (start: number, end: number) =>

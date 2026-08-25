@@ -11,6 +11,13 @@ enum HermesLocationMode: String {
   case walking
 }
 
+// HermesLocationService is fully isolated to the main actor. CLLocationManager
+// is documented as main-actor-isolated: it must be created, configured, and have
+// its methods invoked from the thread on which the delegate runs (main by
+// default). Marking the class @MainActor makes that invariant part of the type
+// system so future bridge additions cannot regress to background-thread
+// undefined behavior.
+@MainActor
 final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   static let shared = HermesLocationService()
   private static let logger = Logger(subsystem: "app.hermes", category: "location-collector")
@@ -51,6 +58,7 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   private var predictedDepartureActivation: DispatchWorkItem?
   private var predictedDepartureReset: DispatchWorkItem?
   private(set) var mode: HermesLocationMode = .stationary
+  var currentAuthorization: CLAuthorizationStatus { manager.authorizationStatus }
   var onLocation: (([String: Any]) -> Void)?
   var onVisit: (([String: Any]) -> Void)?
 
@@ -98,13 +106,30 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
           // status (never an invented one).
           DispatchQueue.main.asyncAfter(deadline: .now() + 25) { [weak self, weak gate] in
             guard let self, let gate else { return }
+            // Mirror scheduleAlwaysUpgradeFallback: confirming the captured
+            // gate is still the current one and releasing the slot under the
+            // lock keeps this mutually exclusive with the delegate callback,
+            // which performs the same claim-and-drain. Resolving only the
+            // captured gate would leave authorizationGate set and queued
+            // waiters stranded, wedging every later request on
+            // shouldStartRequest == false forever.
             self.stateLock.lock()
-            let wasWaiting = self.awaitingSystemAuthorizationPrompt
-            self.awaitingSystemAuthorizationPrompt = false
+            let isCurrent = self.authorizationGate === gate && self.awaitingSystemAuthorizationPrompt
+            let waiters = isCurrent ? self.authorizationWaiters : []
+            if isCurrent {
+              self.awaitingSystemAuthorizationPrompt = false
+              self.authorizationGate = nil
+              self.authorizationWaiters.removeAll()
+            }
             self.stateLock.unlock()
-            guard wasWaiting else { return }
+            guard isCurrent else { return }
+            // The prompt was suppressed (backgrounded app, cooldown after
+            // repeated denials): locationManagerDidChangeAuthorization will
+            // not fire. Resolve with the current real status (never an
+            // invented one) so the permission coordinator can continue.
             let resolved = HermesAuthorization.location(self.manager.authorizationStatus)
             gate.resolve(resolved)
+            waiters.forEach { $0.resolve(resolved) }
           }
         } else {
           self.requestedAlwaysUpgrade = true

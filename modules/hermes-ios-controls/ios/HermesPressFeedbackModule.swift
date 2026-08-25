@@ -78,13 +78,25 @@ final class HermesPressFeedbackView: ExpoView, UIGestureRecognizerDelegate {
 
   private func animate(pressed: Bool) {
     animator?.stopAnimation(true)
-    let changes = {
-      self.alpha = pressed ? self.opacityTo : 1
-      self.transform = pressed
-        ? CGAffineTransform(scaleX: self.scaleTo, y: self.scaleTo)
-        : .identity
+    // Capture only the values needed so the animations block does not
+    // retain self — a previous implementation captured self directly and
+    // created a retain cycle (self.animator -> UIViewPropertyAnimator ->
+    // animations block -> self) that pinned every pressed view in memory
+    // until its parent was deallocated.
+    let targetAlpha: CGFloat = pressed ? opacityTo : 1
+    let targetTransform: CGAffineTransform = pressed
+      ? CGAffineTransform(scaleX: scaleTo, y: scaleTo)
+      : .identity
+    let animator = UIViewPropertyAnimator(duration: 0.3, dampingRatio: 0.8) {
+      self.alpha = targetAlpha
+      self.transform = targetTransform
     }
-    let animator = UIViewPropertyAnimator(duration: 0.3, dampingRatio: 0.8, animations: changes)
+    animator.addCompletion { [weak self] _ in
+      // Only clear the slot if it is still the animator we created; a
+      // subsequent animate() call may have replaced it already.
+      guard self?.animator === animator else { return }
+      self?.animator = nil
+    }
     self.animator = animator
     animator.startAnimation()
   }

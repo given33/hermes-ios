@@ -12,6 +12,7 @@ import {
 import { Linking, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { startNativeFrameRateController } from '../../modules/hermes-ios-controls';
+import { HermesIOSContext } from '../../modules/hermes-ios-context';
 import { IOSPressable } from '../components/ios/IOSPressable';
 import { AuthProvider, useAuth } from '../auth/AuthProvider';
 import { accountOwnerScope } from '../auth/account-identity';
@@ -107,6 +108,10 @@ function NativeAuthRoot() {
       ? `${state.connection.baseUrl}\u0000${state.connection.username.toLowerCase()}`
         + `\u0000${state.connection.accountGeneration}`
       : null,
+  );
+  useDeepLinkTaskControl(
+    navigationTarget,
+    state.status === 'authenticated',
   );
   if (state.status !== 'authenticated') return <LoginScreen />;
   if (!client) return null;
@@ -227,6 +232,48 @@ function useHermesDeepLinkTarget(
     return subscribeHermesDeepLinks(Linking, accept);
   }, [accept]);
   return bound?.target ?? null;
+}
+
+function useDeepLinkTaskControl(
+  target: (HermesDeepLinkTarget & { requestId: number }) | null,
+  enabled: boolean,
+): void {
+  const submittedRequestIds = useRef<Set<number>>(new Set());
+
+  useEffect(() => {
+    const requestId = target?.requestId;
+    const taskId = target?.taskId;
+    const taskAction = target?.taskAction;
+    if (!enabled || !requestId || !taskId || !taskAction) return undefined;
+    if (submittedRequestIds.current.has(requestId)) return undefined;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+
+    const submit = async(): Promise<void> => {
+      attempts += 1;
+      try {
+        const queuedId = await HermesIOSContext.enqueueTaskControl(taskId, taskAction);
+        if (queuedId) {
+          submittedRequestIds.current.add(requestId);
+          return;
+        }
+      } catch {
+        // Native context can be absent in externally re-signed builds; the
+        // visible control must not crash the app.
+      }
+      if (!cancelled && attempts < 15) {
+        timer = setTimeout(() => { void submit(); }, 500);
+      }
+    };
+
+    void submit();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [enabled, target?.requestId, target?.taskId, target?.taskAction]);
 }
 
 // A cleartext EXPO_PUBLIC_HERMES_URL used to throw while src/config.ts was

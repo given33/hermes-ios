@@ -40,9 +40,17 @@ final class HermesWatchService: NSObject, WCSessionDelegate {
     let scopedPayload = fence.envelope(operation)
     if session.isReachable {
       return await withCheckedContinuation { continuation in
+        // WCSession can legally invoke both replyHandler and errorHandler
+        // for a single sendMessage (the OS may deliver a partial failure
+        // after the message was acknowledged), which would resume the
+        // continuation twice and trap. Claim the continuation under a
+        // small atomic so the second call is a no-op.
+        let box = HermesWatchOnceBox()
         session.sendMessage(scopedPayload, replyHandler: { reply in
+          guard box.tryClaim() else { return }
           continuation.resume(returning: reply["accepted"] as? Bool ?? true)
         }, errorHandler: { [weak self] _ in
+          guard box.tryClaim() else { return }
           guard let self, self.isCurrent(fence) else {
             continuation.resume(returning: false)
             return
@@ -472,5 +480,23 @@ private struct AccountFence: Equatable {
       && epoch == lifecycleEpoch
       && legacyEpoch == lifecycleEpoch
       && payloadResetAt == resetAt
+  }
+}
+
+/// Single-shot guard used by send-continuations to prevent a double resume
+/// when WatchConnectivity delivers both a reply and an error for the same
+/// sendMessage (a known race documented in the watchOS 9+ WCSession API).
+/// We use this lightweight class instead of a @unchecked Sendable wrapper to
+/// avoid an extra global lock and keep the per-call cost negligible.
+private final class HermesWatchOnceBox {
+  private var claimed = false
+  private let lock = NSLock()
+
+  func tryClaim() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    if claimed { return false }
+    claimed = true
+    return true
   }
 }
