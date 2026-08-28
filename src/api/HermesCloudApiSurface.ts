@@ -71,6 +71,7 @@ export interface HermesCloudApi {
   installSkillHub(identifier: string, profile?: string): Promise<JsonRecord>; uninstallSkillHub(name: string, profile?: string): Promise<JsonRecord>; updateSkillsHub(profile?: string): Promise<JsonRecord>; getSkillHubSources(profile?: string): Promise<JsonRecord>; searchSkillHub(query?: string, source?: string, limit?: number, profile?: string): Promise<JsonRecord>; previewSkillHub(identifier: string, profile?: string): Promise<JsonRecord>; scanSkillHub(identifier: string, profile?: string): Promise<JsonRecord>;
   revealEnvironmentVariable(key: string, profile?: string): Promise<JsonRecord>; openProfileTerminal(name: string): Promise<JsonRecord>; getProfileDesktopOverlay(name: string): Promise<JsonRecord>;
   searchSessions(query: string, limit?: number, profile?: string, filters?: JsonRecord): Promise<JsonRecord>; getLatestDescendant(id: string, profile?: string): Promise<JsonRecord>; exportSession(id: string, profile?: string): Promise<JsonRecord>; bulkDeleteSessions(ids: string[], profile?: string): Promise<JsonRecord>; importSessions(sessions: JsonRecord[], profile?: string): Promise<JsonRecord>; countEmptySessions(profile?: string): Promise<JsonRecord>; deleteEmptySessions(profile?: string): Promise<JsonRecord>; getSessionStats(profile?: string): Promise<JsonRecord>; pruneSessions(payload?: JsonRecord, profile?: string): Promise<JsonRecord>;
+  getProfileSessionsSidebar(options?: JsonRecord): Promise<JsonRecord>; getProfileProjectsTree(previewLimit?: number, sessionLimit?: number): Promise<JsonRecord>; scanProfileSessionPullRequests(ids: string[]): Promise<JsonRecord>;
 }
 }
 
@@ -128,5 +129,8 @@ Object.assign(CloudApi.prototype, {
   deleteEmptySessions(this: any, p = 'default') { return this.sessions.deleteEmptySessions(p); },
   getSessionStats(this: any, p = 'default') { return this.sessions.getSessionStats(p); },
   pruneSessions(this: any, v: JsonRecord = {}, p = 'default') { return this.sessions.pruneSessions(v, p); },
+  getProfileSessionsSidebar(this: any, o: JsonRecord = {}) { return this.sessions.getProfileSessionsSidebar(o); },
+  getProfileProjectsTree(this: any, l = 3, s = 2000) { return this.sessions.getProfileProjectsTree(l, s); },
+  scanProfileSessionPullRequests(this: any, ids: string[]) { return this.sessions.scanProfileSessionPullRequests(ids); },
 });
 }

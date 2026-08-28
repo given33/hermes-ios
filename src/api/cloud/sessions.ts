@@ -36,6 +36,22 @@ export class HermesSessionsCloudApi {
     });
   }
 
+  getProfileSessionsSidebar(options: JsonRecord = {}) {
+    return this.transport.request<JsonRecord>('/api/profiles/sessions/sidebar', {
+      query: { recents_profile: 'all', ...options },
+    });
+  }
+
+  getProfileProjectsTree(previewLimit = 3, sessionLimit = 2000) {
+    return this.transport.request<JsonRecord>('/api/profiles/projects/tree', {
+      query: { preview_limit: previewLimit, session_limit: sessionLimit },
+    });
+  }
+
+  scanProfileSessionPullRequests(ids: string[]) {
+    return this.transport.json<JsonRecord>('/api/profiles/sessions/pull-requests', 'POST', { ids });
+  }
+
   async getAllProfileSessions(pageSize = 100) {
     return this.drainSessions(
       (offset) => this.getProfileSessions(pageSize, offset),
