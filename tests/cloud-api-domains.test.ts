@@ -172,6 +172,25 @@ test('voice transcription stays authenticated on the Hermes origin', async () =>
   });
 });
 
+test('voice configuration and synthesis stay profile-scoped on the Hermes origin', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.getVoiceConfig('reviewer');
+  await api.listElevenLabsVoices('reviewer');
+  await api.speakAudio('Hello from Hermes', 'reviewer');
+
+  assert.deepEqual(
+    calls.map(({ path, options }) => [path, options.method ?? 'GET', options.query?.profile]),
+    [
+      ['/api/audio/voice-config', 'GET', 'reviewer'],
+      ['/api/audio/elevenlabs/voices', 'GET', 'reviewer'],
+      ['/api/audio/speak', 'POST', 'reviewer'],
+    ],
+  );
+  assert.deepEqual(parsedBody(calls[2]), { text: 'Hello from Hermes' });
+  assert.equal(calls[2].options.deadlineMs, 120_000);
+});
+
 test('model methods keep their exact wire contract through cloud/models', async () => {
   const calls: RecordedCall[] = [];
   const client = {
@@ -331,6 +350,12 @@ test('plugin and MCP methods keep their wire contract through cloud/extensions',
   const { api, calls } = recordingApi();
 
   await api.getPlugins();
+  await api.rescanPlugins();
+  await api.installPlugin('owner/repo');
+  await api.updatePlugin('kan ban');
+  await api.removePlugin('kan ban');
+  await api.setPluginVisibility('kan ban', true);
+  await api.setPluginProviders({ memoryProvider: 'sqlite', contextEngine: 'native' });
   await api.setPluginEnabled('kan ban', true);
   await api.setPluginEnabled('kan ban', false);
   assert.deepEqual(
@@ -338,10 +363,21 @@ test('plugin and MCP methods keep their wire contract through cloud/extensions',
     [
       ['/api/dashboard/plugins', 'GET'],
       ['/api/dashboard/plugins/hub', 'GET'],
+      ['/api/dashboard/plugins/rescan', 'GET'],
+      ['/api/dashboard/agent-plugins/install', 'POST'],
+      ['/api/dashboard/agent-plugins/kan%20ban/update', 'POST'],
+      ['/api/dashboard/agent-plugins/kan%20ban', 'DELETE'],
+      ['/api/dashboard/plugins/kan%20ban/visibility', 'POST'],
+      ['/api/dashboard/plugin-providers', 'PUT'],
       ['/api/dashboard/agent-plugins/kan%20ban/enable', 'POST'],
       ['/api/dashboard/agent-plugins/kan%20ban/disable', 'POST'],
     ],
   );
+  assert.deepEqual(parsedBody(calls[3]), { identifier: 'owner/repo', force: false, enable: true });
+  assert.deepEqual(parsedBody(calls[7]), {
+    memory_provider: 'sqlite',
+    context_engine: 'native',
+  });
 
   calls.length = 0;
   await api.getMcp('ops');
@@ -379,6 +415,15 @@ test('conversation and hosted-turn methods keep their wire contract through clou
   await api.createConversation('ops', 'Deploy audit', 'device-conversation-1');
   await api.getConversation('conversation one');
   await api.getConversationSessionEntries('conversation one', 7, 250);
+  await api.forkSession('runtime session', {
+    atMessageId: 12,
+    expectedTipId: 18,
+    idempotencyKey: 'session-fork-1',
+    profile: 'reviewer',
+    title: 'Runtime branch',
+  });
+  await api.getSessionLineage('runtime session', 'reviewer');
+  await api.getSessionContext('runtime session', 'reviewer');
   await api.forkConversationFromMessage('conversation one', 'message one', {
     idempotencyKey: 'fork-1',
     profile: 'reviewer',
@@ -412,6 +457,18 @@ test('conversation and hosted-turn methods keep their wire contract through clou
         'GET',
       ],
       [
+        '/api/plugins/collaboration/mobile/sessions/runtime%20session/fork',
+        'POST',
+      ],
+      [
+        '/api/plugins/collaboration/mobile/sessions/runtime%20session/lineage',
+        'GET',
+      ],
+      [
+        '/api/plugins/collaboration/mobile/sessions/runtime%20session/context',
+        'GET',
+      ],
+      [
         '/api/plugins/collaboration/mobile/conversations/conversation%20one/messages/message%20one/fork',
         'POST',
       ],
@@ -436,16 +493,25 @@ test('conversation and hosted-turn methods keep their wire contract through clou
   });
   assert.deepEqual(calls[3].options.query, { cursor: '7', limit: '250' });
   assert.deepEqual(parsedBody(calls[4]), {
+    at_message_id: 12,
+    expected_tip_id: 18,
+    idempotency_key: 'session-fork-1',
+    profile: 'reviewer',
+    title: 'Runtime branch',
+  });
+  assert.deepEqual(calls[5].options.query, { profile: 'reviewer' });
+  assert.deepEqual(calls[6].options.query, { profile: 'reviewer' });
+  assert.deepEqual(parsedBody(calls[7]), {
     idempotency_key: 'fork-1',
     profile: 'reviewer',
     title: 'Forked audit',
   });
-  assert.deepEqual(parsedBody(calls[5]), {
+  assert.deepEqual(parsedBody(calls[8]), {
     focus_topic: 'release evidence',
     idempotency_key: 'compress-1',
     profile: 'reviewer',
   });
-  assert.deepEqual(parsedBody(calls[6]), {
+  assert.deepEqual(parsedBody(calls[9]), {
     attachment_context: '',
     attachment_ids: [],
     delivery_context: '',
@@ -455,11 +521,11 @@ test('conversation and hosted-turn methods keep their wire contract through clou
     request_id: 'request-1',
     turn_id: 'turn-1',
   });
-  assert.deepEqual(parsedBody(calls[7]), {
+  assert.deepEqual(parsedBody(calls[10]), {
     content: '@reviewer recheck',
     message_id: 'message-2',
   });
-  assert.deepEqual(parsedBody(calls[8]), {
+  assert.deepEqual(parsedBody(calls[11]), {
     reason: 'user_cancelled',
     request_id: 'cancel-turn-1',
   });
@@ -508,7 +574,22 @@ test('managed and account files keep their wire contract through cloud/files', a
 test('workflow, approval, and runtime controls keep their wire contract through cloud/workflows', async () => {
   const { api, calls } = recordingApi();
 
+  await api.getWorkflowHealth();
+  await api.createWorkflow({
+    name: 'Audit workflow',
+    description: 'Run audit',
+    profile: 'ops',
+    spec: { nodes: [], edges: [] },
+  }, 'workflow-create-1');
+  await api.addWorkflowVersion('workflow-1', {
+    expectedRevision: 2,
+    profile: 'ops',
+    spec: { nodes: [], edges: [] },
+  }, 'workflow-version-1');
   await api.getWorkflows('ops');
+  await api.getWorkflow('workflow-1', 'ops');
+  await api.getWorkflowRuns('ops');
+  await api.getWorkflowRun('run-1', 'ops');
   await api.startWorkflow('release audit', 'ops', 'workflow-start-1');
   await api.cancelWorkflowRun('run one', 7, 'ops', 'workflow-cancel-1');
   await api.approveWorkflowNode('run one', 'review node', 8, 'ops', 'workflow-approve-1');
@@ -528,7 +609,13 @@ test('workflow, approval, and runtime controls keep their wire contract through 
   assert.deepEqual(
     calls.map(({ path, options }) => [path, options.method ?? 'GET']),
     [
+      ['/api/plugins/workflows/health', 'GET'],
+      ['/api/plugins/workflows/definitions', 'POST'],
+      ['/api/plugins/workflows/definitions/workflow-1/versions', 'POST'],
       ['/api/plugins/workflows/definitions', 'GET'],
+      ['/api/plugins/workflows/definitions/workflow-1', 'GET'],
+      ['/api/plugins/workflows/runs', 'GET'],
+      ['/api/plugins/workflows/runs/run-1', 'GET'],
       ['/api/plugins/workflows/definitions/release%20audit/runs', 'POST'],
       ['/api/plugins/workflows/runs/run%20one/cancel', 'POST'],
       ['/api/plugins/workflows/runs/run%20one/nodes/review%20node/approval', 'POST'],
@@ -539,27 +626,37 @@ test('workflow, approval, and runtime controls keep their wire contract through 
       ],
     ],
   );
-  assert.deepEqual(calls[0].options.query, { profile_id: 'ops' });
-  assert.deepEqual(parsedBody(calls[1]), { inputs: {}, profile_id: 'ops' });
-  assert.equal(new Headers(calls[1].options.headers).get('Idempotency-Key'), 'workflow-start-1');
+  assert.deepEqual(parsedBody(calls[1]), {
+    description: 'Run audit', name: 'Audit workflow', profile_id: 'ops', spec: { nodes: [], edges: [] },
+  });
+  assert.equal(new Headers(calls[1].options.headers).get('Idempotency-Key'), 'workflow-create-1');
   assert.deepEqual(parsedBody(calls[2]), {
+    expected_revision: 2, profile_id: 'ops', spec: { nodes: [], edges: [] },
+  });
+  assert.equal(new Headers(calls[2].options.headers).get('Idempotency-Key'), 'workflow-version-1');
+  assert.deepEqual(calls[4].options.query, { profile_id: 'ops' });
+  assert.deepEqual(calls[5].options.query, { limit: 100, profile_id: 'ops' });
+  assert.deepEqual(calls[6].options.query, { profile_id: 'ops' });
+  assert.deepEqual(parsedBody(calls[7]), { inputs: {}, profile_id: 'ops' });
+  assert.equal(new Headers(calls[7].options.headers).get('Idempotency-Key'), 'workflow-start-1');
+  assert.deepEqual(parsedBody(calls[8]), {
     expected_revision: 7,
     profile_id: 'ops',
     reason: 'mobile_user',
   });
-  assert.deepEqual(parsedBody(calls[3]), {
+  assert.deepEqual(parsedBody(calls[9]), {
     decision: 'approve',
     expected_revision: 8,
     profile_id: 'ops',
     request_id: 'workflow-approve-1',
   });
-  assert.deepEqual(parsedBody(calls[4]), {
+  assert.deepEqual(parsedBody(calls[10]), {
     decision: 'approve',
     expected_revision: 4,
     payload_digest: 'sha256:digest',
     profile: 'ops',
   });
-  assert.deepEqual(parsedBody(calls[5]), {
+  assert.deepEqual(parsedBody(calls[11]), {
     reason: 'mobile_user',
     request_id: 'runtime-cancel-1',
   });

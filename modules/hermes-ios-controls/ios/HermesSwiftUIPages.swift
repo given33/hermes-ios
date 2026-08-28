@@ -118,6 +118,25 @@ private struct HermesWorkflowsPage: View {
 
   var body: some View {
     List {
+      if let health = data.health {
+        Section(chinese ? "工作流服务" : "Workflow service") {
+          HStack(spacing: 8) {
+            Circle()
+              .fill(health.ok ? appearance.palette.success : appearance.palette.destructive)
+              .frame(width: 8, height: 8)
+            Text(health.ok
+              ? (chinese ? "服务正常" : "Service healthy")
+              : (chinese ? "服务异常" : "Service unavailable"))
+              .font(HermesFonts.bodyBold(13))
+            Spacer()
+            if let recoverable = health.recoverableRuns {
+              Text(chinese ? "可恢复 (recoverable)" : "(recoverable) recoverable")
+                .font(HermesFonts.mono(10))
+                .foregroundStyle(appearance.palette.secondary)
+            }
+          }
+        }
+      }
       if data.workflows.isEmpty {
         ContentUnavailableView(
           chinese ? "暂无工作流" : "No workflows",
@@ -559,6 +578,7 @@ private enum HermesRemoteEditor: String, Identifiable {
   case kanban
   case channel
   case config
+  case plugin
 
   var id: String { rawValue }
 }
@@ -690,6 +710,16 @@ private struct HermesRemoteRoutePage: View {
             }
           }
         }
+        if route == .plugins {
+          ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+              onAction(.pluginRescan, HermesRouteActionPayload(route: "plugins"))
+            } label: {
+              Image(systemName: "arrow.triangle.2.circlepath")
+            }
+            .accessibilityLabel(chinese ? "重新扫描插件" : "Rescan plugins")
+          }
+        }
       }
       .hermesListStyle()
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "skills")) }
@@ -704,6 +734,11 @@ private struct HermesRemoteRoutePage: View {
             )).labelsHidden()
           }
           .swipeActions {
+            if route == .plugins && item.canRemove == true {
+              Button(role: .destructive) {
+                onAction(.pluginDelete, HermesRouteActionPayload(route: "plugins", id: item.id))
+              } label: { Label(chinese ? "卸载" : "Remove", systemImage: "trash") }
+            }
             if route == .mcp || route == .webhooks {
               Button(role: .destructive) {
                 onAction(.integrationDelete, HermesRouteActionPayload(route: route.rawValue, id: item.id))
@@ -711,6 +746,39 @@ private struct HermesRemoteRoutePage: View {
             }
           }
           .contextMenu {
+            if route == .plugins {
+              if item.canUpdate == true {
+                Button {
+                  onAction(.pluginUpdate, HermesRouteActionPayload(route: "plugins", id: item.id))
+                } label: {
+                  Label(chinese ? "更新插件" : "Update plugin", systemImage: "arrow.down.circle")
+                }
+              }
+              Button {
+                onAction(
+                  .pluginVisibility,
+                  HermesRouteActionPayload(
+                    route: "plugins",
+                    id: item.id,
+                    enabled: item.userHidden != true
+                  )
+                )
+              } label: {
+                Label(
+                  item.userHidden == true
+                    ? (chinese ? "显示在侧边栏" : "Show in sidebar")
+                    : (chinese ? "从侧边栏隐藏" : "Hide from sidebar"),
+                  systemImage: item.userHidden == true ? "eye" : "eye.slash"
+                )
+              }
+              if item.canRemove == true {
+                Button(role: .destructive) {
+                  onAction(.pluginDelete, HermesRouteActionPayload(route: "plugins", id: item.id))
+                } label: {
+                  Label(chinese ? "卸载插件" : "Remove plugin", systemImage: "trash")
+                }
+              }
+            }
             if route == .channels {
               Button {
                 editorID = item.id
@@ -1163,6 +1231,7 @@ private struct HermesRemoteRoutePage: View {
     case "server": return chinese ? "主服务器" : "Server"
     case "dbb3": return "DBB3"
     case "wsl": return "WSL"
+    case "hk": return chinese ? "香港" : "Hong Kong"
     default: return value
     }
   }
@@ -1187,6 +1256,7 @@ private struct HermesRemoteRoutePage: View {
 
   private var editorKind: HermesRemoteEditor? {
     switch route {
+    case .plugins: return .plugin
     case .cron: return .cron
     case .mcp: return .mcp
     case .webhooks: return .webhooks
@@ -1277,6 +1347,16 @@ private struct HermesRemoteRoutePage: View {
     case .config:
       guard !detail.isEmpty else { return }
       onAction(.configUpdate, HermesRouteActionPayload(route: "config", value: detail))
+    case .plugin:
+      guard !name.isEmpty else { return }
+      onAction(
+        .pluginInstall,
+        HermesRouteActionPayload(
+          route: "plugins",
+          name: name,
+          fields: ["force": "false", "enable": "true"]
+        )
+      )
     }
     editor = nil
   }
@@ -1385,6 +1465,7 @@ private struct HermesRemoteEditorSheet: View {
       if kind == .skill { return isCreating ? "New Skill" : "Edit SKILL.md" }
       if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
       if kind == .channel { return "Edit Channel Configuration" }
+      if kind == .plugin { return "Install Plugin" }
       return "Add \(kind.rawValue.capitalized)"
     }
     switch kind {
@@ -1399,6 +1480,7 @@ private struct HermesRemoteEditorSheet: View {
     case .kanban: return name.isEmpty ? "新建任务" : "编辑任务"
     case .channel: return "编辑渠道配置"
     case .config: return "编辑配置"
+    case .plugin: return "安装插件"
     }
   }
 
@@ -1406,6 +1488,7 @@ private struct HermesRemoteEditorSheet: View {
     if kind == .collaboration { return chinese ? "房间名称" : "Room name" }
     if kind == .pairing { return chinese ? "平台" : "Platform" }
     if kind == .kanban { return chinese ? "标题" : "Title" }
+    if kind == .plugin { return chinese ? "插件标识符或仓库" : "Plugin identifier or repository" }
     return chinese ? "名称" : "Name"
   }
   private var valueLabel: String {
@@ -1569,6 +1652,50 @@ private struct HermesSessionsPage: View {
                 }
               }
             }
+          }
+        }
+
+        if !context.branchableMessages.isEmpty {
+          Section(chinese ? "可分叉消息" : "Branchable messages") {
+            ForEach(context.branchableMessages) { message in
+              Button {
+                onAction(
+                  .sessionFork,
+                  HermesRouteActionPayload(
+                    route: "sessions",
+                    id: context.conversationId,
+                    detail: message.messageId,
+                    requestId: "session-fork-\(UUID().uuidString.lowercased())",
+                    fields: ["profile": context.profile]
+                  )
+                )
+              } label: {
+                HStack(spacing: 10) {
+                  Image(systemName: message.role == "user" ? "person.crop.circle" : "sparkles")
+                    .foregroundStyle(appearance.palette.accent)
+                    .frame(width: 24)
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(message.role.capitalized)
+                      .font(HermesFonts.bodyBold(13))
+                    Text("#\(message.runtimeMessageId) · \(message.messageId)")
+                      .font(HermesFonts.mono(10))
+                      .foregroundStyle(appearance.palette.secondary)
+                      .lineLimit(1)
+                  }
+                  Spacer()
+                  Image(systemName: "arrow.triangle.branch")
+                    .foregroundStyle(appearance.palette.accent)
+                }
+                .padding(.vertical, 3)
+              }
+              .buttonStyle(.plain)
+            }
+          } footer: {
+            Text(
+              chinese
+                ? "从选定消息创建新的 Hermes 分支，会话会出现在最近会话中。"
+                : "Create a new Hermes branch from a message; it will appear in Recent Sessions."
+            )
           }
         }
       }

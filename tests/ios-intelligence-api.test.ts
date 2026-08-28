@@ -31,3 +31,26 @@ test('iOS intelligence uses the device timezone for today snapshots and event ba
     'America/Los_Angeles',
   );
 });
+
+test('iOS intelligence exposes health, forecast, places, and routes reads', async () => {
+  const calls: string[] = [];
+  const client = {
+    request: async (path: string) => {
+      calls.push(path);
+      return {};
+    },
+  } as HermesApiClient;
+  const api = new IOSIntelligenceApi(client);
+
+  await api.health(true);
+  await api.activeForecast('Asia/Shanghai');
+  await api.learnedPlaces(25);
+  await api.learnedRoutes('place one', 50);
+
+  assert.deepEqual(calls, [
+    '/api/plugins/ios-intelligence/health?probe=true',
+    '/api/plugins/ios-intelligence/forecast/active?timezone=Asia%2FShanghai',
+    '/api/plugins/ios-intelligence/places?limit=25',
+    '/api/plugins/ios-intelligence/routes?limit=50&origin_place_id=place+one',
+  ]);
+});

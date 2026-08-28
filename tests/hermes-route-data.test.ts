@@ -32,6 +32,53 @@ test('cached session projection filters local tombstones and Studio room transcr
   assert.equal(snapshot.sessions?.[0]?.detail, '1 messages · 0 tool calls');
 });
 
+test('session snapshots expose the real branch boundaries to native SwiftUI', () => {
+  const snapshot = createHermesSwiftUISessionsSnapshotFromConversations(
+    [],
+    new Set(),
+    'en',
+    {
+      branchable_messages: [{
+        message_id: 'message-7',
+        role: 'user',
+        runtime_message_id: 17,
+        runtime_session_id: 'runtime-1',
+      }],
+      context: {
+        active_messages: 3,
+        archived_messages: 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        compression_count: 0,
+        compression_in_progress: false,
+        compression_lineage: [],
+        input_tokens: 100,
+        message_tokens: 120,
+        output_tokens: 20,
+        profile: 'default',
+        reasoning_tokens: 0,
+        session_id: 'runtime-1',
+      },
+      conversation_id: 'conversation-1',
+      lineage: {
+        current_session_id: 'runtime-1',
+        edges: [],
+        roots: ['runtime-1'],
+        sessions: [{ id: 'runtime-1', message_count: 3, tool_call_count: 0 }],
+      },
+      profile: 'default',
+      session_id: 'runtime-1',
+    },
+  );
+
+  assert.deepEqual(snapshot.sessionContext?.branchableMessages, [{
+    messageId: 'message-7',
+    role: 'user',
+    runtimeMessageId: 17,
+    runtimeSessionId: 'runtime-1',
+  }]);
+});
+
 test('session snapshots are derived from the current server response', async () => {
   const api = {
     loadRoute: async () => ({
@@ -155,6 +202,10 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   const calls: unknown[][] = [];
   const api = {
     deleteConversation: async (...args: unknown[]) => { calls.push(['delete', ...args]); },
+    forkConversationFromMessage: async (...args: unknown[]) => {
+      calls.push(['fork', ...args]);
+      return { conversation: {}, created: true, replayed: false, session: {} };
+    },
     discoverCustomModels: async (...args: unknown[]) => {
       calls.push(['model-discover', ...args]);
       return {
@@ -178,6 +229,17 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   const deleted = await performHermesSwiftUIRouteAction(api, {
     action: 'session.delete',
     payload: { id: 'session-1', route: 'sessions' },
+  }, 'reviewer');
+  const forked = await performHermesSwiftUIRouteAction(api, {
+    action: 'session.fork',
+    payload: {
+      detail: 'message-7',
+      fields: { profile: 'reviewer' },
+      id: 'conversation-1',
+      requestId: 'ios-fork-request',
+      route: 'sessions',
+      value: 'Branch title',
+    },
   }, 'reviewer');
   const selected = await performHermesSwiftUIRouteAction(api, {
     action: 'model.select',
@@ -208,6 +270,7 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   }, 'reviewer');
 
   assert.equal(deleted, 'reload');
+  assert.equal(forked, 'reload');
   assert.equal(selected, 'reload');
   assert.deepEqual(saved, { message: '模型配置已保存', reload: true });
   assert.deepEqual(tested, { message: '连接成功（HTTP 200，84 ms）' });
@@ -226,10 +289,44 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
   };
   assert.deepEqual(calls, [
     ['delete', 'session-1'],
+    ['fork', 'conversation-1', 'message-7', {
+      idempotencyKey: 'ios-fork-request',
+      profile: 'reviewer',
+      title: 'Branch title',
+    }],
     ['model', 'provider-a', 'model-a', 'reviewer', false],
     ['model-save', custom, 'reviewer'],
     ['model-test', custom, 'reviewer'],
     ['model-discover', 'https://model.example/v1', 'secret', 'reviewer'],
+  ]);
+});
+
+test('native plugin actions use the authenticated plugin management endpoints', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    installPlugin: async (...args: unknown[]) => { calls.push(['install', ...args]); },
+    removePlugin: async (...args: unknown[]) => { calls.push(['remove', ...args]); },
+    rescanPlugins: async (...args: unknown[]) => { calls.push(['rescan', ...args]); },
+    setPluginVisibility: async (...args: unknown[]) => { calls.push(['visibility', ...args]); },
+    updatePlugin: async (...args: unknown[]) => { calls.push(['update', ...args]); },
+  } as unknown as HermesCloudApi;
+
+  for (const event of [
+    { action: 'plugin.rescan', payload: { route: 'plugins' } },
+    { action: 'plugin.install', payload: { name: 'owner/repo', route: 'plugins' } },
+    { action: 'plugin.update', payload: { id: 'owner/repo', route: 'plugins' } },
+    { action: 'plugin.delete', payload: { id: 'owner/repo', route: 'plugins' } },
+    { action: 'plugin.visibility', payload: { enabled: true, id: 'owner/repo', route: 'plugins' } },
+  ] as const) {
+    assert.equal(await performHermesSwiftUIRouteAction(api, event, 'default'), 'reload');
+  }
+
+  assert.deepEqual(calls, [
+    ['rescan'],
+    ['install', 'owner/repo', { enable: true, force: false }],
+    ['update', 'owner/repo'],
+    ['remove', 'owner/repo'],
+    ['visibility', 'owner/repo', false],
   ]);
 });
 

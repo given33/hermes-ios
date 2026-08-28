@@ -26,6 +26,7 @@ export function workflowsSnapshot(
   }
   const definitions = recordArray(source.definitions);
   const runs = recordArray(source.runs);
+  const healthRecord = isRecord(source.health) ? source.health : undefined;
   const selectedEnvelope = isRecord(source.selected_definition) ? source.selected_definition : {};
   const selectedCandidate = isRecord(selectedEnvelope.definition)
     ? selectedEnvelope.definition
@@ -90,6 +91,11 @@ export function workflowsSnapshot(
     };
   }).filter((edge) => edge.source && edge.target);
   return {
+    health: healthRecord ? {
+      ok: healthRecord.ok !== false,
+      schemaVersion: numberValue(healthRecord.schema_version) || undefined,
+      recoverableRuns: numberValue(healthRecord.recoverable_runs),
+    } : undefined,
     selectedWorkflowId,
     workflows: definitions.map((definition) => {
       const definitionId = stringValue(definition.id);

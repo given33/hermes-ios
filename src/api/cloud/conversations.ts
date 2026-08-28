@@ -8,6 +8,9 @@ import type {
   ConversationAttachmentUploadContext,
   ConversationCompressionResponse,
   ConversationForkResponse,
+  ConversationSessionContext,
+  ConversationSessionForkResponse,
+  ConversationSessionLineageResponse,
   ConversationSessionState,
   ConversationSessionEntriesResponse,
   HostedTurnEnqueueInput,
@@ -118,6 +121,44 @@ export class HermesConversationsCloudApi {
     return this.transport.request<ConversationSessionState>(
       `${COLLABORATION}/mobile/conversations/${encodeURIComponent(conversationId)}/session-state`,
       { query: { profile: profile || undefined } },
+    );
+  }
+
+  /** Fork a bound runtime session at an explicit message boundary. */
+  forkSession(
+    sessionId: string,
+    input: {
+      atMessageId: number;
+      expectedTipId: number;
+      idempotencyKey: string;
+      profile?: string;
+      title?: string;
+    },
+  ) {
+    return this.transport.json<ConversationSessionForkResponse>(
+      `${COLLABORATION}/mobile/sessions/${encodeURIComponent(sessionId)}/fork`,
+      'POST',
+      {
+        at_message_id: input.atMessageId,
+        expected_tip_id: input.expectedTipId,
+        idempotency_key: input.idempotencyKey,
+        profile: input.profile || 'default',
+        title: input.title || '',
+      },
+    );
+  }
+
+  getSessionLineage(sessionId: string, profile = 'default') {
+    return this.transport.request<ConversationSessionLineageResponse>(
+      `${COLLABORATION}/mobile/sessions/${encodeURIComponent(sessionId)}/lineage`,
+      { query: { profile } },
+    );
+  }
+
+  getSessionContext(sessionId: string, profile = 'default') {
+    return this.transport.request<ConversationSessionContext>(
+      `${COLLABORATION}/mobile/sessions/${encodeURIComponent(sessionId)}/context`,
+      { query: { profile } },
     );
   }
 

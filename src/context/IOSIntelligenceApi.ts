@@ -75,8 +75,39 @@ export interface IOSDeviceCommand {
   expires_at?: number | null;
 }
 
+export interface IOSIntelligenceHealth {
+  ok: boolean;
+  schema_version?: number;
+  code_schema_version?: number;
+  db_user_version?: number;
+  schema_migrated?: boolean;
+  schema_compatible?: boolean;
+  scheduler_running?: boolean;
+  cleanup_worker_running?: boolean;
+  scheduler?: Record<string, unknown>;
+  mcp_runtime?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+export interface IOSLearnedPlace extends Record<string, unknown> {
+  place_id?: string;
+  name?: string;
+}
+
+export interface IOSLearnedRoute extends Record<string, unknown> {
+  origin_place_id?: string;
+  destination_place_id?: string;
+}
+
 export class IOSIntelligenceApi {
   constructor(private readonly client: HermesApiClient) {}
+
+  health(probe = false, signal?: AbortSignal) {
+    return this.client.request<IOSIntelligenceHealth>(
+      `${IOS_INTELLIGENCE}/health?probe=${probe ? 'true' : 'false'}`,
+      { signal },
+    );
+  }
 
   snapshot(
     timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
@@ -121,6 +152,37 @@ export class IOSIntelligenceApi {
       `${IOS_INTELLIGENCE}/commands/pull`,
       { device_id: deviceId, cursor, limit: 50 },
       signal,
+    );
+  }
+
+  activeForecast(
+    timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
+    signal?: AbortSignal,
+  ) {
+    return this.client.request<{
+      forecast: IOSActiveForecast[];
+      server_time?: number;
+    }>(
+      `${IOS_INTELLIGENCE}/forecast/active?timezone=${encodeURIComponent(timezone)}`,
+      { signal },
+    );
+  }
+
+  learnedPlaces(limit = 100, signal?: AbortSignal) {
+    return this.client.request<{ places: IOSLearnedPlace[] }>(
+      `${IOS_INTELLIGENCE}/places?limit=${Math.min(1_000, Math.max(1, Math.floor(limit)))}`,
+      { signal },
+    );
+  }
+
+  learnedRoutes(originPlaceId = '', limit = 100, signal?: AbortSignal) {
+    const params = new URLSearchParams({
+      limit: String(Math.min(1_000, Math.max(1, Math.floor(limit)))),
+    });
+    if (originPlaceId.trim()) params.set('origin_place_id', originPlaceId.trim());
+    return this.client.request<{ routes: IOSLearnedRoute[] }>(
+      `${IOS_INTELLIGENCE}/routes?${params.toString()}`,
+      { signal },
     );
   }
 

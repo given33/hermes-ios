@@ -1073,6 +1073,12 @@ test('smart weather view only renders local today data and valid alerts', () => 
   assert.match(source, /timelineExpanded \? '76%' : '38%'/);
   assert.match(source, /centerOnUserRequest=\{centerRequest\}/);
   assert.match(source, /smartWeatherLoadErrorMessage/);
+  assert.match(source, /Promise\.allSettled\(\[/);
+  assert.match(source, /api\.health\(false\)/);
+  assert.match(source, /api\.activeForecast\(next\.timezone\)/);
+  assert.match(source, /api\.learnedPlaces\(100\)/);
+  assert.match(source, /api\.learnedRoutes\('', 100\)/);
+  assert.match(source, /smart-weather-intelligence-summary/);
   assert.doesNotMatch(source, /statusOverlay/);
   assert.match(source, /warningRail: \{[\s\S]*position: 'absolute'/);
   assert.match(source, /permissionActions: \{[\s\S]*flexWrap: 'wrap'/);

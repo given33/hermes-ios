@@ -31,6 +31,8 @@ import { multiplyAlpha } from '../design/control-contracts';
 import { useTheme } from '../design/ThemeProvider';
 import {
   IOSIntelligenceApi,
+  type IOSActiveForecast,
+  type IOSIntelligenceHealth,
   type IOSIntelligenceSnapshot,
 } from './IOSIntelligenceApi';
 import {
@@ -71,6 +73,10 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
   const { tokens } = useTheme();
   const api = useMemo(() => client ? new IOSIntelligenceApi(client) : null, [client]);
   const [snapshot, setSnapshot] = useState<IOSIntelligenceSnapshot>(EMPTY);
+  const [activeForecastFallback, setActiveForecastFallback] = useState<IOSActiveForecast[]>([]);
+  const [intelligenceHealth, setIntelligenceHealth] = useState<IOSIntelligenceHealth | null>(null);
+  const [learnedPlaceCount, setLearnedPlaceCount] = useState(0);
+  const [learnedRouteCount, setLearnedRouteCount] = useState(0);
   const [currentDayKey, setCurrentDayKey] = useState(() => dayKey(new Date()));
   const [loadError, setLoadError] = useState('');
   const [snapshotStale, setSnapshotStale] = useState(false);
@@ -157,16 +163,47 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
     const requestedDay = dayKey(new Date());
     if (!api) {
       setLoadError(locale === 'zh' ? '尚未连接 Hermes 服务' : 'Hermes is not connected');
+      setActiveForecastFallback([]);
+      setIntelligenceHealth(null);
+      setLearnedPlaceCount(0);
+      setLearnedRouteCount(0);
       reloadInFlightRef.current = false;
       reportReady();
       return;
     }
     try {
       const next = normalizeSnapshot(await api.snapshot());
+      // These reads are auxiliary to the map snapshot.  A deployed worker may
+      // be on an older build (or temporarily restarting), so one missing
+      // intelligence endpoint must not blank an otherwise usable map.
+      const [healthResult, forecastResult, placesResult, routesResult] = await Promise.allSettled([
+        api.health(false),
+        api.activeForecast(next.timezone),
+        api.learnedPlaces(100),
+        api.learnedRoutes('', 100),
+      ]);
       if (
         generation !== reloadGenerationRef.current
         || requestedDay !== dayKey(new Date())
       ) return;
+      setIntelligenceHealth(
+        healthResult.status === 'fulfilled' ? healthResult.value : null,
+      );
+      setActiveForecastFallback(
+        forecastResult.status === 'fulfilled'
+          ? normalizeForecastList(forecastResult.value.forecast)
+          : [],
+      );
+      setLearnedPlaceCount(
+        placesResult.status === 'fulfilled' && Array.isArray(placesResult.value.places)
+          ? placesResult.value.places.length
+          : 0,
+      );
+      setLearnedRouteCount(
+        routesResult.status === 'fulfilled' && Array.isArray(routesResult.value.routes)
+          ? routesResult.value.routes.length
+          : 0,
+      );
       setSnapshot(next);
       setLoadError('');
       setSnapshotStale(false);
@@ -235,9 +272,13 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
     effectiveDayKey,
   ));
   const now = Date.now();
-  const visibleForecasts = (snapshot.active_forecasts || snapshot.active_forecast || [])
+  const snapshotForecasts = snapshot.active_forecasts ?? snapshot.active_forecast ?? [];
+  const visibleForecasts = (snapshotForecasts.length ? snapshotForecasts : activeForecastFallback)
     .map(normalizeForecast)
     .filter((forecast) => isForecastActive(forecast, now));
+  const intelligenceStatus = intelligenceHealth?.ok
+    ? locale === 'zh' ? '智能服务正常' : 'Intelligence healthy'
+    : locale === 'zh' ? '智能服务不可用' : 'Intelligence unavailable';
 
   const track: IOSCoordinate[] = todayTrajectory.map((point) => ({
     latitude: point.latitude,
@@ -478,6 +519,17 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
             ? <ChevronDown color={secondary} size={16} />
             : <ChevronUp color={secondary} size={16} />}
         </IOSPressable>
+        <View
+          style={[styles.intelligenceSummary, { borderBottomColor: tokens.colors.border }]}
+          testID="smart-weather-intelligence-summary"
+        >
+          <Text style={[styles.intelligenceTitle, { color: foreground }]}>
+            {locale === 'zh' ? 'Hermes 智能状态' : 'Hermes intelligence'}
+          </Text>
+          <Text style={[styles.intelligenceBody, { color: secondary }]}>
+            {`${intelligenceStatus} · ${locale === 'zh' ? '地点' : 'Places'} ${learnedPlaceCount} · ${locale === 'zh' ? '路线' : 'Routes'} ${learnedRouteCount}`}
+          </Text>
+        </View>
         {visibleForecasts.map((forecast, index) => (
           <View
             key={forecast.id || `${forecast.starts_at || 0}:${index}`}
@@ -713,6 +765,19 @@ function formatRange(start: number, end: number | null | undefined, locale: 'en'
   return `${left} - ${right} · ${locale === 'zh' ? '停留' : 'Stayed'} ${duration}`;
 }
 
+function normalizeForecastList(value: unknown): IOSActiveForecast[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    try {
+      return [normalizeForecast(entry)];
+    } catch {
+      // A malformed optional forecast should not prevent the map and place
+      // timeline from rendering. The next scheduled reload can recover it.
+      return [];
+    }
+  });
+}
+
 const styles = StyleSheet.create({
   root: { flex: 1, overflow: 'hidden' },
   bannerStack: {
@@ -754,6 +819,9 @@ const styles = StyleSheet.create({
   },
   timelineHandle: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center', minHeight: 30 },
   timelineHandleBar: { borderRadius: 2, height: 4, opacity: 0.45, width: 42 },
+  intelligenceSummary: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: 8 },
+  intelligenceTitle: { fontSize: 14, fontWeight: '600' },
+  intelligenceBody: { fontSize: 12, lineHeight: 17, marginTop: 2 },
   forecast: { borderBottomWidth: StyleSheet.hairlineWidth, paddingBottom: 10 },
   forecastTitle: { fontSize: 16, fontWeight: '600' },
   forecastBody: { fontSize: 13, lineHeight: 18, marginTop: 3 },

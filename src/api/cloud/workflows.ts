@@ -13,6 +13,10 @@ const RUNTIME_RUNS = `${COLLABORATION}/mobile/runtime-runs`;
 export class HermesWorkflowsCloudApi {
   constructor(private readonly transport: HermesCloudTransport) {}
 
+  getWorkflowHealth(signal?: AbortSignal) {
+    return this.transport.request<JsonRecord>(`${WORKFLOWS}/health`, { signal });
+  }
+
   getWorkflows(profile = 'default') {
     return this.transport.request<JsonRecord>(`${WORKFLOWS}/definitions`, {
       query: { profile_id: profile },
@@ -26,10 +30,51 @@ export class HermesWorkflowsCloudApi {
     );
   }
 
+  createWorkflow(
+    input: { name: string; description?: string; spec: JsonRecord; profile?: string },
+    requestId: string,
+  ) {
+    return this.transport.json<JsonRecord>(
+      `${WORKFLOWS}/definitions`,
+      'POST',
+      {
+        description: input.description || '',
+        name: input.name,
+        profile_id: input.profile || 'default',
+        spec: input.spec,
+      },
+      { headers: { 'Idempotency-Key': requestId } },
+    );
+  }
+
+  addWorkflowVersion(
+    id: string,
+    input: { expectedRevision: number; spec: JsonRecord; profile?: string },
+    requestId: string,
+  ) {
+    return this.transport.json<JsonRecord>(
+      `${WORKFLOWS}/definitions/${encodeURIComponent(id)}/versions`,
+      'POST',
+      {
+        expected_revision: input.expectedRevision,
+        profile_id: input.profile || 'default',
+        spec: input.spec,
+      },
+      { headers: { 'Idempotency-Key': requestId } },
+    );
+  }
+
   getWorkflowRuns(profile = 'default') {
     return this.transport.request<JsonRecord>(`${WORKFLOWS}/runs`, {
       query: { limit: 100, profile_id: profile },
     });
+  }
+
+  getWorkflowRun(id: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `${WORKFLOWS}/runs/${encodeURIComponent(id)}`,
+      { query: { profile_id: profile } },
+    );
   }
 
   getWorkflowWorkspaceChanges(runId: string, profile = 'default', limit = 100) {

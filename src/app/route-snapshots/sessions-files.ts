@@ -113,6 +113,12 @@ function sessionContextSnapshot(
       toolCallCount: session.tool_call_count || 0,
       current: session.id === currentId,
     })),
+    branchableMessages: state.branchable_messages.map((message) => ({
+      messageId: message.message_id,
+      role: message.role,
+      runtimeSessionId: message.runtime_session_id,
+      runtimeMessageId: message.runtime_message_id,
+    })),
   };
 }
 

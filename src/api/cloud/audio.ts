@@ -5,6 +5,28 @@ export interface AudioTranscriptionResult {
   transcript: string;
 }
 
+export interface ClientVoiceProvider {
+  mode: 'client' | 'relay' | string;
+  provider?: string;
+  model?: string;
+  api_key?: string;
+  base_url?: string;
+  reason?: string;
+  [key: string]: unknown;
+}
+
+export interface ClientVoiceConfig {
+  ok: boolean;
+  stt: ClientVoiceProvider;
+  tts: ClientVoiceProvider;
+}
+
+export interface ElevenLabsVoice {
+  voice_id: string;
+  name: string;
+  label: string;
+}
+
 /** Authenticated speech-to-text through the same Hermes origin as chat. */
 export class HermesAudioCloudApi {
   constructor(private readonly transport: HermesCloudTransport) {}
@@ -28,5 +50,37 @@ export class HermesAudioCloudApi {
       provider: typeof value.provider === 'string' ? value.provider : '',
       transcript,
     };
+  }
+
+  getVoiceConfig(profile = 'default', signal?: AbortSignal) {
+    return this.transport.request<ClientVoiceConfig>('/api/audio/voice-config', {
+      query: { profile },
+      signal,
+    });
+  }
+
+  listElevenLabsVoices(profile = 'default', signal?: AbortSignal) {
+    return this.transport.request<{
+      available: boolean;
+      voices: ElevenLabsVoice[];
+      error?: string;
+    }>('/api/audio/elevenlabs/voices', {
+      query: { profile },
+      signal,
+    });
+  }
+
+  speak(text: string, profile = 'default', signal?: AbortSignal) {
+    return this.transport.json<{
+      ok: boolean;
+      data_url: string;
+      mime_type: string;
+      provider?: string;
+    }>(
+      '/api/audio/speak',
+      'POST',
+      { text },
+      { query: { profile }, deadlineMs: 120_000, signal },
+    );
   }
 }

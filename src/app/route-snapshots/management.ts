@@ -114,6 +114,14 @@ export function integrationsSnapshot(source: unknown, kind: string, localizer: H
         localizer.isChinese,
       ),
       enabled: entry.enabled !== false && entry.disabled !== true,
+      ...(kind === 'plugins' ? {
+        source: stringValue(entry.source),
+        canUpdate: entry.can_update_git === true,
+        canRemove: entry.can_remove === true,
+        userHidden: entry.user_hidden === true,
+        authRequired: entry.auth_required === true,
+        authCommand: stringValue(entry.auth_command),
+      } : {}),
       ...(kind === 'channels' ? { configuration: channelConfiguration(entry) } : {}),
     }];
   });

@@ -198,6 +198,20 @@ export async function performHermesSwiftUIRouteAction(
         profile: payload.fields?.profile || profile,
       });
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionFork:
+      // Branching from the account conversation endpoint creates both the
+      // runtime child session and its visible iOS conversation record. The
+      // low-level /mobile/sessions/{id}/fork API remains available on the
+      // facade for callers that already own a runtime session, but this UI
+      // action must preserve the conversation list invariant.
+      if (!payload.id || !payload.detail || payload.id.startsWith('official:')) return 'none';
+      await api.forkConversationFromMessage(payload.id, payload.detail, {
+        idempotencyKey: payload.requestId
+          || `ios-fork-${Date.now().toString(36)}-${payload.detail}`,
+        profile: payload.fields?.profile || profile,
+        title: payload.value || payload.name || '',
+      });
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileDelete:
       if (!payload.id) return 'none';
       await api.deleteAccountFile(payload.id);
@@ -349,6 +363,28 @@ export async function performHermesSwiftUIRouteAction(
         payload.id,
         payload.requestId || `ios-rollback-${payload.id}-${Date.now().toString(36)}`,
       );
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.pluginRescan:
+      await api.rescanPlugins();
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.pluginInstall:
+      if (!payload.name && !payload.id) return 'none';
+      await api.installPlugin(payload.name || payload.id || '', {
+        force: payload.fields?.force === 'true',
+        enable: payload.fields?.enable !== 'false',
+      });
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.pluginUpdate:
+      if (!payload.id) return 'none';
+      await api.updatePlugin(payload.id);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.pluginDelete:
+      if (!payload.id) return 'none';
+      await api.removePlugin(payload.id);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.pluginVisibility:
+      if (!payload.id || payload.enabled === undefined) return 'none';
+      await api.setPluginVisibility(payload.id, !payload.enabled);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.achievementsRescan:
       await api.rescanAchievements();

@@ -36,6 +36,13 @@ export interface HermesSwiftUISessionLineageSnapshot {
   current: boolean;
 }
 
+export interface HermesSwiftUISessionBranchableMessageSnapshot {
+  messageId: string;
+  role: string;
+  runtimeSessionId: string;
+  runtimeMessageId: number;
+}
+
 export interface HermesSwiftUISessionContextSnapshot {
   conversationId: string;
   sessionId: string;
@@ -55,6 +62,7 @@ export interface HermesSwiftUISessionContextSnapshot {
   parentCount: number;
   childCount: number;
   lineage: readonly HermesSwiftUISessionLineageSnapshot[];
+  branchableMessages: readonly HermesSwiftUISessionBranchableMessageSnapshot[];
 }
 
 export interface HermesSwiftUIFileSnapshot {
@@ -163,6 +171,11 @@ export interface HermesSwiftUIWorkspaceChangeSetDetailSnapshot {
 }
 
 export interface HermesSwiftUIWorkflowSnapshot {
+  health?: {
+    ok: boolean;
+    schemaVersion?: number;
+    recoverableRuns?: number;
+  };
   selectedWorkflowId?: string;
   workflows: readonly HermesSwiftUIWorkflowSummarySnapshot[];
   nodes: readonly HermesSwiftUIWorkflowNodeSnapshot[];
@@ -313,6 +326,12 @@ export interface HermesSwiftUIIntegrationSnapshot {
   detail: string;
   enabled: boolean;
   configuration?: string;
+  source?: string;
+  canUpdate?: boolean;
+  canRemove?: boolean;
+  userHidden?: boolean;
+  authRequired?: boolean;
+  authCommand?: string;
 }
 
 export interface HermesSwiftUIManagedInstallationTargetSnapshot {

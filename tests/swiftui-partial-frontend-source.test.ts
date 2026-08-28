@@ -233,6 +233,10 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routes, /节点安装状态/);
   assert.match(routes, /data\.installations/);
   assert.match(routes, /localizedInstallationState/);
+  assert.match(routes, /case "hk": return chinese \? "香港" : "Hong Kong"/);
+  assert.match(routes, /context\.branchableMessages/);
+  assert.match(routes, /\.sessionFork/);
+  assert.match(routeData, /api\.forkConversationFromMessage/);
   assert.match(routeData, /managedInstallationsSnapshot/);
   const controller = read('src/app/useHermesSwiftUIRouteData.ts');
   assert.match(controller, /INSTALLATION_REFRESH_MS = 2_000/);

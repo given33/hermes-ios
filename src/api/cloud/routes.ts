@@ -28,6 +28,7 @@ type RouteApi = Pick<
   | 'getUnifiedConversations'
   | 'getWebhooks'
   | 'getWorkflow'
+  | 'getWorkflowHealth'
   | 'getWorkflowRuns'
   | 'getWorkflowWorkspaceChange'
   | 'getWorkflowWorkspaceChanges'
@@ -88,6 +89,7 @@ export async function loadCloudRoute(
         api.getWorkflows(profile),
         api.getWorkflowRuns(profile),
       ]);
+      const health = await api.getWorkflowHealth().catch(() => undefined);
       const selected = selectedId ? await api.getWorkflow(selectedId, profile) : {};
       const runRows = Array.isArray(runs.runs) ? runs.runs : [];
       const selectedRun = runRows.find((entry) => (
@@ -106,6 +108,7 @@ export async function loadCloudRoute(
       return {
         ...catalog,
         ...runs,
+        ...(health ? { health } : {}),
         selected_definition: selected,
         workspace_changes: workspaceChanges,
         selected_change_set: selectedChangeSet,

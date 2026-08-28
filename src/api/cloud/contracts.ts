@@ -260,6 +260,20 @@ export interface ConversationSessionState {
   }>;
 }
 
+/** Response returned by the low-level mobile session fork endpoint. */
+export interface ConversationSessionForkResponse {
+  session: ConversationSessionLineageEntry;
+  replayed: boolean;
+}
+
+/** Public lineage tree returned by /mobile/sessions/{id}/lineage. */
+export interface ConversationSessionLineageResponse {
+  current_session_id: string;
+  roots: string[];
+  sessions: ConversationSessionLineageEntry[];
+  edges: Array<{ parent_id: string; child_id: string }>;
+}
+
 export interface ConversationForkResponse {
   conversation: SingleConversation;
   created: boolean;

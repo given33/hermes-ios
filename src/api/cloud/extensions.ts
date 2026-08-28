@@ -191,6 +191,47 @@ export class HermesExtensionsCloudApi {
     ]).then(([manifests, hub]) => ({ manifests, hub }));
   }
 
+  rescanPlugins() {
+    return this.transport.request<JsonRecord>('/api/dashboard/plugins/rescan');
+  }
+
+  installPlugin(identifier: string, options: { force?: boolean; enable?: boolean } = {}) {
+    return this.transport.json<JsonRecord>('/api/dashboard/agent-plugins/install', 'POST', {
+      identifier,
+      force: options.force === true,
+      enable: options.enable !== false,
+    });
+  }
+
+  updatePlugin(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/dashboard/agent-plugins/${encodeURIComponent(name)}/update`,
+      { method: 'POST' },
+    );
+  }
+
+  removePlugin(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/dashboard/agent-plugins/${encodeURIComponent(name)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  setPluginVisibility(name: string, hidden: boolean) {
+    return this.transport.json<JsonRecord>(
+      `/api/dashboard/plugins/${encodeURIComponent(name)}/visibility`,
+      'POST',
+      { hidden },
+    );
+  }
+
+  setPluginProviders(input: { memoryProvider?: string; contextEngine?: string }) {
+    return this.transport.json<JsonRecord>('/api/dashboard/plugin-providers', 'PUT', {
+      ...(input.memoryProvider !== undefined ? { memory_provider: input.memoryProvider } : {}),
+      ...(input.contextEngine !== undefined ? { context_engine: input.contextEngine } : {}),
+    });
+  }
+
   setPluginEnabled(name: string, enabled: boolean) {
     return this.transport.request<JsonRecord>(
       `/api/dashboard/agent-plugins/${encodeURIComponent(name)}/${enabled ? 'enable' : 'disable'}`,

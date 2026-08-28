@@ -247,6 +247,106 @@ struct HermesSessionContextSnapshot: Decodable, Equatable {
   let parentCount: Int
   let childCount: Int
   let lineage: [HermesSessionLineageSnapshot]
+  let branchableMessages: [HermesSessionBranchableMessageSnapshot]
+
+  init(
+    conversationId: String,
+    sessionId: String,
+    profile: String,
+    model: String,
+    activeMessages: Int,
+    archivedMessages: Int,
+    messageTokens: Int,
+    inputTokens: Int,
+    outputTokens: Int,
+    cacheReadTokens: Int,
+    cacheWriteTokens: Int,
+    reasoningTokens: Int,
+    compressionLineage: [String],
+    compressionCount: Int,
+    compressionInProgress: Bool,
+    parentCount: Int,
+    childCount: Int,
+    lineage: [HermesSessionLineageSnapshot],
+    branchableMessages: [HermesSessionBranchableMessageSnapshot] = []
+  ) {
+    self.conversationId = conversationId
+    self.sessionId = sessionId
+    self.profile = profile
+    self.model = model
+    self.activeMessages = activeMessages
+    self.archivedMessages = archivedMessages
+    self.messageTokens = messageTokens
+    self.inputTokens = inputTokens
+    self.outputTokens = outputTokens
+    self.cacheReadTokens = cacheReadTokens
+    self.cacheWriteTokens = cacheWriteTokens
+    self.reasoningTokens = reasoningTokens
+    self.compressionLineage = compressionLineage
+    self.compressionCount = compressionCount
+    self.compressionInProgress = compressionInProgress
+    self.parentCount = parentCount
+    self.childCount = childCount
+    self.lineage = lineage
+    self.branchableMessages = branchableMessages
+  }
+
+  enum CodingKeys: String, CodingKey {
+    case conversationId
+    case sessionId
+    case profile
+    case model
+    case activeMessages
+    case archivedMessages
+    case messageTokens
+    case inputTokens
+    case outputTokens
+    case cacheReadTokens
+    case cacheWriteTokens
+    case reasoningTokens
+    case compressionLineage
+    case compressionCount
+    case compressionInProgress
+    case parentCount
+    case childCount
+    case lineage
+    case branchableMessages
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    conversationId = try container.decode(String.self, forKey: .conversationId)
+    sessionId = try container.decode(String.self, forKey: .sessionId)
+    profile = try container.decode(String.self, forKey: .profile)
+    model = try container.decode(String.self, forKey: .model)
+    activeMessages = try container.decode(Int.self, forKey: .activeMessages)
+    archivedMessages = try container.decode(Int.self, forKey: .archivedMessages)
+    messageTokens = try container.decode(Int.self, forKey: .messageTokens)
+    inputTokens = try container.decode(Int.self, forKey: .inputTokens)
+    outputTokens = try container.decode(Int.self, forKey: .outputTokens)
+    cacheReadTokens = try container.decode(Int.self, forKey: .cacheReadTokens)
+    cacheWriteTokens = try container.decode(Int.self, forKey: .cacheWriteTokens)
+    reasoningTokens = try container.decode(Int.self, forKey: .reasoningTokens)
+    compressionLineage = try container.decode([String].self, forKey: .compressionLineage)
+    compressionCount = try container.decode(Int.self, forKey: .compressionCount)
+    compressionInProgress = try container.decode(Bool.self, forKey: .compressionInProgress)
+    parentCount = try container.decode(Int.self, forKey: .parentCount)
+    childCount = try container.decode(Int.self, forKey: .childCount)
+    lineage = try container.decode([HermesSessionLineageSnapshot].self, forKey: .lineage)
+    branchableMessages = try container.decodeIfPresent(
+      [HermesSessionBranchableMessageSnapshot].self,
+      forKey: .branchableMessages
+    ) ?? []
+  }
+}
+
+struct HermesSessionBranchableMessageSnapshot: Decodable, Equatable, Identifiable {
+  let messageId: String
+  let role: String
+  let runtimeSessionId: String
+  let runtimeMessageId: Int
+
+  var id: String { messageId }
 }
 
 struct HermesFileSnapshot: Decodable, Equatable, Identifiable {
@@ -357,6 +457,7 @@ struct HermesWorkspaceChangeSetDetailSnapshot: Decodable, Equatable, Identifiabl
 }
 
 struct HermesWorkflowSnapshot: Decodable, Equatable {
+  let health: HermesWorkflowHealthSnapshot?
   let selectedWorkflowId: String?
   let workflows: [HermesWorkflowSummarySnapshot]
   let nodes: [HermesWorkflowNodeSnapshot]
@@ -367,6 +468,7 @@ struct HermesWorkflowSnapshot: Decodable, Equatable {
   let selectedChangeSet: HermesWorkspaceChangeSetDetailSnapshot?
 
   private enum CodingKeys: String, CodingKey {
+    case health
     case selectedWorkflowId
     case workflows
     case nodes
@@ -378,6 +480,7 @@ struct HermesWorkflowSnapshot: Decodable, Equatable {
   }
 
   init(
+    health: HermesWorkflowHealthSnapshot? = nil,
     selectedWorkflowId: String?,
     workflows: [HermesWorkflowSummarySnapshot],
     nodes: [HermesWorkflowNodeSnapshot],
@@ -387,6 +490,7 @@ struct HermesWorkflowSnapshot: Decodable, Equatable {
     workspaceAudits: [HermesWorkspaceAuditSnapshot] = [],
     selectedChangeSet: HermesWorkspaceChangeSetDetailSnapshot? = nil
   ) {
+    self.health = health
     self.selectedWorkflowId = selectedWorkflowId
     self.workflows = workflows
     self.nodes = nodes
@@ -399,6 +503,7 @@ struct HermesWorkflowSnapshot: Decodable, Equatable {
 
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
+    health = try container.decodeIfPresent(HermesWorkflowHealthSnapshot.self, forKey: .health)
     selectedWorkflowId = try container.decodeIfPresent(String.self, forKey: .selectedWorkflowId)
     workflows = try container.decodeIfPresent(
       [HermesWorkflowSummarySnapshot].self,
@@ -422,6 +527,7 @@ struct HermesWorkflowSnapshot: Decodable, Equatable {
   }
 
   static let empty = HermesWorkflowSnapshot(
+    health: nil,
     selectedWorkflowId: nil,
     workflows: [],
     nodes: [],
@@ -446,6 +552,12 @@ struct HermesApprovalItemSnapshot: Decodable, Equatable, Identifiable {
   let diff: String
   let diffAvailable: Bool
   let payloadDigest: String?
+}
+
+struct HermesWorkflowHealthSnapshot: Decodable, Equatable {
+  let ok: Bool
+  let schemaVersion: Int?
+  let recoverableRuns: Int?
 }
 
 struct HermesApprovalsSnapshot: Decodable, Equatable {
@@ -602,6 +714,12 @@ struct HermesIntegrationSnapshot: Decodable, Equatable, Identifiable {
   let detail: String
   let enabled: Bool
   let configuration: String?
+  let source: String?
+  let canUpdate: Bool?
+  let canRemove: Bool?
+  let userHidden: Bool?
+  let authRequired: Bool?
+  let authCommand: String?
 }
 
 struct HermesPairingEntrySnapshot: Decodable, Equatable, Identifiable {

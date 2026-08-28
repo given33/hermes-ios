@@ -114,6 +114,7 @@ export type {
 
 export type { StudioMemoryContent } from './cloud/memory';
 export type { AudioTranscriptionResult } from './cloud/audio';
+export type { ClientVoiceConfig, ClientVoiceProvider, ElevenLabsVoice } from './cloud/audio'; export type { ConversationSessionForkResponse, ConversationSessionLineageResponse } from './cloud/contracts';
 export type {
   MobileConsoleCatalog,
   MobileConsoleCommand,
@@ -445,6 +446,8 @@ export class HermesCloudApi {
     return this.extensions.setPluginEnabled(name, enabled);
   }
 
+  rescanPlugins() { return this.extensions.rescanPlugins(); } installPlugin(identifier: string, options: { force?: boolean; enable?: boolean } = {}) { return this.extensions.installPlugin(identifier, options); } updatePlugin(name: string) { return this.extensions.updatePlugin(name); }
+  removePlugin(name: string) { return this.extensions.removePlugin(name); } setPluginVisibility(name: string, hidden: boolean) { return this.extensions.setPluginVisibility(name, hidden); } setPluginProviders(input: { memoryProvider?: string; contextEngine?: string }) { return this.extensions.setPluginProviders(input); }
   getMcp(profile = 'default') {
     return this.extensions.getMcp(profile);
   }
@@ -581,6 +584,8 @@ export class HermesCloudApi {
     return this.workflows.getWorkflows(profile);
   }
 
+  getWorkflowHealth(signal?: AbortSignal) { return this.workflows.getWorkflowHealth(signal); }
+
   rollbackManagedInstallation(operationId: string, requestId: string) {
     return this.extensions.rollbackManagedInstallation(operationId, requestId);
   }
@@ -597,9 +602,12 @@ export class HermesCloudApi {
     return this.workflows.getWorkflow(id, profile);
   }
 
+  createWorkflow(input: { name: string; description?: string; spec: JsonRecord; profile?: string }, requestId = newClientRequestId('workflow-create')) { return this.workflows.createWorkflow(input, requestId); } addWorkflowVersion(id: string, input: { expectedRevision: number; spec: JsonRecord; profile?: string }, requestId = newClientRequestId('workflow-version')) { return this.workflows.addWorkflowVersion(id, input, requestId); }
   getWorkflowRuns(profile = 'default') {
     return this.workflows.getWorkflowRuns(profile);
   }
+
+  getWorkflowRun(id: string, profile = 'default') { return this.workflows.getWorkflowRun(id, profile); }
 
   getWorkflowWorkspaceChanges(runId: string, profile = 'default', limit = 100) {
     return this.workflows.getWorkflowWorkspaceChanges(runId, profile, limit);
@@ -613,6 +621,7 @@ export class HermesCloudApi {
     return this.workflows.getWorkflowWorkspaceChange(runId, changeSetId, profile);
   }
 
+  getVoiceConfig(profile = 'default', signal?: AbortSignal) { return this.audio.getVoiceConfig(profile, signal); } listElevenLabsVoices(profile = 'default', signal?: AbortSignal) { return this.audio.listElevenLabsVoices(profile, signal); } speakAudio(text: string, profile = 'default', signal?: AbortSignal) { return this.audio.speak(text, profile, signal); }
   startWorkflow(id: string, profile = 'default', requestId = newClientRequestId('workflow-start')) {
     return this.workflows.startWorkflow(id, profile, requestId);
   }
@@ -854,6 +863,7 @@ export class HermesCloudApi {
     return this.conversations.getConversationSessionState(conversationId, profile);
   }
 
+  forkSession(sessionId: string, input: { atMessageId: number; expectedTipId: number; idempotencyKey: string; profile?: string; title?: string }) { return this.conversations.forkSession(sessionId, input); } getSessionLineage(sessionId: string, profile = 'default') { return this.conversations.getSessionLineage(sessionId, profile); } getSessionContext(sessionId: string, profile = 'default') { return this.conversations.getSessionContext(sessionId, profile); }
   forkConversationFromMessage(
     conversationId: string,
     messageId: string,
