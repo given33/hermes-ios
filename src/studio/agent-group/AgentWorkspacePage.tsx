@@ -199,8 +199,8 @@ export function AgentWorkspacePage({
       title: isChinese ? '指挥台' : 'Command deck',
       description: isChinese ? 'Manager 在这里拆解任务。' : 'The manager plans work here.',
       detail: isChinese
-        ? '复杂任务会生成计划，再派给 DBB3 或 WSL。普通聊天绕过这里，直接走快速路径。'
-        : 'Complex tasks become plans before dispatch.',
+        ? '复杂任务会生成计划，再派给 DBB3、WSL 或 HK。普通聊天绕过这里，直接走快速路径。'
+        : 'Complex tasks become plans before dispatch to DBB3, WSL, or Hong Kong.',
       x: 118,
       y: 62,
       width: 84,

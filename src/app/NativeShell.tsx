@@ -1299,6 +1299,7 @@ function resolveSidebarGatewayStatuses(
   return [
     byId.get('dbb3') ?? { id: 'dbb3', label: 'DBB3', state: 'unknown' },
     byId.get('wsl') ?? { id: 'wsl', label: 'WSL', state: 'unknown' },
+    byId.get('hk') ?? { id: 'hk', label: 'HK', state: 'unknown' },
   ].map((status) => ({
     id: status.id,
     label: status.label.trim() || status.id,

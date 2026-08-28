@@ -78,7 +78,7 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
     ),
     // Once managed-node monitoring is configured, an empty/stale node list is
     // an unavailable observation. Never let the older aggregate status flag
-    // turn a missing DBB3/WSL heartbeat back into "online".
+    // turn a missing DBB3/WSL/HK heartbeat back into "online".
     gatewayOnline: primaryNode?.gatewayOnline ?? (managedConfigured ? false : Boolean(
       booleanValue(
         status.online

@@ -171,7 +171,7 @@ export function managedInstallationsSnapshot(
       targets: targets.flatMap((target) => {
         if (!isRecord(target)) return [];
         const nodeId = stringValue(target.node_id);
-        if (nodeId !== 'server' && nodeId !== 'dbb3' && nodeId !== 'wsl') return [];
+        if (nodeId !== 'server' && nodeId !== 'dbb3' && nodeId !== 'wsl' && nodeId !== 'hk') return [];
         return [{
           nodeId,
           state: stringValue(target.state),

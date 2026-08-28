@@ -21,7 +21,7 @@ export type ManagedInstallationRequest = {
   source_ref?: string;
   request_id: string;
   scope?: 'auto' | 'fleet' | 'server' | 'workers';
-  targets?: readonly ('dbb3' | 'server' | 'wsl')[];
+  targets?: readonly ('dbb3' | 'server' | 'wsl' | 'hk')[];
 };
 
 export interface ManagedResourceRecord {

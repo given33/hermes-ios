@@ -316,7 +316,7 @@ export interface HermesSwiftUIIntegrationSnapshot {
 }
 
 export interface HermesSwiftUIManagedInstallationTargetSnapshot {
-  nodeId: 'dbb3' | 'server' | 'wsl';
+  nodeId: 'dbb3' | 'server' | 'wsl' | 'hk';
   state: string;
   error: string;
 }
