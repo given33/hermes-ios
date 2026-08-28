@@ -13,6 +13,8 @@ type RouteApi = Pick<
   | 'getCollaborationRooms'
   | 'getConfig'
   | 'getCronJobs'
+  | 'getEnvironment'
+  | 'getBots'
   | 'getLogs'
   | 'getMcp'
   | 'getModelCredentials'
@@ -69,8 +71,13 @@ export async function loadCloudRoute(
     case 'webhooks': return api.getWebhooks();
     case 'profiles':
     case 'profile-new': return api.getProfiles();
+    case 'bots': return api.getBots();
     case 'config': return api.getConfig(profile);
-    case 'env': return api.getModelCredentials(profile);
+    // `/api/model/credentials` was retired upstream.  Environment secrets are
+    // now exposed by the canonical `/api/env` route, which also includes
+    // catalog metadata and profile scoping.  Keep the route on that source of
+    // truth so the native page does not render an empty/stale credential list.
+    case 'env': return api.getEnvironment(profile);
     case 'system': return api.getSystem();
     case 'achievements': return api.getAchievements();
     case 'kanban': return api.getKanbanBoard();

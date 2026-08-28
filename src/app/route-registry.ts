@@ -17,6 +17,7 @@ export type NativeRouteId =
   | 'webhooks'
   | 'system'
   | 'profiles'
+  | 'bots'
   | 'profile-new'
   | 'config'
   | 'account'
@@ -64,6 +65,7 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'webhooks', path: '/webhooks', visibleInSidebar: true },
   { id: 'system', path: '/system', visibleInSidebar: true },
   { id: 'profiles', path: '/profiles', visibleInSidebar: true },
+  { id: 'bots', path: '/bots', visibleInSidebar: true },
   { id: 'profile-new', path: '/profiles/new', visibleInSidebar: false },
   { id: 'config', path: '/config', visibleInSidebar: true },
   { id: 'account', path: '/account', visibleInSidebar: true },

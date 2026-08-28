@@ -557,7 +557,11 @@ test('all native management routes render the current cloud workspace response',
       OPENAI_API_KEY: { is_set: true, redacted_value: 'sk-legacy' },
     }),
   } as unknown as HermesCloudApi, 'env', 'default');
-  assert.deepEqual(legacyEnvironment.environment, []);
+  assert.deepEqual(legacyEnvironment.environment, [{
+    id: 'OPENAI_API_KEY',
+    key: 'OPENAI_API_KEY',
+    maskedValue: 'sk-legacy',
+  }]);
   assert.equal(system.system?.gatewayOnline, true);
   assert.equal(system.system?.activeTasks, '2');
   assert.equal(system.system?.memory, 53);
@@ -674,7 +678,7 @@ test('native management actions write through the canonical cloud APIs', async (
     updateChannel: async (...args: unknown[]) => { calls.push(['channel-update', ...args]); },
     setPluginEnabled: async (...args: unknown[]) => { calls.push(['plugin-toggle', ...args]); },
     setActiveProfile: async (...args: unknown[]) => { calls.push(['profile-active', ...args]); },
-    deleteModelCredential: async (...args: unknown[]) => { calls.push(['model-credential-delete', ...args]); },
+    deleteEnvironmentVariable: async (...args: unknown[]) => { calls.push(['environment-delete', ...args]); },
     updateKanbanTask: async (...args: unknown[]) => { calls.push(['kanban-update', ...args]); },
     updateSkillContent: async (...args: unknown[]) => { calls.push(['skill-update', ...args]); },
     restartGateway: async (...args: unknown[]) => { calls.push(['restart', ...args]); },
@@ -699,7 +703,7 @@ test('native management actions write through the canonical cloud APIs', async (
     ['skill-toggle', 'browser', true, 'reviewer'],
     ['plugin-toggle', 'kanban', false],
     ['profile-active', 'worker'],
-    ['model-credential-delete', 'custom-main', 'default'],
+    ['environment-delete', 'custom-main', 'default'],
     ['restart'],
     ['recover', 'wsl'],
     ['skill-update', 'browser', '# Browser', 'reviewer'],
@@ -933,6 +937,28 @@ test('snapshot labels and action messages follow the caller locale', async () =>
 
   assert.deepEqual(saved, { message: 'Model configuration saved', reload: true });
   assert.deepEqual(tested, { message: 'Connection succeeded (HTTP 200, 84 ms)' });
+});
+
+test('Bot Mode route projects the upstream profile roster', async () => {
+  const snapshot = await loadHermesSwiftUIRouteSnapshot({
+    loadRoute: async (routeId: string) => {
+      assert.equal(routeId, 'bots');
+      return {
+        bot_mode: true,
+        canonical_chat_title: 'Bot Chat',
+        profiles: [{
+          name: 'hk-worker',
+          display_name: 'HK Worker',
+          model: 'gpt-5.6-sol',
+          canonical_session: { id: 'bot-chat', resolved_id: 'bot-chat' },
+        }],
+      };
+    },
+  } as unknown as HermesCloudApi, 'bots', 'default');
+  assert.deepEqual(snapshot.profiles?.map((entry) => ({ id: entry.id, name: entry.name })), [
+    { id: 'hk-worker', name: 'HK Worker' },
+  ]);
+  assert.equal(snapshot.profiles?.[0]?.detail, 'Bot Chat 已就绪');
 });
 
 test('system snapshots share managed-node aliases with the sidebar status', async () => {

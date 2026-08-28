@@ -221,7 +221,7 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routeData, /api\.saveCustomModel/);
   assert.match(routeData, /api\.testCustomModel/);
   assert.match(routeData, /api\.discoverCustomModels/);
-  assert.match(routeData, /api\.deleteModelCredential/);
+  assert.match(routeData, /api\.deleteEnvironmentVariable/);
   // Custom-model normalization lives in HermesCloudApi alone; the route layer
   // once shipped a second copy whose unknown-input fallback diverged.
   assert.doesNotMatch(routeData, /function customApiMode/);

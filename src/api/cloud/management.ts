@@ -80,17 +80,22 @@ export class HermesManagementCloudApi {
     return { profiles: enriched, active };
   }
 
+  /** Upstream Bot Mode exposes profiles as durable named bots. */
+  getBots() {
+    return this.transport.request<JsonRecord>('/api/bots');
+  }
+
   setActiveProfile(name: string) {
     return this.transport.json<JsonRecord>('/api/profiles/active', 'POST', { name });
   }
 
-  createProfile(profile: JsonRecord) {
-    return this.transport.json<JsonRecord>('/api/profiles', 'POST', profile);
+  createProfile(profile: JsonRecord, bot = false) {
+    return this.transport.json<JsonRecord>(bot ? '/api/bots' : '/api/profiles', 'POST', profile);
   }
 
-  deleteProfile(name: string) {
+  deleteProfile(name: string, bot = false) {
     return this.transport.request<{ ok: boolean }>(
-      `/api/profiles/${encodeURIComponent(name)}`,
+      `${bot ? '/api/bots' : '/api/profiles'}/${encodeURIComponent(name)}`,
       { method: 'DELETE' },
     );
   }

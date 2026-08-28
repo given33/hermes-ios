@@ -633,7 +633,7 @@ test('profile-scoped management routes keep the active Profile on every request'
     '/api/plugins/collaboration/managed-installations',
     '/api/plugins/collaboration/managed-resources',
     '/api/messaging/platforms',
-    '/api/model/credentials',
+    '/api/env',
   ]);
   assert.ok(calls
     .filter(({ path }) => path !== '/api/plugins/collaboration/managed-resources')
@@ -1206,6 +1206,13 @@ test('account file consumers retain the bounded streaming transport contract', a
     '/api/plugins/collaboration/tool-output-artifacts/toolout_1234/download',
   ]);
   assert.equal(calls[0].options.query?.preview, true);
+});
+
+test('Bot Mode roster uses the canonical mobile bot endpoint', async () => {
+  const { api, calls } = createApi();
+  await api.getBots();
+  assert.equal(calls[0].path, '/api/bots');
+  assert.equal(calls[0].options.method, undefined);
 });
 
 test('session summaries keep preview, model precedence, and tool counts after the single-pass rewrite', () => {

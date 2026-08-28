@@ -65,6 +65,7 @@ test('native v2 registers the canonical WebUI core route paths', async () => {
       '/webhooks',
       '/system',
       '/profiles',
+      '/bots',
       '/profiles/new',
       '/config',
       '/account',

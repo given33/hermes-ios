@@ -190,6 +190,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     labels: { en: 'System', zh: '系统' },
     items: [
       { path: '/profiles', labels: { en: 'Profiles', zh: '配置' }, symbol: 'person.2', fallback: 'Users' },
+      { path: '/bots', labels: { en: 'Bots', zh: '机器人' }, symbol: 'cpu', fallback: 'Cpu' },
       { path: '/config', labels: { en: 'Settings', zh: '设置' }, symbol: 'slider.horizontal.3', fallback: 'Settings' },
       { path: '/account', labels: { en: 'Account', zh: '账户' }, symbol: 'person.crop.circle', fallback: 'Users' },
       { path: '/env', labels: { en: 'Keys', zh: '密钥' }, symbol: 'key', fallback: 'KeyRound' },

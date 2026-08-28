@@ -93,6 +93,8 @@ struct HermesRouteContent: View {
       HermesRuntimeCenterPage(data: data.runtime, chinese: chinese, onAction: onAction)
     case .profiles:
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
+    case .bots:
+      HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .config:
       HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
     case .account:
@@ -1043,11 +1045,11 @@ private struct HermesRemoteRoutePage: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(appearance.palette.background)
-    case .profiles:
+    case .profiles, .bots:
       List(data.profiles) { profile in
         HermesRemoteRow(icon: profile.active ? "person.crop.circle.fill" : "person.crop.circle", title: profile.name, detail: "\(profile.model) · \(profile.detail)", tint: profile.active ? appearance.palette.success : appearance.palette.secondary) {
           if !profile.active {
-            Button { onAction(.profileActivate, HermesRouteActionPayload(route: "profiles", id: profile.id)) } label: { Image(systemName: "checkmark") }.buttonStyle(.borderless)
+            Button { onAction(.profileActivate, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Image(systemName: "checkmark") }.buttonStyle(.borderless)
           }
         }
         .contextMenu {
@@ -1056,9 +1058,9 @@ private struct HermesRemoteRoutePage: View {
             editorDetail = profile.soul
             editor = .soul
           } label: { Label(chinese ? "编辑 SOUL.md" : "Edit SOUL.md", systemImage: "doc.text") }
-          if !profile.active { Button(role: .destructive) { onAction(.profileDelete, HermesRouteActionPayload(route: "profiles", id: profile.id)) } label: { Label(chinese ? "删除 Profile" : "Delete Profile", systemImage: "trash") } }
+          if !profile.active { Button(role: .destructive) { onAction(.profileDelete, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Label(chinese ? "删除机器人" : "Delete bot", systemImage: "trash") } }
         }
-      }.hermesListStyle().refreshable { onAction(.refresh, HermesRouteActionPayload(route: "profiles")) }
+      }.hermesListStyle().refreshable { onAction(.refresh, HermesRouteActionPayload(route: route.rawValue)) }
     case .config:
       Form {
         Section(chinese ? "通用" : "General") {
@@ -1285,7 +1287,7 @@ private struct HermesRemoteRoutePage: View {
     case .mcp: return .mcp
     case .webhooks: return .webhooks
     case .pairing: return .pairing
-    case .profiles: return .profiles
+    case .profiles, .bots: return .profiles
     case .kanban: return .kanban
     case .collaboration: return .collaboration
     case .config: return .config
@@ -1346,7 +1348,7 @@ private struct HermesRemoteRoutePage: View {
       onAction(.pairingApprove, HermesRouteActionPayload(route: "pairing", id: name, value: value))
     case .profiles:
       guard !name.isEmpty else { return }
-      onAction(.profileCreate, HermesRouteActionPayload(route: "profiles", name: name, fields: ["description": detail, "model": value]))
+      onAction(.profileCreate, HermesRouteActionPayload(route: route.rawValue, name: name, fields: ["description": detail, "model": value]))
     case .soul:
       guard !name.isEmpty else { return }
       onAction(.profileUpdate, HermesRouteActionPayload(route: "profiles", id: name, detail: editorDetail))

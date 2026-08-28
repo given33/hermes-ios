@@ -36,6 +36,7 @@ enum HermesRoute: String, Hashable {
   case approvals
   case runtimeCenter = "runtime-center"
   case profiles
+  case bots
   case config
   case account
   case env
@@ -69,6 +70,7 @@ enum HermesRoute: String, Hashable {
     case .approvals: return "审批中心"
     case .runtimeCenter: return "运行中心"
     case .profiles: return "多 Agent 配置"
+    case .bots: return "机器人"
     case .config: return "配置"
     case .account: return "账户"
     case .env: return "密钥"

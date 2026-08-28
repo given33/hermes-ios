@@ -508,16 +508,16 @@ export class HermesCloudApi {
     return this.management.getProfiles();
   }
 
+  getBots() { return this.management.getBots(); }
+
   setActiveProfile(name: string) {
     return this.management.setActiveProfile(name);
   }
 
-  createProfile(profile: JsonRecord) {
-    return this.management.createProfile(profile);
-  }
+  createProfile(profile: JsonRecord, bot = false) { return this.management.createProfile(profile, bot); }
 
-  deleteProfile(name: string) {
-    return this.management.deleteProfile(name);
+  deleteProfile(name: string, bot = false) {
+    return this.management.deleteProfile(name, bot);
   }
 
   getProfileSoul(name: string) {

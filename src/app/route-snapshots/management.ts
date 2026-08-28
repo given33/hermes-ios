@@ -366,15 +366,23 @@ export function profilesSnapshot(source: unknown, localizer: HermesRouteLocalize
   const active = isRecord(root.active)
     ? stringValue(root.active.name) || stringValue(root.active.active)
     : stringValue(root.active);
+  const botMode = root.bot_mode === true;
   const rows = Array.isArray(root.profiles) ? root.profiles : [];
   return rows.flatMap((entry, index) => {
     if (!isRecord(entry)) return [];
     const id = stringValue(entry.name) || stringValue(entry.id) || `profile-${index}`;
+    const description = localizer.serverText(stringValue(entry.description) || stringValue(entry.detail) || '');
+    const canonical = isRecord(entry.canonical_session) && !entry.canonical_session.archived;
+    const botStatus = botMode
+      ? (canonical
+        ? (localizer.isChinese ? 'Bot Chat 已就绪' : 'Bot Chat ready')
+        : (localizer.isChinese ? 'Bot Chat 尚未创建' : 'Bot Chat not created'))
+      : '';
     return [{
       id,
       name: localizer.serverText(stringValue(entry.display_name) || stringValue(entry.name) || id),
       model: stringValue(entry.model) || '',
-      detail: localizer.serverText(stringValue(entry.description) || stringValue(entry.detail) || ''),
+      detail: [description, botStatus].filter(Boolean).join(' · '),
       active: Boolean(entry.active) || id === active,
       soul: stringValue(entry.soul),
       terminalAccess: entry.terminal_access !== false,
@@ -403,17 +411,26 @@ export function configSnapshot(source: unknown): HermesSwiftUIConfigSnapshot {
 
 export function environmentSnapshot(source: unknown): HermesSwiftUIEnvironmentSecretSnapshot[] {
   const root = isRecord(source) ? source : {};
-  if (!Array.isArray(root.credentials)) return [];
-  return root.credentials.flatMap((value): HermesSwiftUIEnvironmentSecretSnapshot[] => {
-    if (!isRecord(value)) return [];
-    const id = stringValue(value.id);
-    if (!id) return [];
-    const provider = stringValue(value.provider) || 'custom';
-    const model = stringValue(value.model);
-    return [{
-      id,
-      key: model ? `${provider} · ${model}` : provider,
-      maskedValue: stringValue(value.masked_value) || '••••••••',
-    }];
+  // Current Hermes exposes `/api/env` as a keyed object.  Accept the retired
+  // `credentials[]` shape as a read-only compatibility fallback so an older
+  // relay can still render, but never require that removed endpoint.
+  if (Array.isArray(root.credentials)) {
+    return root.credentials.flatMap((value): HermesSwiftUIEnvironmentSecretSnapshot[] => {
+      if (!isRecord(value)) return [];
+      const id = stringValue(value.id);
+      if (!id) return [];
+      const provider = stringValue(value.provider) || 'custom';
+      const model = stringValue(value.model);
+      return [{
+        id,
+        key: model ? `${provider} · ${model}` : provider,
+        maskedValue: stringValue(value.masked_value) || '••••••••',
+      }];
+    });
+  }
+  return Object.entries(root).flatMap(([key, value]) => {
+    if (!isRecord(value) || value.is_set !== true) return [];
+    const masked = stringValue(value.redacted_value) || '••••••••';
+    return [{ id: key, key, maskedValue: masked }];
   });
 }

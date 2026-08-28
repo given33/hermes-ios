@@ -133,6 +133,8 @@ export async function loadHermesSwiftUIRouteSnapshot(
     case 'profiles':
     case 'profile-new':
       return { ...base, profiles: profilesSnapshot(source, localizer) };
+    case 'bots':
+      return { ...base, profiles: profilesSnapshot(source, localizer) };
     case 'config':
       return { ...base, config: configSnapshot(source) };
     case 'env':
@@ -452,11 +454,14 @@ export async function performHermesSwiftUIRouteAction(
       await api.setActiveProfile(payload.id || value);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileCreate:
-      await api.createProfile({ name: payload.name || value || 'profile', ...(payload.fields || {}) });
+      await api.createProfile(
+        { name: payload.name || value || 'profile', ...(payload.fields || {}) },
+        payload.route === 'bots',
+      );
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileDelete:
       if (!payload.id) return 'none';
-      await api.deleteProfile(payload.id);
+      await api.deleteProfile(payload.id, payload.route === 'bots');
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileUpdate:
       if (!payload.id) return 'none';
@@ -471,7 +476,7 @@ export async function performHermesSwiftUIRouteAction(
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.environmentDelete:
       if (!payload.id) return 'none';
-      await api.deleteModelCredential(payload.id, profile);
+      await api.deleteEnvironmentVariable(payload.id, profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRestart:
       await api.restartGateway();

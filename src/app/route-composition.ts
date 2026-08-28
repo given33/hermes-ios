@@ -266,6 +266,12 @@ const BUILTIN_NAV_REST = [
     icon: 'Users',
   },
   {
+    routeId: 'bots',
+    path: '/bots',
+    labels: { en: 'Bots', zh: '\u673a\u5668\u4eba' },
+    icon: 'Cpu',
+  },
+  {
     routeId: 'config',
     path: '/config',
     labels: { en: 'Settings', zh: '\u8bbe\u7f6e' },
