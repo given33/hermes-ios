@@ -14,6 +14,7 @@ interface QueuedHostedLifecycleEvent {
 }
 
 interface HostedLifecycleEventApplicationOptions {
+  activeConversationId: string;
   activeConversationIdRef: MutableRefObject<string>;
   cacheOwner: string;
   firstTokenAtRef: MutableRefObject<number>;
@@ -35,6 +36,7 @@ interface HostedLifecycleEventApplicationOptions {
  * timer.
  */
 export function useHostedLifecycleEventApplication({
+  activeConversationId,
   activeConversationIdRef,
   cacheOwner,
   firstTokenAtRef,
@@ -60,6 +62,14 @@ export function useHostedLifecycleEventApplication({
     runtimeRef.current = undefined;
     setRuntime(undefined);
   }, []);
+
+  // A queued batch belongs to the conversation that was active when its
+  // stream delivered it.  Clear both the queue and the runtime projection as
+  // soon as the chat selection changes; filtering at flush time alone cannot
+  // remove events that were queued before the switch.
+  useEffect(() => {
+    reset();
+  }, [activeConversationId, reset]);
 
   const flush = useCallback(() => {
     flushTimerRef.current = null;

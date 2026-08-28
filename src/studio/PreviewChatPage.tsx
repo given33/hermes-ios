@@ -574,8 +574,8 @@ export function ChatPreviewPage({
     refreshConversationIndex,
     replayDurableOutboxes,
   });
-
   const hostedLifecycleApplication = useHostedLifecycleEventApplication({
+    activeConversationId,
     activeConversationIdRef,
     cacheOwner,
     firstTokenAtRef,

@@ -51,4 +51,36 @@ export class HermesMemoryCloudApi {
     }, { profile });
     return normalizeStudioMemory(value);
   }
+
+  getMemoryStatus() {
+    return this.transport.request<JsonRecord>('/api/memory');
+  }
+
+  setMemoryProvider(provider: string) {
+    return this.transport.json<JsonRecord>('/api/memory/provider', 'PUT', { provider });
+  }
+
+  resetMemory(target: 'all' | 'memory' | 'user' = 'all') {
+    return this.transport.json<JsonRecord>('/api/memory/reset', 'POST', { target });
+  }
+
+  getMemoryProviderConfig(name: string, profile = 'default', surface = '') {
+    return this.transport.request<JsonRecord>(
+      `/api/memory/providers/${encodeURIComponent(name)}/config`,
+      { query: { profile, surface: surface || undefined } },
+    );
+  }
+
+  setupMemoryProvider(name: string, values: JsonRecord = {}) {
+    return this.transport.json<JsonRecord>(
+      `/api/memory/providers/${encodeURIComponent(name)}/setup`, 'POST', { values },
+    );
+  }
+
+  updateMemoryProviderConfig(name: string, values: JsonRecord, profile = 'default', surface = '') {
+    return this.transport.json<JsonRecord>(
+      `/api/memory/providers/${encodeURIComponent(name)}/config`, 'PUT', { values },
+      { query: { profile, surface: surface || undefined } },
+    );
+  }
 }

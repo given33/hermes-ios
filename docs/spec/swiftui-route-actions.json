@@ -11,6 +11,8 @@
     "runtime",
     "analytics",
     "models",
+    "modelAuxiliary",
+    "modelMoa",
     "modelConfirmation",
     "detectedModels",
     "operation",
@@ -26,7 +28,8 @@
     "profiles",
     "config",
     "environment",
-    "system"
+    "system",
+    "memory"
   ],
   "actionPayloadFields": [
     { "name": "route", "type": "string", "required": true },
@@ -96,6 +99,12 @@
     "systemRestart": "system.restart",
     "systemRecover": "system.recover",
     "systemUpdate": "system.update",
+    "systemStart": "system.start",
+    "systemStop": "system.stop",
+    "systemDrain": "system.drain",
+    "systemUpdateCheck": "system.update.check",
+    "memoryProvider": "memory.provider",
+    "memoryReset": "memory.reset",
     "kanbanCreate": "kanban.create",
     "kanbanUpdate": "kanban.update",
     "kanbanMove": "kanban.move",

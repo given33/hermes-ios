@@ -28,6 +28,40 @@ export class HermesFilesCloudApi {
     return this.transport.request<JsonRecord>('/api/files/read', { query: { path } });
   }
 
+  streamFile(path: string, signal?: AbortSignal) {
+    return this.transport.download('/api/files/stream', { query: { path }, signal });
+  }
+
+  listFilesystem(path = '', depth = 1) {
+    return this.transport.request<JsonRecord>('/api/fs/list', {
+      query: { path, depth: String(Math.max(0, Math.trunc(depth))) },
+    });
+  }
+
+  readFilesystemText(path: string) {
+    return this.transport.request<JsonRecord>('/api/fs/read-text', { query: { path } });
+  }
+
+  writeFilesystemText(path: string, content: string) {
+    return this.transport.json<JsonRecord>('/api/fs/write-text', 'POST', { path, content });
+  }
+
+  readFilesystemDataUrl(path: string) {
+    return this.transport.request<JsonRecord>('/api/fs/read-data-url', { query: { path } });
+  }
+
+  downloadFilesystem(path: string) {
+    return this.transport.download('/api/fs/download', { query: { path } });
+  }
+
+  getGitRoot(path = '') {
+    return this.transport.request<JsonRecord>('/api/fs/git-root', { query: { path: path || undefined } });
+  }
+
+  getDefaultCwd() {
+    return this.transport.request<JsonRecord>('/api/fs/default-cwd');
+  }
+
   createDirectory(path: string) {
     return this.transport.json<JsonRecord>('/api/files/mkdir', 'POST', { path });
   }

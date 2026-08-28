@@ -881,3 +881,45 @@ test('the facade keeps no drifting second copy of migrated endpoint bodies', () 
   assert.match(workflows, /\/api\/plugins\/workflows/);
   assert.match(workflows, /payload_digest/);
 });
+
+test('the extended iOS surface reaches upstream system, memory, model, MCP, Git, and ops endpoints', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.getMemoryStatus();
+  await api.startGateway('hk-worker');
+  await api.drainGateway('hk-worker');
+  await api.getAuxiliaryModels('hk-worker');
+  await api.getMoaModels('hk-worker');
+  await api.authMcpServer('github bridge', 'hk-worker');
+  await api.listFilesystem('/workspace', 2);
+  await api.getGitStatus('/workspace');
+  await api.stageGitFile('/workspace', 'src/app.ts');
+  await api.runDoctor({ repair: false });
+  await api.saveRawConfig('model:\n  default: test', 'hk-worker');
+  await api.testChannel('telegram', 'hk-worker');
+
+  assert.deepEqual(
+    calls.map(({ path, options }) => [path, options.method ?? 'GET']),
+    [
+      ['/api/memory', 'GET'],
+      ['/api/gateway/start', 'POST'],
+      ['/api/gateway/drain', 'POST'],
+      ['/api/model/auxiliary', 'GET'],
+      ['/api/model/moa', 'GET'],
+      ['/api/mcp/servers/github%20bridge/auth', 'POST'],
+      ['/api/fs/list', 'GET'],
+      ['/api/git/status', 'GET'],
+      ['/api/git/review/stage', 'POST'],
+      ['/api/ops/doctor', 'POST'],
+      ['/api/config/raw', 'PUT'],
+      ['/api/messaging/platforms/telegram/test', 'POST'],
+    ],
+  );
+  assert.deepEqual(calls[1].options.query, { profile: 'hk-worker' });
+  assert.deepEqual(calls[6].options.query, { path: '/workspace', depth: '2' });
+  assert.deepEqual(parsedBody(calls[8]), { path: '/workspace', file: 'src/app.ts' });
+  assert.deepEqual(parsedBody(calls[10]), {
+    profile: 'hk-worker',
+    yaml_text: 'model:\n  default: test',
+  });
+});

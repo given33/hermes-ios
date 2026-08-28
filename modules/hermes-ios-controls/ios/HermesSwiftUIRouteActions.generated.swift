@@ -13,6 +13,8 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case runtime
   case analytics
   case models
+  case modelAuxiliary
+  case modelMoa
   case modelConfirmation
   case detectedModels
   case operation
@@ -29,6 +31,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case config
   case environment
   case system
+  case memory
 }
 
 struct HermesRouteActionPayload: Encodable, Equatable {
@@ -126,6 +129,12 @@ enum HermesRouteAction: String, CaseIterable {
   case systemRestart = "system.restart"
   case systemRecover = "system.recover"
   case systemUpdate = "system.update"
+  case systemStart = "system.start"
+  case systemStop = "system.stop"
+  case systemDrain = "system.drain"
+  case systemUpdateCheck = "system.update.check"
+  case memoryProvider = "memory.provider"
+  case memoryReset = "memory.reset"
   case kanbanCreate = "kanban.create"
   case kanbanUpdate = "kanban.update"
   case kanbanMove = "kanban.move"

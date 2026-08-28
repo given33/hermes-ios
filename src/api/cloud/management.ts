@@ -39,6 +39,68 @@ export class HermesManagementCloudApi {
     );
   }
 
+  testChannel(id: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/messaging/platforms/${encodeURIComponent(id)}/test`,
+      { method: 'POST', query: { profile } },
+    );
+  }
+
+  startTelegramOnboarding(botName = 'Hermes Agent', profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/messaging/telegram/onboarding/start', 'POST', {
+      bot_name: botName,
+      profile,
+    });
+  }
+
+  getTelegramOnboarding(pairingId: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/messaging/telegram/onboarding/${encodeURIComponent(pairingId)}`,
+    );
+  }
+
+  applyTelegramOnboarding(pairingId: string, allowedUserIds: string[], profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/messaging/telegram/onboarding/${encodeURIComponent(pairingId)}/apply`,
+      'POST', { allowed_user_ids: allowedUserIds, profile },
+    );
+  }
+
+  cancelTelegramOnboarding(pairingId: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/messaging/telegram/onboarding/${encodeURIComponent(pairingId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  startWhatsappOnboarding(mode = 'pairing', allowedUsers = '', profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/messaging/whatsapp/onboarding/start', 'POST', {
+      mode,
+      allowed_users: allowedUsers,
+      profile,
+    });
+  }
+
+  getWhatsappOnboarding(pairingId: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/messaging/whatsapp/onboarding/${encodeURIComponent(pairingId)}`,
+    );
+  }
+
+  applyWhatsappOnboarding(pairingId: string, body: JsonRecord, profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/messaging/whatsapp/onboarding/${encodeURIComponent(pairingId)}/apply`,
+      'POST', { ...body, profile },
+    );
+  }
+
+  cancelWhatsappOnboarding(pairingId: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/messaging/whatsapp/onboarding/${encodeURIComponent(pairingId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
   getWebhooks() {
     return this.transport.request<JsonRecord>('/api/webhooks');
   }
@@ -114,6 +176,41 @@ export class HermesManagementCloudApi {
     );
   }
 
+  updateProfileDescription(name: string, description: string) {
+    return this.transport.json<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}/description`, 'PUT', { description },
+    );
+  }
+
+  updateProfileModel(name: string, provider: string, model: string) {
+    return this.transport.json<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}/model`, 'PUT', { provider, model },
+    );
+  }
+
+  autoDescribeProfile(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}/describe-auto`, { method: 'POST' },
+    );
+  }
+
+  getProfileSetupCommand(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}/setup-command`,
+    );
+  }
+
+  exportProfile(name: string, output = '', extraFiles: string[] = []) {
+    return this.transport.json<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}/export`, 'POST',
+      { output, extra_files: extraFiles },
+    );
+  }
+
+  importProfiles(payload: JsonRecord) {
+    return this.transport.json<JsonRecord>('/api/profiles/import', 'POST', payload);
+  }
+
   getConfig(profile = 'default') {
     return Promise.all([
       this.transport.request<JsonRecord>('/api/config', { profile }),
@@ -176,8 +273,64 @@ export class HermesManagementCloudApi {
     return this.transport.request<JsonRecord>('/api/gateway/restart', { method: 'POST' });
   }
 
+  startGateway(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/gateway/start', {
+      method: 'POST',
+      query: { profile },
+    });
+  }
+
+  stopGateway(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/gateway/stop', {
+      method: 'POST',
+      query: { profile },
+    });
+  }
+
+  drainGateway(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/gateway/drain', {
+      method: 'POST',
+      query: { profile },
+    });
+  }
+
   updateHermes() {
     return this.transport.request<JsonRecord>('/api/hermes/update', { method: 'POST' });
+  }
+
+  checkHermesUpdate() {
+    return this.transport.request<JsonRecord>('/api/hermes/update/check');
+  }
+
+  getHermesUpdateReceipt() {
+    return this.transport.request<JsonRecord>('/api/hermes/update/receipt');
+  }
+
+  getHealth() {
+    return this.transport.request<JsonRecord>('/api/health');
+  }
+
+  getEgressStatus() {
+    return this.transport.request<JsonRecord>('/api/egress/status');
+  }
+
+  getCredentialPool() {
+    return this.transport.request<JsonRecord>('/api/credentials/pool');
+  }
+
+  addCredentialPoolEntry(provider: string, apiKey: string, label = '') {
+    return this.transport.json<JsonRecord>('/api/credentials/pool', 'POST', {
+      provider,
+      api_key: apiKey,
+      label: label || undefined,
+    });
+  }
+
+  removeCredentialPoolEntry(provider: string, index: number) {
+    return this.transport.request<JsonRecord>(
+      `/api/credentials/pool/${encodeURIComponent(provider)}/${Math.max(1, Math.trunc(index))}`,
+      { method: 'DELETE' },
+    );
   }
 
   getAchievements() {

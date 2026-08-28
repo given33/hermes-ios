@@ -137,6 +137,83 @@ export class HermesModelsCloudApi {
     });
   }
 
+  getRecommendedDefault(provider = '') {
+    return this.transport.request<JsonRecord>('/api/model/recommended-default', {
+      query: { provider: provider || undefined },
+    });
+  }
+
+  getAuxiliaryModels(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/model/auxiliary', { profile });
+  }
+
+  getMoaModels(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/model/moa', { profile });
+  }
+
+  saveMoaModels(config: JsonRecord, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/model/moa', 'PUT', config, { profile });
+  }
+
+  getCustomProviderEndpoints(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/providers/custom-endpoints', { profile });
+  }
+
+  saveCustomProviderEndpoint(config: JsonRecord, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/providers/custom-endpoints', 'POST', config, { profile });
+  }
+
+  activateCustomProviderEndpoint(id: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/providers/custom-endpoints/${encodeURIComponent(id)}/activate`,
+      { method: 'POST', query: { profile } },
+    );
+  }
+
+  deleteCustomProviderEndpoint(id: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/providers/custom-endpoints/${encodeURIComponent(id)}`,
+      { method: 'DELETE', query: { profile } },
+    );
+  }
+
+  validateCustomProviderEndpoint(config: JsonRecord) {
+    return this.transport.json<JsonRecord>('/api/providers/custom-endpoints/validate', 'POST', config);
+  }
+
+  validateProviderCredential(config: JsonRecord) {
+    return this.transport.json<JsonRecord>('/api/providers/validate', 'POST', config);
+  }
+
+  getProviderOauth() {
+    return this.transport.request<JsonRecord>('/api/providers/oauth');
+  }
+
+  startProviderOauth(provider: string, body: JsonRecord = {}) {
+    return this.transport.json<JsonRecord>(
+      `/api/providers/oauth/${encodeURIComponent(provider)}/start`, 'POST', body,
+    );
+  }
+
+  submitProviderOauth(provider: string, body: JsonRecord) {
+    return this.transport.json<JsonRecord>(
+      `/api/providers/oauth/${encodeURIComponent(provider)}/submit`, 'POST', body,
+    );
+  }
+
+  pollProviderOauth(provider: string, sessionId: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/providers/oauth/${encodeURIComponent(provider)}/poll/${encodeURIComponent(sessionId)}`,
+    );
+  }
+
+  cancelProviderOauth(sessionId: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/providers/oauth/sessions/${encodeURIComponent(sessionId)}`,
+      { method: 'DELETE' },
+    );
+  }
+
   async getCustomModel(profile = 'default'): Promise<CustomModelConfiguration> {
     const value = await this.transport.request<JsonRecord>('/api/model/custom', { profile });
     return {

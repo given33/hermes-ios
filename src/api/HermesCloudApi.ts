@@ -45,7 +45,9 @@ import {
 import type { CloudJsonMethod, HermesCloudTransport, JsonRecord } from './cloud/transport';
 import { HermesWorkflowsCloudApi } from './cloud/workflows';
 import { HermesSessionsCloudApi } from './cloud/sessions';
+import { HermesOperationsCloudApi } from './cloud/operations';
 import { loadCloudRoute } from './cloud/routes';
+import { installHermesCloudApiSurface } from './HermesCloudApiSurface';
 import type {
   AccountFileEntry,
   AccountFilesQuery,
@@ -78,7 +80,6 @@ import type {
   WorkflowWorkspaceChangeSetSummary,
   WorkflowWorkspaceChangesResponse,
 } from './cloud/contracts';
-
 export type {
   AccountFileEntry,
   AccountFilesQuery,
@@ -111,7 +112,6 @@ export type {
   WorkflowWorkspaceChangeSetSummary,
   WorkflowWorkspaceChangesResponse,
 } from './cloud/contracts';
-
 export type { StudioMemoryContent } from './cloud/memory';
 export type { AudioTranscriptionResult } from './cloud/audio';
 export type { ClientVoiceConfig, ClientVoiceProvider, ElevenLabsVoice } from './cloud/audio'; export type { ConversationSessionForkResponse, ConversationSessionLineageResponse } from './cloud/contracts';
@@ -150,7 +150,6 @@ export {
   RUNTIME_RUN_FRESHNESS_MS,
   runningConversationRecordIsFresh,
 } from './conversation-summary';
-
 /**
  * Native facade over the canonical Dashboard and modified Collaboration APIs.
  * It intentionally stores no business data: every read and mutation goes to
@@ -174,6 +173,7 @@ export class HermesCloudApi {
   private readonly models: HermesModelsCloudApi;
   private readonly sessions: HermesSessionsCloudApi;
   private readonly workflows: HermesWorkflowsCloudApi;
+  private readonly operations: HermesOperationsCloudApi;
 
   constructor(private readonly client: HermesApiClient) {
     const transport: HermesCloudTransport = {
@@ -210,6 +210,7 @@ export class HermesCloudApi {
     this.models = new HermesModelsCloudApi(transport);
     this.sessions = new HermesSessionsCloudApi(transport);
     this.workflows = new HermesWorkflowsCloudApi(transport);
+    this.operations = new HermesOperationsCloudApi(transport);
   }
 
   /**
@@ -240,7 +241,6 @@ export class HermesCloudApi {
   ): Promise<StudioMemoryContent> {
     return this.memory.saveStudioMemory(profile, section, content);
   }
-
   getStatus() {
     return this.sessions.getStatus();
   }
@@ -487,7 +487,6 @@ export class HermesCloudApi {
   updateChannel(id: string, update: JsonRecord, profile = 'default') {
     return this.management.updateChannel(id, update, profile);
   }
-
   getWebhooks() {
     return this.management.getWebhooks();
   }
@@ -527,7 +526,6 @@ export class HermesCloudApi {
   updateProfileSoul(name: string, content: string) {
     return this.management.updateProfileSoul(name, content);
   }
-
   getConfig(profile = 'default') {
     return this.management.getConfig(profile);
   }
@@ -1107,3 +1105,5 @@ export function createCollaborationRoomRequestId(): string {
 export function createWorkflowStartRequestId(): string {
   return newClientRequestId('workflow-start');
 }
+
+installHermesCloudApiSurface(HermesCloudApi);

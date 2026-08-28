@@ -199,6 +199,36 @@ export class HermesExtensionsCloudApi {
     });
   }
 
+  getToolsetConfig(name: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}/config`, { profile },
+    );
+  }
+
+  setToolsetEnabled(name: string, enabled: boolean, profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}`, 'PUT', { enabled, profile },
+    );
+  }
+
+  getTerminalBackends(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/tools/terminal/backends', { profile });
+  }
+
+  setTerminalBackend(backend: string, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/tools/terminal/backend', 'PUT', { backend, profile });
+  }
+
+  getComputerUseStatus(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/tools/computer-use/status', { profile });
+  }
+
+  grantComputerUsePermissions(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/tools/computer-use/permissions/grant', {
+      method: 'POST', query: { profile },
+    });
+  }
+
   getPlugins() {
     return Promise.all([
       this.transport.request<JsonRecord[]>('/api/dashboard/plugins'),
@@ -308,6 +338,23 @@ export class HermesExtensionsCloudApi {
       `/api/mcp/servers/${encodeURIComponent(name)}/test`,
       { method: 'POST', query: { profile } },
     );
+  }
+
+  authMcpServer(name: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/mcp/servers/${encodeURIComponent(name)}/auth`,
+      { method: 'POST', query: { profile } },
+    );
+  }
+
+  getMcpOauthFlow(flowId: string) {
+    return this.transport.request<JsonRecord>(`/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`);
+  }
+
+  cancelMcpOauthFlow(flowId: string) {
+    return this.transport.request<JsonRecord>(`/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`, {
+      method: 'DELETE',
+    });
   }
 
   installMcpCatalogEntry(

@@ -62,6 +62,10 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
   const memory = isRecord(stats.memory) ? stats.memory : {};
   const disk = isRecord(stats.disk) ? stats.disk : {};
   const gateway = isRecord(status.gateway) ? status.gateway : {};
+  const health = isRecord(root.health) ? root.health : {};
+  const egress = isRecord(root.egress) ? root.egress : {};
+  const updateCheck = isRecord(root.updateCheck) ? root.updateCheck : {};
+  const updateReceipt = isRecord(root.updateReceipt) ? root.updateReceipt : {};
   return {
     cpu: primaryNode?.cpu ?? numberValue(stats.cpu_percent ?? stats.cpu),
     memory: primaryNode?.memory ?? numberValue(stats.memory_percent ?? memory.percent),
@@ -93,6 +97,16 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
     metricsAvailable: primaryNode?.metricsAvailable ?? !managedConfigured,
     nodes: nodeSnapshots,
     operationMessage: stringValue(root.operation_message) || undefined,
+    healthLabel: stringValue(health.message) || stringValue(health.status)
+      || (health.ok === true ? 'healthy' : health.ok === false ? 'unhealthy' : undefined),
+    egressLabel: stringValue(egress.text) || stringValue(egress.status) || undefined,
+    updateAvailable: typeof updateCheck.update_available === 'boolean'
+      ? updateCheck.update_available
+      : typeof updateCheck.available === 'boolean' ? updateCheck.available : undefined,
+    updateVersion: stringValue(updateCheck.version) || stringValue(updateCheck.latest_version)
+      || stringValue(updateCheck.latestVersion) || undefined,
+    updateReceipt: stringValue(updateReceipt.status) || stringValue(updateReceipt.message)
+      || undefined,
   };
 }
 

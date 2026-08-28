@@ -13,6 +13,8 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let analytics: HermesAnalyticsSnapshot
   let models: [HermesModelSnapshot]
   let modelConfirmation: HermesModelConfirmationSnapshot?
+  let modelAuxiliary: HermesModelAuxiliarySnapshot
+  let modelMoa: HermesModelMoaSnapshot
   let detectedModels: [String]
   let operation: HermesRouteOperationSnapshot?
   let logs: [HermesLogSnapshot]
@@ -28,6 +30,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let config: HermesConfigSnapshot
   let environment: [HermesEnvironmentSecretSnapshot]
   let system: HermesSystemSnapshot
+  let memory: HermesMemorySnapshot
 
   init(
     version: Int = hermesRouteSnapshotVersion,
@@ -41,6 +44,8 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     analytics: HermesAnalyticsSnapshot = .empty,
     models: [HermesModelSnapshot] = [],
     modelConfirmation: HermesModelConfirmationSnapshot? = nil,
+    modelAuxiliary: HermesModelAuxiliarySnapshot = .empty,
+    modelMoa: HermesModelMoaSnapshot = .empty,
     detectedModels: [String] = [],
     operation: HermesRouteOperationSnapshot? = nil,
     logs: [HermesLogSnapshot] = [],
@@ -55,7 +60,8 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     profiles: [HermesProfileSnapshot] = [],
     config: HermesConfigSnapshot = .empty,
     environment: [HermesEnvironmentSecretSnapshot] = [],
-    system: HermesSystemSnapshot = .empty
+    system: HermesSystemSnapshot = .empty,
+    memory: HermesMemorySnapshot = .empty
   ) {
     self.version = version
     self.route = route
@@ -68,6 +74,8 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.analytics = analytics
     self.models = models
     self.modelConfirmation = modelConfirmation
+    self.modelAuxiliary = modelAuxiliary
+    self.modelMoa = modelMoa
     self.detectedModels = detectedModels
     self.operation = operation
     self.logs = logs
@@ -83,6 +91,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.config = config
     self.environment = environment
     self.system = system
+    self.memory = memory
   }
 
   init(from decoder: Decoder) throws {
@@ -126,6 +135,8 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       HermesModelConfirmationSnapshot.self,
       forKey: .modelConfirmation
     )
+    modelAuxiliary = try container.decodeIfPresent(HermesModelAuxiliarySnapshot.self, forKey: .modelAuxiliary) ?? .empty
+    modelMoa = try container.decodeIfPresent(HermesModelMoaSnapshot.self, forKey: .modelMoa) ?? .empty
     detectedModels = try container.decodeIfPresent(
       [String].self,
       forKey: .detectedModels
@@ -165,6 +176,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       forKey: .environment
     ) ?? []
     system = try container.decodeIfPresent(HermesSystemSnapshot.self, forKey: .system) ?? .empty
+    memory = try container.decodeIfPresent(HermesMemorySnapshot.self, forKey: .memory) ?? .empty
   }
 
   static let empty = HermesRouteSnapshot()
@@ -726,6 +738,26 @@ struct HermesIntegrationSnapshot: Decodable, Equatable, Identifiable {
   let catalogRequiredEnv: [String]?
 }
 
+struct HermesModelAuxiliaryTaskSnapshot: Decodable, Equatable, Identifiable {
+  let task: String
+  let provider: String
+  let model: String
+  var id: String { task }
+}
+
+struct HermesModelAuxiliarySnapshot: Decodable, Equatable {
+  let active: String
+  let tasks: [HermesModelAuxiliaryTaskSnapshot]
+  static let empty = HermesModelAuxiliarySnapshot(active: "", tasks: [])
+}
+
+struct HermesModelMoaSnapshot: Decodable, Equatable {
+  let enabled: Bool
+  let activePreset: String
+  let presetCount: Int
+  static let empty = HermesModelMoaSnapshot(enabled: false, activePreset: "", presetCount: 0)
+}
+
 struct HermesPairingEntrySnapshot: Decodable, Equatable, Identifiable {
   let id: String
   let platform: String
@@ -871,6 +903,11 @@ struct HermesSystemSnapshot: Decodable, Equatable {
   let metricsAvailable: Bool
   let nodes: [HermesSystemNodeSnapshot]
   let operationMessage: String?
+  let healthLabel: String?
+  let egressLabel: String?
+  let updateAvailable: Bool?
+  let updateVersion: String?
+  let updateReceipt: String?
 
   static let empty = HermesSystemSnapshot(
     cpu: 0,
@@ -882,8 +919,31 @@ struct HermesSystemSnapshot: Decodable, Equatable {
     gatewayOnline: false,
     metricsAvailable: false,
     nodes: [],
-    operationMessage: nil
+    operationMessage: nil,
+    healthLabel: nil,
+    egressLabel: nil,
+    updateAvailable: nil,
+    updateVersion: nil,
+    updateReceipt: nil
   )
+}
+
+struct HermesMemoryProviderSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let label: String
+  let status: String
+  let detail: String
+  let active: Bool
+  let ready: Bool
+}
+
+struct HermesMemorySnapshot: Decodable, Equatable {
+  let active: String
+  let memoryBytes: Int
+  let userBytes: Int
+  let providers: [HermesMemoryProviderSnapshot]
+
+  static let empty = HermesMemorySnapshot(active: "", memoryBytes: 0, userBytes: 0, providers: [])
 }
 
 enum HermesRouteSnapshotDecoder {

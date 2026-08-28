@@ -27,7 +27,7 @@ struct HermesRouteContent: View {
         onAction: onAction
       )
     case .memory:
-      HermesRemoteRoutePage(route: route, data: data, chinese: chinese, onAction: onAction)
+      HermesMemoryPage(data: data.memory, chinese: chinese, onAction: onAction)
     case .files:
       HermesFilesPage(
         chinese: chinese,
@@ -50,6 +50,8 @@ struct HermesRouteContent: View {
         chinese: chinese,
         detectedModels: data.detectedModels,
         models: data.models,
+        auxiliary: data.modelAuxiliary,
+        moa: data.modelMoa,
         confirmation: data.modelConfirmation,
         operation: data.operation,
         onAction: onAction
@@ -583,6 +585,61 @@ private enum HermesRemoteEditor: String, Identifiable {
   case plugin
 
   var id: String { rawValue }
+}
+
+private struct HermesMemoryPage: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let data: HermesMemorySnapshot
+  let chinese: Bool
+  let onAction: HermesRouteActionSink
+
+  var body: some View {
+    HermesPage(subtitle: chinese ? "记忆 provider 与本地记忆文件" : "Memory providers and local memory files") {
+      HermesPanel {
+        VStack(alignment: .leading, spacing: 8) {
+          HStack {
+            Label(chinese ? "当前 provider" : "Active provider", systemImage: "brain.head.profile")
+            Spacer()
+            Text(data.active.isEmpty ? (chinese ? "未设置" : "Not configured") : data.active)
+              .font(HermesFonts.mono(12))
+          }
+          HStack {
+            LabeledContent(chinese ? "MEMORY.md" : "MEMORY.md", value: ByteCountFormatter.string(fromByteCount: Int64(data.memoryBytes), countStyle: .file))
+            LabeledContent(chinese ? "USER.md" : "USER.md", value: ByteCountFormatter.string(fromByteCount: Int64(data.userBytes), countStyle: .file))
+          }
+        }
+      }
+      if !data.providers.isEmpty {
+        Section(chinese ? "Providers" : "Providers") {
+          ForEach(data.providers) { provider in
+            Button {
+              onAction(.memoryProvider, HermesRouteActionPayload(route: "memory", id: provider.id))
+            } label: {
+              HStack(spacing: 10) {
+                Image(systemName: provider.active ? "checkmark.circle.fill" : "circle")
+                  .foregroundStyle(provider.ready ? appearance.palette.success : appearance.palette.tertiary)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text(provider.label).font(HermesFonts.bodyBold(14))
+                  if !provider.detail.isEmpty { Text(provider.detail).font(HermesFonts.body(11)).foregroundStyle(appearance.palette.secondary) }
+                }
+                Spacer()
+                HermesStatusPill(text: provider.status.isEmpty ? (provider.ready ? "ready" : "setup") : provider.status)
+              }
+            }.buttonStyle(.plain)
+          }
+        }
+      }
+      HStack {
+        Button(role: .destructive) {
+          onAction(.memoryReset, HermesRouteActionPayload(route: "memory", value: "all"))
+        } label: { Label(chinese ? "重置全部记忆" : "Reset all memory", systemImage: "trash") }
+          .buttonStyle(.bordered)
+        Button {
+          onAction(.refresh, HermesRouteActionPayload(route: "memory"))
+        } label: { Label(chinese ? "刷新" : "Refresh", systemImage: "arrow.clockwise") }
+      }
+    }
+  }
 }
 
 private struct HermesRemoteRoutePage: View {
@@ -1145,6 +1202,26 @@ private struct HermesRemoteRoutePage: View {
         HermesPanel {
           HStack { Text(chinese ? "网关状态" : "Gateway status").font(HermesFonts.display(15)); Spacer(); HermesStatusPill(text: data.system.gatewayOnline ? (chinese ? "在线" : "Online") : (chinese ? "离线" : "Offline"), color: data.system.gatewayOnline ? appearance.palette.success : appearance.palette.destructive) }
         }
+        if let health = data.system.healthLabel, !health.isEmpty {
+          HermesPanel {
+            Label(health, systemImage: data.system.gatewayOnline ? "checkmark.shield" : "exclamationmark.shield")
+              .foregroundStyle(data.system.gatewayOnline ? appearance.palette.success : appearance.palette.warning)
+          }
+        }
+        if let egress = data.system.egressLabel, !egress.isEmpty {
+          HermesPanel {
+            Text(egress).font(HermesFonts.mono(11)).foregroundStyle(appearance.palette.secondary).textSelection(.enabled)
+          }
+        }
+        if let updateVersion = data.system.updateVersion, !updateVersion.isEmpty {
+          HermesPanel {
+            HStack {
+              Label(chinese ? "可用更新" : "Update available", systemImage: "arrow.down.circle")
+              Spacer()
+              Text(updateVersion).font(HermesFonts.mono(11))
+            }
+          }
+        }
         ForEach(data.system.nodes) { node in
           HermesPanel {
             VStack(alignment: .leading, spacing: 12) {
@@ -1200,8 +1277,12 @@ private struct HermesRemoteRoutePage: View {
           }
         }
         HStack {
+          Button { onAction(.systemStart, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "启动" : "Start", systemImage: "play.fill") }.buttonStyle(.bordered)
+          Button { onAction(.systemStop, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "停止" : "Stop", systemImage: "stop.fill") }.buttonStyle(.bordered)
+          Button { onAction(.systemDrain, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "排空" : "Drain", systemImage: "arrow.down.to.line") }.buttonStyle(.bordered)
           Button { onAction(.systemRecover, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "立即重连" : "Reconnect", systemImage: "arrow.triangle.2.circlepath") }.buttonStyle(HermesPrimaryButtonStyle())
           Button { onAction(.systemRestart, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "重启网关" : "Restart gateway", systemImage: "arrow.clockwise") }.buttonStyle(HermesPrimaryButtonStyle())
+          Button { onAction(.systemUpdateCheck, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "检查更新" : "Check updates", systemImage: "magnifyingglass") }.buttonStyle(.bordered)
           Button { onAction(.systemUpdate, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "更新 Hermes" : "Update Hermes", systemImage: "arrow.down.circle") }.buttonStyle(.bordered)
         }
       }.refreshable { onAction(.refresh, HermesRouteActionPayload(route: "system")) }
@@ -2280,6 +2361,8 @@ private struct HermesModelsPage: View {
   let chinese: Bool
   let detectedModels: [String]
   let models: [HermesModelSnapshot]
+  let auxiliary: HermesModelAuxiliarySnapshot
+  let moa: HermesModelMoaSnapshot
   let confirmation: HermesModelConfirmationSnapshot?
   let operation: HermesRouteOperationSnapshot?
   let onAction: HermesRouteActionSink
@@ -2313,6 +2396,7 @@ private struct HermesModelsPage: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 14) {
         availableModelsPanel
+        auxiliaryPanel
         customModelPanel
       }
       .padding(14)
@@ -2402,6 +2486,37 @@ private struct HermesModelsPage: View {
               }
             }
           }
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private var auxiliaryPanel: some View {
+    HermesPanel {
+      VStack(alignment: .leading, spacing: 8) {
+        HStack {
+          Label(chinese ? "辅助任务模型" : "Auxiliary task models", systemImage: "slider.horizontal.3")
+            .font(HermesFonts.display(15))
+          Spacer()
+          if !moa.activePreset.isEmpty { HermesStatusPill(text: "MoA: (moa.activePreset)") }
+        }
+        if auxiliary.tasks.isEmpty {
+          Text(chinese ? "未配置辅助槽位" : "No auxiliary slots configured")
+            .font(HermesFonts.body(12)).foregroundStyle(appearance.palette.secondary)
+        } else {
+          ForEach(auxiliary.tasks) { task in
+            HStack {
+              Text(task.task).font(HermesFonts.bodyBold(12))
+              Spacer()
+              Text([task.provider, task.model].filter { !$0.isEmpty }.joined(separator: "/"))
+                .font(HermesFonts.mono(11)).foregroundStyle(appearance.palette.secondary)
+            }
+          }
+        }
+        HStack {
+          Text(moa.enabled ? (chinese ? "MoA 已启用" : "MoA enabled") : (chinese ? "MoA 未启用" : "MoA disabled"))
+            .font(HermesFonts.body(11)).foregroundStyle(moa.enabled ? appearance.palette.success : appearance.palette.secondary)
+          if moa.presetCount > 0 { Text("· (moa.presetCount) presets").font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary) }
         }
       }
     }

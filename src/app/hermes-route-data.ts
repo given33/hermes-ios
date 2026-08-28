@@ -55,6 +55,7 @@ import {
   modelsSnapshot,
 } from './route-snapshots/models';
 import { systemSnapshot } from './route-snapshots/system';
+import { memorySnapshot } from './route-snapshots/memory';
 
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
 export {
@@ -98,8 +99,28 @@ export async function loadHermesSwiftUIRouteSnapshot(
       return { ...base, runtime: runtimeSnapshot(source, selectedId) };
     case 'analytics':
       return { ...base, analytics: analyticsSnapshot(source) };
-    case 'models':
-      return { ...base, models: modelsSnapshot(source) };
+    case 'models': {
+      const root = isRecord(source) ? source : {};
+      const auxiliary = isRecord(root.auxiliary) ? root.auxiliary : {};
+      const moa = isRecord(root.moa) ? root.moa : {};
+      const presets = isRecord(moa.presets) ? moa.presets : {};
+      const tasks = Array.isArray(auxiliary.tasks) ? auxiliary.tasks : [];
+      return {
+        ...base,
+        models: modelsSnapshot(source),
+        modelAuxiliary: {
+          active: isRecord(auxiliary.main) ? stringValue(auxiliary.main.model) : '',
+          tasks: tasks.filter(isRecord).map((task) => ({
+            task: stringValue(task.task), provider: stringValue(task.provider), model: stringValue(task.model),
+          })),
+        },
+        modelMoa: {
+          enabled: moa.enabled === true || (isRecord(moa.active_preset) && moa.active_preset.enabled === true),
+          activePreset: stringValue(moa.active_preset) || stringValue(moa.activePreset) || stringValue(moa.default_preset),
+          presetCount: Object.keys(presets).length,
+        },
+      };
+    }
     case 'logs':
       return { ...base, logs: logsSnapshot(source, localizer) };
     case 'cron':
@@ -141,6 +162,8 @@ export async function loadHermesSwiftUIRouteSnapshot(
       return { ...base, environment: environmentSnapshot(source) };
     case 'system':
       return { ...base, system: systemSnapshot(source, localizer) };
+    case 'memory':
+      return { ...base, memory: memorySnapshot(source) };
     default:
       return base;
   }
@@ -478,9 +501,30 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       await api.deleteEnvironmentVariable(payload.id, profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.memoryProvider:
+      if (!payload.id && !value) return 'none';
+      await api.setMemoryProvider(payload.id || value);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.memoryReset:
+      await api.resetMemory((payload.value || 'all') as 'all' | 'memory' | 'user');
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRestart:
       await api.restartGateway();
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemStart:
+      await api.startGateway(profile);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemStop:
+      await api.stopGateway(profile);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDrain:
+      await api.drainGateway(profile);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemUpdateCheck: {
+      const result = await api.checkHermesUpdate();
+      const version = stringValue(result.version) || stringValue(result.latest_version);
+      return { message: version ? `${chinese ? '最新版本' : 'Latest version'}: ${version}` : (chinese ? '已检查更新' : 'Update check completed') };
+    }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRecover:
       await api.recoverManagedNodes(payload.id || '');
       return 'reload';

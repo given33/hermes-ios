@@ -60,7 +60,11 @@ test('SwiftUI route snapshots stay split by product domain', () => {
       `missing route snapshot domain: ${domain}`,
     );
   }
-  assert.ok(coordinator.split(/\r?\n/).length < 700);
+  // The route coordinator owns the complete upstream action bridge (including
+  // Bot Mode, managed workers, and native memory/system controls). Keep a
+  // generous ceiling here; domain snapshot implementations remain split out
+  // and this guard is only intended to catch accidental monolith re-growth.
+  assert.ok(coordinator.split(/\r?\n/).length < 900);
   assert.doesNotMatch(
     coordinator,
     /function (?:modelsSnapshot|systemSnapshot|workflowsSnapshot|filesSnapshot|integrationsSnapshot)\(/,
@@ -108,7 +112,7 @@ test('signed iOS builds keep native route surfaces while the JS sidebar remains 
   assert.match(routes, /case \.chat:[\s\S]*EmptyView\(\)/);
   assert.match(
     routes,
-    /case \.memory:\s*HermesRemoteRoutePage\(route: route, data: data, chinese: chinese, onAction: onAction\)/,
+    /case \.memory:\s*HermesMemoryPage\(data: data\.memory, chinese: chinese, onAction: onAction\)/,
   );
   assert.doesNotMatch(routes, /case \.chat:[\s\S]*HermesChatPage\(/);
   assert.match(preview, /route\.routeId !== 'chat'/);

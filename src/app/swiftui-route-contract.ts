@@ -338,6 +338,17 @@ export interface HermesSwiftUIIntegrationSnapshot {
   catalogRequiredEnv?: readonly string[];
 }
 
+export interface HermesSwiftUIModelAuxiliarySnapshot {
+  active: string;
+  tasks: readonly { task: string; provider: string; model: string }[];
+}
+
+export interface HermesSwiftUIModelMoaSnapshot {
+  enabled: boolean;
+  activePreset: string;
+  presetCount: number;
+}
+
 export interface HermesSwiftUIManagedInstallationTargetSnapshot {
   nodeId: 'dbb3' | 'server' | 'wsl' | 'hk';
   state: string;
@@ -459,6 +470,11 @@ export interface HermesSwiftUISystemSnapshot {
   metricsAvailable: boolean;
   nodes: readonly HermesSwiftUISystemNodeSnapshot[];
   operationMessage?: string;
+  healthLabel?: string;
+  egressLabel?: string;
+  updateAvailable?: boolean;
+  updateVersion?: string;
+  updateReceipt?: string;
 }
 
 export interface HermesSwiftUISystemNodeSnapshot {
@@ -479,6 +495,22 @@ export interface HermesSwiftUISystemNodeSnapshot {
   recoveryState: string;
 }
 
+export interface HermesSwiftUIMemoryProviderSnapshot {
+  id: string;
+  label: string;
+  status: string;
+  detail: string;
+  active: boolean;
+  ready: boolean;
+}
+
+export interface HermesSwiftUIMemorySnapshot {
+  active: string;
+  memoryBytes: number;
+  userBytes: number;
+  providers: readonly HermesSwiftUIMemoryProviderSnapshot[];
+}
+
 export interface HermesSwiftUIRouteSnapshot {
   version: typeof HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION;
   route?: string;
@@ -491,6 +523,8 @@ export interface HermesSwiftUIRouteSnapshot {
   analytics?: HermesSwiftUIAnalyticsSnapshot;
   models?: readonly HermesSwiftUIModelSnapshot[];
   modelConfirmation?: HermesSwiftUIModelConfirmationSnapshot;
+  modelAuxiliary?: HermesSwiftUIModelAuxiliarySnapshot;
+  modelMoa?: HermesSwiftUIModelMoaSnapshot;
   detectedModels?: readonly string[];
   operation?: HermesSwiftUIRouteOperationSnapshot;
   logs?: readonly HermesSwiftUILogSnapshot[];
@@ -506,6 +540,7 @@ export interface HermesSwiftUIRouteSnapshot {
   config?: HermesSwiftUIConfigSnapshot;
   environment?: readonly HermesSwiftUIEnvironmentSecretSnapshot[];
   system?: HermesSwiftUISystemSnapshot;
+  memory?: HermesSwiftUIMemorySnapshot;
 }
 
 export type HermesSwiftUIRouteAction =
@@ -546,6 +581,9 @@ const snapshotRecords = [
   'collaboration',
   'config',
   'system',
+  'memory',
+  'modelAuxiliary',
+  'modelMoa',
 ] as const;
 const snapshotFieldNames = new Set<string>(HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS);
 

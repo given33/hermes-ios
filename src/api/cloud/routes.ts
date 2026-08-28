@@ -19,6 +19,9 @@ type RouteApi = Pick<
   | 'getMcp'
   | 'getModelCredentials'
   | 'getModels'
+  | 'getAuxiliaryModels'
+  | 'getMoaModels'
+  | 'getCustomProviderEndpoints'
   | 'getPairing'
   | 'getPlugins'
   | 'getProfiles'
@@ -27,6 +30,10 @@ type RouteApi = Pick<
   | 'getSkillContent'
   | 'getSkills'
   | 'getSystem'
+  | 'getHealth'
+  | 'getEgressStatus'
+  | 'checkHermesUpdate'
+  | 'getHermesUpdateReceipt'
   | 'getUnifiedConversations'
   | 'getWebhooks'
   | 'getWorkflow'
@@ -38,6 +45,7 @@ type RouteApi = Pick<
   | 'getWriteApproval'
   | 'getWriteApprovals'
   | 'getKanbanBoard'
+  | 'getMemoryStatus'
 >;
 
 /** Resolve one native management route from canonical domain APIs. */
@@ -55,7 +63,15 @@ export async function loadCloudRoute(
     }
     case 'files': return api.getAllAccountFiles();
     case 'analytics': return api.getAnalytics(30, profile);
-    case 'models': return api.getModels(profile);
+    case 'models': {
+      const [models, auxiliary, moa, customEndpoints] = await Promise.all([
+        api.getModels(profile),
+        api.getAuxiliaryModels(profile).catch(() => ({})),
+        api.getMoaModels(profile).catch(() => ({})),
+        api.getCustomProviderEndpoints(profile).catch(() => ({})),
+      ]);
+      return { ...models, auxiliary, moa, customEndpoints };
+    }
     case 'logs': return api.getLogs();
     case 'cron': return api.getCronJobs(profile);
     case 'skills': {
@@ -78,7 +94,17 @@ export async function loadCloudRoute(
     // catalog metadata and profile scoping.  Keep the route on that source of
     // truth so the native page does not render an empty/stale credential list.
     case 'env': return api.getEnvironment(profile);
-    case 'system': return api.getSystem();
+    case 'system': {
+      const [system, health, egress, updateCheck, updateReceipt] = await Promise.all([
+        api.getSystem(),
+        api.getHealth().catch(() => ({})),
+        api.getEgressStatus().catch(() => ({})),
+        api.checkHermesUpdate().catch(() => ({})),
+        api.getHermesUpdateReceipt().catch(() => ({})),
+      ]);
+      return { ...system, health, egress, updateCheck, updateReceipt };
+    }
+    case 'memory': return api.getMemoryStatus();
     case 'achievements': return api.getAchievements();
     case 'kanban': return api.getKanbanBoard();
     case 'collaboration': {

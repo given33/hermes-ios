@@ -12,6 +12,8 @@ export const HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS = [
   'runtime',
   'analytics',
   'models',
+  'modelAuxiliary',
+  'modelMoa',
   'modelConfirmation',
   'detectedModels',
   'operation',
@@ -28,6 +30,7 @@ export const HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS = [
   'config',
   'environment',
   'system',
+  'memory',
 ] as const;
 
 export const HERMES_SWIFTUI_ROUTE_ACTION_PAYLOAD_FIELDS = [
@@ -138,6 +141,12 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   systemRestart: 'system.restart',
   systemRecover: 'system.recover',
   systemUpdate: 'system.update',
+  systemStart: 'system.start',
+  systemStop: 'system.stop',
+  systemDrain: 'system.drain',
+  systemUpdateCheck: 'system.update.check',
+  memoryProvider: 'memory.provider',
+  memoryReset: 'memory.reset',
   kanbanCreate: 'kanban.create',
   kanbanUpdate: 'kanban.update',
   kanbanMove: 'kanban.move',
