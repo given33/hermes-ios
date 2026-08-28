@@ -774,7 +774,11 @@ test('management methods keep their wire contract through cloud/management', asy
   await api.getWebhooks();
   await api.setWebhookEnabled('hook one', false);
   await api.getProfiles();
+  await api.getBots();
+  await api.getBotMeta('bot one');
+  await api.updateBotMeta('bot one', { hidden: true });
   await api.renameProfile('worker one', 'worker hk');
+  await api.renameBot('bot one', 'bot hk');
   await api.getConfig('ops');
   await api.setEnvironmentVariable('KEY', 'value', 'ops');
   await api.getSystem();
@@ -792,7 +796,11 @@ test('management methods keep their wire contract through cloud/management', asy
       ['/api/webhooks/hook%20one/enabled', 'PUT'],
       ['/api/profiles', 'GET'],
       ['/api/profiles/active', 'GET'],
+      ['/api/bots', 'GET'],
+      ['/api/bots/bot%20one/meta', 'GET'],
+      ['/api/bots/bot%20one/meta', 'PATCH'],
       ['/api/profiles/worker%20one', 'PATCH'],
+      ['/api/bots/bot%20one', 'PATCH'],
       ['/api/config', 'GET'],
       ['/api/config/defaults', 'GET'],
       ['/api/config/schema', 'GET'],
@@ -804,7 +812,7 @@ test('management methods keep their wire contract through cloud/management', asy
     ],
   );
   assert.deepEqual(parsedBody(calls[4]), { enabled: true, profile: 'ops' });
-  assert.deepEqual(parsedBody(calls[17]), { node_id: 'dbb3' });
+  assert.deepEqual(parsedBody(calls[21]), { node_id: 'dbb3' });
 });
 
 test('kanban and collaboration methods keep their wire contract through cloud/collaboration', async () => {

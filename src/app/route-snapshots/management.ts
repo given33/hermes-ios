@@ -391,6 +391,8 @@ export function profilesSnapshot(source: unknown, localizer: HermesRouteLocalize
     if (!isRecord(entry)) return [];
     const id = stringValue(entry.name) || stringValue(entry.id) || `profile-${index}`;
     const description = localizer.serverText(stringValue(entry.description) || stringValue(entry.detail) || '');
+    const botMeta = isRecord(entry.bot_meta) ? entry.bot_meta : {};
+    const botTitle = botMode ? stringValue(botMeta.title) : ''; const botGroups = botMode && Array.isArray(botMeta.groups) ? botMeta.groups.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean) : []; const botGroupLabel = botGroups.length ? `${localizer.isChinese ? '分组' : 'Groups'}: ${botGroups.join(', ')}` : '';
     const canonicalRecord = isRecord(entry.canonical_session) ? entry.canonical_session : null;
     const canonical = canonicalRecord !== null && !canonicalRecord.archived;
     const canonicalSessionId = canonicalRecord
@@ -403,13 +405,18 @@ export function profilesSnapshot(source: unknown, localizer: HermesRouteLocalize
       : '';
     return [{
       id,
-      name: localizer.serverText(stringValue(entry.display_name) || stringValue(entry.name) || id),
+      name: localizer.serverText(botTitle || stringValue(entry.display_name) || stringValue(entry.name) || id),
       model: stringValue(entry.model) || '',
       description,
-      detail: [description, botStatus].filter(Boolean).join(' · '),
+      detail: [description, botStatus, botGroupLabel].filter(Boolean).join(' · '),
       ...(botMode && canonical && canonicalSessionId
         ? { botSessionId: officialConversationPlaceholderId(id, canonicalSessionId) }
         : {}),
+      ...(botMode ? {
+        botHidden: botMeta.hidden === true,
+        botPinned: botMeta.pinned === true,
+        botGroups,
+      } : {}),
       active: Boolean(entry.active) || id === active,
       soul: stringValue(entry.soul),
       terminalAccess: entry.terminal_access !== false,

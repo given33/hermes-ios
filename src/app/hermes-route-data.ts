@@ -519,8 +519,12 @@ export async function performHermesSwiftUIRouteAction(
       }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationCreate:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.mcpCatalogInstall:
       if (payload.route === 'mcp') {
-        const catalogName = payload.fields?.catalogName?.trim();
+        const catalogName = payload.fields?.catalogName?.trim()
+          || (action === HERMES_SWIFTUI_ROUTE_ACTIONS.mcpCatalogInstall
+            ? payload.id?.trim() || payload.name?.trim() || value
+            : '');
         if (catalogName) {
           const env = parseJsonRecord(payload.fields?.env || '{}');
           const result = await api.installMcpCatalogEntry(catalogName, env && isStringRecord(env) ? env : {}, payload.fields?.enable !== 'false', profile);
@@ -559,13 +563,18 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       await api.deleteProfile(payload.id, payload.route === 'bots');
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.botMetaUpdate: { if (payload.route !== 'bots' || !payload.id || typeof api.updateBotMeta !== 'function') return 'none'; const patch = parseJsonRecord(payload.detail || payload.value || payload.fields?.meta || '{}'); if (!patch) return 'none'; await api.updateBotMeta(payload.id, patch); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileUpdate:
       if (!payload.id) return 'none';
       if (payload.detail !== undefined) await api.updateProfileSoul(payload.id, payload.detail);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileRename:
       if (!payload.id || !payload.name?.trim()) return 'none';
-      await api.renameProfile(payload.id, payload.name.trim());
+      if (payload.route === 'bots' && typeof api.renameBot === 'function') {
+        await api.renameBot(payload.id, payload.name.trim());
+      } else {
+        await api.renameProfile(payload.id, payload.name.trim());
+      }
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileDescription:
       if (!payload.id || payload.detail === undefined) return 'none';
@@ -879,8 +888,7 @@ export async function performHermesSwiftUIRouteAction(
     default:
       return 'none';
   }
-}
-function parseJsonRecord(value: string): Record<string, unknown> | null {
+} function parseJsonRecord(value: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(value) as unknown;
     return isRecord(parsed) ? parsed : null;

@@ -60,6 +60,13 @@ exist. “API only” is deliberately not treated as completion.
 - 2026-08-29: fixed the native `HermesSessionSnapshot` decoder to accept the
   server's optional `archived`, `pinned`, and `unread` flags that the SwiftUI
   page already renders; blank redacted Toolset values are never written back.
+- 2026-08-29: completed the mobile Bot Mode metadata bridge. `/api/bots`
+  now carries upstream `ui_meta['hermes-bots']` presentation state; typed
+  `/api/bots/{name}/meta` GET/PATCH endpoints persist title, hidden/pinned
+  state, avatar presentation fields, and group membership. The native Bots
+  route displays title/groups and exposes hide/show and pin/unpin actions, and
+  bot renames use the dedicated Bot Mode REST route. Legacy `mcp.catalog.install`
+  action events are also routed through the official catalog installer.
 
 Each item must add a typed route snapshot, a named action in
 `docs/spec/swiftui-route-actions.json`, a backend-wire test, and a native source

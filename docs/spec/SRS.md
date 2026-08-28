@@ -92,15 +92,32 @@ Hermes iOS 是 hermes-agent 后端（主服务器）的**原生客户端**：App
 
 **错误处理**：入队失败落 outbox 重放；可重试错误码集合 `RETRYABLE_TURN_ERROR_CODES`（http_5xx/model_timeout/model_empty_response/model_not_configured/hosted_turn_failed 等）+ 消息正则（超时/bad gateway/未配置/繁忙）驱动"重试"按钮（来源:chat-view-model.ts:723-758）。
 
-### FR-CHAT-3 实时更新：SSE 主通道 + 轮询兜底
+### FR-CHAT-3 实时更新：WebSocket 优先 + SSE/轮询兜底
 
-**需求描述**：活跃会话有运行中工作时打开 `GET /single/conversations/{id}/hosted-events`（SSE，`Accept: text/event-stream`，经 `expo/fetch` 流式实现）。只消费 `event: conversation` 帧，data 为 `{conversation, cursor}`，cursor 单调递增并按会话续传。`useHostedConversationStream` 管理前后台、重连和 cursor；`useConversationSnapshotController` 提供快照轮询兜底。流健康 15s 一次快照、断流 1s 一次、单次 20s 超时；断线 1.5s 重连；App 进入后台时暂停流并中止。
+**需求描述**：活跃会话有运行中工作时优先打开认证的
+`GET /single/conversations/{id}/hosted-events-ws` WebSocket 镜像（票据来自
+`/api/auth/ws-ticket`，不把 bearer token 放进 URL）。连接升级失败时打开
+`GET /single/conversations/{id}/hosted-events`（SSE，`Accept:
+text/event-stream`，经 `expo/fetch` 流式实现）。两种传输只消费同一
+`{conversation, cursor}` 游标契约，cursor 单调递增并按会话续传。
+`useHostedConversationStream` 管理前后台、重连和 cursor；
+`useConversationSnapshotController` 提供快照轮询兜底。流健康 15s 一次快照、
+断流 1s 一次、单次 5s 连接超时、90s 空闲看门狗；App 进入后台时暂停流并中止。
 
 **边界条件**：SSE 响应 Content-Type 非 `text/event-stream` 视为协议错误；应用回前台立即重连并刷新（来源:HermesApiClient.openEventStream、useHostedConversationStream）。本地缓存永不作为权威。
 
 ### FR-CHAT-4 托管群聊时间线（多角色）
 
-**需求描述**：collaboration 消息投影为视图消息：角色阶段归一化为 `chat|dispatcher|worker|reviewer|supervisor|reporter`；`dbb3-manager` profile 显示名固定"Hermes 调度员"（英文 Hermes Manager），worker/审阅员/汇报员等均有中英显示名与阶段标签；头像角色按 profile 关键字（dbb3/pc/wsl/review/监督）推断（来源:chat-view-model.ts:406-591、1140-1282）。活动（activities）从 message.activities/meta 的 tool_calls/reasoning/searches/files/commands 等多源合并、按 id 去重合并、按时间排序，分类为 reasoning/search/file/command/model/mcp/skill/subagent/handoff/status（来源:chat-view-model.ts:951-1263）。计时标签：进行中 chat 阶段显示"正在思考/正在执行/正在重连 (n/5)"（重连计数从运行状态活动文本解析），终态显示耗时（来源:chat-view-model.ts:513-547、1314-1331）。
+**需求描述**：collaboration 消息投影为视图消息：角色阶段归一化为
+`chat|dispatcher|worker`；一个调度员拆分任务，DBB3、PC/WSL 与 HK worker
+独立执行并提交结果和证据，不创建监督者、审阅者或汇报者模型回合。
+`dbb3-manager` profile 显示名固定"Hermes 调度员"（英文 Hermes Manager），
+三个 worker 有中英显示名与阶段标签；头像角色按 profile 关键字
+（dbb3/pc/wsl/hk）推断。活动（activities）从
+message.activities/meta 的 tool_calls/reasoning/searches/files/commands 等多源
+合并、按 id 去重合并、按时间排序，分类为
+reasoning/search/file/command/model/mcp/skill/subagent/handoff/status。
+计时标签：进行中 chat 阶段显示"正在思考/正在执行/正在重连 (n/5)"，终态显示耗时。
 
 **边界条件**：`kind === 'route'` 消息不渲染；同 turn 的 chat 进度消息（opening/progress/milestone）在终态后隐藏，最终 chat 消息只保留最新一条；cancelled turn 隐藏其 chat 消息；60s 窗口内同 turn 同内容的 assistant 消息去重（来源:chat-view-model.ts:135-289、1087-1126）。取消（`POST .../hosted-turns/{turnId}/cancel`）与运行中介入（`POST .../interventions`）均可用（来源:HermesCloudApi.ts:1547-1579）。
 

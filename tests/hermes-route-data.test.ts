@@ -459,11 +459,21 @@ test('native MCP actions test configured servers and install catalog entries', a
       fields: { catalogName: 'github', enable: 'true', env: '{"GITHUB_TOKEN":"secret"}' },
     },
   }, 'ops');
+  const legacyInstalled = await performHermesSwiftUIRouteAction(api, {
+    action: 'mcp.catalog.install',
+    payload: {
+      route: 'mcp',
+      id: 'github',
+      fields: { enable: 'true', env: '{"GITHUB_TOKEN":"secret"}' },
+    },
+  }, 'ops');
 
   assert.deepEqual(tested, { message: '连接成功：1 个工具' });
   assert.deepEqual(installed, { message: 'MCP 已安装', reload: true });
+  assert.deepEqual(legacyInstalled, { message: 'MCP 已安装', reload: true });
   assert.deepEqual(calls, [
     ['test', 'github', 'ops'],
+    ['install', 'github', { GITHUB_TOKEN: 'secret' }, true, 'ops'],
     ['install', 'github', { GITHUB_TOKEN: 'secret' }, true, 'ops'],
   ]);
 });
@@ -1055,6 +1065,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
           name: 'hk-worker',
           display_name: 'HK Worker',
           model: 'gpt-5.6-sol',
+          bot_meta: { title: 'HK Worker', hidden: true, pinned: true, groups: ['ops', 'hk'] },
           canonical_session: { id: 'bot-chat', resolved_id: 'bot-chat' },
         }],
       };
@@ -1063,8 +1074,32 @@ test('Bot Mode route projects the upstream profile roster', async () => {
   assert.deepEqual(snapshot.profiles?.map((entry) => ({ id: entry.id, name: entry.name })), [
     { id: 'hk-worker', name: 'HK Worker' },
   ]);
-  assert.equal(snapshot.profiles?.[0]?.detail, 'Bot Chat 已就绪');
+  assert.equal(snapshot.profiles?.[0]?.detail, 'Bot Chat 已就绪 · 分组: ops, hk');
+  assert.equal(snapshot.profiles?.[0]?.name, 'HK Worker');
+  assert.equal(snapshot.profiles?.[0]?.botHidden, true);
+  assert.equal(snapshot.profiles?.[0]?.botPinned, true);
+  assert.deepEqual(snapshot.profiles?.[0]?.botGroups, ['ops', 'hk']);
   assert.match(snapshot.profiles?.[0]?.botSessionId || '', /^official:v3:/);
+});
+
+test('Bot Mode metadata action uses the dedicated REST endpoint', async () => {
+  const calls: Array<[string, Record<string, unknown>]> = [];
+  const api = {
+    updateBotMeta: async (name: string, patch: Record<string, unknown>) => {
+      calls.push([name, patch]);
+      return { ok: true, applied: { ui_meta: true } };
+    },
+  } as unknown as HermesCloudApi;
+  const result = await performHermesSwiftUIRouteAction(api, {
+    action: 'bot.meta.update',
+    payload: {
+      route: 'bots',
+      id: 'hk-worker',
+      detail: JSON.stringify({ hidden: true, pinned: true, groups: ['ops'] }),
+    },
+  }, 'default');
+  assert.equal(result, 'reload');
+  assert.deepEqual(calls, [['hk-worker', { hidden: true, pinned: true, groups: ['ops'] }]]);
 });
 
 test('system snapshots share managed-node aliases with the sidebar status', async () => {

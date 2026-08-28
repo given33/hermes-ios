@@ -147,6 +147,20 @@ export class HermesManagementCloudApi {
     return this.transport.request<JsonRecord>('/api/bots');
   }
 
+  getBotMeta(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/meta`,
+    );
+  }
+
+  updateBotMeta(name: string, patch: JsonRecord) {
+    return this.transport.json<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/meta`,
+      'PATCH',
+      patch,
+    );
+  }
+
   setActiveProfile(name: string) {
     return this.transport.json<JsonRecord>('/api/profiles/active', 'POST', { name });
   }
@@ -179,6 +193,16 @@ export class HermesManagementCloudApi {
   renameProfile(name: string, newName: string) {
     return this.transport.json<JsonRecord>(
       `/api/profiles/${encodeURIComponent(name)}`,
+      'PATCH',
+      { new_name: newName },
+    );
+  }
+
+  /** Bot Mode keeps a distinct REST route so the server can preserve bot
+   * metadata/identity semantics while applying the same profile rename. */
+  renameBot(name: string, newName: string) {
+    return this.transport.json<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}`,
       'PATCH',
       { new_name: newName },
     );

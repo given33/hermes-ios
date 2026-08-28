@@ -199,7 +199,11 @@ GET `/achievements`；POST `/rescan`（来源:HermesCloudApi.ts:1005-1011）。
 5. **Cron 更新 body `{updates:{…}}` 包裹**（§3.5）：已由 `CronJobUpdate` 实现、测试和文档确认。
 6. **插件面整体**（workflows/kanban/achievements/ios-intelligence，§5）：后端 API-HTTP.md §8 明言插件 `plugin_api.py` 路由不在枚举范围。iOS 对这四个面的依赖是硬依赖，建议后端补一份插件 API 附录，否则 iOS 侧契约只能以插件源码为准。
 7. **已核对齐（抽样）**：`/auth/mobile/*`、`/api/mobile/v1/*`、`/single/conversations*`（含 enqueue/hosted-events/interventions/retry/cancel）、write-approvals 的 409+digest、`/api/sessions*`、`/api/files*`、`/api/model/*`、`/api/config*`、`/api/env`、`/api/cron/jobs*`（dashboard 面动词）、`/api/skills*`、`/api/mcp/*`、`/api/pairing*`、`/api/messaging/platforms*`、`/api/webhooks*`、`/api/profiles*`、`/api/managed-nodes/*`、`/api/managed-installations`、`/api/gateway/restart`、`/api/hermes/update`、`/api/logs`、`/api/analytics/*`、`/api/dashboard/themes|theme|font|plugins`。
-8. **明确未使用**：iOS 不再使用任何 WebSocket 通道（`/api/ws`、`/api/events`、ws-ticket 已删除，见 docs/CHANGES-2026-07.md）；不调用 gateway REST 面（:8642）与 TUI JSON-RPC。实时性 = SSE + 轮询。
+8. **实时传输**：iOS 原生聊天优先使用认证的一次性 `/api/auth/ws-ticket` 与
+   `/api/plugins/collaboration/single/conversations/{id}/hosted-events-ws`
+   WebSocket 镜像；代理、旧网关或升级失败时自动回退到同一游标契约的
+   `hosted-events` SSE，再以受限快照轮询兜底。不使用旧的 `/api/ws`、
+   `/api/events` 或 TUI JSON-RPC，也不直连 gateway REST 面（:8642）。
 
 ## 7. 新增调用的清单（给加功能的人）
 

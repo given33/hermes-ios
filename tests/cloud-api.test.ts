@@ -1211,8 +1211,13 @@ test('account file consumers retain the bounded streaming transport contract', a
 test('Bot Mode roster uses the canonical mobile bot endpoint', async () => {
   const { api, calls } = createApi();
   await api.getBots();
+  await api.getBotMeta('hk worker');
+  await api.updateBotMeta('hk worker', { hidden: true });
   assert.equal(calls[0].path, '/api/bots');
   assert.equal(calls[0].options.method, undefined);
+  assert.equal(calls[1].path, '/api/bots/hk%20worker/meta');
+  assert.equal(calls[2].path, '/api/bots/hk%20worker/meta');
+  assert.equal(calls[2].options.method, 'PATCH');
 });
 
 test('session summaries keep preview, model precedence, and tool counts after the single-pass rewrite', () => {

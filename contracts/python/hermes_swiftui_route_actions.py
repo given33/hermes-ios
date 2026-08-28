@@ -153,6 +153,7 @@ ACTIONS: Final = {
     "profileExport": "profile.export",
     "profileActivate": "profile.activate",
     "profileDelete": "profile.delete",
+    "botMetaUpdate": "bot.meta.update",
     "configUpdate": "config.update",
     "configImport": "config.import",
     "environmentDelete": "environment.delete",

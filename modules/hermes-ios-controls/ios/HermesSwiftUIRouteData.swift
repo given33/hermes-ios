@@ -925,6 +925,9 @@ struct HermesProfileSnapshot: Decodable, Equatable, Identifiable {
   let detail: String
   let description: String?
   let botSessionId: String?
+  let botHidden: Bool?
+  let botPinned: Bool?
+  let botGroups: [String]?
   let active: Bool
   let soul: String
   let terminalAccess: Bool

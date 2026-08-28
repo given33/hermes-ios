@@ -585,6 +585,7 @@ private enum HermesRemoteEditor: String, Identifiable {
   case profiles
   case profileDescription
   case profileModel
+  case botMeta
   case soul
   case skill
   case kanban
@@ -1581,6 +1582,7 @@ private struct HermesRemoteRoutePage: View {
               .accessibilityLabel(chinese ? "打开 Bot Chat" : "Open Bot Chat")
           }
         }
+        .opacity(profile.botHidden == true ? 0.55 : 1)
         .contextMenu {
           Button {
             editorID = profile.id
@@ -1612,6 +1614,39 @@ private struct HermesRemoteRoutePage: View {
             editorDetail = ""
             editor = .profiles
           } label: { Label(chinese ? "重命名" : "Rename", systemImage: "pencil") }
+          if route == .bots {
+            Button {
+              editorID = profile.id
+              editorName = profile.name
+              editorValue = (profile.botGroups ?? []).joined(separator: ", ")
+              editorDetail = ""
+              editor = .botMeta
+            } label: { Label(chinese ? "编辑标题与分组" : "Edit title and groups", systemImage: "tag") }
+            Button {
+              onAction(
+                .botMetaUpdate,
+                HermesRouteActionPayload(
+                  route: "bots",
+                  id: profile.id,
+                  detail: "{\"hidden\":\(profile.botHidden == true ? \"false\" : \"true\")}"
+                )
+              )
+            } label: {
+              Label(profile.botHidden == true ? (chinese ? "显示机器人" : "Show bot") : (chinese ? "隐藏机器人" : "Hide bot"), systemImage: profile.botHidden == true ? "eye" : "eye.slash")
+            }
+            Button {
+              onAction(
+                .botMetaUpdate,
+                HermesRouteActionPayload(
+                  route: "bots",
+                  id: profile.id,
+                  detail: "{\"pinned\":\(profile.botPinned == true ? \"false\" : \"true\")}"
+                )
+              )
+            } label: {
+              Label(profile.botPinned == true ? (chinese ? "取消置顶" : "Unpin bot") : (chinese ? "置顶机器人" : "Pin bot"), systemImage: profile.botPinned == true ? "pin.slash" : "pin")
+            }
+          }
           Button {
             editorName = profile.id
             editorDetail = profile.soul
@@ -2051,6 +2086,11 @@ private struct HermesRemoteRoutePage: View {
       } else {
         onAction(.profileRename, HermesRouteActionPayload(route: route.rawValue, id: editorID, name: name))
       }
+    case .botMeta:
+      guard !editorID.isEmpty else { return }
+      let groups = value.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+      guard let encoded = try? JSONSerialization.data(withJSONObject: ["title": name, "groups": groups]), let json = String(data: encoded, encoding: .utf8) else { return }
+      onAction(.botMetaUpdate, HermesRouteActionPayload(route: "bots", id: editorID, detail: json))
     case .profileDescription:
       guard !editorID.isEmpty else { return }
       onAction(.profileDescription, HermesRouteActionPayload(route: route.rawValue, id: editorID, detail: detail))
@@ -2132,7 +2172,16 @@ private struct HermesRemoteEditorSheet: View {
   var body: some View {
     NavigationStack {
       Form {
-        if kind == .skill {
+        if kind == .botMeta {
+          Section(chinese ? "Bot Mode" : "Bot Mode") {
+            TextField(chinese ? "显示标题" : "Display title", text: $name)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+            TextField(chinese ? "分组（逗号分隔）" : "Groups (comma separated)", text: $value)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+          }
+        } else if kind == .skill {
           if isCreating {
             TextField(nameLabel, text: $name)
               .textInputAutocapitalization(.never)
@@ -2221,6 +2270,7 @@ private struct HermesRemoteEditorSheet: View {
       if kind == .soul { return "Edit SOUL.md" }
       if kind == .profileDescription { return isCreating ? "Add Profile description" : "Edit Profile description" }
       if kind == .profileModel { return isCreating ? "Add Profile model" : "Edit Profile model" }
+      if kind == .botMeta { return isCreating ? "Bot Mode metadata" : "Edit Bot Mode metadata" }
       if kind == .skill { return isCreating ? "New Skill" : "Edit SKILL.md" }
       if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
       if kind == .channel { return "Edit Channel Configuration" }
@@ -2240,6 +2290,7 @@ private struct HermesRemoteEditorSheet: View {
     case .profiles: return "新建 Profile"
     case .profileDescription: return "编辑 Profile 描述"
     case .profileModel: return "编辑 Profile 模型"
+    case .botMeta: return "编辑 Bot Mode 信息"
     case .soul: return "编辑 SOUL.md"
     case .skill: return isCreating ? "新建 Skill" : "编辑 SKILL.md"
     case .kanban: return name.isEmpty ? "新建任务" : "编辑任务"

@@ -191,6 +191,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   profileExport: 'profile.export',
   profileActivate: 'profile.activate',
   profileDelete: 'profile.delete',
+  botMetaUpdate: 'bot.meta.update',
   configUpdate: 'config.update',
   configImport: 'config.import',
   environmentDelete: 'environment.delete',

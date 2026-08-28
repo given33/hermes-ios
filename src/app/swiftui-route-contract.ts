@@ -439,6 +439,10 @@ export interface HermesSwiftUIProfileSnapshot {
   description?: string;
   /** Signed placeholder used to adopt a Bot Mode profile's canonical chat. */
   botSessionId?: string;
+  /** Upstream Bot Mode presentation metadata mirrored by `/api/bots`. */
+  botHidden?: boolean;
+  botPinned?: boolean;
+  botGroups?: readonly string[];
   active: boolean;
   soul: string;
   terminalAccess: boolean;
