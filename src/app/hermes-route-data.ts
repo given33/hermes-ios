@@ -57,6 +57,7 @@ import {
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
+import { loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport } from './route-actions/session-surfaces';
 import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata';
 // Account previews use temporaryPlaintextFile(name, 'account-file') and stream through
 // consumeAccountFile(... writeBoundedDownload); implementation lives in presentation.ts.
@@ -86,10 +87,14 @@ export async function loadHermesSwiftUIRouteSnapshot(
       const sessionState = selected && !selectedId.startsWith('official:')
         ? await api.getConversationSessionState(selectedId, selected?.profile || profile)
         : undefined;
+      // Keep the native session page on the same official data surfaces as
+      // desktop. These are optional so older gateways remain decodable.
+      const sessionIds = sessions.map(({ id }) => id).filter((id) => id && !id.startsWith('official:'));
+      const metadata = await loadSessionSurfaceMetadata(api, profile, sessionIds);
       return createHermesSwiftUISessionsSnapshot({
         sessions: isRecord(source) ? source.sessions : [],
         sessionState,
-      }, locale);
+      }, locale, metadata);
     }
     case 'files':
       return { ...base, files: filesSnapshot(source, localizer) };
@@ -172,7 +177,10 @@ export async function loadHermesSwiftUIRouteSnapshot(
       const curator = typeof api.getCurator === 'function'
         ? await api.getCurator().catch(() => undefined)
         : undefined;
-      return { ...base, system: systemSnapshot(
+      const hooks = typeof api.getHooks === 'function'
+        ? await api.getHooks().catch(() => undefined)
+        : undefined;
+      return { ...base, systemHooksJSON: hooks ? JSON.stringify(hooks) : undefined, system: systemSnapshot(
         isRecord(source) && curator !== undefined ? { ...source, curator } : source,
         localizer,
       ) };
@@ -397,6 +405,11 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionPinned(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionUnread:
       if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionUnread(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionBulkDelete: { const ids = parseSessionIDs(payload.fields?.ids || payload.detail || payload.value || ''); if (!ids.length) return 'none'; await api.bulkDeleteSessions(ids, payload.fields?.profile || profile); return 'reload'; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionImport: { const parsed = payload.detail || payload.value || payload.fields?.sessions || ''; if (!parsed) return 'none'; const records = parseSessionImport(parsed); if (!records.length) return 'none'; await api.importSessions(records, payload.fields?.profile || profile); return 'reload'; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionProjects:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionPullRequests:
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronBlueprintCreate:
       if (!payload.id) return 'none'; { const values = payload.fields?.values ? parseJsonRecord(payload.fields.values) || {} : payload.fields || {}; await api.instantiateCronBlueprint(payload.id, values, profile); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronDelete:
@@ -725,6 +738,9 @@ export async function performHermesSwiftUIRouteAction(
       const result = await api.createBackup({});
       return { message: stringValue(result.archive) || stringValue(result.message) || (chinese ? '备份已创建' : 'Backup created') };
     }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemBackupImport: { const uri = payload.uris?.[0] || payload.value || ''; if (!uri) return 'none'; const name = payload.name || fileNameFromUri(uri) || 'hermes-backup.zip'; try { await api.uploadImport({ uri, name, mimeType: payload.fields?.mimeType || 'application/zip' }, payload.fields?.force === 'true'); } finally { if (payload.fields?.stagedImport === 'true') await removeStagedFileImport(uri); } return 'reload'; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemHookCreate: { const values = payload.detail ? parseJsonRecord(payload.detail) : payload.fields; if (!values) return 'none'; await api.createHook(values); return 'reload'; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemHookDelete: { const values = payload.detail ? parseJsonRecord(payload.detail) : payload.fields; if (!values && !payload.id) return 'none'; await api.deleteHook(values || { id: payload.id }); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDebugShare: {
       const result = await api.createDebugShare({});
       return { message: stringValue(result.url) || stringValue(result.message) || (chinese ? '调试报告已生成' : 'Debug report created') };

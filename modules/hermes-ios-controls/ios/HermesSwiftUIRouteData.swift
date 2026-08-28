@@ -6,6 +6,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let route: String?
   let sessions: [HermesSessionSnapshot]
   let sessionContext: HermesSessionContextSnapshot?
+  let sessionSidebarJSON: String?
+  let sessionProjectsJSON: String?
+  let sessionPullRequestsJSON: String?
+  let sessionStatsJSON: String?
   let files: [HermesFileSnapshot]
   let workflows: HermesWorkflowSnapshot
   let approvals: HermesApprovalsSnapshot
@@ -41,6 +45,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let config: HermesConfigSnapshot
   let environment: [HermesEnvironmentSecretSnapshot]
   let system: HermesSystemSnapshot
+  let systemHooksJSON: String?
   let memory: HermesMemorySnapshot
 
   init(
@@ -48,6 +53,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     route: String? = nil,
     sessions: [HermesSessionSnapshot] = [],
     sessionContext: HermesSessionContextSnapshot? = nil,
+    sessionSidebarJSON: String? = nil,
+    sessionProjectsJSON: String? = nil,
+    sessionPullRequestsJSON: String? = nil,
+    sessionStatsJSON: String? = nil,
     files: [HermesFileSnapshot] = [],
     workflows: HermesWorkflowSnapshot = .empty,
     approvals: HermesApprovalsSnapshot = .empty,
@@ -83,12 +92,17 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     config: HermesConfigSnapshot = .empty,
     environment: [HermesEnvironmentSecretSnapshot] = [],
     system: HermesSystemSnapshot = .empty,
+    systemHooksJSON: String? = nil,
     memory: HermesMemorySnapshot = .empty
   ) {
     self.version = version
     self.route = route
     self.sessions = sessions
     self.sessionContext = sessionContext
+    self.sessionSidebarJSON = sessionSidebarJSON
+    self.sessionProjectsJSON = sessionProjectsJSON
+    self.sessionPullRequestsJSON = sessionPullRequestsJSON
+    self.sessionStatsJSON = sessionStatsJSON
     self.files = files
     self.workflows = workflows
     self.approvals = approvals
@@ -124,6 +138,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.config = config
     self.environment = environment
     self.system = system
+    self.systemHooksJSON = systemHooksJSON
     self.memory = memory
   }
 
@@ -140,6 +155,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       HermesSessionContextSnapshot.self,
       forKey: .sessionContext
     )
+    sessionSidebarJSON = try container.decodeIfPresent(String.self, forKey: .sessionSidebarJSON)
+    sessionProjectsJSON = try container.decodeIfPresent(String.self, forKey: .sessionProjectsJSON)
+    sessionPullRequestsJSON = try container.decodeIfPresent(String.self, forKey: .sessionPullRequestsJSON)
+    sessionStatsJSON = try container.decodeIfPresent(String.self, forKey: .sessionStatsJSON)
     files = try container.decodeIfPresent(
       [HermesFileSnapshot].self,
       forKey: .files
@@ -220,6 +239,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       forKey: .environment
     ) ?? []
     system = try container.decodeIfPresent(HermesSystemSnapshot.self, forKey: .system) ?? .empty
+    systemHooksJSON = try container.decodeIfPresent(String.self, forKey: .systemHooksJSON)
     memory = try container.decodeIfPresent(HermesMemorySnapshot.self, forKey: .memory) ?? .empty
   }
 

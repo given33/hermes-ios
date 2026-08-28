@@ -542,6 +542,11 @@ export interface HermesSwiftUIRouteSnapshot {
   route?: string;
   sessions?: readonly HermesSwiftUISessionSnapshot[];
   sessionContext?: HermesSwiftUISessionContextSnapshot;
+  /** JSON encoded official session sidebar/project/PR/statistics surfaces. */
+  sessionSidebarJSON?: string;
+  sessionProjectsJSON?: string;
+  sessionPullRequestsJSON?: string;
+  sessionStatsJSON?: string;
   files?: readonly HermesSwiftUIFileSnapshot[];
   workflows?: HermesSwiftUIWorkflowSnapshot;
   approvals?: HermesSwiftUIApprovalsSnapshot;
@@ -578,6 +583,8 @@ export interface HermesSwiftUIRouteSnapshot {
   config?: HermesSwiftUIConfigSnapshot;
   environment?: readonly HermesSwiftUIEnvironmentSecretSnapshot[];
   system?: HermesSwiftUISystemSnapshot;
+  /** JSON encoded /api/ops/hooks response for native hook management. */
+  systemHooksJSON?: string;
   memory?: HermesSwiftUIMemorySnapshot;
 }
 

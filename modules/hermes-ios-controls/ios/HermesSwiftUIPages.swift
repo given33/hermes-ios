@@ -24,6 +24,10 @@ struct HermesRouteContent: View {
         chinese: chinese,
         sessions: data.sessions,
         sessionContext: data.sessionContext,
+        sessionSidebarJSON: data.sessionSidebarJSON,
+        sessionProjectsJSON: data.sessionProjectsJSON,
+        sessionPullRequestsJSON: data.sessionPullRequestsJSON,
+        sessionStatsJSON: data.sessionStatsJSON,
         onAction: onAction
       )
     case .memory:
@@ -765,9 +769,22 @@ private struct HermesRemoteRoutePage: View {
   @State private var toolsetConfigJSON = ""
   @State private var toolsetModelsJSON = ""
   @State private var toolsetProvidersJSON = ""
+  @State private var showingToolsetSchema = false
+  @State private var editingToolsetID = ""
+  @State private var editingToolsetConfigJSON = ""
   @State private var skillHubQuery = ""
   @State private var skillHubIdentifier = ""
   @State private var cronBlueprintValues = "{}"
+  @State private var importingBackup = false
+  @State private var editingHook = false
+  @State private var hookJSON = "{}"
+  @State private var hookEvent = "on_session_end"
+  @State private var hookCommand = ""
+  @State private var hookMatcher = ""
+  @State private var hookTimeout = "30"
+  @State private var hookApprove = false
+  @State private var hookDeleteEvent = ""
+  @State private var hookDeleteCommand = ""
 
   var body: some View {
     routeBody
@@ -842,6 +859,76 @@ private struct HermesRemoteRoutePage: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+      }
+      .sheet(isPresented: $showingToolsetSchema) {
+        HermesToolsetSchemaSheet(
+          chinese: chinese,
+          toolsetName: toolsetConfigName,
+          configJSON: editingToolsetConfigJSON,
+          onCancel: { showingToolsetSchema = false },
+          onSave: { json in
+            onAction(.toolsetEnvironment, HermesRouteActionPayload(route: "skills", id: editingToolsetID, detail: json))
+            showingToolsetSchema = false
+          }
+        )
+        .environmentObject(appearance)
+      }
+      .sheet(isPresented: $editingHook) {
+        NavigationStack {
+          Form {
+            Section(chinese ? "Hook 字段" : "Hook fields") {
+              TextField(chinese ? "事件" : "Event", text: $hookEvent).textInputAutocapitalization(.never).autocorrectionDisabled()
+              TextField(chinese ? "命令路径" : "Command path", text: $hookCommand).textInputAutocapitalization(.never).autocorrectionDisabled()
+              TextField(chinese ? "匹配器（可选）" : "Matcher (optional)", text: $hookMatcher).textInputAutocapitalization(.never).autocorrectionDisabled()
+              TextField(chinese ? "超时秒数" : "Timeout seconds", text: $hookTimeout).keyboardType(.numberPad)
+              Toggle(chinese ? "同时批准执行" : "Approve execution", isOn: $hookApprove)
+            }
+            Section(chinese ? "官方 Hook JSON" : "Official hook JSON") {
+              TextEditor(text: $hookJSON)
+                .font(HermesFonts.mono(11))
+                .frame(minHeight: 180)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            }
+          }
+          .navigationTitle(chinese ? "新增 Hook" : "Create hook")
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button(chinese ? "取消" : "Cancel") { editingHook = false }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+              Button(chinese ? "保存" : "Save") {
+                var values: [String: Any] = ["event": hookEvent, "command": hookCommand, "approve": hookApprove]
+                if !hookMatcher.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { values["matcher"] = hookMatcher }
+                if let timeout = Int(hookTimeout), timeout > 0 { values["timeout"] = timeout }
+                let payloadJSON = (try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys])).flatMap { String(data: $0, encoding: .utf8) } ?? hookJSON
+                onAction(.systemHookCreate, HermesRouteActionPayload(route: "system", detail: payloadJSON))
+                editingHook = false
+              }
+              .disabled(hookEvent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hookCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+          }
+        }
+        .presentationDetents([.medium, .large])
+      }
+      .fileImporter(
+        isPresented: $importingBackup,
+        allowedContentTypes: [.data, .archive, .zip],
+        allowsMultipleSelection: false
+      ) { result in
+        guard case let .success(urls) = result, let url = urls.first else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+          let staged = HermesFileImportStaging.stage([url])
+          guard let stagedURL = staged.first else { return }
+          DispatchQueue.main.async {
+            onAction(.systemBackupImport, HermesRouteActionPayload(
+              route: "system",
+              name: url.lastPathComponent,
+              fields: ["mimeType": "application/zip", "stagedImport": "true"],
+              uris: [stagedURL.absoluteString]
+            ))
+          }
+        }
       }
       .onChange(of: data.skills) { _, skills in
         guard !requestedSkillID.isEmpty,
@@ -1068,6 +1155,14 @@ private struct HermesRemoteRoutePage: View {
                     showingToolsetConfig = true
                   } label: {
                     Label(chinese ? "查看官方配置" : "View official configuration", systemImage: "doc.text.magnifyingglass")
+                  }
+                  Button {
+                    toolsetConfigName = toolset.name
+                    editingToolsetID = toolset.id
+                    editingToolsetConfigJSON = config
+                    showingToolsetSchema = true
+                  } label: {
+                    Label(chinese ? "使用声明式表单配置" : "Configure with schema form", systemImage: "list.bullet.rectangle")
                   }
                 }
                 Button {
@@ -1699,6 +1794,7 @@ private struct HermesRemoteRoutePage: View {
           Button { onAction(.systemDoctor, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "运行 Doctor" : "Run Doctor", systemImage: "stethoscope") }.buttonStyle(.bordered)
           Button { onAction(.systemSecurityAudit, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "安全审计" : "Security audit", systemImage: "checkmark.shield") }.buttonStyle(.bordered)
           Button { onAction(.systemBackup, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "创建备份" : "Create backup", systemImage: "externaldrive.badge.timemachine") }.buttonStyle(.bordered)
+          Button { importingBackup = true } label: { Label(chinese ? "导入备份" : "Import backup", systemImage: "externaldrive.badge.plus") }.buttonStyle(.bordered)
           Button { onAction(.systemDebugShare, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "调试报告" : "Debug share", systemImage: "square.and.arrow.up") }.buttonStyle(.bordered)
           Button { onAction(.systemDiagnostics, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "诊断报告" : "Diagnostics", systemImage: "stethoscope") }.buttonStyle(.bordered)
           Button { onAction(.systemCheckpoints, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "检查点" : "Checkpoints", systemImage: "point.3.connected.trianglepath.dotted") }.buttonStyle(.bordered)
@@ -1718,6 +1814,52 @@ private struct HermesRemoteRoutePage: View {
           }
           }
           .padding(.horizontal, 1)
+        }
+        if let hooks = data.systemHooksJSON, !hooks.isEmpty {
+          HermesPanel {
+            VStack(alignment: .leading, spacing: 8) {
+              HStack {
+                Text(chinese ? "Hooks" : "Hooks").font(HermesFonts.display(15))
+                Spacer()
+                Button {
+                  hookJSON = "{}"
+                  hookEvent = "on_session_end"
+                  hookCommand = ""
+                  hookMatcher = ""
+                  hookTimeout = "30"
+                  hookApprove = false
+                  editingHook = true
+                } label: {
+                  Label(chinese ? "新增" : "Add", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+              }
+              Text(hooks)
+                .font(HermesFonts.mono(10))
+                .foregroundStyle(appearance.palette.secondary)
+                .textSelection(.enabled)
+                .lineLimit(10)
+              HStack {
+                TextField(chinese ? "事件（如 on_session_end）" : "Event (for example on_session_end)", text: $hookDeleteEvent)
+                  .textInputAutocapitalization(.never)
+                  .autocorrectionDisabled()
+                TextField(chinese ? "命令路径" : "Command path", text: $hookDeleteCommand)
+                  .textInputAutocapitalization(.never)
+                  .autocorrectionDisabled()
+                Button(role: .destructive) {
+                  onAction(.systemHookDelete, HermesRouteActionPayload(route: "system", fields: ["event": hookDeleteEvent, "command": hookDeleteCommand]))
+                  hookDeleteEvent = ""
+                  hookDeleteCommand = ""
+                } label: {
+                  Image(systemName: "trash")
+                }
+                .disabled(hookDeleteEvent.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hookDeleteCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+              }
+              Text(chinese ? "可直接粘贴官方 /api/ops/hooks JSON 创建；删除需要事件名和命令路径。" : "Paste the official /api/ops/hooks JSON to create a hook; delete requires the event and command path.")
+                .font(HermesFonts.body(11))
+                .foregroundStyle(appearance.palette.tertiary)
+            }
+          }
         }
       }.refreshable { onAction(.refresh, HermesRouteActionPayload(route: "system")) }
     default:
@@ -2138,6 +2280,67 @@ private struct HermesRemoteEditorSheet: View {
   }
 }
 
+/// Native counterpart of the desktop ToolsetConfigPanel's declared-key form.
+/// The server remains authoritative; this view submits the same environment API.
+private struct HermesToolsetSchemaSheet: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let chinese: Bool
+  let toolsetName: String
+  let configJSON: String
+  let onCancel: () -> Void
+  let onSave: (String) -> Void
+  @State private var values: [String: String]
+
+  init(chinese: Bool, toolsetName: String, configJSON: String, onCancel: @escaping () -> Void, onSave: @escaping (String) -> Void) {
+    self.chinese = chinese; self.toolsetName = toolsetName; self.configJSON = configJSON; self.onCancel = onCancel; self.onSave = onSave
+    _values = State(initialValue: Self.initialValues(configJSON))
+  }
+
+  private var keys: [String] {
+    guard let data = configJSON.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+    let rows = (object["env_vars"] as? [[String: Any]]) ?? (object["fields"] as? [[String: Any]]) ?? []
+    return Array(Set(rows.compactMap { ($0["key"] as? String) ?? ($0["name"] as? String) ?? ($0["id"] as? String) })).sorted()
+  }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section(chinese ? "声明式配置：\(toolsetName)" : "Declared configuration: \(toolsetName)") {
+          if keys.isEmpty {
+            Text(chinese ? "上游未声明可编辑字段，请使用 JSON 编辑器。" : "The upstream schema declares no editable fields; use the JSON editor instead.").foregroundStyle(appearance.palette.secondary)
+          } else {
+            ForEach(keys, id: \.self) { key in
+              SecureField(key, text: Binding(get: { values[key, default: ""] }, set: { values[key] = $0 }))
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+            }
+          }
+        }
+      }
+      .scrollContentBackground(.hidden).background(appearance.palette.background)
+      .navigationTitle(chinese ? "工具集配置" : "Toolset configuration").navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button(chinese ? "取消" : "Cancel", action: onCancel) }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(chinese ? "保存" : "Save") {
+            guard let data = try? JSONSerialization.data(withJSONObject: values, options: [.sortedKeys]), let json = String(data: data, encoding: .utf8) else { return }; onSave(json)
+          }.disabled(keys.isEmpty)
+        }
+      }
+    }.presentationDetents([.medium, .large])
+  }
+
+  private static func initialValues(_ text: String) -> [String: String] {
+    guard let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+    let rows = (object["env_vars"] as? [[String: Any]]) ?? (object["fields"] as? [[String: Any]]) ?? []
+    return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
+      let key = (row["key"] as? String) ?? (row["name"] as? String) ?? (row["id"] as? String); guard let key, !key.isEmpty else { return nil }
+      // Never copy a redacted preview into an outgoing write; leaving it
+      // blank preserves the already-stored secret on the server.
+      return (key, (row["value"] as? String) ?? "")
+    })
+  }
+}
+
 private struct HermesRemoteRow<Trailing: View>: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let icon: String
@@ -2164,10 +2367,17 @@ private struct HermesSessionsPage: View {
   let chinese: Bool
   let sessions: [HermesSessionSnapshot]
   let sessionContext: HermesSessionContextSnapshot?
+  let sessionSidebarJSON: String?
+  let sessionProjectsJSON: String?
+  let sessionPullRequestsJSON: String?
+  let sessionStatsJSON: String?
   let onAction: HermesRouteActionSink
   @State private var search = ""
   @State private var renameTarget: HermesSessionSnapshot?
   @State private var renameText = ""
+  @State private var selectedForBulk = Set<String>()
+  @State private var importingSessions = false
+  @State private var importedSessionsJSON = "[]"
 
   private var filtered: [HermesSessionSnapshot] {
     guard !search.isEmpty else { return sessions }
@@ -2329,6 +2539,53 @@ private struct HermesSessionsPage: View {
         }
       }
 
+      if let sidebar = sessionSidebarJSON, !sidebar.isEmpty {
+        Section(chinese ? "官方会话侧栏" : "Official session sidebar") {
+          Text(sidebar)
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+            .lineLimit(8)
+        }
+      }
+      if let projects = sessionProjectsJSON, !projects.isEmpty {
+        Section(chinese ? "项目树" : "Project tree") {
+          Text(projects)
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+            .lineLimit(12)
+          Button {
+            onAction(.sessionProjects, HermesRouteActionPayload(route: "sessions"))
+          } label: {
+            Label(chinese ? "刷新项目树" : "Refresh project tree", systemImage: "folder.badge.gearshape")
+          }
+        }
+      }
+      if let pullRequests = sessionPullRequestsJSON, !pullRequests.isEmpty {
+        Section(chinese ? "会话 Pull Requests" : "Session pull requests") {
+          Text(pullRequests)
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+            .lineLimit(12)
+          Button {
+            onAction(.sessionPullRequests, HermesRouteActionPayload(route: "sessions"))
+          } label: {
+            Label(chinese ? "重新扫描 PR" : "Rescan pull requests", systemImage: "arrow.triangle.branch")
+          }
+        }
+      }
+      if let stats = sessionStatsJSON, !stats.isEmpty {
+        Section(chinese ? "会话统计" : "Session statistics") {
+          Text(stats)
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+            .lineLimit(8)
+        }
+      }
+
       Section {
         ForEach(filtered) { session in
           Button {
@@ -2393,6 +2650,20 @@ private struct HermesSessionsPage: View {
             .tint(appearance.palette.accent)
           }
           .contextMenu {
+            Button {
+              if selectedForBulk.contains(session.id) {
+                selectedForBulk.remove(session.id)
+              } else {
+                selectedForBulk.insert(session.id)
+              }
+            } label: {
+              Label(
+                selectedForBulk.contains(session.id)
+                  ? (chinese ? "移出批量选择" : "Remove from bulk selection")
+                  : (chinese ? "加入批量选择" : "Add to bulk selection"),
+                systemImage: selectedForBulk.contains(session.id) ? "checkmark.circle" : "checkmark.circle.badge.plus"
+              )
+            }
             Button {
               onAction(
                 .sessionSelect,
@@ -2462,12 +2733,30 @@ private struct HermesSessionsPage: View {
     .searchable(text: $search, prompt: chinese ? "搜索会话" : "Search sessions")
     .toolbar {
       ToolbarItem(placement: .navigationBarTrailing) {
-        Button {
-          onAction(.sessionDeleteEmpty, HermesRouteActionPayload(route: "sessions"))
+        Menu {
+          Button {
+            onAction(.sessionDeleteEmpty, HermesRouteActionPayload(route: "sessions"))
+          } label: {
+            Label(chinese ? "清理空会话" : "Delete empty sessions", systemImage: "trash.slash")
+          }
+          Button {
+            let ids = Array(selectedForBulk)
+            guard !ids.isEmpty else { return }
+            onAction(.sessionBulkDelete, HermesRouteActionPayload(route: "sessions", detail: (try? String(data: JSONEncoder().encode(ids), encoding: .utf8)) ?? "[]"))
+            selectedForBulk.removeAll()
+          } label: {
+            Label(chinese ? "删除已选会话（(selectedForBulk.count)）" : "Delete selected sessions ((selectedForBulk.count))", systemImage: "trash")
+          }
+          .disabled(selectedForBulk.isEmpty)
+          Button {
+            importingSessions = true
+          } label: {
+            Label(chinese ? "导入会话 JSON" : "Import sessions JSON", systemImage: "square.and.arrow.down")
+          }
         } label: {
-          Image(systemName: "trash.slash")
+          Image(systemName: "ellipsis.circle")
         }
-        .accessibilityLabel(chinese ? "清理空会话" : "Delete empty sessions")
+        .accessibilityLabel(chinese ? "会话操作" : "Session actions")
       }
     }
     .refreshable {
@@ -2506,6 +2795,32 @@ private struct HermesSessionsPage: View {
         }
       }
       .presentationDetents([.medium])
+    }
+    .sheet(isPresented: $importingSessions) {
+      NavigationStack {
+        Form {
+          Section(chinese ? "粘贴官方导出 JSON 数组" : "Paste the official exported JSON array") {
+            TextEditor(text: $importedSessionsJSON)
+              .font(HermesFonts.mono(11))
+              .frame(minHeight: 220)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+          }
+        }
+        .navigationTitle(chinese ? "导入会话" : "Import sessions")
+        .toolbar {
+          ToolbarItem(placement: .cancellationAction) {
+            Button(chinese ? "取消" : "Cancel") { importingSessions = false }
+          }
+          ToolbarItem(placement: .confirmationAction) {
+            Button(chinese ? "导入" : "Import") {
+              onAction(.sessionImport, HermesRouteActionPayload(route: "sessions", detail: importedSessionsJSON))
+              importingSessions = false
+            }
+          }
+        }
+      }
+      .presentationDetents([.medium, .large])
     }
   }
 }

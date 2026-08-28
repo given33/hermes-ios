@@ -10,6 +10,7 @@ import type {
   ConversationSessionState,
   SingleConversation,
 } from '../../api/HermesCloudApi';
+import type { JsonRecord } from '../../api/cloud/transport';
 import { conversationSessionSummary } from '../../api/HermesCloudApi';
 import {
   formatBytes,
@@ -52,6 +53,12 @@ export function sessionsSnapshot(
 export function createHermesSwiftUISessionsSnapshot(
   source: unknown,
   locale: HermesRouteLocaleInput = 'zh',
+  metadata: {
+    sidebar?: JsonRecord;
+    projects?: JsonRecord;
+    pullRequests?: JsonRecord;
+    stats?: JsonRecord;
+  } = {},
 ): HermesSwiftUIRouteSnapshot {
   const localizer = routeLocalizer(locale);
   const sessionState = isRecord(source) && isConversationSessionState(source.sessionState)
@@ -62,6 +69,10 @@ export function createHermesSwiftUISessionsSnapshot(
     route: 'sessions',
     sessions: sessionsSnapshot(source, localizer),
     sessionContext: sessionState ? sessionContextSnapshot(sessionState) : undefined,
+    sessionSidebarJSON: metadata.sidebar ? JSON.stringify(metadata.sidebar) : undefined,
+    sessionProjectsJSON: metadata.projects ? JSON.stringify(metadata.projects) : undefined,
+    sessionPullRequestsJSON: metadata.pullRequests ? JSON.stringify(metadata.pullRequests) : undefined,
+    sessionStatsJSON: metadata.stats ? JSON.stringify(metadata.stats) : undefined,
   };
 }
 

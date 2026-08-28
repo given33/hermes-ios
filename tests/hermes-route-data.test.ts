@@ -110,6 +110,44 @@ test('session snapshots are derived from the current server response', async () 
   assert.equal(snapshot.sessions?.[0].detail, '8 条消息 · 3 次工具调用');
 });
 
+test('official session sidebars/projects/PRs/stats are bridged and bulk actions call upstream APIs', async () => {
+  const calls: unknown[] = [];
+  const api = {
+    loadRoute: async () => ({ sessions: [{ id: 's1', title: 'one', model: 'm', is_active: false, message_count: 1, tool_call_count: 0, last_active: 1 }] }),
+    getProfileSessionsSidebar: async (options: unknown) => { calls.push(['sidebar', options]); return { recent: ['s1'] }; },
+    getProfileProjectsTree: async () => { calls.push('projects'); return { projects: [] }; },
+    scanProfileSessionPullRequests: async (ids: unknown) => { calls.push(['prs', ids]); return { s1: [] }; },
+    getSessionStats: async (profile: unknown) => { calls.push(['stats', profile]); return { total: 1 }; },
+    bulkDeleteSessions: async (ids: unknown, profile: unknown) => { calls.push(['bulk', ids, profile]); return {}; },
+    importSessions: async (sessions: unknown, profile: unknown) => { calls.push(['import', sessions, profile]); return {}; },
+  } as unknown as HermesCloudApi;
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'sessions', 'hk-worker');
+  assert.match(snapshot.sessionSidebarJSON || '', /s1/);
+  assert.match(snapshot.sessionProjectsJSON || '', /projects/);
+  assert.match(snapshot.sessionPullRequestsJSON || '', /s1/);
+  assert.match(snapshot.sessionStatsJSON || '', /total/);
+  await performHermesSwiftUIRouteAction(api, { action: 'session.bulk-delete', payload: { route: 'sessions', detail: '["s1"]', fields: { profile: 'hk-worker' } } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'session.import', payload: { route: 'sessions', detail: '[{"id":"s2"}]' } }, 'default');
+  assert.deepEqual(calls.slice(-2), [['bulk', ['s1'], 'hk-worker'], ['import', [{ id: 's2' }], 'default']]);
+});
+
+test('system backup import and hook actions use official operations endpoints', async () => {
+  const calls: unknown[] = [];
+  const api = {
+    uploadImport: async (upload: unknown, force: unknown) => { calls.push(['import', upload, force]); return {}; },
+    createHook: async (payload: unknown) => { calls.push(['create', payload]); return {}; },
+    deleteHook: async (payload: unknown) => { calls.push(['delete', payload]); return {}; },
+  } as unknown as HermesCloudApi;
+  await performHermesSwiftUIRouteAction(api, { action: 'system.backup.import', payload: { route: 'system', name: 'b.zip', uris: ['file:///tmp/b.zip'], fields: { force: 'true' } } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'system.hook.create', payload: { route: 'system', detail: '{"name":"h"}' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'system.hook.delete', payload: { route: 'system', fields: { event: 'on_session_end', command: 'echo hi' } } }, 'default');
+  assert.deepEqual(calls, [
+    ['import', { uri: 'file:///tmp/b.zip', name: 'b.zip', mimeType: 'application/zip' }, true],
+    ['create', { name: 'h' }],
+    ['delete', { event: 'on_session_end', command: 'echo hi' }],
+  ]);
+});
+
 test('native skills and cron snapshots hydrate official desktop metadata', async () => {
   const api = {
     loadRoute: async (route: string) => route === 'skills'

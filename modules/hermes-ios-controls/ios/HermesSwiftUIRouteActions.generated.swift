@@ -7,6 +7,10 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case route
   case sessions
   case sessionContext
+  case sessionSidebarJSON
+  case sessionProjectsJSON
+  case sessionPullRequestsJSON
+  case sessionStatsJSON
   case files
   case workflows
   case approvals
@@ -42,6 +46,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case config
   case environment
   case system
+  case systemHooksJSON
   case memory
 }
 
@@ -97,6 +102,10 @@ enum HermesRouteAction: String, CaseIterable {
   case sessionArchive = "session.archive"
   case sessionPin = "session.pin"
   case sessionUnread = "session.unread"
+  case sessionBulkDelete = "session.bulk-delete"
+  case sessionImport = "session.import"
+  case sessionProjects = "session.projects"
+  case sessionPullRequests = "session.pull-requests"
   case sessionDeleteEmpty = "session.delete-empty"
   case fileSelect = "file.select"
   case fileDelete = "file.delete"
@@ -185,6 +194,9 @@ enum HermesRouteAction: String, CaseIterable {
   case systemDoctor = "system.doctor"
   case systemSecurityAudit = "system.security-audit"
   case systemBackup = "system.backup"
+  case systemBackupImport = "system.backup.import"
+  case systemHookCreate = "system.hook.create"
+  case systemHookDelete = "system.hook.delete"
   case systemDebugShare = "system.debug-share"
   case systemDiagnostics = "system.diagnostics"
   case systemCheckpoints = "system.checkpoints"
