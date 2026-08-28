@@ -92,7 +92,7 @@ export function integrationsSnapshot(source: unknown, kind: string, localizer: H
           : source.platforms
     : source;
   const rows = Array.isArray(candidates) ? candidates : [];
-  return rows.flatMap((entry, index) => {
+  const integrations = rows.flatMap((entry, index) => {
     if (!isRecord(entry)) return [];
     const id = stringValue(entry.name) || stringValue(entry.id) || stringValue(entry.slug) || `${kind}-${index}`;
     return [{
@@ -122,9 +122,52 @@ export function integrationsSnapshot(source: unknown, kind: string, localizer: H
         authRequired: entry.auth_required === true,
         authCommand: stringValue(entry.auth_command),
       } : {}),
+      ...(kind === 'mcp' ? { canTest: true } : {}),
       ...(kind === 'channels' ? { configuration: channelConfiguration(entry) } : {}),
     }];
   });
+  if (kind !== 'mcp' || !isRecord(source) || !isRecord(source.catalog)) return integrations;
+  const catalogEntries = Array.isArray(source.catalog.entries) ? source.catalog.entries : [];
+  const configuredNames = new Set(integrations.map((entry) => entry.id));
+  const catalogRows = catalogEntries.flatMap((entry, index) => {
+    if (!isRecord(entry)) return [];
+    const name = stringValue(entry.name);
+    if (!name || configuredNames.has(name)) return [];
+    const requiredEnv = Array.isArray(entry.required_env)
+      ? entry.required_env.flatMap((item) => isRecord(item) && stringValue(item.name)
+        ? [stringValue(item.name)]
+        : [])
+      : [];
+    const description = localizer.serverText(
+      stringValue(entry.description)
+        || stringValue(entry.url)
+        || stringValue(entry.command)
+        || 'MCP catalog entry',
+    );
+    return [{
+      id: name,
+      name: localizer.serverText(stringValue(entry.name) || name),
+      detail: requiredEnv.length
+        ? `${description} · ${localizer.isChinese ? '需要凭据' : 'credentials required'}: ${requiredEnv.join(', ')}`
+        : description,
+      enabled: entry.enabled === true,
+      source: 'catalog',
+      catalogEntry: true,
+      catalogNeedsInstall: entry.needs_install === true,
+      catalogRequiredEnv: requiredEnv,
+      canTest: false,
+      canRemove: false,
+      configuration: JSON.stringify({
+        args: stringArray(entry.args),
+        command: stringValue(entry.command),
+        installRef: stringValue(entry.install_ref),
+        installUrl: stringValue(entry.install_url),
+        requiredEnv,
+        url: stringValue(entry.url),
+      }),
+    }];
+  });
+  return [...integrations, ...catalogRows];
 }
 
 export function managedInstallationsSnapshot(

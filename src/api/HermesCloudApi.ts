@@ -460,9 +460,9 @@ export class HermesCloudApi {
     return this.extensions.setMcpServerEnabled(name, enabled, profile);
   }
 
-  removeMcpServer(name: string, profile = 'default') {
-    return this.extensions.removeMcpServer(name, profile);
-  }
+  removeMcpServer(name: string, profile = 'default') { return this.extensions.removeMcpServer(name, profile); }
+
+  testMcpServer(name: string, profile = 'default') { return this.extensions.testMcpServer(name, profile); } installMcpCatalogEntry(name: string, env: Record<string, string> = {}, enable = true, profile = 'default') { return this.extensions.installMcpCatalogEntry(name, env, enable, profile); }
 
   getPairing() {
     return this.management.getPairing();

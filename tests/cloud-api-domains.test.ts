@@ -397,15 +397,25 @@ test('plugin and MCP methods keep their wire contract through cloud/extensions',
   await api.addMcpServer({ name: 'files' }, 'ops');
   await api.setMcpServerEnabled('files db', true, 'ops');
   await api.removeMcpServer('files db', 'ops');
+  await api.testMcpServer('files db', 'ops');
+  await api.installMcpCatalogEntry('github', { GITHUB_TOKEN: 'secret' }, true, 'ops');
   assert.deepEqual(
     calls.map(({ path, options }) => [path, options.method ?? 'GET', options.query?.profile]),
     [
       ['/api/mcp/servers', 'POST', 'ops'],
       ['/api/mcp/servers/files%20db/enabled', 'PUT', 'ops'],
       ['/api/mcp/servers/files%20db', 'DELETE', 'ops'],
+      ['/api/mcp/servers/files%20db/test', 'POST', 'ops'],
+      ['/api/mcp/catalog/install', 'POST', undefined],
     ],
   );
   assert.deepEqual(parsedBody(calls[1]), { enabled: true });
+  assert.deepEqual(parsedBody(calls[4]), {
+    enable: true,
+    env: { GITHUB_TOKEN: 'secret' },
+    name: 'github',
+    profile: 'ops',
+  });
 });
 
 test('conversation and hosted-turn methods keep their wire contract through cloud/conversations', async () => {

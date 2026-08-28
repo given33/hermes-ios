@@ -64,6 +64,21 @@ export interface ManagedResourceCatalog {
   has_more: boolean;
 }
 
+export interface McpServerTestResult {
+  ok: boolean;
+  error?: string;
+  tools: Array<{ name: string; description: string; schema_chars?: number }>;
+  prompts?: number;
+  resources?: number;
+}
+
+export interface McpCatalogInstallResult {
+  ok: boolean;
+  name: string;
+  background: boolean;
+  action?: string;
+}
+
 export class HermesExtensionsCloudApi {
   constructor(
     private readonly transport: HermesCloudTransport,
@@ -285,6 +300,26 @@ export class HermesExtensionsCloudApi {
         method: 'DELETE',
         query: { profile },
       },
+    );
+  }
+
+  testMcpServer(name: string, profile = 'default') {
+    return this.transport.request<McpServerTestResult>(
+      `/api/mcp/servers/${encodeURIComponent(name)}/test`,
+      { method: 'POST', query: { profile } },
+    );
+  }
+
+  installMcpCatalogEntry(
+    name: string,
+    env: Record<string, string> = {},
+    enable = true,
+    profile = 'default',
+  ) {
+    return this.transport.json<McpCatalogInstallResult>(
+      '/api/mcp/catalog/install',
+      'POST',
+      { name, env, enable, profile },
     );
   }
 }

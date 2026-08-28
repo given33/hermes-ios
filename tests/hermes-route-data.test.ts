@@ -330,6 +330,39 @@ test('native plugin actions use the authenticated plugin management endpoints', 
   ]);
 });
 
+test('native MCP actions test configured servers and install catalog entries', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    testMcpServer: async (...args: unknown[]) => {
+      calls.push(['test', ...args]);
+      return { ok: true, tools: [{ name: 'search', description: 'Search' }] };
+    },
+    installMcpCatalogEntry: async (...args: unknown[]) => {
+      calls.push(['install', ...args]);
+      return { background: false, name: 'github', ok: true };
+    },
+  } as unknown as HermesCloudApi;
+
+  const tested = await performHermesSwiftUIRouteAction(api, {
+    action: 'mcp.test',
+    payload: { route: 'mcp', id: 'github' },
+  }, 'ops');
+  const installed = await performHermesSwiftUIRouteAction(api, {
+    action: 'integration.create',
+    payload: {
+      route: 'mcp',
+      fields: { catalogName: 'github', enable: 'true', env: '{"GITHUB_TOKEN":"secret"}' },
+    },
+  }, 'ops');
+
+  assert.deepEqual(tested, { message: '连接成功：1 个工具' });
+  assert.deepEqual(installed, { message: 'MCP 已安装', reload: true });
+  assert.deepEqual(calls, [
+    ['test', 'github', 'ops'],
+    ['install', 'github', { GITHUB_TOKEN: 'secret' }, true, 'ops'],
+  ]);
+});
+
 test('approval decisions echo the digest rendered by the native snapshot', async () => {
   const calls: unknown[][] = [];
   const api = {
@@ -407,7 +440,15 @@ test('all native management routes render the current cloud workspace response',
     plugins: { manifests: [{ name: 'collaboration', description: '多 Agent 协作', enabled: true }] },
     mcp: {
       servers: { servers: [{ name: 'filesystem', command: 'npx', args: ['server-filesystem'], enabled: true }] },
-      catalog: { entries: [] },
+      catalog: {
+        entries: [{
+          name: 'github',
+          description: 'GitHub tools',
+          needs_install: false,
+          required_env: [{ name: 'GITHUB_TOKEN', required: true }],
+          url: 'https://github.example/mcp',
+        }],
+      },
       installations: {
         operations: [{
           id: 'mi-mcp',
@@ -485,6 +526,9 @@ test('all native management routes render the current cloud workspace response',
   assert.equal(plugins.integrations?.[0].detail, '多 Agent 协作');
   assert.equal(mcp.integrations?.[0].name, '文件系统');
   assert.equal(mcp.integrations?.[0].detail, 'npx server-filesystem');
+  assert.equal(mcp.integrations?.[1].id, 'github');
+  assert.equal(mcp.integrations?.[1].catalogEntry, true);
+  assert.deepEqual(mcp.integrations?.[1].catalogRequiredEnv, ['GITHUB_TOKEN']);
   assert.equal(mcp.installations?.[0].state, 'verified');
   assert.equal(mcp.installations?.[0].version, '2.0.0');
   assert.deepEqual(mcp.installations?.[0].tools, ['issues.list']);

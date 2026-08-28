@@ -122,6 +122,8 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   integrationUpdate: 'integration.update',
   integrationToggle: 'integration.toggle',
   integrationDelete: 'integration.delete',
+  mcpTest: 'mcp.test',
+  mcpCatalogInstall: 'mcp.catalog.install',
   pairingApprove: 'pairing.approve',
   pairingRevoke: 'pairing.revoke',
   pairingClearPending: 'pairing.clear-pending',

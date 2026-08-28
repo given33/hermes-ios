@@ -720,6 +720,10 @@ struct HermesIntegrationSnapshot: Decodable, Equatable, Identifiable {
   let userHidden: Bool?
   let authRequired: Bool?
   let authCommand: String?
+  let canTest: Bool?
+  let catalogEntry: Bool?
+  let catalogNeedsInstall: Bool?
+  let catalogRequiredEnv: [String]?
 }
 
 struct HermesPairingEntrySnapshot: Decodable, Equatable, Identifiable {

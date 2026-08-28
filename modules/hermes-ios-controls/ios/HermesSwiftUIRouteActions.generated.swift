@@ -110,6 +110,8 @@ enum HermesRouteAction: String, CaseIterable {
   case integrationUpdate = "integration.update"
   case integrationToggle = "integration.toggle"
   case integrationDelete = "integration.delete"
+  case mcpTest = "mcp.test"
+  case mcpCatalogInstall = "mcp.catalog.install"
   case pairingApprove = "pairing.approve"
   case pairingRevoke = "pairing.revoke"
   case pairingClearPending = "pairing.clear-pending"

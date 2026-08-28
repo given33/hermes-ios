@@ -406,6 +406,12 @@ export async function performHermesSwiftUIRouteAction(
       if (payload.route === 'mcp') await api.removeMcpServer(payload.id, profile);
       else if (payload.route === 'webhooks') await api.deleteWebhook(payload.id);
       return payload.route === 'mcp' || payload.route === 'webhooks' ? 'reload' : 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.mcpTest: {
+      if (!payload.id || payload.route !== 'mcp') return 'none';
+      const result = await api.testMcpServer(payload.id, profile);
+      if (!result.ok) throw new Error(result.error || (chinese ? 'MCP 连接测试失败' : 'MCP connection test failed'));
+      return { message: chinese ? `连接成功：${result.tools.length} 个工具` : `Connection succeeded: ${result.tools.length} tools` };
+    }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationUpdate:
       if (!payload.id || payload.route !== 'channels') return 'none';
       {
@@ -416,6 +422,12 @@ export async function performHermesSwiftUIRouteAction(
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationCreate:
       if (payload.route === 'mcp') {
+        const catalogName = payload.fields?.catalogName?.trim();
+        if (catalogName) {
+          const env = parseJsonRecord(payload.fields?.env || '{}');
+          const result = await api.installMcpCatalogEntry(catalogName, env && isStringRecord(env) ? env : {}, payload.fields?.enable !== 'false', profile);
+          return { message: result.background ? (chinese ? 'MCP 正在后台安装' : 'MCP installation started in the background') : (chinese ? 'MCP 已安装' : 'MCP installed'), reload: true };
+        }
         await api.addMcpServer({ name: payload.name || 'mcp-server', ...(payload.fields || {}) }, profile);
         return 'reload';
       }
@@ -671,4 +683,8 @@ function parseJsonRecord(value: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+function isStringRecord(value: Record<string, unknown>): value is Record<string, string> {
+  return Object.values(value).every((item) => typeof item === 'string');
 }

@@ -728,10 +728,27 @@ private struct HermesRemoteRoutePage: View {
         if route == .mcp { installationSection }
         ForEach(data.integrations) { item in
           HermesRemoteRow(icon: route == .plugins ? "puzzlepiece.extension" : route == .mcp ? "point.3.connected.trianglepath.dotted" : route == .channels ? "dot.radiowaves.left.and.right" : "arrow.triangle.branch", title: item.name, detail: item.detail, tint: item.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
-            Toggle("", isOn: Binding(
-              get: { item.enabled },
-              set: { onAction(.integrationToggle, HermesRouteActionPayload(route: route.rawValue, id: item.id, enabled: $0)) }
-            )).labelsHidden()
+            if route == .mcp && item.catalogEntry == true {
+              Button {
+                onAction(.integrationCreate, HermesRouteActionPayload(
+                  route: "mcp",
+                  name: item.name,
+                  fields: [
+                    "catalogName": item.id,
+                    "enable": "true",
+                  ]
+                ))
+              } label: {
+                Label(chinese ? "安装" : "Install", systemImage: "arrow.down.circle")
+              }
+              .buttonStyle(.borderedProminent)
+              .disabled(item.catalogNeedsInstall == true && !(item.catalogRequiredEnv ?? []).isEmpty)
+            } else {
+              Toggle("", isOn: Binding(
+                get: { item.enabled },
+                set: { onAction(.integrationToggle, HermesRouteActionPayload(route: route.rawValue, id: item.id, enabled: $0)) }
+              )).labelsHidden()
+            }
           }
           .swipeActions {
             if route == .plugins && item.canRemove == true {
@@ -739,10 +756,17 @@ private struct HermesRemoteRoutePage: View {
                 onAction(.pluginDelete, HermesRouteActionPayload(route: "plugins", id: item.id))
               } label: { Label(chinese ? "卸载" : "Remove", systemImage: "trash") }
             }
-            if route == .mcp || route == .webhooks {
+            if (route == .mcp || route == .webhooks) && item.catalogEntry != true {
               Button(role: .destructive) {
                 onAction(.integrationDelete, HermesRouteActionPayload(route: route.rawValue, id: item.id))
               } label: { Label(chinese ? "删除" : "Delete", systemImage: "trash") }
+            }
+            if route == .mcp && item.catalogEntry != true && item.canTest == true {
+              Button {
+                onAction(.mcpTest, HermesRouteActionPayload(route: "mcp", id: item.id))
+              } label: {
+                Label(chinese ? "测试连接" : "Test connection", systemImage: "bolt")
+              }
             }
           }
           .contextMenu {

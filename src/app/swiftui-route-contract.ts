@@ -332,6 +332,10 @@ export interface HermesSwiftUIIntegrationSnapshot {
   userHidden?: boolean;
   authRequired?: boolean;
   authCommand?: string;
+  canTest?: boolean;
+  catalogEntry?: boolean;
+  catalogNeedsInstall?: boolean;
+  catalogRequiredEnv?: readonly string[];
 }
 
 export interface HermesSwiftUIManagedInstallationTargetSnapshot {
