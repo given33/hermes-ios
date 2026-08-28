@@ -83,4 +83,13 @@ export class HermesAudioCloudApi {
       { query: { profile }, deadlineMs: 120_000, signal },
     );
   }
+
+  /** Open the upstream sentence-chunked PCM TTS stream used during replies. */
+  openSpeechStream(profile = 'default', signal?: AbortSignal) {
+    return this.transport.openWebSocket('/api/audio/speak-stream', {
+      profile,
+      signal,
+      connectTimeoutMs: 10_000,
+    });
+  }
 }

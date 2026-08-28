@@ -237,16 +237,34 @@ export class HermesManagementCloudApi {
     return this.transport.json<{ ok: boolean }>('/api/env', 'DELETE', { key, profile });
   }
 
+  revealEnvironmentVariable(key: string, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/env/reveal', 'POST', { key, profile });
+  }
+
   getModelCredentials(profile = 'default') {
-    return this.transport.request<{ credentials: JsonRecord[] }>('/api/model/credentials', {
+    // Hermes exposes credential status through the unified OAuth catalog;
+    // older mobile code used the removed /api/model/credentials route.
+    return this.transport.request<{ providers: JsonRecord[] }>('/api/providers/oauth', {
       query: { profile },
-    });
+    }).then(({ providers }) => ({ credentials: providers || [] }));
   }
 
   deleteModelCredential(id: string, profile = 'default') {
     return this.transport.request<{ ok: boolean; removed: boolean }>(
-      `/api/model/credentials/${encodeURIComponent(id)}`,
+      `/api/providers/oauth/${encodeURIComponent(id)}`,
       { method: 'DELETE', query: { profile } },
+    );
+  }
+
+  openProfileTerminal(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}/open-terminal`, { method: 'POST' },
+    );
+  }
+
+  getProfileDesktopOverlay(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}/desktop-overlay`,
     );
   }
 

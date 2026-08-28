@@ -211,6 +211,52 @@ export class HermesExtensionsCloudApi {
     );
   }
 
+  getToolsetModels(name: string, provider?: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}/models`,
+      { query: { provider, profile } },
+    );
+  }
+
+  setToolsetModel(name: string, model: string, provider?: string, profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}/model`,
+      'PUT',
+      { model, provider, profile },
+    );
+  }
+
+  getToolsetProviders(name: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}/provider`,
+      { query: { profile } },
+    );
+  }
+
+  setToolsetProvider(name: string, provider: string, capability?: 'search' | 'extract', profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}/provider`,
+      'PUT',
+      { provider, capability, profile },
+    );
+  }
+
+  saveToolsetEnvironment(name: string, env: Record<string, string>, profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}/env`,
+      'PUT',
+      { env, profile },
+    );
+  }
+
+  runToolsetPostSetup(name: string, key: string, profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/tools/toolsets/${encodeURIComponent(name)}/post-setup`,
+      'POST',
+      { key, profile },
+    );
+  }
+
   getTerminalBackends(profile = 'default') {
     return this.transport.request<JsonRecord>('/api/tools/terminal/backends', { profile });
   }
@@ -354,6 +400,40 @@ export class HermesExtensionsCloudApi {
   cancelMcpOauthFlow(flowId: string) {
     return this.transport.request<JsonRecord>(`/api/mcp/oauth/flows/${encodeURIComponent(flowId)}`, {
       method: 'DELETE',
+    });
+  }
+
+  installSkillHub(identifier: string, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/skills/hub/install', 'POST', { identifier, profile });
+  }
+
+  uninstallSkillHub(name: string, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/skills/hub/uninstall', 'POST', { name, profile });
+  }
+
+  updateSkillsHub(profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/skills/hub/update', 'POST', { profile });
+  }
+
+  getSkillHubSources(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/skills/hub/sources', { query: { profile } });
+  }
+
+  searchSkillHub(query = '', source = 'all', limit = 20, profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/skills/hub/search', {
+      query: { q: query, source, limit, profile },
+    });
+  }
+
+  previewSkillHub(identifier: string, profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/skills/hub/preview', {
+      query: { identifier, profile },
+    });
+  }
+
+  scanSkillHub(identifier: string, profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/skills/hub/scan', {
+      query: { identifier, profile },
     });
   }
 

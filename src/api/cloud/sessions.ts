@@ -72,6 +72,48 @@ export class HermesSessionsCloudApi {
     );
   }
 
+  searchSessions(query: string, limit = 20, profile = 'default', filters: JsonRecord = {}) {
+    return this.transport.request<JsonRecord>('/api/sessions/search', {
+      query: { q: query, limit, profile, ...filters },
+    });
+  }
+
+  getLatestDescendant(id: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/sessions/${encodeURIComponent(id)}/latest-descendant`, { query: { profile } },
+    );
+  }
+
+  exportSession(id: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/sessions/${encodeURIComponent(id)}/export`, { query: { profile } },
+    );
+  }
+
+  bulkDeleteSessions(ids: string[], profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/sessions/bulk-delete', 'POST', { ids, profile });
+  }
+
+  importSessions(sessions: JsonRecord[], profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/sessions/import', 'POST', { sessions, profile });
+  }
+
+  countEmptySessions(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/sessions/empty/count', { query: { profile } });
+  }
+
+  deleteEmptySessions(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/sessions/empty', { method: 'DELETE', query: { profile } });
+  }
+
+  getSessionStats(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/sessions/stats', { query: { profile } });
+  }
+
+  pruneSessions(payload: JsonRecord = {}, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/sessions/prune', 'POST', { ...payload, profile });
+  }
+
   getAnalytics(days = 30, profile = 'default') {
     return Promise.all([
       this.transport.request<JsonRecord>('/api/analytics/usage', {

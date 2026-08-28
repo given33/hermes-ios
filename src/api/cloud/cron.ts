@@ -53,4 +53,19 @@ export class HermesCronCloudApi {
       },
     );
   }
+
+  getDeliveryTargets() {
+    return this.transport.request<JsonRecord>('/api/cron/delivery-targets');
+  }
+
+  getBlueprints() {
+    return this.transport.request<JsonRecord>('/api/cron/blueprints');
+  }
+
+  instantiateBlueprint(blueprint: string, values: JsonRecord = {}, profile = 'default') {
+    return this.transport.json<JsonRecord>('/api/cron/blueprints/instantiate', 'POST', {
+      blueprint,
+      values,
+    }, { query: { profile } });
+  }
 }
