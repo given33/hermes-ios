@@ -35,18 +35,23 @@ Web/Expo 预览的凭据适配器只保留当前 JavaScript 进程内存，不�
 - **之前的问题**：读取/确认未强制 scope，账号切换/删号后存在跨账号排空与复活风险。
 - **现在的行为**：`read`/`acknowledge` 必须携带当前活跃 ownerScope；删除带墓碑 + `requestedAt` 时间闸防陈旧删除；命令游标/完成集/执行结果按 scope 分桶；本地账号清删顺序由 local-account-purge(+order) 固化。
 
-## 2. 死代码清理（WebSocket 聊天通道整体下线）
+## 2. 历史死代码清理（旧 JSON-RPC WebSocket 聊天栈）
+
+> 本节记录 2026-07 的旧 `/api/ws` JSON-RPC 聊天栈清理。2026-08-29 起，
+> iOS 为 hosted collaboration 事件重新启用独立的低延迟 WebSocket 镜像：
+> 通过 REST 铸造一次性 ticket，连接失败自动回退到 hosted-events SSE；
+> 这不是已删除的旧 JSON-RPC 协议，详见 `docs/spec/API-CONTRACT.md` §6。
 
 | 删除 | 原内容 | 替代 |
 |---|---|---|
 | `src/api/HermesChatStream.ts`（495 行） | 经 dashboard `/api/ws` 的 JSON-RPC WebSocket 聊天流运行时（重连/网络/AppState 编排） | hosted-events SSE + `useHostedConversationStream` + 快照轮询 |
 | `src/api/native-chat-stream-runtime.ts`（22 行） | 上述运行时的 RN 适配器（NetInfo/AppState/WebSocket 工厂） | 同上 |
-| `src/api/ws-ticket.ts`（43 行）+ `hermes-types.ts` 的 `WebSocketTicketResponse` | `/api/auth/ws-ticket` 铸票与 wss URL 构造 | 不再需要——iOS 不再使用任何 WS 通道 |
+| `src/api/ws-ticket.ts`（43 行）+ `hermes-types.ts` 的 `WebSocketTicketResponse` | 旧 `/api/ws` 铸票与 wss URL 构造 | 旧实现删除；当前 hosted-events WS 在 `HermesApiClient.openWebSocket` 中使用同一一次性 ticket 机制 |
 | `tests/hermes-chat-stream.test.ts`（135 行） | 上述模块的测试 | tests/hosted-conversation-events.test.ts 等 |
 | `src/preview/attachment-draft-lifecycle.ts`（37 行） | 附件临时源清理逻辑的旧位置 | 迁至 `src/api/attachment-draft-lifecycle.ts`（tests 引用同步更新） |
 | `src/preview/PreviewCorePages.tsx` −711 行 | 预览页中被 SwiftUI 路由/生产 stub 取代的死分支 | production-route-stubs / SwiftUI pages |
 
-**对用户可见**：无（行为等价链路早已切到 SSE）；包体与攻击面缩小。tests/swiftui-partial-frontend-source.test.ts 新增断言禁止 `new HermesChatStream|existingSessionId:` 回潮。
+**对用户可见**：旧 JSON-RPC 聊天行为无变化；当前 hosted 对话优先获得更低延迟的 WebSocket 事件，升级失败仍由 SSE/轮询接管。包体与攻击面缩小。tests/swiftui-partial-frontend-source.test.ts 新增断言禁止 `new HermesChatStream|existingSessionId:` 回潮。
 
 ## 3. 会话缓存 v4 分片（conversation-local-store.ts；审计项 arch#4）
 
@@ -96,5 +101,6 @@ SwiftUI 审批快照现在显式携带后端返回的 `payload_digest`，用户�
 1. 升级即登出一次（Keychain v2 换名，legacy 清除）。
 2. 保存过 `http://` 服务器地址的设备回到登录页；开发环境用 `EXPO_PUBLIC_HERMES_ALLOW_HTTP=1` 或 loopback/.local。
 3. 附件 outbox Documents→Application Support 一次性迁移；会话缓存 v3→v4 一次性重分片；两者失败均可在下次启动重试且不丢数据。
-4. iOS 不再使用 `/api/auth/ws-ticket`、`/api/ws`、`/api/events`——后端可据此评估 ticket 面收紧。
+4. iOS 不再使用旧 `/api/ws`、`/api/events` 或 TUI JSON-RPC；`/api/auth/ws-ticket`
+   仅服务 hosted-events WebSocket 镜像，失败时自动回退 SSE。
 5. Screen Time 扩展与主 App 必须同版本部署（密封/开封两半共享密钥与 AAD 常量）。
