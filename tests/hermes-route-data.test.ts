@@ -959,6 +959,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
     { id: 'hk-worker', name: 'HK Worker' },
   ]);
   assert.equal(snapshot.profiles?.[0]?.detail, 'Bot Chat 已就绪');
+  assert.match(snapshot.profiles?.[0]?.botSessionId || '', /^official:v3:/);
 });
 
 test('system snapshots share managed-node aliases with the sidebar status', async () => {

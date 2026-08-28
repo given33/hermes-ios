@@ -16,6 +16,7 @@ import {
   localizeHermesIntegrationDescription,
   localizeHermesIntegrationName,
 } from '../../i18n/hermes-server-content-zh';
+import { officialConversationPlaceholderId } from '../../api/conversation-identifiers';
 import {
   formatDateValue,
   hashString,
@@ -372,7 +373,11 @@ export function profilesSnapshot(source: unknown, localizer: HermesRouteLocalize
     if (!isRecord(entry)) return [];
     const id = stringValue(entry.name) || stringValue(entry.id) || `profile-${index}`;
     const description = localizer.serverText(stringValue(entry.description) || stringValue(entry.detail) || '');
-    const canonical = isRecord(entry.canonical_session) && !entry.canonical_session.archived;
+    const canonicalRecord = isRecord(entry.canonical_session) ? entry.canonical_session : null;
+    const canonical = canonicalRecord !== null && !canonicalRecord.archived;
+    const canonicalSessionId = canonicalRecord
+      ? stringValue(canonicalRecord.id) || stringValue(canonicalRecord.resolved_id)
+      : '';
     const botStatus = botMode
       ? (canonical
         ? (localizer.isChinese ? 'Bot Chat 已就绪' : 'Bot Chat ready')
@@ -383,6 +388,9 @@ export function profilesSnapshot(source: unknown, localizer: HermesRouteLocalize
       name: localizer.serverText(stringValue(entry.display_name) || stringValue(entry.name) || id),
       model: stringValue(entry.model) || '',
       detail: [description, botStatus].filter(Boolean).join(' · '),
+      ...(botMode && canonical && canonicalSessionId
+        ? { botSessionId: officialConversationPlaceholderId(id, canonicalSessionId) }
+        : {}),
       active: Boolean(entry.active) || id === active,
       soul: stringValue(entry.soul),
       terminalAccess: entry.terminal_access !== false,

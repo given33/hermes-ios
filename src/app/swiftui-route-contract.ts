@@ -422,6 +422,8 @@ export interface HermesSwiftUIProfileSnapshot {
   name: string;
   model: string;
   detail: string;
+  /** Signed placeholder used to adopt a Bot Mode profile's canonical chat. */
+  botSessionId?: string;
   active: boolean;
   soul: string;
   terminalAccess: boolean;

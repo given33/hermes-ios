@@ -806,6 +806,7 @@ struct HermesProfileSnapshot: Decodable, Equatable, Identifiable {
   let name: String
   let model: String
   let detail: String
+  let botSessionId: String?
   let active: Bool
   let soul: String
   let terminalAccess: Bool

@@ -1051,6 +1051,20 @@ private struct HermesRemoteRoutePage: View {
           if !profile.active {
             Button { onAction(.profileActivate, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Image(systemName: "checkmark") }.buttonStyle(.borderless)
           }
+          if route == .bots, let botSessionId = profile.botSessionId, !botSessionId.isEmpty {
+            Button {
+              onAction(
+                .sessionOpen,
+                HermesRouteActionPayload(
+                  route: "sessions",
+                  id: botSessionId,
+                  fields: ["profile": profile.id]
+                )
+              )
+            } label: { Image(systemName: "bubble.left.and.bubble.right.fill") }
+              .buttonStyle(.borderless)
+              .accessibilityLabel(chinese ? "打开 Bot Chat" : "Open Bot Chat")
+          }
         }
         .contextMenu {
           Button {
