@@ -132,15 +132,15 @@ function NativeAuthRoot() {
               ownerScope={ownerScope}
             >
               <FrontendPreviewApp
+                cacheOwner={ownerScope}
+                client={client}
+                notificationTarget={notificationTarget}
                 account={{
                   deleteAccount,
                   logout,
                   username: state.connection.username,
                 }}
-                cacheOwner={ownerScope}
-                client={client}
                 navigationTarget={navigationTarget}
-                notificationTarget={notificationTarget}
               />
             </IOSContextProvider>
           </View>
