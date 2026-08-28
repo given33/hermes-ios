@@ -2332,12 +2332,13 @@ private struct HermesToolsetSchemaSheet: View {
   private static func initialValues(_ text: String) -> [String: String] {
     guard let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
     let rows = (object["env_vars"] as? [[String: Any]]) ?? (object["fields"] as? [[String: Any]]) ?? []
-    return Dictionary(uniqueKeysWithValues: rows.compactMap { row in
-      let key = (row["key"] as? String) ?? (row["name"] as? String) ?? (row["id"] as? String); guard let key, !key.isEmpty else { return nil }
+    return rows.reduce(into: [String: String]()) { result, row in
+      let key = (row["key"] as? String) ?? (row["name"] as? String) ?? (row["id"] as? String)
+      guard let key, !key.isEmpty else { return }
       // Never copy a redacted preview into an outgoing write; leaving it
       // blank preserves the already-stored secret on the server.
-      return (key, (row["value"] as? String) ?? "")
-    })
+      result[key] = (row["value"] as? String) ?? ""
+    }
   }
 }
 
@@ -2745,7 +2746,7 @@ private struct HermesSessionsPage: View {
             onAction(.sessionBulkDelete, HermesRouteActionPayload(route: "sessions", detail: (try? String(data: JSONEncoder().encode(ids), encoding: .utf8)) ?? "[]"))
             selectedForBulk.removeAll()
           } label: {
-            Label(chinese ? "删除已选会话（(selectedForBulk.count)）" : "Delete selected sessions ((selectedForBulk.count))", systemImage: "trash")
+            Label(chinese ? "删除已选会话（" + String(selectedForBulk.count) + "）" : "Delete selected sessions (" + String(selectedForBulk.count) + ")", systemImage: "trash")
           }
           .disabled(selectedForBulk.isEmpty)
           Button {
