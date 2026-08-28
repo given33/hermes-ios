@@ -2298,7 +2298,7 @@ private struct HermesToolsetSchemaSheet: View {
 
   private var keys: [String] {
     guard let data = configJSON.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
-    let rows = (object["env_vars"] as? [[String: Any]]) ?? (object["fields"] as? [[String: Any]]) ?? []
+    let rows = Self.declaredRows(object)
     return Array(Set(rows.compactMap { ($0["key"] as? String) ?? ($0["name"] as? String) ?? ($0["id"] as? String) })).sorted()
   }
 
@@ -2331,7 +2331,7 @@ private struct HermesToolsetSchemaSheet: View {
 
   private static func initialValues(_ text: String) -> [String: String] {
     guard let data = text.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
-    let rows = (object["env_vars"] as? [[String: Any]]) ?? (object["fields"] as? [[String: Any]]) ?? []
+    let rows = declaredRows(object)
     return rows.reduce(into: [String: String]()) { result, row in
       let key = (row["key"] as? String) ?? (row["name"] as? String) ?? (row["id"] as? String)
       guard let key, !key.isEmpty else { return }
@@ -2339,6 +2339,12 @@ private struct HermesToolsetSchemaSheet: View {
       // blank preserves the already-stored secret on the server.
       result[key] = (row["value"] as? String) ?? ""
     }
+  }
+
+  private static func declaredRows(_ object: [String: Any]) -> [[String: Any]] {
+    if let rows = object["env_vars"] as? [[String: Any]] { return rows }
+    if let rows = object["fields"] as? [[String: Any]] { return rows }
+    return (object["providers"] as? [[String: Any]] ?? []).flatMap { $0["env_vars"] as? [[String: Any]] ?? [] }
   }
 }
 
