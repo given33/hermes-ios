@@ -28,6 +28,14 @@ test('managed node status accepts only fresh matching device observations', () =
         observed_at: '2026-07-18T09:55:00Z',
         version: 'v9.9.9',
       },
+      {
+        id: 'hk',
+        label: 'HK',
+        online: true,
+        gateway_state: 'active',
+        observed_at: '2026-07-18T09:59:40Z',
+        version: 'v2.0.0',
+      },
     ],
     sources: [{ id: 'home', online: true }],
   }, now);
@@ -35,6 +43,7 @@ test('managed node status accepts only fresh matching device observations', () =
   assert.deepEqual(statuses, [
     { id: 'dbb3', label: 'DBB3', state: 'online', version: 'v1.2.3' },
     { id: 'wsl', label: 'WSL', state: 'offline', version: 'v9.9.9' },
+    { id: 'hk', label: 'HK', state: 'online', version: 'v2.0.0' },
   ]);
 });
 
@@ -44,6 +53,7 @@ test('missing devices fail closed to offline instead of checking forever', () =>
     [
       { id: 'dbb3', label: 'DBB3', state: 'offline' },
       { id: 'wsl', label: 'WSL', state: 'offline' },
+      { id: 'hk', label: 'HK', state: 'offline' },
     ],
   );
 });
@@ -64,6 +74,7 @@ test('aggregate recovery reports explicit DBB3 and WSL target failures', () => {
   assert.deepEqual(statuses.map(({ id, state }) => ({ id, state })), [
     { id: 'dbb3', state: 'offline' },
     { id: 'wsl', state: 'offline' },
+    { id: 'hk', state: 'offline' },
   ]);
 });
 
@@ -89,7 +100,7 @@ test('managed relay timestamps accept Unix seconds and native camel-case aliases
         observedAt: nowSeconds - 5,
       }],
     }, now).map(({ id, state }) => ({ id, state })),
-    [{ id: 'dbb3', state: 'online' }, { id: 'wsl', state: 'offline' }],
+    [{ id: 'dbb3', state: 'online' }, { id: 'wsl', state: 'offline' }, { id: 'hk', state: 'offline' }],
   );
   assert.deepEqual(
     managedNodeGatewayStatuses({
@@ -101,7 +112,7 @@ test('managed relay timestamps accept Unix seconds and native camel-case aliases
         checkedAt: nowSeconds - 5,
       }],
     }, now).map(({ id, state }) => ({ id, state })),
-    [{ id: 'dbb3', state: 'offline' }, { id: 'wsl', state: 'online' }],
+    [{ id: 'dbb3', state: 'offline' }, { id: 'wsl', state: 'online' }, { id: 'hk', state: 'offline' }],
   );
 });
 
@@ -113,7 +124,7 @@ test('recovery target states are matched case-insensitively across contract alia
         recovery_state: { targetStates: { DBB3: { state: 'healthy' }, WSL: { online: true } } },
       }],
     }).map(({ id, state }) => ({ id, state })),
-    [{ id: 'dbb3', state: 'online' }, { id: 'wsl', state: 'online' }],
+    [{ id: 'dbb3', state: 'online' }, { id: 'wsl', state: 'online' }, { id: 'hk', state: 'offline' }],
   );
 });
 

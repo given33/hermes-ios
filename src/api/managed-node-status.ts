@@ -22,7 +22,10 @@ export function managedNodeGatewayStatuses(
 ): ManagedNodeGatewayStatus[] {
   const nodes = arrayField(source, ['nodes', 'items', 'managed_nodes', 'managedNodes']);
   const sources = arrayField(source, ['sources', 'monitors']).filter(isRecord);
-  return ['dbb3', 'wsl'].map((id): ManagedNodeGatewayStatus => {
+  // Keep the four-member fabric visible on every authenticated surface:
+  // server/dispatcher is represented separately, while these are the three
+  // independently deployable worker nodes.
+  return ['dbb3', 'wsl', 'hk'].map((id): ManagedNodeGatewayStatus => {
     const value = nodes.find((entry) => (
       isRecord(entry) && nodeId(entry) === id
     ));

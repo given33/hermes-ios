@@ -125,6 +125,7 @@ export function AgentWorkspacePage({
         nodes: [
           { gateway_state: 'ready', id: 'dbb3', observed_at: Date.now(), online: true },
           { gateway_state: 'ready', id: 'wsl', observed_at: Date.now(), online: true },
+          { gateway_state: 'ready', id: 'hk', observed_at: Date.now(), online: true },
         ],
       }));
       setLoading(false);
@@ -181,6 +182,14 @@ export function AgentWorkspacePage({
       state: nodeState('wsl'),
       x: 198,
       y: 104,
+    },
+    {
+      id: 'hk-worker',
+      name: 'HK Worker',
+      role: isChinese ? '香港执行' : 'Hong Kong runner',
+      state: nodeState('hk'),
+      x: 138,
+      y: 140,
     },
   ], [isChinese, nodes, serverOnline]);
 
