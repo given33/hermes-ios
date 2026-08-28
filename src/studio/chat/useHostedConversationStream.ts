@@ -6,6 +6,8 @@ import { withAbortableDeadline } from '../../api/async-deadline';
 import { reconnectDelay } from '../../api/reconnect-backoff';
 import {
   consumeHostedConversationEvents,
+  consumeHostedConversationEventsWebSocket,
+  type HostedConversationEventFrame,
   type HostedLifecycleEvent,
 } from '../../api/hosted-conversation-events';
 import { accountGenerationFromOwnerScope } from '../../auth/account-identity';
@@ -144,20 +146,15 @@ export function useHostedConversationStream({
         }, EVENT_STREAM_IDLE_TIMEOUT_MS);
       };
       armIdleWatchdog();
-      void consumeHostedConversationEvents(
-        cloudApi,
-        activeConversationId,
-        cursorRef.current.get(activeConversationId) || 0,
-        expectedAccountGeneration,
-        streamController.signal,
-        async ({
+      const eventCursor = cursorRef.current.get(activeConversationId) || 0;
+      const applyFrame = async ({
           accountGeneration: incomingAccountGeneration,
           conversation,
           cursor,
           events,
           hasGap,
           resetCursor,
-        }) => {
+        }: HostedConversationEventFrame) => {
           if (
             disposed
             || !lifecycleCurrent()
@@ -192,11 +189,36 @@ export function useHostedConversationStream({
             streamHealthy = true;
             reconnectAttempt = 0;
           });
-        },
+        };
+      const consumeSse = () => consumeHostedConversationEvents(
+        cloudApi,
+        activeConversationId,
+        cursorRef.current.get(activeConversationId) || eventCursor,
+        expectedAccountGeneration,
+        streamController!.signal,
+        applyFrame,
         undefined,
         EVENT_STREAM_CONNECTION_TIMEOUT_MS,
         armIdleWatchdog,
-      ).catch((error: unknown) => {
+      );
+      // The hosted conversation contract is transport-neutral. Prefer the
+      // lower-latency WebSocket mirror on native clients, but immediately
+      // fall back to the existing SSE implementation when a proxy, old
+      // server, or captive network does not permit the upgrade.
+      const consumePreferred = consumeHostedConversationEventsWebSocket(
+          cloudApi,
+          activeConversationId,
+          eventCursor,
+          expectedAccountGeneration,
+          streamController.signal,
+          applyFrame,
+          armIdleWatchdog,
+          EVENT_STREAM_CONNECTION_TIMEOUT_MS,
+        ).catch((error: unknown) => {
+          if (streamController?.signal.aborted) throw error;
+          return consumeSse();
+        });
+      void consumePreferred.catch((error: unknown) => {
         if (!streamController?.signal.aborted) {
           streamHealthy = false;
           reportRefreshFailure('stream', error);

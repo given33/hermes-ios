@@ -118,7 +118,8 @@ export function localizeHermesIntegrationName(
   const base = normalized
     .replace(/-(?:provider|platform)$/u, '')
     .replace(/^(?:browser|web|memory|image_gen|video_gen|observability|dashboard_auth|model-providers?)[-_]/u, '');
-  const product = PRODUCT_NAMES[base]
+  const product = PRODUCT_NAMES[normalized]
+    || PRODUCT_NAMES[base]
     || PRODUCT_NAMES[base.replaceAll('-', '_')]
     || titleCaseIdentifier(base || value);
   if (kind === 'mcp') return `${product} MCP 服务`;

@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import { Check, Copy } from 'lucide-react-native';
-import { useCallback, useEffect, useReducer, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -66,6 +66,10 @@ export function ReasoningSection({
   );
   const [copied, setCopied] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+  }, []);
   useEffect(() => {
     dispatchCollapse({
       entries: [{ id: REASONING_ENTRY_ID, running }],
@@ -79,7 +83,8 @@ export function ReasoningSection({
     if (!text.trim()) return;
     await Clipboard.setStringAsync(text);
     setCopied(true);
-    setTimeout(() => setCopied(false), 1_200);
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(false), 1_200);
   }, [text]);
   const clamp = clampActivityText(text);
   const value = showAll ? text.trimEnd() : clamp.text;

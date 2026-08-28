@@ -9,6 +9,7 @@ export type HermesChatAvatarRole =
   | 'dbb3-worker'
   | 'dispatcher'
   | 'hermes'
+  | 'hk-worker'
   | 'pc-worker'
   | 'reporter'
   | 'reviewer'

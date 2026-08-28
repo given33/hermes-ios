@@ -483,15 +483,20 @@ function liveMessageFor(
 function normalizeLiveRoleStage(value: string): HermesChatRoleStage {
   const normalized = value.toLowerCase();
   if (normalized === 'worker' || normalized.startsWith('worker.')) return 'worker';
-  if (normalized === 'reviewer' || normalized.startsWith('reviewer.')) return 'reviewer';
-  if (normalized === 'reporter' || normalized.startsWith('reporter.')) return 'reporter';
+  if (
+    normalized === 'reviewer'
+    || normalized.startsWith('reviewer.')
+    || normalized === 'reporter'
+    || normalized.startsWith('reporter.')
+    || normalized === 'supervisor'
+    || normalized.startsWith('supervisor.')
+  ) return 'worker';
   // Keep the same stage names the snapshot-side normalizer uses
   // (chat-view-model.ts normalizeRoleStage) so live and persisted bubbles
   // share a fold key — mismatched keys caused the live bubble to be
   // re-appended at the tail instead of merging with its snapshot twin.
   if (normalized.startsWith('manager')) return 'dispatcher';
   if (normalized === 'dispatch' || normalized.startsWith('dispatch.')) return 'dispatcher';
-  if (normalized === 'supervisor' || normalized.startsWith('supervisor.')) return 'supervisor';
   return 'chat';
 }
 
@@ -500,19 +505,19 @@ function liveRoleLabel(stage: HermesChatRoleStage, chinese: boolean): string {
     return {
       chat: 'Hermes Agent',
       worker: '任务执行',
-      reviewer: '结果审核',
-      reporter: '最终汇报',
+      reviewer: '任务执行',
+      reporter: '任务执行',
       dispatcher: '任务调度',
-      supervisor: '流程监督',
+      supervisor: '任务执行',
     }[stage];
   }
   return {
     chat: 'Hermes Agent',
     worker: 'Execution',
-    reviewer: 'Review',
-    reporter: 'Final report',
+    reviewer: 'Execution',
+    reporter: 'Execution',
     dispatcher: 'Task dispatch',
-    supervisor: 'Workflow supervision',
+    supervisor: 'Execution',
   }[stage];
 }
 
@@ -526,6 +531,10 @@ function liveRoleName(
   if (stage === 'worker' && /pc|wsl|local|windows/i.test(profile)) {
     return chinese ? 'PC/WSL 执行员' : 'PC/WSL Worker';
   }
+  if (stage === 'worker' && /hk|hong.?kong|香港/i.test(profile)) {
+    return chinese ? 'HK 执行员' : 'Hong Kong Worker';
+  }
+  if (stage === 'worker') return chinese ? 'DBB3 执行员' : 'DBB3 Worker';
   return liveRoleLabel(stage, chinese);
 }
 

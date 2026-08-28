@@ -116,6 +116,10 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   const { tokens } = useTheme();
   const motion = useMotion();
   const [copied, setCopied] = useState<'message' | 'model' | 'sender' | null>(null);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+  }, []);
   const isUser = message.role === 'user';
   const metadata = isUser
     ? formatMessageLocalTime(message.createdAt, isChinese)
@@ -140,7 +144,11 @@ export const UnifiedMessage = memo(function UnifiedMessage({
     if (!value.trim()) return;
     await Clipboard.setStringAsync(value);
     setCopied(target);
-    setTimeout(() => setCopied((current) => current === target ? null : current), 1_200);
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(
+      () => setCopied((current) => current === target ? null : current),
+      1_200,
+    );
   }, []);
   const markdownStyles = createMessageMarkdownStyles(
     messageForeground,

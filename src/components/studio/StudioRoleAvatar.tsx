@@ -10,6 +10,7 @@ interface StudioRoleAvatarProps {
 
 const ROLE_SEEDS: Partial<Record<HermesChatAvatarRole, string>> = {
   'dbb3-worker': 'studio-role-worker-dbb3',
+  'hk-worker': 'studio-role-worker-hk',
   'pc-worker': 'studio-role-worker-wsl',
   reporter: 'studio-role-reporter',
   reviewer: 'studio-role-reviewer',

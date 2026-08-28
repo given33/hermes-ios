@@ -36,15 +36,15 @@ test('hosted stage events map to canonical member ids without hardcoding', () =>
   );
   assert.equal(
     teamMemberIdForEvent({ profile: 'dispatcher', roleStage: 'dispatcher' }),
-    'dbb3-manager',
+    'dispatcher',
   );
   assert.equal(
     teamMemberIdForEvent({ rawRoleStage: 'manager_handoff' }),
-    'dbb3-manager',
+    'dispatcher',
   );
   assert.equal(
     teamMemberIdForEvent({ profile: 'default', rawRoleStage: 'reporter' }),
-    'default',
+    'dbb3-worker',
   );
   assert.equal(isHostedTeamEvent({ role: 'user', roleStage: 'chat' }), false);
   assert.equal(isHostedTeamEvent({ profile: 'default', roleStage: 'chat' }), false);
@@ -62,34 +62,34 @@ test('a completed team run yields a full roster with elapsed and rework badges',
   // Server participants[] order (dispatch order) is authoritative.
   assert.deepEqual(
     roster.map(({ id }) => id),
-    ['dbb3-manager', 'dbb3-worker', 'pc-worker', 'reviewer', 'default'],
+    ['dispatcher', 'dbb3-worker', 'pc-worker', 'hk-worker'],
   );
   assert.deepEqual(
     roster.map(({ role }) => role),
-    ['manager', 'worker', 'worker', 'reviewer', 'reporter'],
+    ['dispatcher', 'worker', 'worker', 'worker'],
   );
   assert.deepEqual(
     roster.map(({ node }) => node),
-    ['dbb3', 'dbb3', 'wsl', 'dbb3', 'main'],
+    ['dbb3', 'dbb3', 'wsl', 'hk'],
   );
   assert.deepEqual(
     roster.map(({ displayName }) => displayName),
-    ['Hermes 调度员', 'DBB3 执行员', 'PC/WSL 执行员', 'Hermes 审阅员', 'Hermes 汇报员'],
+    ['Hermes 调度员', 'DBB3 执行员', 'PC/WSL 执行员', 'HK 执行员'],
   );
   assert.ok(roster.every(({ state }) => state === 'done'));
   assert.ok(roster.every(({ avatarSeed }) => avatarSeed.startsWith('hermes-member-')));
 
-  // Rework badges: both workers and the reviewer went through round 1.
+  // All worker lanes expose their rework evidence directly.
   assert.deepEqual(
     roster.map(({ reworkRounds }) => reworkRounds),
-    [0, 1, 1, 1, 0],
+    [0, 1, 1, 1],
   );
 
   // Per-member elapsed sums stage segments and skips waiting gaps:
   // manager 720ms plan + 400ms handoff, workers first pass + rework, etc.
   assert.deepEqual(
     roster.map(({ elapsedMs }) => elapsedMs),
-    [1_120, 2_080, 2_280, 1_320, 710],
+    [1_830, 2_080, 2_280, 2_680],
   );
   assert.equal(formatTeamElapsed(2_080), '2s');
   assert.equal(formatTeamElapsed(125_000), '2m 05s');
@@ -109,26 +109,26 @@ test('live states follow persisted events through the whole lifecycle', () => {
   };
 
   // Manager planning silently: thinking. Members not yet active: idle.
-  assert.equal(stateAt(1, 'dbb3-manager', STARTED_AT + 300), 'thinking');
+  assert.equal(stateAt(1, 'dispatcher', STARTED_AT + 300), 'thinking');
   assert.equal(stateAt(1, 'dbb3-worker', STARTED_AT + 300), 'idle');
   // Both workers running in parallel while the manager is done.
   assert.equal(stateAt(4, 'dbb3-worker', STARTED_AT + 1_500), 'executing');
   assert.equal(stateAt(4, 'pc-worker', STARTED_AT + 1_500), 'executing');
-  assert.equal(stateAt(4, 'dbb3-manager', STARTED_AT + 1_500), 'done');
-  // Reviewer reviewing, then the rejection makes the rework round visible.
-  assert.equal(stateAt(7, 'reviewer', STARTED_AT + 2_600), 'reviewing');
+  assert.equal(stateAt(4, 'dispatcher', STARTED_AT + 1_500), 'done');
+  // The HK worker joins the same execution state as the other independent lanes.
+  assert.equal(stateAt(7, 'hk-worker', STARTED_AT + 2_600), 'executing');
   const afterRejection = teamRoster({
     events: playback.slice(0, 8),
     isChinese: true,
     now: STARTED_AT + 3_200,
     participants: PREVIEW_TEAM_PARTICIPANTS,
   });
-  assert.equal(afterRejection.find(({ id }) => id === 'reviewer')?.reworkRounds, 1);
+  assert.equal(afterRejection.find(({ id }) => id === 'hk-worker')?.reworkRounds, 0);
   // Workers executing again during rework.
   assert.equal(stateAt(10, 'pc-worker', STARTED_AT + 3_500), 'executing');
-  // Manager streams the handoff text: typing. Reporter publishes: reporting.
-  assert.equal(stateAt(14, 'dbb3-manager', STARTED_AT + 4_800), 'typing');
-  assert.equal(stateAt(16, 'default', STARTED_AT + 5_400), 'reporting');
+  // Dispatcher streams the handoff text and final summary.
+  assert.equal(stateAt(14, 'dispatcher', STARTED_AT + 4_800), 'typing');
+  assert.equal(stateAt(16, 'dispatcher', STARTED_AT + 5_400), 'thinking');
   // Failed terminal events surface as failed.
   const failed = teamRoster({
     events: [{

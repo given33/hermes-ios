@@ -210,10 +210,8 @@ test('the same conversation lifts into the Studio collaboration surface from per
   assert.match(source, /群聊已拉起/);
   assert.match(source, /function CollaborationLiftNotice/);
   assert.match(source, /Hermes 调度员/);
-  assert.match(source, /Hermes 审阅员/);
-  assert.match(source, /Hermes 汇报员/);
-  assert.match(source, /Hermes 监督者/);
-  assert.match(source, /5 位成员/);
+  assert.match(source, /HK 执行员/);
+  assert.match(source, /4 位协作成员/);
   assert.match(source, /function CollaborationMemberStack/);
   assert.match(source, /collaborationHeaderInfo/);
   assert.match(source, /collaborationHeaderConnection/);
@@ -323,10 +321,9 @@ test('a running hosted turn exposes the real server cancellation control', () =>
 
 test('collaboration members keep canonical distinct local avatars without excessive overlap', () => {
   assert.match(source, /canonicalMember\('dispatcher', 'dispatcher'/);
-  assert.match(source, /canonicalMember\('worker', 'dbb3-worker'/);
-  assert.match(source, /canonicalMember\('reviewer', 'reviewer'/);
-  assert.match(source, /canonicalMember\('reporter', 'reporter'/);
-  assert.match(source, /canonicalMember\('supervisor', 'supervisor'/);
+  assert.match(source, /canonicalMember\('dbb3-worker', 'worker'/);
+  assert.match(source, /canonicalMember\('pc-worker', 'worker'/);
+  assert.match(source, /canonicalMember\('hk-worker', 'worker'/);
   assert.match(source, /<StudioRoleAvatar role=\{member\.avatarRole \|\| 'hermes'\} size=\{24\}/);
   assert.match(source, /marginLeft: index === 0 \? 0 : -6/);
   assert.doesNotMatch(source, /<StudioOfficialAvatar size=\{24\} \/>/);
@@ -335,9 +332,7 @@ test('collaboration members keep canonical distinct local avatars without excess
     'utf8',
   );
   assert.match(avatars, /'dbb3-worker': 'studio-role-worker-dbb3'/);
-  assert.match(avatars, /reporter: 'studio-role-reporter'/);
-  assert.match(avatars, /reviewer: 'studio-role-reviewer'/);
-  assert.match(avatars, /supervisor: 'studio-role-supervisor'/);
+  assert.match(avatars, /'hk-worker': 'studio-role-worker-hk'/);
 });
 
 test('long pressing a member submits a durable intervention to the same hosted turn', () => {

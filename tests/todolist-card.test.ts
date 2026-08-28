@@ -276,7 +276,7 @@ test('指派角色映射为确定性头像角色(头像配色来源)', () => {
   assert.equal(todoAssigneeAvatarRole('dbb3-worker'), 'dbb3-worker');
   assert.equal(todoAssigneeAvatarRole('pc-worker'), 'pc-worker');
   assert.equal(todoAssigneeAvatarRole('dbb3-manager'), 'dispatcher');
-  assert.equal(todoAssigneeAvatarRole('reviewer'), 'reviewer');
+  assert.equal(todoAssigneeAvatarRole('reviewer'), 'dbb3-worker');
   assert.equal(todoAssigneeAvatarRole(''), 'hermes');
 });
 

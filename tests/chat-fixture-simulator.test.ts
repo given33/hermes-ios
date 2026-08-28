@@ -47,22 +47,21 @@ test('frontend fixture lifts multi-stage work into the Studio collaboration role
     turnId: 'turn-work',
   });
   // Upserted playback: unique message ids in first-appearance order describe
-  // the full team scenario (plan → parallel workers → rejection → rework →
-  // re-review → handoff → final report).
+  // the dispatcher plus three independent worker lanes.
   const finalById = new Map(messages.map((message) => [message.id, message]));
   const stages = [...finalById.values()];
   assert.deepEqual(
     stages.map(({ memberId }) => memberId),
     [
-      'dbb3-manager',
+      'dispatcher',
       'dbb3-worker',
       'pc-worker',
-      'reviewer',
+      'hk-worker',
       'dbb3-worker',
       'pc-worker',
-      'reviewer',
-      'dbb3-manager',
-      'default',
+      'hk-worker',
+      'dispatcher',
+      'dispatcher',
     ],
   );
   assert.deepEqual(
@@ -71,29 +70,28 @@ test('frontend fixture lifts multi-stage work into the Studio collaboration role
       'dispatcher',
       'dbb3-worker',
       'pc-worker',
-      'reviewer',
+      'hk-worker',
       'dbb3-worker',
       'pc-worker',
-      'reviewer',
+      'hk-worker',
       'dispatcher',
-      'reporter',
+      'dispatcher',
     ],
   );
   // Each member keeps a distinct sender header instead of a generic Hermes.
   assert.deepEqual(
     [...new Set(stages.map(({ name }) => name))],
-    ['Hermes 调度员', 'DBB3 执行员', 'PC/WSL 执行员', 'Hermes 审阅员', 'Hermes 汇报员'],
+    ['Hermes 调度员', 'DBB3 执行员', 'PC/WSL 执行员', 'HK 执行员'],
   );
-  // The reviewer rejects once and both workers run a visible rework round.
+  // Worker lanes expose their rework evidence directly to the dispatcher.
   assert.deepEqual(
     stages
       .map(({ rawRoleStage }) => rawRoleStage)
       .filter((stage) => /rework/.test(stage || '')),
     [
-      'reviewer:rework-request:1',
       'worker:dbb3-worker:rework:1',
       'worker:pc-worker:rework:1',
-      'reviewer:rework:1',
+      'worker:hk-worker:rework:1',
     ],
   );
   // Live states stream through running snapshots before terminal upserts.

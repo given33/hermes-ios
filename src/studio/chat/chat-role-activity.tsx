@@ -120,50 +120,6 @@ const AwaitingChoiceCard = memo(function AwaitingChoiceCard({
   );
 });
 /**
- * Supervisor verdict card: green for PASS, red for CORRECTIVE_ACTION.
- * Rework state chips ("正在打回给 worker" → "已打回给 worker 重做") render
- * below the verdict text.
- */
-const SupervisorVerdictCard = memo(function SupervisorVerdictCard({
-  activity,
-  isChinese,
-}: {
-  activity: ChatActivity;
-  isChinese: boolean;
-}) {
-  const { tokens } = useTheme();
-  const corrective = activity.severity === 'corrective';
-  const color = corrective ? tokens.colors.destructive : tokens.colors.success;
-  return (
-    <View
-      style={[
-        styles.subagentCard,
-        {
-          backgroundColor: multiplyAlpha(color, 0.06),
-          borderColor: multiplyAlpha(color, 0.35),
-        },
-      ]}
-    >
-      <View style={styles.subagentHeader}>
-        <View style={[styles.subagentIcon, { backgroundColor: multiplyAlpha(color, 0.14) }]}>
-          <Text style={{ fontSize: 11, lineHeight: 14 }}>{corrective ? '⚠️' : '✅'}</Text>
-        </View>
-        <Text style={[styles.subagentName, { color: tokens.colors.textSecondary }]}>
-          {isChinese ? '监督检查' : 'Supervision check'}
-        </Text>
-        <Text style={[styles.subagentStatus, { color }]}>
-          {corrective ? (isChinese ? '需整改' : 'corrective') : (isChinese ? '通过' : 'pass')}
-        </Text>
-      </View>
-      {activity.output || activity.preview ? (
-        <Text numberOfLines={6} style={[styles.subagentSummary, { color: tokens.colors.textSecondary }]}>
-          {activity.output || activity.preview}
-        </Text>
-      ) : null}
-    </View>
-  );
-});
-/**
  * Agent roster: every subagent spawned during the conversation (live or
  * historical), grouped by name — the mobile equivalent of the pi Agent Hub
  * side list. Each row shows the agent's name, live state and latest
@@ -360,7 +316,7 @@ export function TeamStatusBar({
           awaitingCount += 1;
         }
         if (
-          activity.category === 'supervisor'
+          activity.category === 'status'
           && (activity.severity || '').toLowerCase() === 'corrective'
           && inCurrentTurn
         ) {
@@ -593,23 +549,24 @@ function subscribeSharedNow(listener: (now: number) => void): () => void {
 const TimingLabel = memo(function TimingLabel({
   isChinese,
   message,
+  now,
 }: {
   isChinese: boolean;
   message: ChatMessage;
+  now: number;
 }) {
   const { tokens } = useTheme();
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    setNow(Date.now());
-    return subscribeSharedNow(setNow);
-  }, []);
   return (
     <Text numberOfLines={1} style={[styles.activityTitle, { color: tokens.colors.textSecondary }]}>
       {turnTimingLine(message, isChinese, now)}
     </Text>
   );
 });
-/** One subscription per running group, one interval for the whole screen. */
+/**
+ * One subscription per running group, one interval for the whole screen.
+ * `now` comes from the group's gated `useNowTicker(running)` so settled
+ * groups never subscribe and the shared interval idles when nothing runs.
+ */
 function useNowTicker(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -648,9 +605,6 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   const awaitingActivities = activities.filter(
     (activity) => activity.category === 'awaiting',
   );
-  const supervisorActivities = activities.filter(
-    (activity) => activity.category === 'supervisor',
-  );
   const reworkActivities = activities.filter(
     (activity) => activity.category === 'rework',
   );
@@ -659,7 +613,6 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
       activity.category !== 'reasoning'
       && activity.category !== 'subagent'
       && activity.category !== 'awaiting'
-      && activity.category !== 'supervisor'
       && activity.category !== 'rework'
     ),
   );
@@ -695,7 +648,7 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
           {phase.label}
         </Text>
       </View>
-      <TimingLabel isChinese={isChinese} message={message} />
+      <TimingLabel isChinese={isChinese} message={message} now={now} />
       {stepActivities.length ? (
         <Text style={[styles.activityCount, { color: tokens.colors.textTertiary }]}>
           {isChinese ? `${stepActivities.length} 个工具调用` : `${stepActivities.length} tool calls`}
@@ -721,17 +674,6 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
               key={activity.id}
               onChoiceInputFocus={onChoiceInputFocus}
               onRespondToChoice={onRespondToChoice}
-            />
-          ))}
-        </View>
-      ) : null}
-      {supervisorActivities.length ? (
-        <View style={styles.subagentCards}>
-          {supervisorActivities.map((activity) => (
-            <SupervisorVerdictCard
-              activity={activity}
-              isChinese={isChinese}
-              key={activity.id}
             />
           ))}
         </View>

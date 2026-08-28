@@ -123,9 +123,9 @@ export function previewTurnMessages({
       updatedAt: completedAt,
     }];
   }
-  // Multi-member hosted team: the manager plans, two workers run in
-  // parallel, the reviewer rejects once, both workers rework, the reviewer
-  // passes, the manager hands off, and the reporter publishes one answer.
+  // Multi-member hosted team: the dispatcher plans, independent workers run
+  // in parallel, each worker returns evidence, and the dispatcher publishes
+  // one answer. The HK lane exercises the production four-member roster.
   // Stages with `streamRunning` first emit a running snapshot under the same
   // id so the roster live states (typing/thinking/executing/reviewing/
   // reporting) are driven by upserted fixture events, exactly like SSE.
@@ -148,18 +148,17 @@ export function previewTurnMessages({
   const managerName = isChinese ? 'Hermes 调度员' : 'Hermes Manager';
   const dbb3Name = isChinese ? 'DBB3 执行员' : 'DBB3 Worker';
   const pcName = isChinese ? 'PC/WSL 执行员' : 'PC/WSL Worker';
-  const reviewerName = isChinese ? 'Hermes 审阅员' : 'Hermes Reviewer';
-  const reporterName = isChinese ? 'Hermes 汇报员' : 'Hermes Reporter';
+  const hkName = isChinese ? 'HK 执行员' : 'Hong Kong Worker';
   const stages: TeamStageFixture[] = [
     {
       avatarRole: 'dispatcher',
       completeOffset: 720,
       content: isChinese
-        ? '已完成难度评估：拆分为 DBB3 部署与 PC/WSL 验证两个子任务，并行派发给两名执行员。'
-        : 'Difficulty assessed: split into DBB3 deployment and PC/WSL verification, dispatched to both workers in parallel.',
-      handoffTo: ['dbb3-worker', 'pc-worker'],
+        ? '已完成难度评估：拆分为 DBB3、PC/WSL 与 HK 三个子任务，并行派发给三名执行员。'
+        : 'Difficulty assessed: split into DBB3, PC/WSL, and Hong Kong work, dispatched in parallel.',
+      handoffTo: ['dbb3-worker', 'pc-worker', 'hk-worker'],
       key: 'manager-plan',
-      memberId: 'dbb3-manager',
+      memberId: 'dispatcher',
       name: managerName,
       rawRoleStage: 'manager_planning',
       roleLabel: isChinese ? 'Hermes 调度员 · 规划' : 'Hermes Manager · Planning',
@@ -174,7 +173,7 @@ export function previewTurnMessages({
       content: isChinese
         ? '部署完成：服务已在 DBB3 重启并通过健康检查。'
         : 'Deployment done: the service restarted on DBB3 and passed health checks.',
-      handoffTo: ['reviewer'],
+      handoffTo: ['dispatcher'],
       key: 'dbb3-run',
       memberId: 'dbb3-worker',
       name: dbb3Name,
@@ -191,7 +190,7 @@ export function previewTurnMessages({
       content: isChinese
         ? '本地验证完成：WSL 网关连通，冒烟用例全部通过。'
         : 'Local verification done: the WSL gateway is reachable and smoke tests pass.',
-      handoffTo: ['reviewer'],
+      handoffTo: ['dispatcher'],
       key: 'pc-run',
       memberId: 'pc-worker',
       name: pcName,
@@ -203,20 +202,20 @@ export function previewTurnMessages({
       streamRunning: true,
     },
     {
-      avatarRole: 'reviewer',
-      completeOffset: 3_000,
+      avatarRole: 'hk-worker',
+      completeOffset: 2_980,
       content: isChinese
-        ? '审阅未通过（第 1 轮返工）：缺少回滚验证证据，请两名执行员补齐后重新提交。'
-        : 'Review rejected (rework round 1): rollback verification evidence is missing; both workers must resubmit.',
-      handoffTo: ['dbb3-worker', 'pc-worker'],
-      key: 'review-reject',
-      memberId: 'reviewer',
-      name: reviewerName,
-      rawRoleStage: 'reviewer:rework-request:1',
-      roleLabel: isChinese ? 'Hermes 审阅员 · 退回返工' : 'Hermes Reviewer · Rework requested',
-      roleStage: 'reviewer',
-      startOffset: 2_200,
-      statusText: isChinese ? '第 1 轮返工已退回' : 'Rework round 1 requested',
+        ? '香港执行节点发现回滚证据缺口，已重新执行验证。'
+        : 'The Hong Kong execution lane found a rollback evidence gap and reran verification.',
+      handoffTo: ['dispatcher'],
+      key: 'hk-run',
+      memberId: 'hk-worker',
+      name: hkName,
+      rawRoleStage: 'worker:hk-worker',
+      roleLabel: isChinese ? 'HK 执行员 · 执行' : 'Hong Kong Worker · Execution',
+      roleStage: 'worker',
+      startOffset: 820,
+      statusText: isChinese ? '执行完成' : 'Execution completed',
       streamRunning: true,
     },
     {
@@ -225,7 +224,7 @@ export function previewTurnMessages({
       content: isChinese
         ? '返工完成：已补充回滚演练记录与回执哈希。'
         : 'Rework done: rollback drill log and receipt hash attached.',
-      handoffTo: ['reviewer'],
+      handoffTo: ['dispatcher'],
       key: 'dbb3-rework',
       memberId: 'dbb3-worker',
       name: dbb3Name,
@@ -242,7 +241,7 @@ export function previewTurnMessages({
       content: isChinese
         ? '返工完成：本地回滚脚本验证通过并附执行日志。'
         : 'Rework done: the local rollback script passed with logs attached.',
-      handoffTo: ['reviewer'],
+      handoffTo: ['dispatcher'],
       key: 'pc-rework',
       memberId: 'pc-worker',
       name: pcName,
@@ -254,53 +253,53 @@ export function previewTurnMessages({
       streamRunning: true,
     },
     {
-      avatarRole: 'reviewer',
+      avatarRole: 'hk-worker',
       completeOffset: 4_560,
       content: isChinese
-        ? '返工复审通过：证据完整，交给 Hermes 调度员汇总交接。'
-        : 'Rework re-review passed: evidence is complete; handing off to the Hermes Manager.',
-      handoffTo: ['dbb3-manager'],
-      key: 'review-pass',
-      memberId: 'reviewer',
-      name: reviewerName,
-      rawRoleStage: 'reviewer:rework:1',
-      roleLabel: isChinese ? 'Hermes 审阅员 · 返工复审' : 'Hermes Reviewer · Rework re-review',
-      roleStage: 'reviewer',
+        ? '补充验证完成：证据完整，交给 Hermes 调度员汇总交接。'
+        : 'Supplemental verification is complete; handing off to the Hermes Dispatcher.',
+      handoffTo: ['dispatcher'],
+      key: 'hk-summary',
+      memberId: 'hk-worker',
+      name: hkName,
+      rawRoleStage: 'worker:hk-worker:rework:1',
+      roleLabel: isChinese ? 'HK 执行员 · 复验' : 'Hong Kong Worker · Verification',
+      roleStage: 'worker',
       startOffset: 4_040,
-      statusText: isChinese ? '返工复审通过' : 'Rework re-review passed',
+      statusText: isChinese ? '补充验证完成' : 'Supplemental verification completed',
     },
     {
       avatarRole: 'dispatcher',
       completeOffset: 5_000,
       content: isChinese
-        ? '结构化交接已生成：包含计划、双执行结果、审阅结论与 1 轮返工记录。'
-        : 'Structured handoff ready: plan, both worker results, the review verdict, and 1 rework round.',
-      handoffTo: ['default'],
+        ? '结构化交接已生成：包含计划、三条执行结果与返工记录。'
+        : 'Structured handoff ready: plan, three worker results, and rework evidence.',
+      handoffTo: ['dispatcher'],
       key: 'manager-handoff',
-      memberId: 'dbb3-manager',
+      memberId: 'dispatcher',
       name: managerName,
       rawRoleStage: 'manager_handoff',
       roleLabel: isChinese ? 'Hermes 调度员 · 交接' : 'Hermes Manager · Handoff',
       roleStage: 'dispatcher',
-      runningContent: isChinese ? '正在汇总执行与审阅证据…' : 'Collecting execution and review evidence…',
+      runningContent: isChinese ? '正在汇总三条执行证据…' : 'Collecting execution evidence…',
       startOffset: 4_600,
       statusText: isChinese ? '交接完成' : 'Handoff completed',
       streamRunning: true,
     },
     {
-      avatarRole: 'reporter',
+      avatarRole: 'dispatcher',
       completeOffset: 5_750,
       content: isChinese
-        ? '任务完成：DBB3 部署与 PC/WSL 验证均通过审阅，含 1 轮返工修复，详情见交接记录。'
-        : 'Task complete: DBB3 deployment and PC/WSL verification passed review after 1 rework round; see the handoff record.',
-      key: 'reporter',
-      memberId: 'default',
-      name: reporterName,
-      rawRoleStage: 'reporter',
-      roleLabel: isChinese ? 'Hermes · 最终汇报' : 'Hermes · Final report',
-      roleStage: 'reporter',
+        ? '任务完成：DBB3、PC/WSL 与 HK 执行结果均已汇总。'
+        : 'Task complete: DBB3, PC/WSL, and Hong Kong execution results are summarized.',
+      key: 'dispatcher-summary',
+      memberId: 'dispatcher',
+      name: managerName,
+      rawRoleStage: 'dispatcher',
+      roleLabel: isChinese ? 'Hermes 调度员 · 完成' : 'Hermes Dispatcher · Complete',
+      roleStage: 'dispatcher',
       startOffset: 5_040,
-      statusText: isChinese ? '最终汇报完成' : 'Final report completed',
+      statusText: isChinese ? '任务完成' : 'Task completed',
       streamRunning: true,
     },
   ];
@@ -332,7 +331,7 @@ export function previewTurnMessages({
       memberId: stage.memberId,
       model: 'preview/local-hermes',
       name: stage.name,
-      rawRoleStage: running && stage.key === 'review-reject' ? 'reviewer' : stage.rawRoleStage,
+      rawRoleStage: stage.rawRoleStage,
       role: 'assistant',
       roleLabel: stage.roleLabel,
       roleStage: stage.roleStage,
@@ -350,17 +349,17 @@ export function previewTurnMessages({
     ['pc-run', true],
     ['dbb3-run', false],
     ['pc-run', false],
-    ['review-reject', true],
-    ['review-reject', false],
+    ['hk-run', true],
+    ['hk-run', false],
     ['dbb3-rework', true],
     ['pc-rework', true],
     ['dbb3-rework', false],
     ['pc-rework', false],
-    ['review-pass', false],
+    ['hk-summary', false],
     ['manager-handoff', true],
     ['manager-handoff', false],
-    ['reporter', true],
-    ['reporter', false],
+    ['dispatcher-summary', true],
+    ['dispatcher-summary', false],
   ];
   return playback.flatMap(([key, running]) => {
     const stage = stageByKey.get(key);

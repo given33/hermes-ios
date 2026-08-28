@@ -1101,7 +1101,7 @@ export function streamEventToActivity(
   const isBrowser = eventType === 'browser.progress';
   const isMoa = eventType.startsWith('moa.');
   const isAwaiting = eventType === 'awaiting.choice';
-  const isSupervisorVerdict = eventType === 'supervisor.verdict';
+  const isLegacySupervisionEvent = eventType === 'supervisor.verdict';
   const isRework = eventType === 'rework.started' || eventType === 'rework.dispatched';
   const isInteraction = [
     'approval.request',
@@ -1121,7 +1121,7 @@ export function streamEventToActivity(
     && !isInteraction
     && !isBackground
     && !isAwaiting
-    && !isSupervisorVerdict
+    && !isLegacySupervisionEvent
     && !isRework
   ) return null;
   const toolName = stringValue(payload.tool_name)
@@ -1143,8 +1143,8 @@ export function streamEventToActivity(
           ? '多模型协作'
           : isAwaiting
             ? '需要你决定'
-            : isSupervisorVerdict
-              ? '监督检查'
+            : isLegacySupervisionEvent
+              ? '调度状态'
               : isRework
                 ? '返工'
                 : isInteraction
@@ -1181,8 +1181,8 @@ export function streamEventToActivity(
       ? 'subagent'
       : isAwaiting
         ? 'awaiting'
-        : isSupervisorVerdict
-          ? 'supervisor'
+        : isLegacySupervisionEvent
+          ? 'status'
           : isRework
             ? 'rework'
             : isBrowser
@@ -1610,9 +1610,10 @@ function normalizeRoleStage(
   if (/dispatch|manager|workflow/.test(normalized)) {
     return 'dispatcher';
   }
-  if (/review/.test(normalized)) return 'reviewer';
-  if (/supervis|监督/.test(normalized)) return 'supervisor';
-  if (/report/.test(normalized)) return 'reporter';
+  // Legacy hosted events may still carry the retired reviewer/reporter/
+  // supervisor stage names. They are historical worker output, not active
+  // members in the current dispatcher + workers workflow.
+  if (/review|supervis|监督|report/.test(normalized)) return 'worker';
   if (/worker|executor/.test(normalized)) return 'worker';
   return 'chat';
 }
@@ -1623,29 +1624,29 @@ function profileDisplayName(
   chinese: boolean,
 ): string {
   const normalizedProfile = profile.toLowerCase();
+  const profileAlias = /^(reporter|reviewer|supervisor|manager)$/.test(normalizedProfile)
+    ? (normalizedProfile === 'manager' ? 'dispatcher' : 'dbb3-worker')
+    : normalizedProfile;
   if (normalizedProfile === 'dbb3-manager') {
-    return chinese ? 'Hermes 调度员' : 'Hermes Manager';
+    return chinese ? 'Hermes 调度员' : 'Hermes Dispatcher';
   }
   if (stage === 'dispatcher') return chinese ? 'Hermes 调度员' : 'Hermes Dispatcher';
-  if (stage === 'reporter') return chinese ? 'Hermes 汇报员' : 'Hermes Reporter';
-  if (stage === 'reviewer' && !profile) return chinese ? 'Hermes 审阅员' : 'Hermes Reviewer';
-  if (stage === 'supervisor') return chinese ? 'Hermes 监督者' : 'Hermes Supervisor';
   if (!chinese) {
     const names: Record<string, string> = {
       default: 'Hermes',
       'dbb3-worker': 'DBB3 Worker',
+      'hk-worker': 'Hong Kong Worker',
       'pc-worker': 'PC/WSL Worker',
-      reviewer: 'Hermes Reviewer',
     };
-    return names[normalizedProfile] || profile || 'Hermes Agent';
+    return names[profileAlias] || profile || 'Hermes Agent';
   }
   const names: Record<string, string> = {
     default: 'Hermes',
     'dbb3-worker': 'DBB3 执行员',
+    'hk-worker': 'HK 执行员',
     'pc-worker': 'PC/WSL 执行员',
-    reviewer: 'Hermes 审阅员',
   };
-  return names[normalizedProfile] || profile || 'Hermes Agent';
+  return names[profileAlias] || profile || 'Hermes Agent';
 }
 
 function roleStageLabel(
@@ -1656,18 +1657,18 @@ function roleStageLabel(
     return {
       chat: 'Hermes Agent',
       dispatcher: 'Task dispatch',
-      reporter: 'Final report',
-      reviewer: 'Review',
-      supervisor: 'Workflow supervision',
+      reporter: 'Execution',
+      reviewer: 'Execution',
+      supervisor: 'Execution',
       worker: 'Execution',
     }[stage];
   }
   return {
     chat: 'Hermes Agent',
     dispatcher: '任务调度',
-    reporter: '最终汇报',
-    reviewer: '结果审阅',
-    supervisor: '流程监督',
+    reporter: '任务执行',
+    reviewer: '任务执行',
+    supervisor: '任务执行',
     worker: '任务执行',
   }[stage];
 }
@@ -1717,14 +1718,14 @@ export function avatarRoleFor(
 ): HermesChatAvatarRole {
   if (isUser) return 'user';
   if (stage === 'dispatcher') return 'dispatcher';
-  if (stage === 'reporter') return 'reporter';
-  if (stage === 'reviewer') return 'reviewer';
-  if (stage === 'supervisor') return 'supervisor';
   const normalized = profile.toLowerCase();
+  if (/hk|hong.?kong|香港/.test(normalized)) return 'hk-worker';
   if (/dbb3/.test(normalized)) return 'dbb3-worker';
   if (/pc|wsl|windows|local/.test(normalized)) return 'pc-worker';
-  if (/review/.test(normalized)) return 'reviewer';
-  if (/supervis|监督/.test(normalized)) return 'supervisor';
+  if (stage === 'reporter' || stage === 'reviewer' || stage === 'supervisor') {
+    return 'dbb3-worker';
+  }
+  if (stage === 'worker') return 'dbb3-worker';
   return 'hermes';
 }
 

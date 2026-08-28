@@ -290,8 +290,8 @@ export function ConversationHistory({
               {isChinese ? `删除 ${selectedIds.size} 个` : `Delete ${selectedIds.size}`}
             </Text>
           </IOSPressable>
-        ) : <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>default</Text>}
-        <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>
+        ) : null}
+        <Text style={[styles.historyItemMeta, { color: tokens.colors.textSecondary, marginLeft: 'auto' }]}>
           {filtered.length} {isChinese ? '个会话' : 'conversations'}
         </Text>
       </View>

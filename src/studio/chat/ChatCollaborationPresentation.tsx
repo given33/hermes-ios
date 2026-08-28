@@ -25,43 +25,38 @@ function collaborationMembers(
   messages: readonly ChatMessage[],
   isChinese: boolean,
 ): ChatMessage[] {
-  const latestForStage = (stage: NonNullable<ChatMessage['roleStage']>) => (
-    [...messages].reverse().find((message) => message.roleStage === stage)
+  const latestForMember = (avatarRole: NonNullable<ChatMessage['avatarRole']>) => (
+    [...messages].reverse().find((message) => message.avatarRole === avatarRole)
   );
   const canonicalMember = (
+    id: string,
     stage: NonNullable<ChatMessage['roleStage']>,
     avatarRole: NonNullable<ChatMessage['avatarRole']>,
     fallback: ChatMessage,
   ): ChatMessage => ({
     ...fallback,
-    ...latestForStage(stage),
+    ...latestForMember(avatarRole),
+    id,
     avatarRole,
     roleStage: stage,
   });
   return [
-    canonicalMember('dispatcher', 'dispatcher', {
+    canonicalMember('dispatcher', 'dispatcher', 'dispatcher', {
       avatarRole: 'dispatcher', content: '', id: 'collaboration-manager',
-      name: isChinese ? 'Hermes 调度员' : 'Hermes Manager',
+      name: isChinese ? 'Hermes 调度员' : 'Hermes Dispatcher',
       role: 'assistant', roleStage: 'dispatcher',
     }),
-    canonicalMember('worker', 'dbb3-worker', {
+    canonicalMember('dbb3-worker', 'worker', 'dbb3-worker', {
       avatarRole: 'dbb3-worker', content: '', id: 'collaboration-worker',
-      name: 'Worker', role: 'assistant', roleStage: 'worker',
+      name: isChinese ? 'DBB3 执行员' : 'DBB3 Worker', role: 'assistant', roleStage: 'worker',
     }),
-    canonicalMember('reviewer', 'reviewer', {
-      avatarRole: 'reviewer', content: '', id: 'collaboration-reviewer',
-      name: isChinese ? 'Hermes 审阅员' : 'Hermes Reviewer',
-      role: 'assistant', roleStage: 'reviewer',
+    canonicalMember('pc-worker', 'worker', 'pc-worker', {
+      avatarRole: 'pc-worker', content: '', id: 'collaboration-pc-worker',
+      name: isChinese ? 'PC/WSL 执行员' : 'PC/WSL Worker', role: 'assistant', roleStage: 'worker',
     }),
-    canonicalMember('reporter', 'reporter', {
-      avatarRole: 'reporter', content: '', id: 'collaboration-reporter',
-      name: isChinese ? 'Hermes 汇报员' : 'Hermes Reporter',
-      role: 'assistant', roleStage: 'reporter',
-    }),
-    canonicalMember('supervisor', 'supervisor', {
-      avatarRole: 'supervisor', content: '', id: 'collaboration-supervisor',
-      name: isChinese ? 'Hermes 监督者' : 'Hermes Supervisor',
-      role: 'assistant', roleStage: 'supervisor',
+    canonicalMember('hk-worker', 'worker', 'hk-worker', {
+      avatarRole: 'hk-worker', content: '', id: 'collaboration-hk-worker',
+      name: isChinese ? 'HK 执行员' : 'Hong Kong Worker', role: 'assistant', roleStage: 'worker',
     }),
   ];
 }
@@ -78,7 +73,7 @@ export function CollaborationMemberStack({
   const { tokens } = useTheme();
   const members = collaborationMembers(messages, isChinese);
   return (
-    <View accessibilityLabel={isChinese ? '5 位协作成员' : '5 collaboration members'} style={styles.collaborationAvatarStack}>
+    <View accessibilityLabel={isChinese ? '4 位协作成员' : '4 collaboration members'} style={styles.collaborationAvatarStack}>
       {members.map((member, index) => (
         <IOSPressable
           accessibilityLabel={isChinese ? `长按 @${member.name}` : `Long press to mention ${member.name}`}
@@ -151,7 +146,7 @@ export function CollaborationLiftNotice({
         </View>
         <Text numberOfLines={1} style={[styles.collaborationLiftMeta, { color: tokens.colors.textTertiary }]}>
           {lifted
-            ? (isChinese ? 'Hermes 调度员 · Worker · 审阅员 · 汇报员 · 监督者' : 'Hermes Manager · Worker · Reviewer · Reporter · Supervisor')
+            ? (isChinese ? 'Hermes 调度员 · DBB3 · PC/WSL · HK 执行员' : 'Hermes Dispatcher · DBB3 · PC/WSL · Hong Kong workers')
             : (isChinese ? 'Hermes 正在连接协作成员' : 'Hermes is connecting the collaboration members')}
         </Text>
       </View>

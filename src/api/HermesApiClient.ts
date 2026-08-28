@@ -12,6 +12,14 @@ export interface HermesRequestOptions extends RequestInit {
   query?: HermesQuery;
 }
 
+export interface HermesWebSocketOptions {
+  profile?: string;
+  query?: HermesQuery;
+  protocols?: string | string[];
+  signal?: AbortSignal;
+  connectTimeoutMs?: number;
+}
+
 export interface HermesAccessTokenRequest {
   forceRefresh?: boolean;
   rejectedToken?: string;
@@ -182,6 +190,81 @@ export class HermesApiClient {
    */
   async getAccessTokenForRealtime(): Promise<string> {
     return this.resolveAccessToken();
+  }
+
+  /**
+   * Open an authenticated WebSocket using the same mobile bearer session as
+   * REST. Browsers/RN cannot attach Authorization during the upgrade, so the
+   * short-lived ticket is minted over REST and consumed exactly once by the
+   * server-side WS handshake.
+   */
+  async openWebSocket(
+    path: string,
+    options: HermesWebSocketOptions = {},
+  ): Promise<WebSocket> {
+    const ticketResponse = await this.request<{ ticket?: unknown }>(
+      '/api/auth/ws-ticket',
+      {
+        method: 'POST',
+        signal: options.signal,
+        deadlineMs: options.connectTimeoutMs ?? 10_000,
+      },
+    );
+    const ticket = typeof ticketResponse?.ticket === 'string'
+      ? ticketResponse.ticket.trim()
+      : '';
+    if (!ticket) throw new Error('Hermes returned an invalid WebSocket ticket');
+    if (options.signal?.aborted) throw new Error('Hermes WebSocket connection aborted');
+
+    const url = this.createSameOriginUrl(path);
+    mergeQuery(url, options.query);
+    if (options.profile !== undefined) url.searchParams.set('profile', options.profile);
+    url.searchParams.set('ticket', ticket);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+
+    const timeoutMs = options.connectTimeoutMs ?? 10_000;
+    return new Promise<WebSocket>((resolve, reject) => {
+      let settled = false;
+      let socket: WebSocket;
+      try {
+        socket = options.protocols === undefined
+          ? new WebSocket(url.toString())
+          : new WebSocket(url.toString(), options.protocols);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      const abort = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        try { socket.close(); } catch { /* best effort */ }
+        reject(new Error('Hermes WebSocket connection aborted'));
+      };
+      const cleanup = () => options.signal?.removeEventListener('abort', abort);
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        try { socket.close(); } catch { /* best effort */ }
+        reject(new Error('Hermes WebSocket connection timed out'));
+      }, timeoutMs);
+      options.signal?.addEventListener('abort', abort, { once: true });
+      socket.onopen = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        cleanup();
+        resolve(socket);
+      };
+      socket.onerror = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        cleanup();
+        reject(new Error('Hermes WebSocket connection failed'));
+      };
+    });
   }
 
   /**

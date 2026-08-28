@@ -209,7 +209,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
           // Older builds persisted a refresh session even when the user did
           // not opt in to remembered login. Remove that legacy session before
           // it can bypass password authentication on this launch.
-          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+          await credentialMutations.run(async () => {
+            if (!current()) return;
+            await credentialStore.clearSession();
+          }).catch(() => undefined);
           if (!current()) return;
           setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
         } else {
@@ -219,7 +222,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
           // Remembered sessions must stay biometric-gated. If a previous
           // Keychain write fell back to device-only protection, keep the
           // remembered password but require a fresh explicit login.
-          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+          await credentialMutations.run(async () => {
+            if (!current()) return;
+            await credentialStore.clearSession();
+          }).catch(() => undefined);
           if (!current()) return;
         } else if (savedLogin.enabled && unlockRequired) {
           const inspection = await inspectSavedConnection(credentialStore);
@@ -232,7 +238,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
           }
           // A protection flag without a base URL is a partial wipe; drop the
           // leftovers and continue to the provisioning path.
-          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+          await credentialMutations.run(async () => {
+            if (!current()) return;
+            await credentialStore.clearSession();
+          }).catch(() => undefined);
         }
         const result = await bootstrapSavedConnection(credentialStore);
         if (!current()) return;
@@ -260,7 +269,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
         }
 
         if (result.status === 'locked') {
-          await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+          await credentialMutations.run(async () => {
+            if (!current()) return;
+            await credentialStore.clearSession();
+          }).catch(() => undefined);
         }
 
         if (current()) {
@@ -296,7 +308,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
           await localAccountCleanupSaga
             .run(savedOwnerScope, localAccountCleanupTasks())
             .catch(() => undefined);
-          await credentialMutations.run(() => credentialStore.clear()).catch(() => undefined);
+          await credentialMutations.run(async () => {
+            if (!current()) return;
+            await credentialStore.clear();
+          }).catch(() => undefined);
           if (current()) {
             setRememberedLogin(EMPTY_REMEMBERED_LOGIN);
             dispatch({
@@ -314,7 +329,10 @@ export function AuthProvider({ children }: PropsWithChildren) {
           scheduleRetry();
           return;
         }
-        await credentialMutations.run(() => credentialStore.clearSession()).catch(() => undefined);
+        await credentialMutations.run(async () => {
+          if (!current()) return;
+          await credentialStore.clearSession();
+        }).catch(() => undefined);
         if (current()) {
           dispatch({
             type: 'BOOTSTRAP_EMPTY',
@@ -1029,12 +1047,17 @@ async function adoptSavedSession(
   // Refresh tokens rotate on every successful exchange. Persist the
   // successor before the handshake so a transient handshake failure
   // never retries an already-consumed token and revokes this device.
+  // The restore retry loop is not an auth operation and runs while the
+  // login form is interactive: stop before writing this chain's tokens
+  // over a session a concurrent login/logout just established.
+  if (!isCurrent()) return { outcome: 'stale' };
   await credentialMutations.run(() => credentialStore.saveSessionTokens(
     refreshed.accessToken,
     refreshed.refreshToken,
     refreshed.expiresAt,
     refreshed.account.accountGeneration,
   ));
+  if (!isCurrent()) return { outcome: 'stale' };
   if (await hasPendingRemoteAccountDeletion(savedOwnerScope)) {
     const deletionClient = new HermesApiClient(
       mobileAuth.baseUrl,
@@ -1043,7 +1066,10 @@ async function adoptSavedSession(
     await new IOSIntelligenceApi(deletionClient).deleteAccount(savedOwnerScope);
     await localAccountCleanupSaga.markRemoteDone(savedOwnerScope);
     await localAccountCleanupSaga.run(savedOwnerScope, localAccountCleanupTasks());
-    await credentialMutations.run(() => credentialStore.clear());
+    await credentialMutations.run(async () => {
+      if (!isCurrent()) return;
+      await credentialStore.clear();
+    });
     return { outcome: 'deleted' };
   }
   const verifiedConnection = await persistVerifiedConnection(
@@ -1059,7 +1085,10 @@ async function adoptSavedSession(
     {
       store: {
         async save(candidate) {
-          await credentialMutations.run(() => credentialStore.save(candidate));
+          await credentialMutations.run(async () => {
+            if (!isCurrent()) return;
+            await credentialStore.save(candidate);
+          });
         },
       },
       async verify(candidate) {

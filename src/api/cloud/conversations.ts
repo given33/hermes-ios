@@ -94,6 +94,26 @@ export class HermesConversationsCloudApi {
     );
   }
 
+  openHostedConversationEventsWebSocket(
+    conversationId: string,
+    cursor: number,
+    expectedAccountGeneration: string,
+    deadlineMs = 5_000,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.openWebSocket(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-events-ws`,
+      {
+        query: {
+          cursor: Math.max(0, Math.floor(cursor)),
+          expected_account_generation: expectedAccountGeneration,
+        },
+        signal,
+        connectTimeoutMs: deadlineMs,
+      },
+    );
+  }
+
   getConversationSessionState(conversationId: string, profile = '') {
     return this.transport.request<ConversationSessionState>(
       `${COLLABORATION}/mobile/conversations/${encodeURIComponent(conversationId)}/session-state`,

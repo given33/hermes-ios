@@ -111,7 +111,7 @@ test('frontend preview renders every customized route and authenticated builds m
   // Production/authenticated surfaces must not serve fixture pages as live data.
   assert.match(app, /EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
   assert.match(app, /allowFixturePages/);
-  assert.match(app, /production-route-unavailable/);
+  assert.match(app, /LiveRouteFallbackPage/);
   assert.doesNotMatch(previewSources, /useAuth/);
   assert.doesNotMatch(previewSources, /WebView|WKWebView|react-native-webview/);
 });

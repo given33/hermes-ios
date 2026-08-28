@@ -90,6 +90,7 @@ import { SkillsManagementPage } from '../skills/SkillsManagementPage';
 import { MemoryPreviewPage } from './PreviewMemoryPage';
 import { HermesStudioSettingsPage } from '../preview/HermesStudioSettingsPage';
 import { AccountPage } from '../auth/AccountPage';
+import { LiveRouteFallbackPage } from './LiveRouteFallbackPage';
 import {
   AchievementsPreviewPage,
   CollaborationPreviewPage,
@@ -561,13 +562,15 @@ function PreviewRoute({
     && route.routeId !== 'memory'
     && route.routeId !== 'workflows'
   ) {
-    const message = locale === 'zh'
-      ? '此页面需要原生 SwiftUI 界面。请使用完整签名安装包。'
-      : 'This page requires the native SwiftUI shell. Install a full signed build.';
     return (
-      <View style={styles.nativeRoute}>
-        <ScreenState kind="error" message={message} testID="production-route-unavailable" />
-      </View>
+      <LiveRouteFallbackPage
+        cacheOwner={cacheOwner}
+        client={client}
+        locale={locale ?? 'zh'}
+        notify={notify}
+        profile={profile}
+        routeId={route.routeId ?? ''}
+      />
     );
   }
   if (route.source === 'plugin') {

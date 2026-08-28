@@ -407,6 +407,31 @@ const PRESERVE_PATTERNS = [
   /^(?:Anthropic|OpenAI|OpenRouter|Telegram|Discord|Slack|Nous Research|Hermes Agent)$/,
 ];
 
+const ZH_MONTH_INDEX: Record<string, number> = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
+
+const ZH_WEEKDAY_INDEX: Record<string, number> = {
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6,
+};
+
 function translateDynamic(value: string): string | null {
   let match = value.match(/^(\d+) keys?$/);
   if (match) return `${match[1]} 个密钥`;
@@ -426,10 +451,27 @@ function translateDynamic(value: string): string | null {
   if (match) return `今天 ${match[1]}`;
   match = value.match(/^Tomorrow (.+)$/);
   if (match) return `明天 ${match[1]}`;
-  match = value.match(/^Sun (.+)$/);
-  if (match) return `星期日 ${match[1]}`;
-  match = value.match(/^Jul (\d+)$/);
-  if (match) return `7 月 ${match[1]} 日`;
+  match = value.match(/^([A-Z][a-z]{2}) (\d{1,2})$/);
+  if (match) {
+    const month = ZH_MONTH_INDEX[match[1].toLowerCase()];
+    if (month !== undefined) {
+      return new Date(2000, month, Number(match[2])).toLocaleString('zh-CN', {
+        month: 'long',
+        day: 'numeric',
+      });
+    }
+  }
+  match = value.match(/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (.+)$/);
+  if (match) {
+    const weekday = ZH_WEEKDAY_INDEX[match[1].toLowerCase()];
+    if (weekday !== undefined) {
+      // 2024-01-07 is a Sunday; 2024-01-01 is a Monday.
+      const zhName = new Date(2024, 0, 7 + weekday).toLocaleString('zh-CN', {
+        weekday: 'long',
+      });
+      return `${zhName} ${match[2]}`;
+    }
+  }
   match = value.match(/^EXPIRES IN (.+)$/);
   if (match) return `${match[1]} 后过期`;
   match = value.match(/^Active sessions:\s*(\d+)$/);

@@ -123,7 +123,7 @@ export function ChatHeader({
                 numberOfLines={1}
                 style={[styles.collaborationHeaderCount, { color: tokens.colors.textTertiary }]}
               >
-                {isChinese ? '5 位成员' : '5 members'}
+                {isChinese ? '4 位成员' : '4 members'}
               </Text>
             ) : null}
             <View style={[styles.collaborationHeaderConnection, { backgroundColor: tokens.colors.success }]} />

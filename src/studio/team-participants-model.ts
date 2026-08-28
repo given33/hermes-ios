@@ -8,7 +8,8 @@ import type { HermesChatAvatarRole } from '../api/chat-view-model';
  * derived only from persisted events, never invented client side.
  */
 
-export type TeamMemberRole = 'manager' | 'reporter' | 'reviewer' | 'supervisor' | 'worker';
+/** Current hosted workflow roles: one dispatcher and independent workers. */
+export type TeamMemberRole = 'dispatcher' | 'worker';
 
 export type TeamMemberLiveState =
   | 'done'
@@ -63,15 +64,15 @@ export interface TeamRosterEntry {
   state: TeamMemberLiveState;
 }
 
-const MANAGER_MEMBER_ID = 'dbb3-manager';
+const DISPATCHER_MEMBER_ID = 'dispatcher';
 
 const MEMBER_NODES: Record<string, string> = {
-  [MANAGER_MEMBER_ID]: 'dbb3',
+  [DISPATCHER_MEMBER_ID]: 'dbb3',
+  'dbb3-manager': 'dbb3',
   'dbb3-worker': 'dbb3',
+  'hk-worker': 'hk',
   'pc-worker': 'wsl',
   default: 'main',
-  reviewer: 'dbb3',
-  supervisor: 'dbb3',
 };
 
 const HOSTED_STAGE_BASES = new Set([
@@ -108,11 +109,11 @@ export function isHostedTeamEvent(event: TeamTimelineEvent): boolean {
 /** Canonical member id for one event; mirrors the server hosted_member_id. */
 export function teamMemberIdForEvent(event: TeamTimelineEvent): string {
   const explicit = (event.memberId || '').trim();
-  if (explicit) return explicit;
+  if (explicit) return normalizeMemberId(explicit, eventStageBase(event));
   const profile = (event.profile || '').trim().toLowerCase();
   const base = eventStageBase(event);
   if (
-    profile === MANAGER_MEMBER_ID
+    profile === 'dbb3-manager'
     || profile === 'dispatcher'
     || profile === 'manager'
     || base.startsWith('manager')
@@ -120,16 +121,35 @@ export function teamMemberIdForEvent(event: TeamTimelineEvent): string {
     || base === 'dispatcher'
     || base === 'workflow'
   ) {
-    return MANAGER_MEMBER_ID;
+    return DISPATCHER_MEMBER_ID;
   }
   if (base === 'worker') {
     // Single-worker turns use the bare "worker" stage; the profile names the lane.
     return profile || stageSegment(event, 1) || 'dbb3-worker';
   }
-  if (base === 'reviewer') return 'reviewer';
-  if (base === 'supervisor') return profile || 'supervisor';
-  if (base === 'reporter') return profile || 'default';
-  return profile;
+  if (base === 'reviewer' || base === 'supervisor' || base === 'reporter') {
+    if (!profile || /^(default|hermes|main)$/.test(profile)) return 'dbb3-worker';
+    return normalizeWorkerId(profile);
+  }
+  return normalizeWorkerId(profile);
+}
+
+function normalizeWorkerId(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (/hk|hong.?kong|香港/.test(normalized)) return 'hk-worker';
+  if (/pc|wsl|windows|local/.test(normalized)) return 'pc-worker';
+  if (/dbb3/.test(normalized)) return 'dbb3-worker';
+  return value.trim();
+}
+
+function normalizeMemberId(value: string, roleHint = ''): string {
+  const normalized = value.trim().toLowerCase();
+  if (/dispatch|manager/.test(normalized)) return DISPATCHER_MEMBER_ID;
+  if (/review|supervis|report/.test(normalized)) return 'dbb3-worker';
+  if (/^(default|hermes|main)$/.test(normalized) && /report/.test(roleHint)) {
+    return 'dbb3-worker';
+  }
+  return normalizeWorkerId(value);
 }
 
 function stageSegment(event: TeamTimelineEvent, index: number): string {
@@ -141,46 +161,45 @@ function stageSegment(event: TeamTimelineEvent, index: number): string {
 
 export function teamMemberRoleFor(memberId: string, stageHint = ''): TeamMemberRole {
   const normalized = memberId.trim().toLowerCase();
-  if (normalized === MANAGER_MEMBER_ID || normalized === 'dispatcher') return 'manager';
-  if (/supervis/.test(normalized)) return 'supervisor';
-  if (/review/.test(normalized)) return 'reviewer';
+  if (normalized === DISPATCHER_MEMBER_ID || normalized === 'dbb3-manager') return 'dispatcher';
+  if (/dispatch|manager/.test(normalized)) return 'dispatcher';
   if (/worker/.test(normalized)) return 'worker';
   const base = stageBase(stageHint);
+  if (base === 'dispatch' || base === 'dispatcher' || base.startsWith('manager')) return 'dispatcher';
   if (base === 'worker') return 'worker';
-  if (base === 'reviewer') return 'reviewer';
-  if (base === 'supervisor') return 'supervisor';
-  return 'reporter';
+  return 'worker';
 }
 
 export function teamMemberAvatarRole(memberId: string, role: TeamMemberRole): HermesChatAvatarRole {
-  if (role === 'manager') return 'dispatcher';
+  if (role === 'dispatcher') return 'dispatcher';
   if (role === 'worker') {
+    if (/hk|hong.?kong|香港/.test(memberId)) return 'hk-worker';
     return /pc|wsl|windows|local/.test(memberId) ? 'pc-worker' : 'dbb3-worker';
   }
-  return role;
+  return 'hermes';
 }
 
 function defaultDisplayName(memberId: string, role: TeamMemberRole, isChinese: boolean): string {
   const zh: Record<string, string> = {
-    [MANAGER_MEMBER_ID]: 'Hermes 调度员',
+    [DISPATCHER_MEMBER_ID]: 'Hermes 调度员',
+    'dbb3-manager': 'Hermes 调度员',
     'dbb3-worker': 'DBB3 执行员',
+    'hk-worker': 'HK 执行员',
     'pc-worker': 'PC/WSL 执行员',
-    default: 'Hermes 汇报员',
-    reviewer: 'Hermes 审阅员',
-    supervisor: 'Hermes 监督者',
+    default: 'Hermes 执行员',
   };
   const en: Record<string, string> = {
-    [MANAGER_MEMBER_ID]: 'Hermes Manager',
+    [DISPATCHER_MEMBER_ID]: 'Hermes Dispatcher',
+    'dbb3-manager': 'Hermes Dispatcher',
     'dbb3-worker': 'DBB3 Worker',
+    'hk-worker': 'Hong Kong Worker',
     'pc-worker': 'PC/WSL Worker',
-    default: 'Hermes Reporter',
-    reviewer: 'Hermes Reviewer',
-    supervisor: 'Hermes Supervisor',
+    default: 'Hermes Worker',
   };
   const names = isChinese ? zh : en;
   if (names[memberId]) return names[memberId];
   if (role === 'worker') return memberId || (isChinese ? '执行员' : 'Worker');
-  return memberId || 'Hermes';
+  return memberId || (isChinese ? '调度员' : 'Dispatcher');
 }
 
 function eventStartAt(event: TeamTimelineEvent): number {
@@ -229,9 +248,7 @@ function memberLiveState(
   if (!RUNNING_STATUSES.has(status)) return 'done';
   if (status === 'queued') return 'typing';
   if (role === 'worker') return 'executing';
-  if (role === 'reviewer') return 'reviewing';
-  if (role === 'reporter') return 'reporting';
-  // Manager and supervisor: typing while their message streams, thinking before.
+  // Dispatcher: typing while its message streams, thinking before.
   return latest.firstTokenAt || (latest.content || '').trim() ? 'typing' : 'thinking';
 }
 
@@ -313,9 +330,12 @@ export function teamRoster({
   const order: string[] = [];
   const identities = new Map<string, TeamParticipantIdentity>();
   for (const participant of participants) {
-    const id = (participant.id || '').trim();
+    const id = normalizeMemberId(
+      (participant.id || '').trim(),
+      String(participant.role || '').trim().toLowerCase(),
+    );
     if (!id || identities.has(id)) continue;
-    identities.set(id, participant);
+    identities.set(id, { ...participant, id });
     order.push(id);
   }
   for (const memberId of discoveredOrder) {
@@ -333,8 +353,10 @@ export function teamRoster({
         || memberEvents[memberEvents.length - 1].roleStage
         || ''
       : '';
-    const role = (identity.role as TeamMemberRole)
-      || teamMemberRoleFor(memberId, stageHint);
+    // Historical participant records used manager/reviewer/reporter role
+    // strings. Normalize them through the same member-id/stage mapping as
+    // timeline events so stale snapshots cannot reintroduce retired roles.
+    const role = teamMemberRoleFor(memberId, identity.role || stageHint);
     const latest = memberEvents[memberEvents.length - 1];
     return {
       avatarRole: teamMemberAvatarRole(memberId, role),
@@ -364,18 +386,12 @@ export function teamRoster({
 export function teamMemberRoleLabel(role: TeamMemberRole, isChinese: boolean): string {
   if (!isChinese) {
     return {
-      manager: 'Manager',
-      reporter: 'Reporter',
-      reviewer: 'Reviewer',
-      supervisor: 'Supervisor',
+      dispatcher: 'Dispatcher',
       worker: 'Worker',
     }[role];
   }
   return {
-    manager: '调度',
-    reporter: '汇报',
-    reviewer: '审阅',
-    supervisor: '监督',
+    dispatcher: '调度',
     worker: '执行',
   }[role];
 }

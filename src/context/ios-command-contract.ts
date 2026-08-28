@@ -18,7 +18,9 @@ export function predictedDepartureTimestamp(
 /**
  * The device-side policy envelope is intentionally small and serializable so
  * the backend can attach it to a command without coupling to Swift types.
- * Unknown actions default to read-only/no-confirmation and are still audited.
+ * Unknown actions fail closed: read-named actions default to read-only and
+ * no-confirmation, any other unknown action defaults to destructive and
+ * confirmation-required, and every unknown action is still audited.
  */
 export type IOSNativeActionRisk = 'read' | 'write' | 'destructive';
 export type IOSNativeActionConfirmation = 'none' | 'required';

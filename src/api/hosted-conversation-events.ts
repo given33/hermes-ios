@@ -65,6 +65,16 @@ export interface HostedConversationEventSource {
   ): Promise<Response>;
 }
 
+export interface HostedConversationEventWebSocketSource {
+  openHostedConversationEventsWebSocket(
+    conversationId: string,
+    cursor: number,
+    expectedAccountGeneration: string,
+    deadlineMs?: number,
+    signal?: AbortSignal,
+  ): Promise<WebSocket>;
+}
+
 export async function consumeHostedConversationEvents(
   api: HostedConversationEventSource,
   conversationId: string,
@@ -131,6 +141,100 @@ export async function consumeHostedConversationEvents(
     }
   }
   return latestCursor;
+}
+
+/**
+ * Consume the same hosted-event envelopes over a WebSocket. The server sends
+ * JSON envelopes with `type=conversation`; replay and validation remain in
+ * `parseSseFrame` so SSE and WS cannot drift into different semantics.
+ */
+export async function consumeHostedConversationEventsWebSocket(
+  api: HostedConversationEventWebSocketSource,
+  conversationId: string,
+  cursor: number,
+  expectedAccountGeneration: string,
+  signal: AbortSignal,
+  onEvent: (event: HostedConversationEventFrame) => void | Promise<void>,
+  onActivity?: () => void,
+  connectionTimeoutMs = 5_000,
+): Promise<number> {
+  const expectedGeneration = expectedAccountGeneration.trim();
+  if (!conversationId.trim() || !expectedGeneration) {
+    throw new Error('Hermes hosted event WebSocket identity is incomplete');
+  }
+  if (signal.aborted) throw new Error('Hermes hosted event WebSocket aborted');
+  const socket = await api.openHostedConversationEventsWebSocket(
+    conversationId,
+    Math.max(0, Math.floor(cursor)),
+    expectedGeneration,
+    connectionTimeoutMs,
+    signal,
+  );
+  let latestCursor = Math.max(0, Math.floor(cursor));
+  let settled = false;
+  let eventChain = Promise.resolve();
+
+  return new Promise<number>((resolve, reject) => {
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', abort);
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      try { socket.close(); } catch { /* best effort */ }
+      if (error) reject(error);
+      else resolve(latestCursor);
+    };
+    const abort = () => finish(new Error('Hermes hosted event WebSocket aborted'));
+    signal.addEventListener('abort', abort, { once: true });
+    try {
+      socket.send(JSON.stringify({ type: 'subscribe' }));
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
+    socket.onmessage = (message) => {
+      eventChain = eventChain.then(async () => {
+        if (settled) return;
+        onActivity?.();
+        const raw = await websocketMessageText(message.data);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          throw new Error('Hermes hosted event WebSocket returned invalid JSON');
+        }
+        if (!isRecord(payload) || payload.type === 'keepalive') return;
+        if (payload.type !== 'conversation') return;
+        const frame = `event: conversation\nid: ${String(payload.cursor ?? '')}\n`
+          + `data: ${JSON.stringify(payload)}\n\n`;
+        latestCursor = await parseSseFrame(
+          frame,
+          latestCursor,
+          conversationId,
+          expectedGeneration,
+          onEvent,
+        );
+      }).catch((error) => finish(error instanceof Error ? error : new Error(String(error))));
+    };
+    socket.onerror = () => finish(new Error('Hermes hosted event WebSocket failed'));
+    socket.onclose = (event) => {
+      if (!settled) {
+        finish(new Error(
+          event.reason || `Hermes hosted event WebSocket closed (${event.code || 'unknown'})`,
+        ));
+      }
+    };
+  });
+}
+
+async function websocketMessageText(value: unknown): Promise<string> {
+  if (typeof value === 'string') return value;
+  if (value && typeof (value as { text?: unknown }).text === 'function') {
+    return String(await (value as Blob).text());
+  }
+  return String(value ?? '');
 }
 
 async function drainSseBuffer(

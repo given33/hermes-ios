@@ -196,7 +196,7 @@ export function ModelToolsDrawer({
             <Text style={[styles.drawerTitle, { color: tokens.colors.foreground }]}>
               {isChinese ? '模型\n与工具' : 'MODEL\n& TOOLS'}
             </Text>
-            <IOSPressable accessibilityLabel="Close" onPress={onClose} scaleTo={0.9} style={styles.drawerClose}>
+            <IOSPressable accessibilityLabel={isChinese ? '关闭' : 'Close'} onPress={onClose} scaleTo={0.9} style={styles.drawerClose}>
               <X color={tokens.colors.textSecondary} size={18} />
             </IOSPressable>
           </View>

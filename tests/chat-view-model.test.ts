@@ -31,7 +31,7 @@ function conversation(overrides: Partial<SingleConversation> = {}): SingleConver
   };
 }
 
-test('cloud conversation messages preserve worker, reviewer, reporter, and activities', () => {
+test('cloud conversation messages normalize legacy workflow stages to worker output', () => {
   const messages = conversationMessagesToView(conversation({
     messages: [
       {
@@ -78,15 +78,15 @@ test('cloud conversation messages preserve worker, reviewer, reporter, and activ
 
   assert.deepEqual(messages.map(({ id, roleStage }) => [id, roleStage]), [
     ['worker', 'worker'],
-    ['reviewer', 'reviewer'],
-    ['reporter', 'reporter'],
+    ['reviewer', 'worker'],
+    ['reporter', 'worker'],
   ]);
   assert.equal(messages[0].activities?.[0].input, 'git status');
   assert.equal(messages[0].activities?.[0].duration, '420 ms');
   assert.deepEqual(messages.map(({ avatarRole }) => avatarRole), [
     'dbb3-worker',
-    'reviewer',
-    'reporter',
+    'dbb3-worker',
+    'dbb3-worker',
   ]);
 });
 
@@ -524,13 +524,14 @@ test('server workflow metadata restores sender, runtime, timestamps, handoff, an
   assert.match(message.activities?.[1].detail ?? '', /src\/app\.ts/);
 });
 
-test('role avatars and activity labels distinguish every workflow participant', () => {
+test('role avatars and activity labels distinguish current workflow participants', () => {
   assert.equal(avatarRoleFor('default', 'dispatcher'), 'dispatcher');
   assert.equal(avatarRoleFor('dbb3-worker', 'worker'), 'dbb3-worker');
   assert.equal(avatarRoleFor('pc-wsl-worker', 'worker'), 'pc-worker');
-  assert.equal(avatarRoleFor('reviewer', 'reviewer'), 'reviewer');
-  assert.equal(avatarRoleFor('default', 'reporter'), 'reporter');
-  assert.equal(avatarRoleFor('supervisor', 'supervisor'), 'supervisor');
+  assert.equal(avatarRoleFor('reviewer', 'reviewer'), 'dbb3-worker');
+  assert.equal(avatarRoleFor('hk-worker', 'worker'), 'hk-worker');
+  assert.equal(avatarRoleFor('default', 'reporter'), 'dbb3-worker');
+  assert.equal(avatarRoleFor('supervisor', 'supervisor'), 'dbb3-worker');
   assert.equal(activityCategoryLabel('reasoning', true), '思考');
   assert.equal(activityCategoryLabel('browser', true), '搜索');
   assert.equal(activityCategoryLabel('mcp', false), 'MCP');

@@ -6,6 +6,19 @@ import UniformTypeIdentifiers
 private let hermesFileProviderGroup = "group.app.sunstone1029.fig1171.hermes"
 private let hermesFileProviderOwnerKey = "hermes-file-provider-owner-v1"
 
+/// Strip the root prefix rather than replacing every occurrence of the root
+/// path. A nested folder reusing the root's trailing path components made the
+/// naive replace erase interior segments, aliasing two items onto a single
+/// identifier.
+private func hermesFileProviderRelativePath(of url: URL, root: URL) -> String {
+  let path = url.path
+  let rootPath = root.path
+  guard rootPath != "/", path.hasPrefix(rootPath + "/") else {
+    return path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+  }
+  return String(path.dropFirst(rootPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+}
+
 final class HermesFileProviderItem: NSObject, NSFileProviderItem {
   private let url: URL
   private let parent: NSFileProviderItemIdentifier
@@ -19,7 +32,7 @@ final class HermesFileProviderItem: NSObject, NSFileProviderItem {
   }
 
   var itemIdentifier: NSFileProviderItemIdentifier {
-    let relative = url.path.replacingOccurrences(of: root.path, with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let relative = hermesFileProviderRelativePath(of: url, root: root)
     return relative.isEmpty ? .rootContainer : NSFileProviderItemIdentifier(relative)
   }
   var parentItemIdentifier: NSFileProviderItemIdentifier { parent }
@@ -216,15 +229,25 @@ final class HermesFileProvider: NSObject, NSFileProviderReplicatedExtension {
         if source != destination { try FileManager.default.moveItem(at: source, to: destination) }
       }
       if changedFields.contains(.contents), let newContents {
-        if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
-        try FileManager.default.copyItem(at: newContents, to: destination)
+        // Stage the new contents next to the destination and swap it in
+        // atomically. Removing the original before copying opened a data-loss
+        // window: a failed copy (disk full, EACCES) left the destination gone.
+        let swap = destination.deletingLastPathComponent()
+          .appendingPathComponent(".hermes-swap-\(UUID().uuidString).tmp")
+        try FileManager.default.copyItem(at: newContents, to: swap)
+        defer { try? FileManager.default.removeItem(at: swap) }
+        if FileManager.default.fileExists(atPath: destination.path) {
+          _ = try FileManager.default.replaceItemAt(destination, withItemAt: swap)
+        } else {
+          try FileManager.default.moveItem(at: swap, to: destination)
+        }
       }
       completionHandler(HermesFileProviderItem(url: destination, parent: item.parentItemIdentifier, root: Self.root), [], false, nil)
       // A move invalidates both enumerators. Without the old-parent signal,
       // Files can keep rendering a stale entry until the user manually
       // refreshes the provider.
       signal(oldParent)
-      let newParentPath = (destination.path.replacingOccurrences(of: Self.root.path, with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/")) as NSString).deletingLastPathComponent
+      let newParentPath = (hermesFileProviderRelativePath(of: destination, root: Self.root) as NSString).deletingLastPathComponent
       let newParent = newParentPath.isEmpty ? NSFileProviderItemIdentifier.rootContainer : NSFileProviderItemIdentifier(newParentPath)
       if newParent.rawValue != oldParent.rawValue { signal(newParent) }
     } catch { completionHandler(nil, [], false, error) }

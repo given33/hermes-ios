@@ -169,10 +169,9 @@ test('hosted lifecycle accepts team-stage events and a turn-stage terminal event
     { ...event(4, 'turn.completed'), role_stage: 'turn' },
   ], false);
 
-  assert.equal(completed.messages.length, 3);
-  assert.equal(completed.messages.find((message) => message.roleStage === 'worker')?.content, '');
-  assert.equal(completed.messages.find((message) => message.roleStage === 'reviewer')?.content, 'Implementation complete. ');
-  assert.equal(completed.messages.find((message) => message.roleStage === 'reporter')?.content, 'Review passed.');
+  assert.equal(completed.messages.length, 1);
+  assert.equal(completed.messages[0]?.roleStage, 'worker');
+  assert.equal(completed.messages[0]?.content, 'Implementation complete. Review passed.');
   assert.equal(completed.messages.every((message) => message.status === 'completed'), true);
   assert.equal(completed.completed, true);
   assert.equal(completed.turnActive, false);

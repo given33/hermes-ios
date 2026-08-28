@@ -271,15 +271,15 @@ export const PREVIEW_ACHIEVEMENTS = [
 
 // Mirrors the hosted-events participants[] contract persisted by the
 // collaboration dashboard: id + role + display_name + node + avatar_seed,
-// appended in dispatch order (manager, workers, reviewer, reporter).
+// appended in dispatch order (dispatcher, independent workers).
 export const PREVIEW_TEAM_PARTICIPANTS = [
   {
     avatar_seed: 'hermes-member-dbb3-manager',
     display_name: 'Hermes 调度员',
-    id: 'dbb3-manager',
+    id: 'dispatcher',
     joined_at: 1_752_800_000_000,
     node: 'dbb3',
-    role: 'manager',
+    role: 'dispatcher',
   },
   {
     avatar_seed: 'hermes-member-dbb3-worker',
@@ -298,20 +298,12 @@ export const PREVIEW_TEAM_PARTICIPANTS = [
     role: 'worker',
   },
   {
-    avatar_seed: 'hermes-member-reviewer',
-    display_name: 'Hermes 审阅员',
-    id: 'reviewer',
-    joined_at: 1_752_800_002_200,
-    node: 'dbb3',
-    role: 'reviewer',
-  },
-  {
-    avatar_seed: 'hermes-member-default',
-    display_name: 'Hermes 汇报员',
-    id: 'default',
-    joined_at: 1_752_800_005_040,
-    node: 'main',
-    role: 'reporter',
+    avatar_seed: 'hermes-member-hk-worker',
+    display_name: 'HK 执行员',
+    id: 'hk-worker',
+    joined_at: 1_752_800_001_040,
+    node: 'hk',
+    role: 'worker',
   },
 ] as const;
 

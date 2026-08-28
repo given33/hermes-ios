@@ -30,5 +30,13 @@ export interface HermesCloudTransport {
     path: string,
     options?: HermesRequestOptions,
   ): Promise<Response>;
+  openWebSocket(
+    path: string,
+    options?: Pick<HermesRequestOptions, 'profile' | 'query'> & {
+      protocols?: string | string[];
+      signal?: AbortSignal;
+      connectTimeoutMs?: number;
+    },
+  ): Promise<WebSocket>;
   request<T>(path: string, options?: HermesRequestOptions): Promise<T>;
 }

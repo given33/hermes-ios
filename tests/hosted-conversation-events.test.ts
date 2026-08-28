@@ -4,6 +4,8 @@ import test from 'node:test';
 import type { HermesCloudApi } from '../src/api/HermesCloudApi';
 import {
   consumeHostedConversationEvents,
+  consumeHostedConversationEventsWebSocket,
+  type HostedConversationEventWebSocketSource,
 } from '../src/api/hosted-conversation-events';
 import { MAX_SSE_FRAME_CHARACTERS } from '../src/api/sse-stream-safety';
 
@@ -18,6 +20,70 @@ function streamResponse(chunks: string[]): Response {
     headers: { 'Content-Type': 'text/event-stream' },
   });
 }
+
+class FakeHostedEventSocket {
+  onclose: ((event: { code?: number; reason?: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  sent: string[] = [];
+  closed = false;
+
+  send(value: string) {
+    this.sent.push(value);
+    queueMicrotask(() => this.onmessage?.({
+      data: JSON.stringify({
+        type: 'conversation',
+        cursor: 12,
+        min_cursor: 1,
+        has_gap: false,
+        account_generation: 'generation-ws',
+        events: [{
+          event_id: 'evt-ws',
+          cursor: 12,
+          account_generation: 'generation-ws',
+          conversation_id: 'chat-ws',
+          turn_id: 'turn-ws',
+          role_stage: 'worker',
+          event_type: 'message.delta',
+          sequence: 1,
+          occurred_at: 1,
+          idempotency_key: 'ws-1',
+          payload: { delta: 'hello over ws' },
+          schema_version: 'hermes.hosted-event.v1',
+        }],
+      }),
+    }));
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
+
+test('hosted conversation WebSocket uses the shared envelope parser and cursor contract', async () => {
+  const socket = new FakeHostedEventSocket();
+  const source: HostedConversationEventWebSocketSource = {
+    openHostedConversationEventsWebSocket() {
+      return Promise.resolve(socket as unknown as WebSocket);
+    },
+  };
+  const controller = new AbortController();
+  const cursors: number[] = [];
+  const consuming = consumeHostedConversationEventsWebSocket(
+    source,
+    'chat-ws',
+    11,
+    'generation-ws',
+    controller.signal,
+    (frame) => { cursors.push(frame.cursor); },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(socket.sent, ['{"type":"subscribe"}']);
+  assert.deepEqual(cursors, [12]);
+  controller.abort();
+  await assert.rejects(consuming, /aborted/);
+  assert.equal(socket.closed, true);
+});
 
 test('hosted conversation SSE survives fragmented frames and advances its cursor', async () => {
   const calls: Array<{ cursor: number; id: string }> = [];

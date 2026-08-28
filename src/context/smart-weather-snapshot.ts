@@ -23,8 +23,8 @@ export function normalizeForecast(value: unknown): IOSActiveForecast {
   const startsAt = value.starts_at ?? value.valid_from ?? nested.starts_at;
   const expiresAt = value.expires_at ?? value.valid_until ?? nested.expires_at;
   return {
-    ...value,
     ...nested,
+    ...value,
     data: nested,
     summary: typeof (nested.summary ?? nested.body ?? value.summary) === 'string'
       ? String(nested.summary ?? nested.body ?? value.summary)

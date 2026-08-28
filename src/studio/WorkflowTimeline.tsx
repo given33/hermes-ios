@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useReducer,
+  useRef,
   useState,
 } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -285,13 +286,18 @@ function EntryDetailBody({
 }) {
   const { tokens } = useTheme();
   const [copied, setCopied] = useState(false);
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+  }, []);
   const sections = useMemo(() => entryDetailSections(activity, isChinese), [activity, isChinese]);
   const copyDetail = useCallback(async () => {
     const value = sections.map(({ label, text }) => `${label}\n${text}`).join('\n\n');
     if (!value.trim()) return;
     await Clipboard.setStringAsync(value);
     setCopied(true);
-    setTimeout(() => setCopied(false), 1_200);
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(false), 1_200);
   }, [sections]);
   return (
     <View style={styles.entryDetailBody}>

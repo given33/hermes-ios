@@ -342,6 +342,48 @@ test('hosted event streams refresh one rejected token without putting credential
   assert.doesNotMatch(calls.map(({ url }) => url).join('\n'), /stream-token/);
 });
 
+test('opens a ticket-authenticated WebSocket without exposing the bearer token', async () => {
+  const calls: FetchCall[] = [];
+  const OriginalWebSocket = globalThis.WebSocket;
+  const sockets: Array<{ url: string; protocols?: string | string[] }> = [];
+  class FakeWebSocket {
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(url: string, protocols?: string | string[]) {
+      sockets.push({ url, protocols });
+      queueMicrotask(() => this.onopen?.());
+    }
+    close() {}
+  }
+  globalThis.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+  try {
+    const client = new HermesApiClient(
+      'https://hermes.test',
+      'mobile-secret',
+      async (input, init) => {
+        calls.push({ url: String(input), init: init ?? {} });
+        return jsonResponse('https://hermes.test/api/auth/ws-ticket', {
+          ticket: 'one-time-ticket',
+        });
+      },
+    );
+    await client.openWebSocket('/api/plugins/collaboration/single/conversations/chat-1/hosted-events-ws', {
+      query: { cursor: 7, expected_account_generation: 'generation-1' },
+      connectTimeoutMs: 500,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(new Headers(calls[0].init.headers).get('Authorization'), 'Bearer mobile-secret');
+    const url = new URL(sockets[0].url);
+    assert.equal(url.protocol, 'wss:');
+    assert.equal(url.searchParams.get('cursor'), '7');
+    assert.equal(url.searchParams.get('expected_account_generation'), 'generation-1');
+    assert.equal(url.searchParams.get('ticket'), 'one-time-ticket');
+    assert.doesNotMatch(sockets[0].url, /mobile-secret/);
+  } finally {
+    globalThis.WebSocket = OriginalWebSocket;
+  }
+});
+
 test('hosted event stream connection attempts have an abortable deadline', async () => {
   let requestSignal: AbortSignal | undefined;
   const client = new HermesApiClient(

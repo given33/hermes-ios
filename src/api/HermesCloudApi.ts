@@ -193,6 +193,7 @@ export class HermesCloudApi {
         path: string,
         options?: HermesRequestOptions,
       ) => this.client.openEventStream(path, options),
+      openWebSocket: (path, options) => this.client.openWebSocket(path, options),
       request: <T>(path: string, options?: HermesRequestOptions) =>
         this.request<T>(path, options),
     };
@@ -933,6 +934,10 @@ export class HermesCloudApi {
     signal?: AbortSignal,
   ) {
     return this.conversations.enqueueHostedTurn(conversationId, input, signal);
+  }
+
+  openHostedConversationEventsWebSocket(conversationId: string, cursor: number, expectedAccountGeneration: string, deadlineMs?: number, signal?: AbortSignal) {
+    return this.conversations.openHostedConversationEventsWebSocket(conversationId, cursor, expectedAccountGeneration, deadlineMs, signal);
   }
 
   cancelHostedTurn(

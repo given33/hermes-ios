@@ -230,9 +230,23 @@ private struct AgentActivityLinks: View {
 }
 
 private func agentActivityURL(_ state: HermesAgentActivityAttributes.ContentState) -> URL? {
-  if let deepLink = state.actionDeepLink, let url = URL(string: deepLink) { return url }
+  if let url = validatedActionURL(state.actionDeepLink) { return url }
   if let taskID = state.taskID { return agentTaskURL(taskID: taskID, action: "open") }
   return URL(string: "hermes-agent://chat")
+}
+
+/// The activity's `actionDeepLink` is provider-supplied payload, not a
+/// compile-time constant: only accept task links the app itself could have
+/// produced (mirror of HermesLiveActivityService.safeTaskDeepLink) so a
+/// tampered activity cannot bounce the user into an arbitrary URL or an
+/// unrelated hermes-agent flow.
+private func validatedActionURL(_ deepLink: String?) -> URL? {
+  guard let deepLink, let url = URL(string: deepLink),
+        url.scheme?.lowercased() == "hermes-agent",
+        url.host?.lowercased() == "task",
+        url.user == nil, url.password == nil,
+        url.path.split(separator: "/").count == 1 else { return nil }
+  return url
 }
 
 private func agentTaskURL(taskID: String, action: String) -> URL {
@@ -324,7 +338,7 @@ private struct AgentTaskLinks: View {
 }
 
 private func activityURL(_ state: HermesWeatherActivityAttributes.ContentState) -> URL? {
-  if let deepLink = state.actionDeepLink, let url = URL(string: deepLink) {
+  if let url = validatedActionURL(state.actionDeepLink) {
     return url
   }
   if state.kind == "agent-task", let taskID = state.taskID {
