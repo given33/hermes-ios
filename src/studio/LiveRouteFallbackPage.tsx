@@ -27,6 +27,7 @@ export function LiveRouteFallbackPage({
   client,
   locale,
   notify,
+  onOpenConversation,
   profile,
   routeId,
 }: {
@@ -34,6 +35,7 @@ export function LiveRouteFallbackPage({
   client?: HermesApiClient;
   locale: NativeRouteLocale;
   notify(message: string): void;
+  onOpenConversation(conversationId: string): void;
   profile: string;
   routeId: string;
 }) {
@@ -43,6 +45,8 @@ export function LiveRouteFallbackPage({
   const [messageDraft, setMessageDraft] = useState('');
   const [configDraft, setConfigDraft] = useState('');
   const [pairingCode, setPairingCode] = useState('');
+  const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
+  const [soulDrafts, setSoulDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const routeData = useHermesSwiftUIRouteData({ cacheOwner, client, locale, notify, profile, routeId });
   const snapshot = useMemo<JsonRecord | null>(() => {
@@ -96,7 +100,9 @@ export function LiveRouteFallbackPage({
         importFiles,
         locale,
         messageDraft,
+        onOpenConversation,
         pairingCode,
+        renameDrafts,
         roomDraft,
         routeId,
         send,
@@ -104,7 +110,10 @@ export function LiveRouteFallbackPage({
         setDraft,
         setMessageDraft,
         setPairingCode,
+        setRenameDrafts,
         setRoomDraft,
+        setSoulDrafts,
+        soulDrafts,
         snapshot,
         tokens,
       })}
@@ -119,7 +128,9 @@ function renderRoute({
   importFiles,
   locale,
   messageDraft,
+  onOpenConversation,
   pairingCode,
+  renameDrafts,
   routeId,
   roomDraft,
   send,
@@ -127,16 +138,23 @@ function renderRoute({
   setDraft,
   setMessageDraft,
   setPairingCode,
+  setRenameDrafts,
   setRoomDraft,
+  setSoulDrafts,
   snapshot,
+  soulDrafts,
   tokens,
 }: {
   busy: boolean; configDraft: string; draft: string; importFiles(): Promise<void>;
-  locale: NativeRouteLocale; messageDraft: string; pairingCode: string; roomDraft: string; routeId: string;
+  locale: NativeRouteLocale; messageDraft: string; onOpenConversation(conversationId: string): void;
+  pairingCode: string; renameDrafts: Record<string, string>; roomDraft: string; routeId: string;
   send(action: string, payload?: JsonRecord): Promise<void>; setDraft(value: string): void;
   setConfigDraft(value: string): void; setMessageDraft(value: string): void;
-  setPairingCode(value: string): void; setRoomDraft(value: string): void;
-  snapshot: JsonRecord | null; tokens: ReturnType<typeof useTheme>['tokens'];
+  setPairingCode(value: string): void;
+  setRenameDrafts(value: (current: Record<string, string>) => Record<string, string>): void;
+  setRoomDraft(value: string): void;
+  setSoulDrafts(value: (current: Record<string, string>) => Record<string, string>): void;
+  snapshot: JsonRecord | null; soulDrafts: Record<string, string>; tokens: ReturnType<typeof useTheme>['tokens'];
 }) {
   if (!snapshot) return <ScreenState kind="loading" message={locale === 'zh' ? '正在加载 Hermes 数据...' : 'Loading Hermes data...'} />;
   const chinese = locale === 'zh';
@@ -148,8 +166,11 @@ function renderRoute({
     const logs = Array.isArray(snapshot.logs) ? snapshot.logs : [];
     return <PreviewCard title={chinese ? '服务器日志' : 'Server logs'}>{logs.length ? logs.map((entry, index) => <PreviewText key={index} color={tokens.colors.textSecondary} style={styles.log} variant="mono">{displayValue(entry)}</PreviewText>) : <ScreenState kind="empty" message={chinese ? '暂无日志' : 'No logs'} />}</PreviewCard>;
   }
-  if (routeId === 'sessions') return <PreviewCard title={chinese ? '会话' : 'Sessions'}>{rows(snapshot.sessions).map((row) => <PreviewRow key={row.id} style={styles.row}><View style={styles.grow}><PreviewText>{row.title || row.id}</PreviewText><PreviewText variant="muted">{row.detail || row.model || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename, { id: row.id, value: row.title || row.id })} size="sm">{chinese ? '重命名' : 'Rename'}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionCompress, { id: row.id, detail: row.title || '' })} size="sm">{chinese ? '压缩' : 'Compact'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete, { id: row.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard>;
-  if (routeId === 'files') return <><PreviewRow style={styles.actions}><NativeButton disabled={busy} onPress={() => void importFiles()} size="sm">{chinese ? '导入文件' : 'Import files'}</NativeButton></PreviewRow><PreviewCard title={chinese ? '文件' : 'Files'}>{rows(snapshot.files).map((row) => <PreviewRow key={row.id} style={styles.row}><View style={styles.grow}><PreviewText>{row.name || row.id}</PreviewText><PreviewText variant="muted">{row.detail || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileDownload, { id: row.id, name: row.name })} size="sm">{chinese ? '下载' : 'Get'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileDelete, { id: row.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard></>;
+  if (routeId === 'sessions') return <PreviewCard title={chinese ? '会话' : 'Sessions'}>{rows(snapshot.sessions).map((row) => {
+    const title = renameDrafts[row.id] ?? row.title ?? row.id;
+    return <PreviewRow key={row.id} style={styles.row}><View style={styles.grow}><TextInput onChangeText={(value) => setRenameDrafts((current) => ({ ...current, [row.id]: value }))} placeholder={chinese ? '会话名称' : 'Session name'} placeholderTextColor="#8b929c" style={styles.input} value={title} /><PreviewText variant="muted">{row.detail || row.model || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => onOpenConversation(row.id)} size="sm">{chinese ? '打开' : 'Open'}</NativeButton><NativeButton disabled={busy || !title.trim()} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename, { id: row.id, value: title })} size="sm">{chinese ? '保存名称' : 'Save name'}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionCompress, { id: row.id, detail: title })} size="sm">{chinese ? '压缩' : 'Compact'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete, { id: row.id })} size="icon">×</NativeButton></PreviewRow>;
+  })}</PreviewCard>;
+  if (routeId === 'files') return <><PreviewRow style={styles.actions}><NativeButton disabled={busy} onPress={() => void importFiles()} size="sm">{chinese ? '导入文件' : 'Import files'}</NativeButton></PreviewRow><PreviewCard title={chinese ? '文件' : 'Files'}>{rows(snapshot.files).map((row) => <PreviewRow key={row.id} style={styles.row}><View style={styles.grow}><PreviewText>{row.name || row.id}</PreviewText><PreviewText variant="muted">{row.detail || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileDownload, { id: row.id, name: row.name })} size="sm">{chinese ? '下载' : 'Get'}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileShare, { id: row.id, name: row.name })} size="sm">{chinese ? '分享' : 'Share'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileDelete, { id: row.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard></>;
   if (routeId === 'cron') {
     const jobs = Array.isArray(snapshot.cron) ? snapshot.cron : [];
     return <><CreateBar busy={busy} chinese={chinese} draft={draft} onChange={setDraft} onSubmit={() => { const [name, schedule, ...prompt] = draft.split('|'); void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronCreate, { name: name || 'Hermes job', detail: prompt.join('|'), fields: { schedule: schedule || '0 * * * *' } }).then(() => setDraft('')); }} placeholder={chinese ? '名称|cron|提示词' : 'name|cron|prompt'} /><PreviewCard title={chinese ? '定时任务' : 'Scheduled jobs'}>{jobs.map((job) => <PreviewRow key={job.id} style={styles.row}><View style={styles.grow}><PreviewText>{job.name || job.id}</PreviewText><PreviewText variant="muted">{job.schedule || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronToggle, { id: job.id, enabled: job.enabled !== false })} size="sm">{job.enabled === false ? (chinese ? '启用' : 'Enable') : (chinese ? '停用' : 'Pause')}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronRun, { id: job.id })} size="sm">{chinese ? '运行' : 'Run'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronDelete, { id: job.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard></>;
@@ -160,7 +181,7 @@ function renderRoute({
   }
   if (routeId === 'profiles' || routeId === 'profile-new') {
     const profiles = Array.isArray(snapshot.profiles) ? snapshot.profiles : [];
-    return <><CreateBar busy={busy} chinese={chinese} draft={draft} onChange={setDraft} onSubmit={() => { void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileCreate, { name: draft }).then(() => setDraft('')); }} placeholder={chinese ? '新 Profile 名称' : 'New profile name'} /><PreviewCard title="Profiles">{profiles.map((item) => <PreviewRow key={item.id} style={styles.row}><View style={styles.grow}><PreviewText>{item.name || item.id}</PreviewText><PreviewText variant="muted">{item.model || item.detail || ''}</PreviewText></View><PreviewBadge tone={item.active ? 'success' : 'outline'}>{item.active ? (chinese ? '当前' : 'Active') : (chinese ? '可用' : 'Available')}</PreviewBadge><NativeButton disabled={busy || item.active === true} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileActivate, { id: item.id })} size="sm">{chinese ? '使用' : 'Use'}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileUpdate, { id: item.id, detail: item.soul || item.detail || '' })} size="sm">{chinese ? '保存灵魂' : 'Save soul'}</NativeButton><NativeButton disabled={busy || item.active === true} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileDelete, { id: item.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard></>;
+    return <><CreateBar busy={busy} chinese={chinese} draft={draft} onChange={setDraft} onSubmit={() => { void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileCreate, { name: draft }).then(() => setDraft('')); }} placeholder={chinese ? '新 Profile 名称' : 'New profile name'} /><PreviewCard title="Profiles">{profiles.map((item) => { const soul = soulDrafts[item.id] ?? item.soul ?? item.detail ?? ''; return <PreviewRow key={item.id} style={styles.row}><View style={styles.grow}><PreviewText>{item.name || item.id}</PreviewText><TextInput multiline onChangeText={(value) => setSoulDrafts((current) => ({ ...current, [item.id]: value }))} placeholder={chinese ? 'SOUL.md 内容' : 'SOUL.md content'} placeholderTextColor="#8b929c" style={styles.input} value={soul} /><PreviewText variant="muted">{item.model || ''}</PreviewText></View><PreviewBadge tone={item.active ? 'success' : 'outline'}>{item.active ? (chinese ? '当前' : 'Active') : (chinese ? '可用' : 'Available')}</PreviewBadge><NativeButton disabled={busy || item.active === true} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileActivate, { id: item.id })} size="sm">{chinese ? '使用' : 'Use'}</NativeButton><NativeButton disabled={busy || !soul.trim()} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileUpdate, { id: item.id, detail: soul })} size="sm">{chinese ? '保存灵魂' : 'Save soul'}</NativeButton><NativeButton disabled={busy || item.active === true} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.profileDelete, { id: item.id })} size="icon">×</NativeButton></PreviewRow>; })}</PreviewCard></>;
   }
   if (routeId === 'env') return <PreviewCard title={chinese ? '模型凭据' : 'Model credentials'}>{rows(snapshot.environment).map((item) => <PreviewRow key={item.id} style={styles.row}><View style={styles.grow}><PreviewText>{item.key || item.id}</PreviewText><PreviewText variant="mono">{item.maskedValue || '********'}</PreviewText></View><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.environmentDelete, { id: item.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard>;
   if (routeId === 'pairing') {

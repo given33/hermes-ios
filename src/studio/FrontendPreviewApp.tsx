@@ -569,6 +569,7 @@ function PreviewRoute({
         client={client}
         locale={locale ?? 'zh'}
         notify={notify}
+        onOpenConversation={onOpenConversation}
         profile={profile}
         routeId={route.routeId ?? ''}
       />
