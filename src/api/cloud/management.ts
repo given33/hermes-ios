@@ -256,6 +256,10 @@ export class HermesManagementCloudApi {
     );
   }
 
+  enableWebhooks() {
+    return this.transport.request<JsonRecord>('/api/webhooks/enable', { method: 'POST' });
+  }
+
   openProfileTerminal(name: string) {
     return this.transport.request<JsonRecord>(
       `/api/profiles/${encodeURIComponent(name)}/open-terminal`, { method: 'POST' },

@@ -211,6 +211,12 @@ export class HermesExtensionsCloudApi {
     );
   }
 
+  getManagedInstallation(operationId: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/plugins/collaboration/managed-installations/${encodeURIComponent(operationId)}`,
+    );
+  }
+
   getToolsetModels(name: string, provider?: string, profile = 'default') {
     return this.transport.request<JsonRecord>(
       `/api/tools/toolsets/${encodeURIComponent(name)}/models`,

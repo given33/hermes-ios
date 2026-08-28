@@ -2498,7 +2498,7 @@ private struct HermesModelsPage: View {
           Label(chinese ? "辅助任务模型" : "Auxiliary task models", systemImage: "slider.horizontal.3")
             .font(HermesFonts.display(15))
           Spacer()
-          if !moa.activePreset.isEmpty { HermesStatusPill(text: "MoA: (moa.activePreset)") }
+          if !moa.activePreset.isEmpty { HermesStatusPill(text: "MoA: \(moa.activePreset)") }
         }
         if auxiliary.tasks.isEmpty {
           Text(chinese ? "未配置辅助槽位" : "No auxiliary slots configured")
@@ -2516,7 +2516,7 @@ private struct HermesModelsPage: View {
         HStack {
           Text(moa.enabled ? (chinese ? "MoA 已启用" : "MoA enabled") : (chinese ? "MoA 未启用" : "MoA disabled"))
             .font(HermesFonts.body(11)).foregroundStyle(moa.enabled ? appearance.palette.success : appearance.palette.secondary)
-          if moa.presetCount > 0 { Text("· (moa.presetCount) presets").font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary) }
+          if moa.presetCount > 0 { Text("· \(moa.presetCount) presets").font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary) }
         }
       }
     }

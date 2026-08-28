@@ -67,9 +67,12 @@ export interface HermesCloudApi {
   getUsageAnalytics(days?: number, profile?: string): Promise<JsonRecord>; getModelAnalytics(days?: number, profile?: string): Promise<JsonRecord>; getActionStatus(name: string): Promise<JsonRecord>;
   openSpeechStream(profile?: string, signal?: AbortSignal): Promise<WebSocket>;
   getDeliveryTargets(): Promise<JsonRecord>; getCronBlueprints(): Promise<JsonRecord>; instantiateCronBlueprint(blueprint: string, values?: JsonRecord, profile?: string): Promise<JsonRecord>;
+  getCronJob(id: string, profile?: string): Promise<JsonRecord>; getCronJobRuns(id: string, profile?: string, limit?: number): Promise<JsonRecord>;
   getToolsetModels(name: string, provider?: string, profile?: string): Promise<JsonRecord>; setToolsetModel(name: string, model: string, provider?: string, profile?: string): Promise<JsonRecord>; getToolsetProviders(name: string, profile?: string): Promise<JsonRecord>; setToolsetProvider(name: string, provider: string, capability?: 'search' | 'extract', profile?: string): Promise<JsonRecord>; saveToolsetEnvironment(name: string, env: Record<string, string>, profile?: string): Promise<JsonRecord>; runToolsetPostSetup(name: string, key: string, profile?: string): Promise<JsonRecord>;
   installSkillHub(identifier: string, profile?: string): Promise<JsonRecord>; uninstallSkillHub(name: string, profile?: string): Promise<JsonRecord>; updateSkillsHub(profile?: string): Promise<JsonRecord>; getSkillHubSources(profile?: string): Promise<JsonRecord>; searchSkillHub(query?: string, source?: string, limit?: number, profile?: string): Promise<JsonRecord>; previewSkillHub(identifier: string, profile?: string): Promise<JsonRecord>; scanSkillHub(identifier: string, profile?: string): Promise<JsonRecord>;
+  getManagedInstallation(operationId: string): Promise<JsonRecord>;
   revealEnvironmentVariable(key: string, profile?: string): Promise<JsonRecord>; openProfileTerminal(name: string): Promise<JsonRecord>; getProfileDesktopOverlay(name: string): Promise<JsonRecord>;
+  enableWebhooks(): Promise<JsonRecord>;
   searchSessions(query: string, limit?: number, profile?: string, filters?: JsonRecord): Promise<JsonRecord>; getLatestDescendant(id: string, profile?: string): Promise<JsonRecord>; exportSession(id: string, profile?: string): Promise<JsonRecord>; bulkDeleteSessions(ids: string[], profile?: string): Promise<JsonRecord>; importSessions(sessions: JsonRecord[], profile?: string): Promise<JsonRecord>; countEmptySessions(profile?: string): Promise<JsonRecord>; deleteEmptySessions(profile?: string): Promise<JsonRecord>; getSessionStats(profile?: string): Promise<JsonRecord>; pruneSessions(payload?: JsonRecord, profile?: string): Promise<JsonRecord>;
   getProfileSessionsSidebar(options?: JsonRecord): Promise<JsonRecord>; getProfileProjectsTree(previewLimit?: number, sessionLimit?: number): Promise<JsonRecord>; scanProfileSessionPullRequests(ids: string[]): Promise<JsonRecord>;
 }
@@ -104,6 +107,8 @@ Object.assign(CloudApi.prototype, {
   getDeliveryTargets(this: any) { return this.cron.getDeliveryTargets(); },
   getCronBlueprints(this: any) { return this.cron.getBlueprints(); },
   instantiateCronBlueprint(this: any, b: string, v: JsonRecord = {}, p = 'default') { return this.cron.instantiateBlueprint(b, v, p); },
+  getCronJob(this: any, i: string, p = 'default') { return this.cron.getCronJob(i, p); },
+  getCronJobRuns(this: any, i: string, p = 'default', l = 20) { return this.cron.getCronJobRuns(i, p, l); },
   getToolsetModels(this: any, n: string, p?: string, profile = 'default') { return this.extensions.getToolsetModels(n, p, profile); },
   setToolsetModel(this: any, n: string, m: string, p?: string, profile = 'default') { return this.extensions.setToolsetModel(n, m, p, profile); },
   getToolsetProviders(this: any, n: string, p = 'default') { return this.extensions.getToolsetProviders(n, p); },
@@ -117,9 +122,11 @@ Object.assign(CloudApi.prototype, {
   searchSkillHub(this: any, q = '', s = 'all', l = 20, p = 'default') { return this.extensions.searchSkillHub(q, s, l, p); },
   previewSkillHub(this: any, i: string, p = 'default') { return this.extensions.previewSkillHub(i, p); },
   scanSkillHub(this: any, i: string, p = 'default') { return this.extensions.scanSkillHub(i, p); },
+  getManagedInstallation(this: any, i: string) { return this.extensions.getManagedInstallation(i); },
   revealEnvironmentVariable(this: any, k: string, p = 'default') { return this.management.revealEnvironmentVariable(k, p); },
   openProfileTerminal(this: any, n: string) { return this.management.openProfileTerminal(n); },
   getProfileDesktopOverlay(this: any, n: string) { return this.management.getProfileDesktopOverlay(n); },
+  enableWebhooks(this: any) { return this.management.enableWebhooks(); },
   searchSessions(this: any, q: string, l = 20, p = 'default', f: JsonRecord = {}) { return this.sessions.searchSessions(q, l, p, f); },
   getLatestDescendant(this: any, i: string, p = 'default') { return this.sessions.getLatestDescendant(i, p); },
   exportSession(this: any, i: string, p = 'default') { return this.sessions.exportSession(i, p); },

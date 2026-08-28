@@ -15,6 +15,20 @@ export class HermesCronCloudApi {
     return this.transport.request<JsonRecord[]>('/api/cron/jobs', { query: { profile } });
   }
 
+  getCronJob(id: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/cron/jobs/${encodeURIComponent(id)}`,
+      { query: { profile } },
+    );
+  }
+
+  getCronJobRuns(id: string, profile = 'default', limit = 20) {
+    return this.transport.request<JsonRecord>(
+      `/api/cron/jobs/${encodeURIComponent(id)}/runs`,
+      { query: { profile, limit } },
+    );
+  }
+
   createCronJob(job: JsonRecord, profile = 'default') {
     return this.transport.json<JsonRecord>('/api/cron/jobs', 'POST', job, {
       query: { profile },
