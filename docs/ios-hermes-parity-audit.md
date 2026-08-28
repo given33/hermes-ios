@@ -57,6 +57,9 @@ exist. “API only” is deliberately not treated as completion.
   endpoints; System can import a backup archive and create/delete hooks; and
   Toolsets expose a native declared-key schema form in addition to the raw
   JSON editor. Added backend-wire and native source regression tests.
+- 2026-08-29: fixed the native `HermesSessionSnapshot` decoder to accept the
+  server's optional `archived`, `pinned`, and `unread` flags that the SwiftUI
+  page already renders; blank redacted Toolset values are never written back.
 
 Each item must add a typed route snapshot, a named action in
 `docs/spec/swiftui-route-actions.json`, a backend-wire test, and a native source
