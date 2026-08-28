@@ -149,6 +149,7 @@ export function useHermesSwiftUIRouteData({
   const lastSuccessfulReloadAt = useRef(0);
   const acknowledgedRoomRequestId = useRef('');
   const collaborationReplay = useRef<Promise<string> | null>(null);
+  const lifecycleEpoch = useRef(0);
   const operationRef = useRef<HermesSwiftUIRouteOperationSnapshot | undefined>(undefined);
   const resetRefreshCadence = useRef<() => void>(() => undefined);
   const lastEventFailureLogAt = useRef(0);
@@ -173,23 +174,26 @@ export function useHermesSwiftUIRouteData({
     if (collaborationReplay.current) return collaborationReplay.current;
     const replay = (async () => {
       const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
+      const replayEpoch = lifecycleEpoch.current;
+      const replayIsCurrent = () => replayEpoch === lifecycleEpoch.current
+        && isConversationStorageEpochCurrent(cacheOwner, ownerEpoch);
       let lastAcknowledged = '';
       let discarded = 0;
       const pending = await localStore.readPendingRoomMessages(cacheOwner);
       for (const item of pending.sort((left, right) => left.queuedAt - right.queuedAt)) {
         try {
-          if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          if (!replayIsCurrent()) {
             return lastAcknowledged;
           }
           await sendCollaborationRoomMessageWithDeadline(api, item);
-          if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          if (!replayIsCurrent()) {
             return lastAcknowledged;
           }
           await localStore.removePendingRoomMessage(cacheOwner, item.requestId);
           lastAcknowledged = item.requestId;
         } catch (error) {
           if (!isPermanentRoomSendError(error)) throw error;
-          if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
+          if (!replayIsCurrent()) {
             return lastAcknowledged;
           }
           await localStore.removePendingRoomMessage(cacheOwner, item.requestId);
@@ -376,6 +380,7 @@ export function useHermesSwiftUIRouteData({
   }, [api, reload, routeId]);
 
   useEffect(() => {
+    lifecycleEpoch.current += 1;
     const lifecycleVersion = ++requestVersion.current;
     lastSuccessfulReloadAt.current = 0;
     selectedItemId.current = '';

@@ -30,3 +30,14 @@ export class ThemePreferenceStore {
     return this.storage.setItem(THEME_STORAGE_KEYS.font, font);
   }
 }
+
+export function namespacedThemePreferenceStore(
+  storage: AsyncStorageAdapter,
+  namespace: string,
+): ThemePreferenceStore {
+  const suffix = namespace.trim().replace(/[^a-zA-Z0-9._-]/g, '_').slice(-160) || 'local';
+  return new ThemePreferenceStore({
+    getItem: (key) => storage.getItem(`${key}.${suffix}`),
+    setItem: (key, value) => storage.setItem(`${key}.${suffix}`, value),
+  });
+}

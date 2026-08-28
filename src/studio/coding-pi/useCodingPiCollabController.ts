@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { HermesCodingPiCollabLinks } from '../../api/hermes-coding-pi';
 import {
@@ -30,8 +30,10 @@ export interface CodingPiCollabController {
  * this store, so the Pi stream and room connection continue independently.
  */
 export function useCodingPiCollabController({
+  ownerScope = '',
   currentCollab,
 }: {
+  ownerScope?: string;
   currentCollab?: HermesCodingPiCollabLinks | null;
 }): CodingPiCollabController {
   const [client, setClient] = useState<NativeCollabClient | null>(null);
@@ -43,12 +45,20 @@ export function useCodingPiCollabController({
   const autoConnectDisabledRef = useRef(false);
   const lastAutoLinkRef = useRef('');
   const snapshot = useNativeCollabSnapshot(client);
+  const storagePrefix = useMemo(() => {
+    const normalized = ownerScope.trim();
+    if (!normalized) return '';
+    const suffix = normalized.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-160);
+    return `${suffix}.`;
+  }, [ownerScope]);
+  const nameStorageKey = `${NAME_STORAGE_KEY}.${storagePrefix || 'local'}`;
+  const linkStorageKey = `${LINK_STORAGE_KEY}.${storagePrefix || 'local'}`;
 
   useEffect(() => {
     let active = true;
     void Promise.all([
-      AsyncStorage.getItem(NAME_STORAGE_KEY),
-      AsyncStorage.getItem(LINK_STORAGE_KEY),
+      AsyncStorage.getItem(nameStorageKey),
+      AsyncStorage.getItem(linkStorageKey),
     ]).then(([storedName, storedLink]) => {
       if (!active) return;
       if (storedName?.trim()) setNameState(storedName.trim().slice(0, 32));
@@ -62,8 +72,16 @@ export function useCodingPiCollabController({
     });
     return () => {
       active = false;
+      setClient((current) => {
+        current?.close();
+        return null;
+      });
+      setError(null);
+      setNameState('guest');
+      setLink('');
+      loadedRef.current = false;
     };
-  }, []);
+  }, [linkStorageKey, nameStorageKey]);
 
   const connect = useCallback((nextLink: string, nextName = name) => {
     const normalizedLink = nextLink.trim();
@@ -80,8 +98,8 @@ export function useCodingPiCollabController({
       setLink(normalizedLink);
       setNameState(normalizedName);
       void AsyncStorage.multiSet([
-        [LINK_STORAGE_KEY, normalizedLink],
-        [NAME_STORAGE_KEY, normalizedName],
+        [linkStorageKey, normalizedLink],
+        [nameStorageKey, normalizedName],
       ]).catch(() => undefined);
       setClient((current) => {
         current?.close();
@@ -91,7 +109,7 @@ export function useCodingPiCollabController({
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     }
-  }, [name]);
+  }, [linkStorageKey, name, nameStorageKey]);
 
   const leave = useCallback(() => {
     autoConnectDisabledRef.current = true;
@@ -115,8 +133,8 @@ export function useCodingPiCollabController({
   const setName = useCallback((nextName: string) => {
     const normalized = nextName.slice(0, 32);
     setNameState(normalized);
-    void AsyncStorage.setItem(NAME_STORAGE_KEY, normalized).catch(() => undefined);
-  }, []);
+    void AsyncStorage.setItem(nameStorageKey, normalized).catch(() => undefined);
+  }, [nameStorageKey]);
 
   useEffect(() => {
     if (!loadedRef.current || autoConnectDisabledRef.current) return;

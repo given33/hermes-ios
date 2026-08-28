@@ -554,6 +554,7 @@ function PreviewRoute({
     !allowFixturePages
     && route.routeId !== 'chat'
     && route.routeId !== 'agent-group'
+    && route.routeId !== 'agent-workspace'
     && route.routeId !== 'agent-hub'
     && route.routeId !== 'account'
     && route.routeId !== 'browser'

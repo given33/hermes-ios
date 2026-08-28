@@ -6,7 +6,7 @@ import {
   Search,
   Trash2,
 } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   StyleSheet,
@@ -77,6 +77,7 @@ export function ModelsManagementPage({
   const [model, setModel] = useState('');
   const [operation, setOperation] = useState<ModelOperationState>(null);
   const [reasoningEffort, setReasoningEffort] = useState<CustomModelConfiguration['reasoningEffort']>('medium');
+  const loadGenerationRef = useRef(0);
   // Disclosure chevron rotates with the shared control timing instead of the
   // previous instant transform swap; withTiming retargets mid-flight, so fast
   // taps stay interruptible, and Reduce Motion collapses it to a snap.
@@ -92,9 +93,11 @@ export function ModelsManagementPage({
   }));
 
   const load = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
     setLoading(true);
     try {
       const current = await api.getCustomModel(profile);
+      if (generation !== loadGenerationRef.current) return;
       setApiKey('');
       setApiKeyConfigured(current.apiKeyConfigured === true);
       setApiKeyDeleteRequested(false);
@@ -105,9 +108,10 @@ export function ModelsManagementPage({
       setModel(current.model);
       setReasoningEffort(current.reasoningEffort);
     } catch (error) {
+      if (generation !== loadGenerationRef.current) return;
       setOperation({ kind: 'save', message: modelPageError(error, chinese), state: 'error' });
     } finally {
-      setLoading(false);
+      if (generation === loadGenerationRef.current) setLoading(false);
     }
   }, [api, chinese, profile]);
 

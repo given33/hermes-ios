@@ -107,6 +107,7 @@ export function useChatFeatureModes({
   });
   const codingPiCollabController = useCodingPiCollabController({
     currentCollab: codingPiController.activeSession?.collab,
+    ownerScope: cacheOwner,
   });
 
   const historyConversations = useMemo<ConversationHistoryItem[]>(() => {

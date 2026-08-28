@@ -119,7 +119,10 @@ export function useHostedLifecycleEventApplication({
   ) => {
     if (!events.length) return;
     const owner = conversationId || activeConversationIdRef.current;
-    if (!owner) return;
+    // A stream from the conversation that just lost focus can finish after
+    // the user switches rooms. Never enqueue those frames into the new room's
+    // reducer; doing so can merge lifecycle state across conversations.
+    if (!owner || owner !== activeConversationIdRef.current) return;
     eventQueueRef.current.push(...events.map((event) => ({ conversationId: owner, event })));
     const terminalEvent = events.some((event) => {
       const eventType = event.event_type.toLowerCase();

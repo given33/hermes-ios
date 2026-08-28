@@ -190,7 +190,15 @@ final class HermesAttachmentVault {
   @discardableResult
   func deleteDecryptedFile(uri: String) throws -> Bool {
     let target = try fileURL(uri)
-    try requireDescendant(target, of: plaintextCacheRoot)
+    let identity = HermesContextEventQueue.shared.currentOwnerIdentity
+    guard !identity.ownerScope.isEmpty else {
+      throw HermesAttachmentVaultError.staleOwner
+    }
+    let ownerRoot = plaintextCacheRoot.appendingPathComponent(
+      try keyAccount(owner: identity.ownerScope),
+      isDirectory: true
+    )
+    try requireDescendant(target, of: ownerRoot)
     guard FileManager.default.fileExists(atPath: target.path) else { return false }
     try FileManager.default.removeItem(at: target)
     return true

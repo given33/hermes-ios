@@ -198,6 +198,13 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
 
   @MainActor
   func startAgentCapture(localeIdentifier: String?) throws -> Bool {
+    guard HermesPermissionCollectionGate.shared.isReadyForCurrentOwner else {
+      throw NSError(
+        domain: "HermesVoice",
+        code: 5,
+        userInfo: [NSLocalizedDescriptionKey: "Hermes permissions are not ready for the active account"]
+      )
+    }
     do {
       let started = try startRecognition(localeIdentifier: localeIdentifier)
       enqueueAgentTriggerOnFinalTranscript = true

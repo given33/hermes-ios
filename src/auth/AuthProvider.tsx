@@ -61,6 +61,7 @@ import {
   type MobileAuthSession,
 } from './mobile-auth';
 import { clearExpoAccountNotifications } from '../notifications/expo-notification-runtime';
+import { enqueueApnsUnregister } from '../notifications/apns-unregister-outbox';
 import {
   savedSessionFailureInvalidatesCredentials,
   savedSessionFailureIsCleartextBaseUrl,
@@ -830,7 +831,14 @@ export function AuthProvider({ children }: PropsWithChildren) {
           connection.baseUrl,
           connection.accessToken,
         );
-        await unregisterApnsBeforeLogout(logoutClient, connection.deviceId);
+        const unregistered = await unregisterApnsBeforeLogout(logoutClient, connection.deviceId);
+        if (!unregistered) {
+          await enqueueApnsUnregister({
+            baseUrl: connection.baseUrl,
+            deviceId: connection.deviceId || '',
+            username: connection.username,
+          }).catch(() => undefined);
+        }
         const remoteCleanup = new MobileAuthApiClient(connection.baseUrl).logout(
           connection.refreshToken,
           connection.accessToken,
@@ -1114,9 +1122,9 @@ function savedConnectionOwnerScope(connection: SavedConnection): string {
 async function unregisterApnsBeforeLogout(
   client: HermesApiClient,
   rawDeviceId = '',
-): Promise<void> {
+): Promise<boolean> {
   const deviceId = rawDeviceId.trim();
-  if (!deviceId) return;
+  if (!deviceId) return true;
   const abortController = new AbortController();
   try {
     await withDeadline(
@@ -1127,8 +1135,10 @@ async function unregisterApnsBeforeLogout(
       APNS_LOGOUT_DEADLINE_MS,
       'Hermes APNs logout timed out',
     );
+    return true;
   } catch {
     // Local logout must complete even when the device or server is offline.
+    return false;
   } finally {
     abortController.abort();
   }

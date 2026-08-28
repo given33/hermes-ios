@@ -39,7 +39,7 @@ import {
   type ThemeStateEffectExecutor,
   type ThemeStatePlan,
 } from './theme-state';
-import { ThemePreferenceStore } from './theme-store';
+import { namespacedThemePreferenceStore, ThemePreferenceStore } from './theme-store';
 import { deriveNativeThemeTokens } from './theme-tokens';
 import type {
   DashboardTheme,
@@ -61,6 +61,7 @@ export interface ThemeContextValue {
 
 interface ThemeProviderProps extends PropsWithChildren {
   client: HermesApiClient;
+  preferenceNamespace?: string;
   preferenceStore?: ThemePreferenceStore;
 }
 
@@ -70,12 +71,20 @@ const asyncStorageThemeStore = new ThemePreferenceStore(AsyncStorage);
 export function ThemeProvider({
   children,
   client,
-  preferenceStore = asyncStorageThemeStore,
+  preferenceNamespace,
+  preferenceStore,
 }: ThemeProviderProps) {
   const [state, dispatch] = useReducer(themeStateReducer, INITIAL_THEME_STATE);
   const [ready, setReady] = useState(false);
   const stateRef = useRef(state);
   const reconciliationRef = useRef<ThemeReconciliationHandle | null>(null);
+  const scopedPreferenceStore = useMemo(
+    () => preferenceStore
+      || (preferenceNamespace
+        ? namespacedThemePreferenceStore(AsyncStorage, preferenceNamespace)
+        : asyncStorageThemeStore),
+    [preferenceNamespace, preferenceStore],
+  );
 
   useEffect(() => {
     stateRef.current = state;
@@ -87,8 +96,8 @@ export function ThemeProvider({
 
   const effectExecutor = useMemo<ThemeStateEffectExecutor>(
     () => ({
-      writeTheme: (value) => preferenceStore.writeTheme(value),
-      writeFont: (value) => preferenceStore.writeFont(value),
+      writeTheme: (value) => scopedPreferenceStore.writeTheme(value),
+      writeFont: (value) => scopedPreferenceStore.writeFont(value),
       async putTheme(value) {
         await themeApi.setTheme(value);
       },
@@ -96,12 +105,12 @@ export function ThemeProvider({
         await themeApi.setFontPref(value);
       },
     }),
-    [preferenceStore, themeApi],
+    [scopedPreferenceStore, themeApi],
   );
 
   const effectQueue = useMemo(
-    () => getThemeEffectPlanQueue(preferenceStore),
-    [preferenceStore],
+    () => getThemeEffectPlanQueue(scopedPreferenceStore),
+    [scopedPreferenceStore],
   );
 
   const commitPlan = useCallback((plan: ThemeStatePlan) => {
@@ -112,7 +121,7 @@ export function ThemeProvider({
   useEffect(() => {
     setReady(false);
     const reconciliation = startThemeReconciliation({
-      store: preferenceStore,
+      store: scopedPreferenceStore,
       client: themeApi,
       effects: effectExecutor,
       queue: effectQueue,
@@ -127,7 +136,7 @@ export function ThemeProvider({
         reconciliationRef.current = null;
       }
     };
-  }, [commitPlan, effectExecutor, effectQueue, preferenceStore, themeApi]);
+  }, [commitPlan, effectExecutor, effectQueue, scopedPreferenceStore, themeApi]);
 
   const setTheme = useCallback(
     async (name: string) => {

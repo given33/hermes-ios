@@ -21,6 +21,7 @@ import {
   synchronizeApnsRegistration,
   type NativePushToken,
 } from './mobile-notifications';
+import { drainApnsUnregister } from './apns-unregister-outbox';
 import {
   buildSmartWeatherFeedbackEvent,
   notificationDedupeKey,
@@ -341,6 +342,14 @@ export function NotificationProvider({ children }: PropsWithChildren) {
       });
     };
     enqueueSynchronization();
+    void drainApnsUnregister(authenticatedConnection.username, async (item) => {
+      if (item.baseUrl !== authenticatedConnection.baseUrl) return false;
+      await client.request(
+        `/api/mobile/v1/devices/${encodeURIComponent(item.deviceId)}/apns`,
+        { method: 'DELETE' },
+      );
+      return true;
+    });
     void runtime.subscribePushTokens((token) => {
       if (active) enqueueSynchronization(token);
     }).then((remove) => {

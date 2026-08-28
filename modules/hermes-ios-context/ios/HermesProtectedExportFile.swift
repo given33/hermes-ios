@@ -4,13 +4,20 @@ final class HermesProtectedExportFile {
   static let shared = HermesProtectedExportFile()
 
   private let fileManager = FileManager.default
+  private let maximumBytes = 10 * 1024 * 1024
 
   private init() {}
 
   func write(contents: String, filename: String) throws -> String {
+    guard contents.utf8.count <= maximumBytes else {
+      throw CocoaError(.fileWriteOutOfSpace)
+    }
     let directory = try exportDirectory()
     let safeName = sanitizedFilename(filename)
-    let target = directory.appendingPathComponent(safeName, isDirectory: false)
+    let target = directory.appendingPathComponent(
+      "\(UUID().uuidString.lowercased())-\(safeName)",
+      isDirectory: false
+    )
     let temporary = directory.appendingPathComponent(".\(UUID().uuidString).tmp")
     let attributes: [FileAttributeKey: Any] = [
       .protectionKey: FileProtectionType.complete,

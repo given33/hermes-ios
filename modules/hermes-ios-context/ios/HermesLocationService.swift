@@ -170,6 +170,20 @@ final class HermesLocationService: NSObject, CLLocationManagerDelegate {
   }
 
   func stop() {
+    locationRetry?.cancel()
+    locationRetry = nil
+    locationTimeout?.cancel()
+    locationTimeout = nil
+    predictedDepartureActivation?.cancel()
+    predictedDepartureActivation = nil
+    predictedDepartureReset?.cancel()
+    predictedDepartureReset = nil
+    locationContinuation?.resume(returning: locationRequestBestPayload)
+    locationContinuation = nil
+    locationRequestToken = nil
+    locationRequestBestPayload = nil
+    locationRequestBestAccuracy = CLLocationAccuracy.greatestFiniteMagnitude
+    locationRequestStartedAt = nil
     manager.stopUpdatingLocation()
     manager.stopMonitoringSignificantLocationChanges()
     manager.stopMonitoringVisits()

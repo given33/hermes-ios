@@ -421,7 +421,9 @@ final class HermesContextEventQueue {
       state["ownerScope"] = normalized
       state["serverAccountGeneration"] = normalizedGeneration
       state["updatedAt"] = Date().timeIntervalSince1970 * 1000
-      persistRelayStateUnlocked(state)
+      guard persistRelayStateUnlocked(state) else {
+        return accountGenerationUnlocked()
+      }
       return state["accountGeneration"] as? Int ?? 0
     }
   }

@@ -118,7 +118,7 @@ function NativeAuthRoot() {
   const ownerScope = accountOwnerScope(state.connection);
   return (
     <AuthenticatedContentBoundary resetKey={ownerScope}>
-      <ThemeProvider client={client}>
+      <ThemeProvider client={client} preferenceNamespace={ownerScope}>
         <ThemedNativeSurface>
           <ThemedStatusBar />
           <View

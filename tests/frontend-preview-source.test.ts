@@ -116,6 +116,31 @@ test('frontend preview renders every customized route and authenticated builds m
   assert.doesNotMatch(previewSources, /WebView|WKWebView|react-native-webview/);
 });
 
+test('authenticated fallback routes expose live actions instead of raw JSON placeholders', () => {
+  const app = read('src/studio/FrontendPreviewApp.tsx');
+  const fallback = read('src/studio/LiveRouteFallbackPage.tsx');
+
+  // Agent Workspace owns its own API-backed screen and must not be swallowed
+  // by the generic route fallback when the optional native module is absent.
+  assert.match(app, /route\.routeId !== 'agent-workspace'/);
+  for (const routeId of ['achievements', 'kanban', 'collaboration', 'approvals', 'runtime-center']) {
+    assert.match(fallback, new RegExp(`routeId === '${routeId}'`));
+  }
+  for (const action of [
+    'achievementsRescan',
+    'kanbanCreate',
+    'kanbanMove',
+    'collaborationSend',
+    'approvalApprove',
+    'approvalReject',
+    'runtimeCancel',
+    'runtimeRetry',
+  ]) {
+    assert.match(fallback, new RegExp(`HERMES_SWIFTUI_ROUTE_ACTIONS\\.${action}`));
+  }
+  assert.match(fallback, /routeId === 'docs'/);
+});
+
 test('distributable IPA builds always launch the authenticated production frontend', () => {
   const workflow = read('.github/workflows/ios-unsigned.yml');
   const app = read('src/app/HermesNativeApp.tsx');

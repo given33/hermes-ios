@@ -35,6 +35,7 @@ export class HermesStudioWorkflowSocketApi {
     this.desiredSubscriptions.clear();
     this.socket?.disconnect();
     const endpoint = new URL('/workflow', `${this.client.baseUrl}/`).toString();
+    let authUnavailable = false;
     const socket = io(endpoint, {
       autoConnect: false,
       // Socket.IO invokes an auth callback for every namespace handshake,
@@ -43,8 +44,17 @@ export class HermesStudioWorkflowSocketApi {
       // refresh has completed.
       auth: (callback) => {
         void this.client.getAccessTokenForRealtime()
-          .then((token) => callback({ token }))
-          .catch(() => callback({ token: '' }));
+          .then((token) => {
+            authUnavailable = false;
+            callback({ token });
+          })
+          .catch(() => {
+            // An expired/temporarily unavailable session must not become an
+            // infinite empty-token reconnect loop. The caller can invoke
+            // connect again after auth recovery.
+            authUnavailable = true;
+            callback({ token: '' });
+          });
       },
       query: { profile },
       transports: ['websocket', 'polling'],
@@ -61,6 +71,13 @@ export class HermesStudioWorkflowSocketApi {
     socket.on('connect', () => {
       if (this.socket !== socket) return;
       void this.replaySubscriptions(socket).catch(() => undefined);
+    });
+    socket.on('connect_error', () => {
+      if (!authUnavailable || this.socket !== socket) return;
+      socket.io.opts.reconnection = false;
+      socket.disconnect();
+      this.socket = null;
+      this.socketProfile = '';
     });
     this.socket = socket;
     this.socketProfile = profile;
