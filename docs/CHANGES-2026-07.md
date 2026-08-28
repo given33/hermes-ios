@@ -104,3 +104,18 @@ SwiftUI 审批快照现在显式携带后端返回的 `payload_digest`，用户�
 4. iOS 不再使用旧 `/api/ws`、`/api/events` 或 TUI JSON-RPC；`/api/auth/ws-ticket`
    仅服务 hosted-events WebSocket 镜像，失败时自动回退 SSE。
 5. Screen Time 扩展与主 App 必须同版本部署（密封/开封两半共享密钥与 AAD 常量）。
+
+## 8. 2026-08-29 增量复验：Bot Mode 与 WebSocket
+
+- Bot Mode 的核心移动端桥接已落地：`/api/bots` 返回官方 profile roster 和
+  canonical `Bot Chat` 会话占位符；profile CRUD、Bot Chat 打开、名称修改、
+  title/groups、隐藏/显示、置顶/取消置顶均通过带类型校验的 REST/action 契约
+  进入原生 SwiftUI Bots 页面。
+- hosted 对话事件优先使用一次性 ticket 认证的 WebSocket，连接失败自动退回
+  SSE/轮询；这条链路不是旧 TUI JSON-RPC 聊天栈，旧 `/api/ws` 实现仍不作为
+  iOS 聊天依赖。
+- 复验结果：`pnpm typecheck`、`pnpm contract:check`、全量 `pnpm test` 均通过，
+  当前统计为 796 tests / 796 pass。原生 Xcode 编译仍需 macOS runner。
+- 明确范围：Bot Mode 的桌面 group-round 引擎、跨连接 relay、头像/宠物生成器和
+  Routines 专用面板尚未被宣称为 iOS parity；它们只有在各自拥有 typed API、
+  原生 route/action 和回归测试后才会升级为 verified。
