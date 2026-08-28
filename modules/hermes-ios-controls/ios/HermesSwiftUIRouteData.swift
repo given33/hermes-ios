@@ -15,11 +15,22 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let modelConfirmation: HermesModelConfirmationSnapshot?
   let modelAuxiliary: HermesModelAuxiliarySnapshot
   let modelMoa: HermesModelMoaSnapshot
+  let providerOauthJSON: String?
+  let customProviderEndpointsJSON: String?
   let detectedModels: [String]
   let operation: HermesRouteOperationSnapshot?
   let logs: [HermesLogSnapshot]
   let cron: [HermesCronJobSnapshot]
+  let cronBlueprintsJSON: String?
+  let cronDeliveryTargetsJSON: String?
+  let cronRunsJSON: String?
   let skills: [HermesSkillSnapshot]
+  let toolsets: [HermesToolsetSnapshot]
+  let terminalBackendsJSON: String?
+  let computerUseJSON: String?
+  let skillHubSourcesJSON: String?
+  let learningGraphJSON: String?
+  let skillHubResultJSON: String?
   let integrations: [HermesIntegrationSnapshot]
   let installations: [HermesManagedInstallationSnapshot]
   let pairing: HermesPairingSnapshot
@@ -46,11 +57,22 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     modelConfirmation: HermesModelConfirmationSnapshot? = nil,
     modelAuxiliary: HermesModelAuxiliarySnapshot = .empty,
     modelMoa: HermesModelMoaSnapshot = .empty,
+    providerOauthJSON: String? = nil,
+    customProviderEndpointsJSON: String? = nil,
     detectedModels: [String] = [],
     operation: HermesRouteOperationSnapshot? = nil,
     logs: [HermesLogSnapshot] = [],
     cron: [HermesCronJobSnapshot] = [],
+    cronBlueprintsJSON: String? = nil,
+    cronDeliveryTargetsJSON: String? = nil,
+    cronRunsJSON: String? = nil,
     skills: [HermesSkillSnapshot] = [],
+    toolsets: [HermesToolsetSnapshot] = [],
+    terminalBackendsJSON: String? = nil,
+    computerUseJSON: String? = nil,
+    skillHubSourcesJSON: String? = nil,
+    learningGraphJSON: String? = nil,
+    skillHubResultJSON: String? = nil,
     integrations: [HermesIntegrationSnapshot] = [],
     installations: [HermesManagedInstallationSnapshot] = [],
     pairing: HermesPairingSnapshot = .empty,
@@ -76,11 +98,22 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.modelConfirmation = modelConfirmation
     self.modelAuxiliary = modelAuxiliary
     self.modelMoa = modelMoa
+    self.providerOauthJSON = providerOauthJSON
+    self.customProviderEndpointsJSON = customProviderEndpointsJSON
     self.detectedModels = detectedModels
     self.operation = operation
     self.logs = logs
     self.cron = cron
+    self.cronBlueprintsJSON = cronBlueprintsJSON
+    self.cronDeliveryTargetsJSON = cronDeliveryTargetsJSON
+    self.cronRunsJSON = cronRunsJSON
     self.skills = skills
+    self.toolsets = toolsets
+    self.terminalBackendsJSON = terminalBackendsJSON
+    self.computerUseJSON = computerUseJSON
+    self.skillHubSourcesJSON = skillHubSourcesJSON
+    self.learningGraphJSON = learningGraphJSON
+    self.skillHubResultJSON = skillHubResultJSON
     self.integrations = integrations
     self.installations = installations
     self.pairing = pairing
@@ -137,6 +170,8 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     )
     modelAuxiliary = try container.decodeIfPresent(HermesModelAuxiliarySnapshot.self, forKey: .modelAuxiliary) ?? .empty
     modelMoa = try container.decodeIfPresent(HermesModelMoaSnapshot.self, forKey: .modelMoa) ?? .empty
+    providerOauthJSON = try container.decodeIfPresent(String.self, forKey: .providerOauthJSON)
+    customProviderEndpointsJSON = try container.decodeIfPresent(String.self, forKey: .customProviderEndpointsJSON)
     detectedModels = try container.decodeIfPresent(
       [String].self,
       forKey: .detectedModels
@@ -150,7 +185,16 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       forKey: .logs
     ) ?? []
     cron = try container.decodeIfPresent([HermesCronJobSnapshot].self, forKey: .cron) ?? []
+    cronBlueprintsJSON = try container.decodeIfPresent(String.self, forKey: .cronBlueprintsJSON)
+    cronDeliveryTargetsJSON = try container.decodeIfPresent(String.self, forKey: .cronDeliveryTargetsJSON)
+    cronRunsJSON = try container.decodeIfPresent(String.self, forKey: .cronRunsJSON)
     skills = try container.decodeIfPresent([HermesSkillSnapshot].self, forKey: .skills) ?? []
+    toolsets = try container.decodeIfPresent([HermesToolsetSnapshot].self, forKey: .toolsets) ?? []
+    terminalBackendsJSON = try container.decodeIfPresent(String.self, forKey: .terminalBackendsJSON)
+    computerUseJSON = try container.decodeIfPresent(String.self, forKey: .computerUseJSON)
+    skillHubSourcesJSON = try container.decodeIfPresent(String.self, forKey: .skillHubSourcesJSON)
+    learningGraphJSON = try container.decodeIfPresent(String.self, forKey: .learningGraphJSON)
+    skillHubResultJSON = try container.decodeIfPresent(String.self, forKey: .skillHubResultJSON)
     integrations = try container.decodeIfPresent(
       [HermesIntegrationSnapshot].self,
       forKey: .integrations
@@ -838,6 +882,7 @@ struct HermesProfileSnapshot: Decodable, Equatable, Identifiable {
   let name: String
   let model: String
   let detail: String
+  let description: String?
   let botSessionId: String?
   let active: Bool
   let soul: String
@@ -908,6 +953,7 @@ struct HermesSystemSnapshot: Decodable, Equatable {
   let updateAvailable: Bool?
   let updateVersion: String?
   let updateReceipt: String?
+  let curatorPaused: Bool?
 
   static let empty = HermesSystemSnapshot(
     cpu: 0,
@@ -924,7 +970,8 @@ struct HermesSystemSnapshot: Decodable, Equatable {
     egressLabel: nil,
     updateAvailable: nil,
     updateVersion: nil,
-    updateReceipt: nil
+    updateReceipt: nil,
+    curatorPaused: nil
   )
 }
 
@@ -935,6 +982,58 @@ struct HermesMemoryProviderSnapshot: Decodable, Equatable, Identifiable {
   let detail: String
   let active: Bool
   let ready: Bool
+  let oauthAvailable: Bool
+  let oauthConnected: Bool
+  let oauthState: String
+  let configJSON: String?
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    label = try container.decode(String.self, forKey: .label)
+    status = try container.decode(String.self, forKey: .status)
+    detail = try container.decode(String.self, forKey: .detail)
+    active = try container.decode(Bool.self, forKey: .active)
+    ready = try container.decode(Bool.self, forKey: .ready)
+    oauthAvailable = try container.decodeIfPresent(Bool.self, forKey: .oauthAvailable) ?? false
+    oauthConnected = try container.decodeIfPresent(Bool.self, forKey: .oauthConnected) ?? false
+    oauthState = try container.decodeIfPresent(String.self, forKey: .oauthState) ?? ""
+    configJSON = try container.decodeIfPresent(String.self, forKey: .configJSON)
+  }
+}
+
+struct HermesToolsetSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let name: String
+  let detail: String
+  let enabled: Bool
+  let configured: Bool
+  let tools: [String]
+  /// JSON-encoded upstream provider schema. Optional for older gateways.
+  let configJSON: String?
+  let modelsJSON: String?
+  let providersJSON: String?
+  let environmentJSON: String?
+  let postSetupJSON: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case id, name, detail, enabled, configured, tools, configJSON, modelsJSON, providersJSON, environmentJSON, postSetupJSON
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    name = try container.decode(String.self, forKey: .name)
+    detail = try container.decode(String.self, forKey: .detail)
+    enabled = try container.decode(Bool.self, forKey: .enabled)
+    configured = try container.decode(Bool.self, forKey: .configured)
+    tools = try container.decode([String].self, forKey: .tools)
+    configJSON = try container.decodeIfPresent(String.self, forKey: .configJSON)
+    modelsJSON = try container.decodeIfPresent(String.self, forKey: .modelsJSON)
+    providersJSON = try container.decodeIfPresent(String.self, forKey: .providersJSON)
+    environmentJSON = try container.decodeIfPresent(String.self, forKey: .environmentJSON)
+    postSetupJSON = try container.decodeIfPresent(String.self, forKey: .postSetupJSON)
+  }
 }
 
 struct HermesMemorySnapshot: Decodable, Equatable {

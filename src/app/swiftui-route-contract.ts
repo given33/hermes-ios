@@ -21,6 +21,9 @@ export interface HermesSwiftUISessionSnapshot {
   running: boolean;
   profile?: string;
   detail?: string;
+  archived?: boolean;
+  pinned?: boolean;
+  unread?: boolean;
 }
 
 export interface HermesSwiftUISessionLineageSnapshot {
@@ -433,6 +436,7 @@ export interface HermesSwiftUIProfileSnapshot {
   name: string;
   model: string;
   detail: string;
+  description?: string;
   /** Signed placeholder used to adopt a Bot Mode profile's canonical chat. */
   botSessionId?: string;
   active: boolean;
@@ -475,6 +479,7 @@ export interface HermesSwiftUISystemSnapshot {
   updateAvailable?: boolean;
   updateVersion?: string;
   updateReceipt?: string;
+  curatorPaused?: boolean;
 }
 
 export interface HermesSwiftUISystemNodeSnapshot {
@@ -502,6 +507,27 @@ export interface HermesSwiftUIMemoryProviderSnapshot {
   detail: string;
   active: boolean;
   ready: boolean;
+  /** Whether the provider exposes the upstream browser OAuth flow. */
+  oauthAvailable?: boolean;
+  oauthConnected?: boolean;
+  oauthState?: string;
+  /** JSON-encoded declared provider schema for the native configuration sheet. */
+  configJSON?: string;
+  modelsJSON?: string;
+  providersJSON?: string;
+  environmentJSON?: string;
+  postSetupJSON?: string;
+}
+
+export interface HermesSwiftUIToolsetSnapshot {
+  id: string;
+  name: string;
+  detail: string;
+  enabled: boolean;
+  configured: boolean;
+  tools: readonly string[];
+  /** Declared upstream provider schema/config, serialized for the native detail sheet. */
+  configJSON?: string;
 }
 
 export interface HermesSwiftUIMemorySnapshot {
@@ -525,11 +551,23 @@ export interface HermesSwiftUIRouteSnapshot {
   modelConfirmation?: HermesSwiftUIModelConfirmationSnapshot;
   modelAuxiliary?: HermesSwiftUIModelAuxiliarySnapshot;
   modelMoa?: HermesSwiftUIModelMoaSnapshot;
+  providerOauthJSON?: string;
+  customProviderEndpointsJSON?: string;
   detectedModels?: readonly string[];
   operation?: HermesSwiftUIRouteOperationSnapshot;
   logs?: readonly HermesSwiftUILogSnapshot[];
   cron?: readonly HermesSwiftUICronJobSnapshot[];
+  /** JSON-encoded official cron blueprint and delivery-target catalogs. */
+  cronBlueprintsJSON?: string;
+  cronDeliveryTargetsJSON?: string;
+  cronRunsJSON?: string;
   skills?: readonly HermesSwiftUISkillSnapshot[];
+  toolsets?: readonly HermesSwiftUIToolsetSnapshot[];
+  terminalBackendsJSON?: string;
+  computerUseJSON?: string;
+  skillHubSourcesJSON?: string;
+  learningGraphJSON?: string;
+  skillHubResultJSON?: string;
   integrations?: readonly HermesSwiftUIIntegrationSnapshot[];
   installations?: readonly HermesSwiftUIManagedInstallationSnapshot[];
   pairing?: HermesSwiftUIPairingSnapshot;
@@ -562,6 +600,7 @@ const snapshotRecordArrays = [
   'logs',
   'cron',
   'skills',
+  'toolsets',
   'integrations',
   'installations',
   'kanban',

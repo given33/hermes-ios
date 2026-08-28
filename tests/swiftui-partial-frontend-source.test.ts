@@ -230,9 +230,9 @@ test('SwiftUI management pages expose the server write operations', () => {
   // once shipped a second copy whose unknown-input fallback diverged.
   assert.doesNotMatch(routeData, /function customApiMode/);
   assert.doesNotMatch(routeData, /function customReasoningEffort/);
-  assert.doesNotMatch(routes, /case \.env: return \.environment/);
-  assert.doesNotMatch(routes, /\.environmentUpsert/);
-  assert.doesNotMatch(routeData, /HERMES_SWIFTUI_ROUTE_ACTIONS\.environmentUpsert/);
+  assert.match(routes, /case \.env: return \.environment/);
+  assert.match(routes, /\.environment/);
+  assert.match(routeData, /HERMES_SWIFTUI_ROUTE_ACTIONS\.environmentSet/);
   assert.match(routeData, /api\.updateChannel/);
   assert.match(routes, /节点安装状态/);
   assert.match(routes, /data\.installations/);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Linking } from 'react-native';
 
 import { HermesApiError, type HermesApiClient } from '../api/HermesApiClient';
 import { isAlreadyDeletedRemote as isAlreadyDeletedRemoteShared } from '../api/hermes-studio';
@@ -39,6 +39,7 @@ import {
   performHermesSwiftUIRouteAction,
   createHermesSwiftUISessionsSnapshotFromConversations,
 } from './hermes-route-data';
+import { mergeRouteField } from './route-loaders/remote-metadata';
 import {
   initialRouteRefreshDelay,
   nextRouteRefreshDelay,
@@ -663,6 +664,12 @@ export function useHermesSwiftUIRouteData({
       if (typeof result === 'object' && result.detectedModels) {
         setDataJson((current) => mergeDetectedModels(current, result.detectedModels || []));
       }
+      const skillHubResultJSON = typeof result === 'object' && result !== null
+        ? result.skillHubResultJSON
+        : undefined;
+      if (typeof skillHubResultJSON === 'string' && skillHubResultJSON) {
+        setDataJson((current) => mergeRouteField(current, 'skillHubResultJSON', skillHubResultJSON));
+      }
       if (typeof result === 'object' && result.confirmRequired) {
         setDataJson((current) => mergeModelConfirmation(current, {
           id: encodeModelSelection(result.provider || '', result.model || ''),
@@ -673,6 +680,37 @@ export function useHermesSwiftUIRouteData({
         return;
       }
       const resultMessage = typeof result === 'object' ? result.message : '';
+      if (typeof result === 'object' && result.url && /^https?:\/\//i.test(result.url)) {
+        void Linking.openURL(result.url).catch(() => undefined);
+      }
+      if (typeof result === 'object' && result.flowId && event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.mcpAuth) {
+        const flowId = String(result.flowId);
+        let terminalMessage = '';
+        for (let attempt = 0; attempt < 90; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+          if (AppState.currentState !== 'active') break;
+          const flow = await api.getMcpOauthFlow(flowId).catch(() => undefined);
+          const status = typeof flow === 'object' ? String(flow?.status || '') : '';
+          if (status === 'approved') { terminalMessage = locale === 'zh' ? 'MCP OAuth 已完成' : 'MCP OAuth completed'; break; }
+          if (status === 'error') { terminalMessage = String(flow?.error || (locale === 'zh' ? 'MCP OAuth 失败' : 'MCP OAuth failed')); break; }
+        }
+        if (terminalMessage) notify(terminalMessage);
+        await reload();
+      }
+      if (typeof result === 'object' && result.oauthProvider && result.oauthSessionId && event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthStart) {
+        const provider = String(result.oauthProvider); const sessionId = String(result.oauthSessionId);
+        let terminalMessage = '';
+        for (let attempt = 0; attempt < 90; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 2_000));
+          if (AppState.currentState !== 'active') break;
+          const flow = await api.pollProviderOauth(provider, sessionId).catch(() => undefined);
+          const status = typeof flow === 'object' ? String(flow?.status || '') : '';
+          if (status === 'complete' || status === 'approved' || status === 'connected') { terminalMessage = locale === 'zh' ? 'Provider OAuth 已完成' : 'Provider OAuth completed'; break; }
+          if (status === 'error' || status === 'failed') { terminalMessage = String(flow?.error || (locale === 'zh' ? 'Provider OAuth 失败' : 'Provider OAuth failed')); break; }
+        }
+        if (terminalMessage) notify(terminalMessage);
+        await reload();
+      }
       if (modelOperation) {
         updateOperation({
           action: modelOperation,

@@ -17,8 +17,8 @@ export class HermesOperationsCloudApi {
   dumpDiagnostics(_payload: JsonRecord = {}) { return this.transport.request<JsonRecord>('/api/ops/dump', { method: 'POST' }); }
   migrateConfig(_payload: JsonRecord = {}) { return this.transport.request<JsonRecord>('/api/ops/config-migrate', { method: 'POST' }); }
   createDebugShare(payload: JsonRecord = {}) { return this.transport.json<JsonRecord>('/api/ops/debug-share', 'POST', payload); }
-  runDoctor(_payload: JsonRecord = {}) { return this.transport.request<JsonRecord>('/api/ops/doctor', { method: 'POST' }); }
-  runSecurityAudit(_payload: JsonRecord = {}) { return this.transport.request<JsonRecord>('/api/ops/security-audit', { method: 'POST' }); }
+  runDoctor(payload: JsonRecord = {}) { return this.transport.json<JsonRecord>('/api/ops/doctor', 'POST', payload); }
+  runSecurityAudit(payload: JsonRecord = {}) { return this.transport.json<JsonRecord>('/api/ops/security-audit', 'POST', payload); }
   createBackup(payload: JsonRecord = {}) { return this.transport.json<JsonRecord>('/api/ops/backup', 'POST', payload); }
   downloadBackup(archive: string) { return this.transport.download('/api/ops/backup/download', { query: { archive } }); }
   importBackup(payload: JsonRecord) { return this.transport.json<JsonRecord>('/api/ops/import', 'POST', payload); }
@@ -41,5 +41,9 @@ export class HermesOperationsCloudApi {
   setDashboardFont(font: string) { return this.transport.json<JsonRecord>('/api/dashboard/font', 'PUT', { font }); }
   getUsageAnalytics(days = 30, profile = 'default') { return this.transport.request<JsonRecord>('/api/analytics/usage', { query: { days, profile } }); }
   getModelAnalytics(days = 30, profile = 'default') { return this.transport.request<JsonRecord>('/api/analytics/models', { query: { days, profile } }); }
-  getActionStatus(name: string) { return this.transport.request<JsonRecord>(`/api/actions/${encodeURIComponent(name)}/status`); }
+  getActionStatus(name: string, lines = 200, profile = '') {
+    return this.transport.request<JsonRecord>(`/api/actions/${encodeURIComponent(name)}/status`, {
+      query: { lines: String(Math.max(1, Math.floor(lines))), profile: profile || undefined },
+    });
+  }
 }

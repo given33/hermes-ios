@@ -15,12 +15,23 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case models
   case modelAuxiliary
   case modelMoa
+  case providerOauthJSON
+  case customProviderEndpointsJSON
   case modelConfirmation
   case detectedModels
   case operation
   case logs
   case cron
+  case cronBlueprintsJSON
+  case cronDeliveryTargetsJSON
+  case cronRunsJSON
   case skills
+  case toolsets
+  case terminalBackendsJSON
+  case computerUseJSON
+  case skillHubSourcesJSON
+  case learningGraphJSON
+  case skillHubResultJSON
   case integrations
   case installations
   case pairing
@@ -82,6 +93,11 @@ enum HermesRouteAction: String, CaseIterable {
   case sessionRename = "session.rename"
   case sessionCompress = "session.compress"
   case sessionFork = "session.fork"
+  case sessionExport = "session.export"
+  case sessionArchive = "session.archive"
+  case sessionPin = "session.pin"
+  case sessionUnread = "session.unread"
+  case sessionDeleteEmpty = "session.delete-empty"
   case fileSelect = "file.select"
   case fileDelete = "file.delete"
   case fileDownload = "file.download"
@@ -93,16 +109,38 @@ enum HermesRouteAction: String, CaseIterable {
   case modelDiscover = "model.discover"
   case modelSave = "model.save"
   case modelTest = "model.test"
+  case providerOauthStart = "provider.oauth.start"
+  case providerOauthSubmit = "provider.oauth.submit"
+  case providerOauthCancel = "provider.oauth.cancel"
+  case customEndpointValidate = "provider.custom.validate"
+  case customEndpointSave = "provider.custom.save"
+  case customEndpointActivate = "provider.custom.activate"
+  case customEndpointDelete = "provider.custom.delete"
   case logsFilter = "logs.filter"
   case cronCreate = "cron.create"
   case cronToggle = "cron.toggle"
   case cronRun = "cron.run"
   case cronDelete = "cron.delete"
+  case cronBlueprintCreate = "cron.blueprint.create"
   case skillCreate = "skill.create"
   case skillToggle = "skill.toggle"
   case skillSelect = "skill.select"
   case skillView = "skill.view"
   case skillUpdate = "skill.update"
+  case skillHubUpdate = "skillhub.update"
+  case skillHubSearch = "skillhub.search"
+  case skillHubPreview = "skillhub.preview"
+  case skillHubScan = "skillhub.scan"
+  case skillHubInstall = "skillhub.install"
+  case skillHubUninstall = "skillhub.uninstall"
+  case learningGraphRefresh = "learning.graph.refresh"
+  case toolsetToggle = "toolset.toggle"
+  case toolsetProvider = "toolset.provider"
+  case toolsetModel = "toolset.model"
+  case toolsetEnvironment = "toolset.environment"
+  case toolsetPostSetup = "toolset.post-setup"
+  case terminalBackend = "terminal.backend"
+  case computerUseGrant = "computer-use.grant"
   case installationRollback = "installation.rollback"
   case pluginRescan = "plugin.rescan"
   case pluginInstall = "plugin.install"
@@ -112,8 +150,11 @@ enum HermesRouteAction: String, CaseIterable {
   case integrationCreate = "integration.create"
   case integrationUpdate = "integration.update"
   case integrationToggle = "integration.toggle"
+  case integrationTest = "integration.test"
   case integrationDelete = "integration.delete"
+  case webhooksEnable = "webhooks.enable"
   case mcpTest = "mcp.test"
+  case mcpAuth = "mcp.auth"
   case mcpCatalogInstall = "mcp.catalog.install"
   case pairingApprove = "pairing.approve"
   case pairingRevoke = "pairing.revoke"
@@ -121,11 +162,19 @@ enum HermesRouteAction: String, CaseIterable {
   case achievementsRescan = "achievements.rescan"
   case profileCreate = "profile.create"
   case profileUpdate = "profile.update"
+  case profileRename = "profile.rename"
+  case profileDescription = "profile.description"
+  case profileModel = "profile.model"
+  case profileAutoDescribe = "profile.auto-describe"
+  case profileSetup = "profile.setup"
+  case profileExport = "profile.export"
   case profileActivate = "profile.activate"
   case profileDelete = "profile.delete"
   case configUpdate = "config.update"
   case configImport = "config.import"
   case environmentDelete = "environment.delete"
+  case environmentSet = "environment.set"
+  case environmentReveal = "environment.reveal"
   case systemRestart = "system.restart"
   case systemRecover = "system.recover"
   case systemUpdate = "system.update"
@@ -133,7 +182,18 @@ enum HermesRouteAction: String, CaseIterable {
   case systemStop = "system.stop"
   case systemDrain = "system.drain"
   case systemUpdateCheck = "system.update.check"
+  case systemDoctor = "system.doctor"
+  case systemSecurityAudit = "system.security-audit"
+  case systemBackup = "system.backup"
+  case systemDebugShare = "system.debug-share"
+  case systemDiagnostics = "system.diagnostics"
+  case systemCheckpoints = "system.checkpoints"
+  case systemCheckpointPrune = "system.checkpoints.prune"
+  case systemCuratorRun = "system.curator.run"
+  case systemCuratorPause = "system.curator.pause"
   case memoryProvider = "memory.provider"
+  case memoryOAuthStart = "memory.oauth.start"
+  case memoryConfigUpdate = "memory.config.update"
   case memoryReset = "memory.reset"
   case kanbanCreate = "kanban.create"
   case kanbanUpdate = "kanban.update"

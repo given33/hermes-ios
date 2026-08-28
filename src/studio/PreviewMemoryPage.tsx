@@ -1,6 +1,7 @@
 import { FileText, Pencil, RefreshCw, Smile, UserRound } from 'lucide-react-native';
 import { memo, useCallback, useEffect, useState, type ComponentType } from 'react';
 import {
+  Linking,
   StyleSheet,
   TextInput,
   View,
@@ -65,6 +66,7 @@ export function MemoryPreviewPage({
   fixtureMode?: boolean;
   profile: string;
 }) {
+  const { tokens } = useTheme();
   const [content, setContent] = useState<StudioMemoryContent>(
     fixtureMode ? { ...PREVIEW_MEMORY } : EMPTY_MEMORY,
   );
@@ -72,6 +74,10 @@ export function MemoryPreviewPage({
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(Boolean(client));
   const [saving, setSaving] = useState(false);
+  const [providerStatus, setProviderStatus] = useState<unknown>(null);
+  const [providerBusy, setProviderBusy] = useState('');
+  const [providerConfigID, setProviderConfigID] = useState('');
+  const [providerConfigDraft, setProviderConfigDraft] = useState('');
 
   const load = useCallback(async () => {
     if (!client) {
@@ -80,13 +86,68 @@ export function MemoryPreviewPage({
     }
     setLoading(true);
     try {
-      setContent(await hermesCloudApiFor(client).getStudioMemory(profile));
+      const api = hermesCloudApiFor(client);
+      const [nextContent, nextProviders] = await Promise.all([
+        api.getStudioMemory(profile),
+        api.getMemoryStatus(profile).catch(() => undefined),
+      ]);
+      setContent(nextContent);
+      setProviderStatus(nextProviders);
     } catch (error) {
       notify(memoryError(error, locale));
     } finally {
       setLoading(false);
     }
   }, [client, fixtureMode, locale, notify, profile]);
+
+  const mutateProvider = useCallback(async (name: string, operation: () => Promise<unknown>) => {
+    if (!client || !name.trim()) return;
+    setProviderBusy(name);
+    try {
+      const result = await operation();
+      const record = isRecord(result) ? result : {};
+      const url = stringValue(record.authorization_url) || stringValue(record.url);
+      if (url && /^https?:\/\//i.test(url)) {
+        void Linking.openURL(url).catch(() => undefined);
+      }
+      notify(locale === 'zh' ? 'Memory Provider 已更新' : 'Memory provider updated');
+      await load();
+    } catch (error) {
+      notify(memoryError(error, locale));
+    } finally {
+      setProviderBusy('');
+    }
+  }, [client, load, locale, notify]);
+
+  const openProviderConfig = useCallback(async (name: string) => {
+    if (!client || !name.trim()) return;
+    setProviderBusy(name);
+    try {
+      const config = await hermesCloudApiFor(client).getMemoryProviderConfig(name, profile, 'declared');
+      setProviderConfigID(name);
+      setProviderConfigDraft(JSON.stringify(config, null, 2));
+    } catch (error) {
+      notify(memoryError(error, locale));
+    } finally {
+      setProviderBusy('');
+    }
+  }, [client, locale, notify, profile]);
+
+  const saveProviderConfig = useCallback(async () => {
+    if (!client || !providerConfigID) return;
+    const parsed = parseJsonRecord(providerConfigDraft);
+    if (!parsed) {
+      notify(locale === 'zh' ? 'Provider 配置必须是 JSON 对象' : 'Provider configuration must be a JSON object');
+      return;
+    }
+    await mutateProvider(providerConfigID, () => hermesCloudApiFor(client).updateMemoryProviderConfig(
+      providerConfigID,
+      parsed,
+      profile,
+      'declared',
+    ));
+    setProviderConfigID('');
+  }, [client, locale, mutateProvider, profile, providerConfigDraft, providerConfigID, notify]);
 
   useEffect(() => {
     void load();
@@ -144,20 +205,122 @@ export function MemoryPreviewPage({
       {loading ? (
         <MemorySkeleton />
       ) : (
-        <MemorySections
-          content={content}
-          draft={draft}
-          editing={editing}
-          locale={locale}
-          onCancel={cancelEdit}
-          onChangeDraft={setDraft}
-          onEdit={beginEdit}
-          onSave={requestSave}
-          saving={saving}
-        />
+        <>
+          <MemorySections
+            content={content}
+            draft={draft}
+            editing={editing}
+            locale={locale}
+            onCancel={cancelEdit}
+            onChangeDraft={setDraft}
+            onEdit={beginEdit}
+            onSave={requestSave}
+            saving={saving}
+          />
+          <MemoryProviderPanel
+            locale={locale}
+            onConfigure={openProviderConfig}
+            onOAuth={(name) => mutateProvider(name, () => hermesCloudApiFor(client!).startMemoryProviderOAuth(name, profile))}
+            onSelect={(name) => mutateProvider(name, () => hermesCloudApiFor(client!).setMemoryProvider(name, profile))}
+            providerBusy={providerBusy}
+            providerStatus={providerStatus}
+          />
+          {providerConfigID ? (
+            <View style={[styles.providerConfig, { borderColor: tokens.colors.border }]}>
+              <PreviewText variant="heading">{providerConfigID}</PreviewText>
+              <TextInput
+                multiline
+                onChangeText={setProviderConfigDraft}
+                style={[styles.configInput, { backgroundColor: tokens.colors.background, borderColor: tokens.colors.border, color: tokens.colors.foreground }]}
+                textAlignVertical="top"
+                value={providerConfigDraft}
+              />
+              <View style={styles.actions}>
+                <NativeButton onPress={() => setProviderConfigID('')} size="sm">{locale === 'zh' ? '取消' : 'Cancel'}</NativeButton>
+                <NativeButton onPress={() => { void saveProviderConfig(); }} size="sm">{locale === 'zh' ? '保存 Provider' : 'Save provider'}</NativeButton>
+              </View>
+            </View>
+          ) : null}
+        </>
       )}
     </PreviewPage>
   );
+}
+
+function MemoryProviderPanel({
+  locale,
+  onConfigure,
+  onOAuth,
+  onSelect,
+  providerBusy,
+  providerStatus,
+}: {
+  locale: 'en' | 'zh';
+  onConfigure(name: string): void;
+  onOAuth(name: string): void;
+  onSelect(name: string): void;
+  providerBusy: string;
+  providerStatus: unknown;
+}) {
+  const { tokens } = useTheme();
+  const providers = memoryProviderRows(providerStatus);
+  if (!providers.length) return null;
+  return (
+    <View style={[styles.providerPanel, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }]}>
+      <PreviewText variant="heading">{locale === 'zh' ? 'Memory Provider' : 'Memory providers'}</PreviewText>
+      <PreviewText variant="muted">
+        {locale === 'zh' ? '当前 Profile 使用 Hermes 官方 Provider 状态与配置接口。' : 'Uses Hermes official provider status and configuration APIs for the active Profile.'}
+      </PreviewText>
+      {providers.map((provider) => (
+        <View key={provider.name} style={styles.providerRow}>
+          <View style={styles.grow}>
+            <PreviewText>{provider.name}</PreviewText>
+            <PreviewText variant="muted">{provider.status || provider.description || (provider.available ? 'ready' : 'unavailable')}</PreviewText>
+          </View>
+          <NativeButton disabled={providerBusy !== ''} onPress={() => onSelect(provider.name)} size="sm">
+            {locale === 'zh' ? '使用' : 'Use'}
+          </NativeButton>
+          <NativeButton disabled={providerBusy !== ''} ghost onPress={() => onConfigure(provider.name)} size="sm">
+            {locale === 'zh' ? '配置' : 'Config'}
+          </NativeButton>
+          <NativeButton disabled={providerBusy !== ''} ghost onPress={() => onOAuth(provider.name)} size="sm">
+            {locale === 'zh' ? 'OAuth' : 'OAuth'}
+          </NativeButton>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function memoryProviderRows(value: unknown): Array<{ available: boolean; description: string; name: string; status: string }> {
+  if (!isRecord(value) || !Array.isArray(value.providers)) return [];
+  return value.providers.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const name = stringValue(item.name) || stringValue(item.provider);
+    return name ? [{
+      available: item.available === true,
+      description: stringValue(item.description),
+      name,
+      status: stringValue(item.status),
+    }] : [];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 // Ambient placeholder while the server memory loads: same card geometry as
@@ -358,8 +521,13 @@ const styles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: 8, justifyContent: 'flex-end' },
   body: { flex: 1, minHeight: 250, padding: 16 },
   bodyText: { lineHeight: 24 },
+  configInput: { borderRadius: 6, borderWidth: 1, minHeight: 180, padding: 12 },
   editor: { flex: 1, gap: 10, minHeight: 300, padding: 14 },
+  grow: { flex: 1, minWidth: 0 },
   input: { borderRadius: 6, borderWidth: 1, flex: 1, fontSize: 13, lineHeight: 21, minHeight: 240, padding: 12 },
+  providerConfig: { borderRadius: 7, borderWidth: 1, gap: 10, marginTop: 14, padding: 14 },
+  providerPanel: { borderRadius: 7, borderWidth: 1, gap: 10, marginTop: 16, padding: 14 },
+  providerRow: { alignItems: 'center', flexDirection: 'row', gap: 6 },
   section: { borderRadius: 7, borderWidth: 1, flex: 1, minHeight: 360, minWidth: 0, overflow: 'hidden' },
   sectionHeader: { alignItems: 'center', borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', justifyContent: 'space-between', minHeight: 44, paddingHorizontal: 12 },
   sectionTitle: { alignItems: 'center', flex: 1, flexDirection: 'row', gap: 8, minWidth: 0 },

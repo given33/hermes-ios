@@ -151,6 +151,30 @@ test('memory methods keep their wire contract and normalize server mtimes', asyn
   assert.notEqual(loaded.memoryMtime, '');
 });
 
+test('memory provider OAuth follows the upstream browser-flow contract', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.startMemoryProviderOAuth('honcho', 'hk-worker');
+  await api.getMemoryProviderOAuthStatus('honcho', 'hk-worker');
+  await api.getMemoryStatus('hk-worker');
+  await api.setMemoryProvider('honcho', 'hk-worker');
+  await api.resetMemory('memory', 'hk-worker');
+
+  assert.deepEqual(
+    calls.map(({ path, options }) => [path, options.method ?? 'GET', options.profile]),
+    [
+      ['/api/memory/providers/honcho/oauth/start', 'POST', 'hk-worker'],
+      ['/api/memory/providers/honcho/oauth/status', 'GET', 'hk-worker'],
+      ['/api/memory', 'GET', 'hk-worker'],
+      ['/api/memory/provider', 'PUT', 'hk-worker'],
+      ['/api/memory/reset', 'POST', 'hk-worker'],
+    ],
+  );
+  assert.deepEqual(parsedBody(calls[0]), {});
+  assert.deepEqual(parsedBody(calls[3]), { provider: 'honcho' });
+  assert.deepEqual(parsedBody(calls[4]), { target: 'memory' });
+});
+
 test('voice transcription stays authenticated on the Hermes origin', async () => {
   const { api, calls } = recordingApi();
 
@@ -695,6 +719,9 @@ test('session, analytics, and log methods keep their wire contract through cloud
   await api.getSession('session one', 'ops');
   await api.getSessionMessages('session one', 'ops');
   await api.renameSession('session one', 'Renamed', 'ops');
+  await api.setSessionArchived('session one', true, 'ops');
+  await api.setSessionPinned('session one', true, 'ops');
+  await api.setSessionUnread('session one', false, 'ops');
   await api.deleteSession('session one', 'ops');
   await api.getAnalytics(14, 'ops');
   await api.getLogs(20, 'ERROR', 'gateway');
@@ -708,6 +735,9 @@ test('session, analytics, and log methods keep their wire contract through cloud
       ['/api/sessions/session%20one', 'GET'],
       ['/api/sessions/session%20one/messages', 'GET'],
       ['/api/sessions/session%20one', 'PATCH'],
+      ['/api/sessions/session%20one', 'PATCH'],
+      ['/api/sessions/session%20one', 'PATCH'],
+      ['/api/sessions/session%20one', 'PATCH'],
       ['/api/sessions/session%20one', 'DELETE'],
       ['/api/analytics/usage', 'GET'],
       ['/api/analytics/models', 'GET'],
@@ -715,7 +745,10 @@ test('session, analytics, and log methods keep their wire contract through cloud
     ],
   );
   assert.deepEqual(parsedBody(calls[5]), { profile: 'ops', title: 'Renamed' });
-  assert.deepEqual(calls[9].options.query, {
+  assert.deepEqual(parsedBody(calls[6]), { archived: true, profile: 'ops' });
+  assert.deepEqual(parsedBody(calls[7]), { pinned: true, profile: 'ops' });
+  assert.deepEqual(parsedBody(calls[8]), { profile: 'ops', unread: false });
+  assert.deepEqual(calls[12].options.query, {
     component: 'gateway',
     level: 'ERROR',
     lines: 20,
@@ -741,6 +774,7 @@ test('management methods keep their wire contract through cloud/management', asy
   await api.getWebhooks();
   await api.setWebhookEnabled('hook one', false);
   await api.getProfiles();
+  await api.renameProfile('worker one', 'worker hk');
   await api.getConfig('ops');
   await api.setEnvironmentVariable('KEY', 'value', 'ops');
   await api.getSystem();
@@ -758,6 +792,7 @@ test('management methods keep their wire contract through cloud/management', asy
       ['/api/webhooks/hook%20one/enabled', 'PUT'],
       ['/api/profiles', 'GET'],
       ['/api/profiles/active', 'GET'],
+      ['/api/profiles/worker%20one', 'PATCH'],
       ['/api/config', 'GET'],
       ['/api/config/defaults', 'GET'],
       ['/api/config/schema', 'GET'],
@@ -769,7 +804,7 @@ test('management methods keep their wire contract through cloud/management', asy
     ],
   );
   assert.deepEqual(parsedBody(calls[4]), { enabled: true, profile: 'ops' });
-  assert.deepEqual(parsedBody(calls[16]), { node_id: 'dbb3' });
+  assert.deepEqual(parsedBody(calls[17]), { node_id: 'dbb3' });
 });
 
 test('kanban and collaboration methods keep their wire contract through cloud/collaboration', async () => {
@@ -922,4 +957,57 @@ test('the extended iOS surface reaches upstream system, memory, model, MCP, Git,
     profile: 'hk-worker',
     yaml_text: 'model:\n  default: test',
   });
+});
+
+test('toolset, SkillHub, Learning, and session export calls keep official wire paths', async () => {
+  const { api, calls } = recordingApi();
+  await api.getToolsetConfig('web', 'hk-worker');
+  await api.getToolsetModels('image_gen', undefined, 'hk-worker');
+  await api.getToolsetProviders('web', 'hk-worker');
+  await api.setToolsetProvider('web', 'ddgs', 'search', 'hk-worker');
+  await api.saveToolsetEnvironment('web', { DDGS_API_KEY: 'redacted' }, 'hk-worker');
+  await api.getSkillHubSources('hk-worker');
+  await api.getLearningGraph('hk-worker');
+  await api.exportSession('session-1', 'hk-worker');
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/tools/toolsets/web/config', 'GET'],
+    ['/api/tools/toolsets/image_gen/models', 'GET'],
+    ['/api/tools/toolsets/web/provider', 'GET'],
+    ['/api/tools/toolsets/web/provider', 'PUT'],
+    ['/api/tools/toolsets/web/env', 'PUT'],
+    ['/api/skills/hub/sources', 'GET'],
+    ['/api/learning/graph', 'GET'],
+    ['/api/sessions/session-1/export', 'GET'],
+  ]);
+  assert.equal(calls[0].options.profile, 'hk-worker');
+  assert.equal(calls[1].options.query?.profile, 'hk-worker');
+  assert.deepEqual(parsedBody(calls[3]), { capability: 'search', profile: 'hk-worker', provider: 'ddgs' });
+});
+
+test('provider OAuth and custom endpoint controls keep official wire paths', async () => {
+  const { api, calls } = recordingApi();
+  await api.getProviderOauth();
+  await api.startProviderOauth('openai', { device: 'ios' });
+  await api.submitProviderOauth('openai', { session_id: 'oauth-1', code: '1234' });
+  await api.pollProviderOauth('openai', 'oauth-1');
+  await api.cancelProviderOauth('oauth-1');
+  await api.getCustomProviderEndpoints('hk-worker');
+  await api.validateCustomProviderEndpoint({ id: 'edge', base_url: 'https://edge.example/v1' });
+  await api.saveCustomProviderEndpoint({ id: 'edge', base_url: 'https://edge.example/v1' }, 'hk-worker');
+  await api.activateCustomProviderEndpoint('edge', 'hk-worker');
+  await api.deleteCustomProviderEndpoint('edge', 'hk-worker');
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/providers/oauth', 'GET'],
+    ['/api/providers/oauth/openai/start', 'POST'],
+    ['/api/providers/oauth/openai/submit', 'POST'],
+    ['/api/providers/oauth/openai/poll/oauth-1', 'GET'],
+    ['/api/providers/oauth/sessions/oauth-1', 'DELETE'],
+    ['/api/providers/custom-endpoints', 'GET'],
+    ['/api/providers/custom-endpoints/validate', 'POST'],
+    ['/api/providers/custom-endpoints', 'POST'],
+    ['/api/providers/custom-endpoints/edge/activate', 'POST'],
+    ['/api/providers/custom-endpoints/edge', 'DELETE'],
+  ]);
+  assert.equal(calls[5].options.profile, 'hk-worker');
+  assert.deepEqual(parsedBody(calls[2]), { code: '1234', session_id: 'oauth-1' });
 });

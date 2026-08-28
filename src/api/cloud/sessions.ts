@@ -81,6 +81,24 @@ export class HermesSessionsCloudApi {
     );
   }
 
+  setSessionArchived(id: string, archived: boolean, profile = 'default') {
+    return this.transport.json<{ ok: boolean }>(
+      `/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { archived, profile },
+    );
+  }
+
+  setSessionPinned(id: string, pinned: boolean, profile = 'default') {
+    return this.transport.json<{ ok: boolean }>(
+      `/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { pinned, profile },
+    );
+  }
+
+  setSessionUnread(id: string, unread: boolean, profile = 'default') {
+    return this.transport.json<{ ok: boolean }>(
+      `/api/sessions/${encodeURIComponent(id)}`, 'PATCH', { unread, profile },
+    );
+  }
+
   deleteSession(id: string, profile = 'default') {
     return this.transport.request<{ ok: boolean }>(
       `/api/sessions/${encodeURIComponent(id)}`,

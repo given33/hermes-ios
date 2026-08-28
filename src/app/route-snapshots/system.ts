@@ -66,6 +66,7 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
   const egress = isRecord(root.egress) ? root.egress : {};
   const updateCheck = isRecord(root.updateCheck) ? root.updateCheck : {};
   const updateReceipt = isRecord(root.updateReceipt) ? root.updateReceipt : {};
+  const curator = isRecord(root.curator) ? root.curator : {};
   return {
     cpu: primaryNode?.cpu ?? numberValue(stats.cpu_percent ?? stats.cpu),
     memory: primaryNode?.memory ?? numberValue(stats.memory_percent ?? memory.percent),
@@ -107,6 +108,9 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
       || stringValue(updateCheck.latestVersion) || undefined,
     updateReceipt: stringValue(updateReceipt.status) || stringValue(updateReceipt.message)
       || undefined,
+    curatorPaused: typeof curator.paused === 'boolean'
+      ? curator.paused
+      : typeof curator.is_paused === 'boolean' ? curator.is_paused : undefined,
   };
 }
 

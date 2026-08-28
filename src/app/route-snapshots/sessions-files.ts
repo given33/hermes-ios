@@ -39,6 +39,9 @@ export function sessionsSnapshot(
       date: formatTimestamp(session.last_active || session.started_at),
       running: session.is_active,
       profile: session.profile?.trim() || undefined,
+      archived: session.archived,
+      pinned: session.pinned,
+      unread: session.unread,
       detail: localizer.choose(
         `${session.message_count} 条消息 · ${session.tool_call_count} 次工具调用`,
         `${session.message_count} messages · ${session.tool_call_count} tool calls`,

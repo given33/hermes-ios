@@ -52,6 +52,8 @@ struct HermesRouteContent: View {
         models: data.models,
         auxiliary: data.modelAuxiliary,
         moa: data.modelMoa,
+        providerOauthJSON: data.providerOauthJSON,
+        customProviderEndpointsJSON: data.customProviderEndpointsJSON,
         confirmation: data.modelConfirmation,
         operation: data.operation,
         onAction: onAction
@@ -577,12 +579,18 @@ private enum HermesRemoteEditor: String, Identifiable {
   case webhooks
   case pairing
   case profiles
+  case profileDescription
+  case profileModel
   case soul
   case skill
   case kanban
   case channel
   case config
   case plugin
+  case environment
+  case toolsetProvider
+  case toolsetModel
+  case toolsetEnvironment
 
   var id: String { rawValue }
 }
@@ -592,6 +600,8 @@ private struct HermesMemoryPage: View {
   let data: HermesMemorySnapshot
   let chinese: Bool
   let onAction: HermesRouteActionSink
+  @State private var configProviderID = ""
+  @State private var configDraft = ""
 
   var body: some View {
     HermesPage(subtitle: chinese ? "记忆 provider 与本地记忆文件" : "Memory providers and local memory files") {
@@ -612,21 +622,49 @@ private struct HermesMemoryPage: View {
       if !data.providers.isEmpty {
         Section(chinese ? "Providers" : "Providers") {
           ForEach(data.providers) { provider in
-            Button {
-              onAction(.memoryProvider, HermesRouteActionPayload(route: "memory", id: provider.id))
-            } label: {
-              HStack(spacing: 10) {
-                Image(systemName: provider.active ? "checkmark.circle.fill" : "circle")
-                  .foregroundStyle(provider.ready ? appearance.palette.success : appearance.palette.tertiary)
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(provider.label).font(HermesFonts.bodyBold(14))
-                  if !provider.detail.isEmpty { Text(provider.detail).font(HermesFonts.body(11)).foregroundStyle(appearance.palette.secondary) }
+            HStack(spacing: 10) {
+              Button {
+                onAction(.memoryProvider, HermesRouteActionPayload(route: "memory", id: provider.id))
+              } label: {
+                HStack(spacing: 10) {
+                  Image(systemName: provider.active ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(provider.ready ? appearance.palette.success : appearance.palette.tertiary)
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(provider.label).font(HermesFonts.bodyBold(14))
+                    if !provider.detail.isEmpty { Text(provider.detail).font(HermesFonts.body(11)).foregroundStyle(appearance.palette.secondary) }
+                  }
                 }
-                Spacer()
-                HermesStatusPill(text: provider.status.isEmpty ? (provider.ready ? "ready" : "setup") : provider.status)
               }
-            }.buttonStyle(.plain)
-          }
+              .buttonStyle(.plain)
+              Spacer(minLength: 6)
+              if provider.oauthAvailable == true && provider.oauthConnected != true {
+                if provider.oauthState == "pending" {
+                  ProgressView().controlSize(.small)
+                    .accessibilityLabel(chinese ? "等待 OAuth 授权" : "Waiting for OAuth authorization")
+                } else {
+                  Button {
+                    onAction(.memoryOAuthStart, HermesRouteActionPayload(route: "memory", id: provider.id))
+                  } label: {
+                    Label(chinese ? "连接" : "Connect", systemImage: "person.badge.key")
+                  }
+                  .buttonStyle(.borderedProminent)
+                  .controlSize(.small)
+                }
+              } else if provider.oauthConnected == true {
+                HermesStatusPill(text: chinese ? "已连接" : "Connected", color: appearance.palette.success)
+              }
+              HermesStatusPill(text: provider.status.isEmpty ? (provider.ready ? "ready" : "setup") : provider.status)
+              if let configJSON = provider.configJSON, !configJSON.isEmpty {
+                Button {
+                  configProviderID = provider.id
+                  configDraft = configJSON
+                } label: {
+                  Image(systemName: "gearshape")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(chinese ? "配置记忆 Provider" : "Configure memory provider")
+              }
+            }
         }
       }
       HStack {
@@ -639,6 +677,68 @@ private struct HermesMemoryPage: View {
         } label: { Label(chinese ? "刷新" : "Refresh", systemImage: "arrow.clockwise") }
       }
     }
+    .task(id: data.providers.map { "\($0.id):\($0.oauthState)" }.joined(separator: ",")) {
+      guard data.providers.contains(where: { $0.oauthState == "pending" }) else { return }
+      while !Task.isCancelled {
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        guard !Task.isCancelled else { return }
+        onAction(.refresh, HermesRouteActionPayload(route: "memory"))
+      }
+    }
+    .sheet(isPresented: Binding(
+      get: { !configProviderID.isEmpty },
+      set: { if !$0 { configProviderID = "" } }
+    )) {
+      HermesMemoryConfigSheet(
+        provider: configProviderID,
+        chinese: chinese,
+        draft: $configDraft,
+        onCancel: { configProviderID = "" },
+        onSave: {
+          let id = configProviderID
+          let json = configDraft
+          configProviderID = ""
+          onAction(.memoryConfigUpdate, HermesRouteActionPayload(route: "memory", id: id, detail: json))
+        }
+      )
+    }
+  }
+}
+
+private struct HermesMemoryConfigSheet: View {
+  let provider: String
+  let chinese: Bool
+  @Binding var draft: String
+  let onCancel: () -> Void
+  let onSave: () -> Void
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          Text(chinese
+            ? "这些字段来自 Hermes 官方 declared provider schema。保存时会通过 /api/memory/providers/<provider>/config 写回当前 Profile。"
+            : "These fields come from Hermes' declared provider schema and are saved through the official provider config API for the active Profile.")
+            .font(HermesFonts.body(12))
+            .foregroundStyle(.secondary)
+          TextEditor(text: $draft)
+            .font(HermesFonts.mono(12))
+            .frame(minHeight: 320)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+        } header: {
+          Text(provider)
+        }
+      }
+      .navigationTitle(chinese ? "Provider 配置" : "Provider configuration")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button(chinese ? "取消" : "Cancel", action: onCancel) }
+        ToolbarItem(placement: .confirmationAction) { Button(chinese ? "保存" : "Save", action: onSave) }
+      }
+    }
+    .presentationDetents([.large])
+    .presentationDragIndicator(.visible)
   }
 }
 
@@ -660,6 +760,14 @@ private struct HermesRemoteRoutePage: View {
   @State private var importingConfiguration = false
   @State private var requestedSkillID = ""
   @State private var rollbackInstallationID = ""
+  @State private var showingToolsetConfig = false
+  @State private var toolsetConfigName = ""
+  @State private var toolsetConfigJSON = ""
+  @State private var toolsetModelsJSON = ""
+  @State private var toolsetProvidersJSON = ""
+  @State private var skillHubQuery = ""
+  @State private var skillHubIdentifier = ""
+  @State private var cronBlueprintValues = "{}"
 
   var body: some View {
     routeBody
@@ -688,6 +796,52 @@ private struct HermesRemoteRoutePage: View {
           onSave: { saveEditor(kind) }
         )
         .environmentObject(appearance)
+      }
+      .sheet(isPresented: $showingToolsetConfig) {
+        NavigationStack {
+          Form {
+            Section(chinese ? "上游工具集配置" : "Upstream toolset configuration") {
+              Text(toolsetConfigName)
+                .font(HermesFonts.bodyBold(15))
+              Text(chinese
+                ? "此内容来自 Hermes 官方 ToolsetConfig 接口。可在桌面端同一配置面板中修改凭据；iOS 展示经过脱敏的声明式配置，避免在日志或 URL 中泄露密钥。"
+                : "Loaded from Hermes' official ToolsetConfig endpoint. Edit credentials in the same upstream configuration panel; iOS renders the declared, redacted schema without putting secrets in logs or URLs.")
+                .font(HermesFonts.body(12))
+                .foregroundStyle(appearance.palette.secondary)
+              ScrollView(.horizontal) {
+                Text(toolsetConfigJSON)
+                  .font(HermesFonts.mono(11))
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+              }
+              if !toolsetModelsJSON.isEmpty {
+                Text(chinese ? "官方模型目录" : "Official model catalog")
+                  .font(HermesFonts.bodyBold(12))
+                Text(toolsetModelsJSON)
+                  .font(HermesFonts.mono(10))
+                  .textSelection(.enabled)
+              }
+              if !toolsetProvidersJSON.isEmpty {
+                Text(chinese ? "官方 Provider 目录" : "Official provider catalog")
+                  .font(HermesFonts.bodyBold(12))
+                Text(toolsetProvidersJSON)
+                  .font(HermesFonts.mono(10))
+                  .textSelection(.enabled)
+              }
+            }
+          }
+          .scrollContentBackground(.hidden)
+          .background(appearance.palette.background)
+          .navigationTitle(chinese ? "工具集详情" : "Toolset details")
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .confirmationAction) {
+              Button(chinese ? "完成" : "Done") { showingToolsetConfig = false }
+            }
+          }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
       }
       .onChange(of: data.skills) { _, skills in
         guard !requestedSkillID.isEmpty,
@@ -725,7 +879,48 @@ private struct HermesRemoteRoutePage: View {
   @ViewBuilder private var routeBody: some View {
     switch route {
     case .cron:
-      List(data.cron) { job in
+      List {
+        if let catalog = data.cronBlueprintsJSON, !catalog.isEmpty {
+          Section(chinese ? "官方自动化蓝图" : "Official automation blueprints") {
+            Text(catalog)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+              .lineLimit(6)
+            ForEach(cronBlueprintKeys, id: \.self) { key in
+              VStack(alignment: .leading, spacing: 5) {
+                Text(key).font(HermesFonts.bodyBold(13))
+                TextEditor(text: $cronBlueprintValues)
+                  .font(HermesFonts.mono(10)).frame(minHeight: 55)
+                  .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Button {
+                  onAction(.cronBlueprintCreate, HermesRouteActionPayload(route: "cron", id: key, fields: ["values": cronBlueprintValues]))
+                } label: {
+                  Label(chinese ? "从此蓝图创建" : "Create from blueprint", systemImage: "wand.and.stars")
+                }
+              }
+            }
+          }
+        }
+        if let targets = data.cronDeliveryTargetsJSON, !targets.isEmpty {
+          Section(chinese ? "投递目标" : "Delivery targets") {
+            Text(targets)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+              .lineLimit(4)
+          }
+        }
+        if let runs = data.cronRunsJSON, !runs.isEmpty {
+          Section(chinese ? "运行历史" : "Run history") {
+            Text(runs)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+              .lineLimit(14)
+          }
+        }
+        ForEach(data.cron) { job in
         HermesRemoteRow(icon: job.enabled ? "clock.arrow.circlepath" : "pause.circle", title: job.name, detail: "\(job.schedule) · \(job.lastRun)", tint: job.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
           Button {
             onAction(.cronToggle, HermesRouteActionPayload(route: "cron", id: job.id, enabled: !job.enabled))
@@ -743,11 +938,76 @@ private struct HermesRemoteRoutePage: View {
           } label: { Label(chinese ? "删除" : "Delete", systemImage: "trash") }
         }
       }
+      }
       .hermesListStyle()
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "cron")) }
     case .skills:
       List {
         installationSection
+        if let sources = data.skillHubSourcesJSON, !sources.isEmpty {
+          Section(chinese ? "SkillHub 来源" : "SkillHub sources") {
+            Text(sources)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+              .lineLimit(6)
+            Button {
+              onAction(.skillHubUpdate, HermesRouteActionPayload(route: "skills"))
+            } label: {
+              Label(chinese ? "更新 SkillHub" : "Update SkillHub", systemImage: "arrow.clockwise")
+            }
+          }
+        }
+        if let graph = data.learningGraphJSON, !graph.isEmpty {
+          Section(chinese ? "Learning 图谱" : "Learning graph") {
+            Text(graph)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+              .lineLimit(8)
+            Button {
+              onAction(.learningGraphRefresh, HermesRouteActionPayload(route: "skills"))
+            } label: {
+              Label(chinese ? "刷新学习图谱" : "Refresh learning graph", systemImage: "arrow.clockwise")
+            }
+          }
+        }
+        if let result = data.skillHubResultJSON, !result.isEmpty {
+          Section(chinese ? "SkillHub 结果" : "SkillHub result") {
+            Text(result)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+              .lineLimit(12)
+          }
+        }
+        Section(chinese ? "SkillHub 浏览与安装" : "Browse and install from SkillHub") {
+          TextField(chinese ? "搜索关键词" : "Search query", text: $skillHubQuery)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+          TextField(chinese ? "标识符（预览/扫描/安装）" : "Identifier (preview / scan / install)", text: $skillHubIdentifier)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+          HStack {
+            Button {
+              onAction(.skillHubSearch, HermesRouteActionPayload(route: "skills", value: skillHubQuery, fields: ["source": "all", "limit": "20"]))
+            } label: { Label(chinese ? "搜索" : "Search", systemImage: "magnifyingglass") }
+            .buttonStyle(.bordered)
+            Button {
+              onAction(.skillHubPreview, HermesRouteActionPayload(route: "skills", value: skillHubIdentifier))
+            } label: { Label(chinese ? "预览" : "Preview", systemImage: "doc.text.magnifyingglass") }
+            .buttonStyle(.bordered)
+            Button {
+              onAction(.skillHubScan, HermesRouteActionPayload(route: "skills", value: skillHubIdentifier))
+            } label: { Label(chinese ? "扫描" : "Scan", systemImage: "checkmark.shield") }
+            .buttonStyle(.bordered)
+          }
+          Button {
+            onAction(.skillHubInstall, HermesRouteActionPayload(route: "skills", value: skillHubIdentifier))
+          } label: { Label(chinese ? "安装 Skill" : "Install Skill", systemImage: "arrow.down.circle") }
+          .buttonStyle(.borderedProminent)
+          .disabled(skillHubIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
         Section(chinese ? "已安装 Skill" : "Installed Skills") {
           ForEach(data.skills) { skill in
             HermesRemoteRow(icon: skill.bundled ? "shippingbox.fill" : "shippingbox", title: skill.name, detail: skill.detail, tint: appearance.palette.accent) {
@@ -766,17 +1026,84 @@ private struct HermesRemoteRoutePage: View {
               Button { onAction(.skillView, HermesRouteActionPayload(route: "skills", id: skill.id)) } label: {
                 Label(chinese ? "查看 SKILL.md" : "View SKILL.md", systemImage: "doc.text")
               }
+              if !skill.bundled {
+                Button(role: .destructive) {
+                  onAction(.skillHubUninstall, HermesRouteActionPayload(route: "skills", value: skill.id))
+                } label: {
+                  Label(chinese ? "从 SkillHub 卸载" : "Uninstall from SkillHub", systemImage: "trash")
+                }
+              }
             }
           }
         }
-        if route == .plugins {
-          ToolbarItem(placement: .navigationBarLeading) {
-            Button {
-              onAction(.pluginRescan, HermesRouteActionPayload(route: "plugins"))
-            } label: {
-              Image(systemName: "arrow.triangle.2.circlepath")
+        if !data.toolsets.isEmpty {
+          Section(chinese ? "工具集" : "Toolsets") {
+            ForEach(data.toolsets) { toolset in
+              HermesRemoteRow(
+                icon: toolset.enabled ? "wrench.and.screwdriver.fill" : "wrench.and.screwdriver",
+                title: toolset.name,
+                detail: toolset.detail.isEmpty
+                  ? "\(toolset.tools.count) \(chinese ? "个工具" : "tools")"
+                  : "\(toolset.detail) · \(toolset.tools.count) \(chinese ? "个工具" : "tools")",
+                tint: toolset.enabled ? appearance.palette.accent : appearance.palette.tertiary
+              ) {
+                Toggle("", isOn: Binding(
+                  get: { toolset.enabled },
+                  set: { onAction(.toolsetToggle, HermesRouteActionPayload(route: "skills", id: toolset.id, enabled: $0)) }
+                )).labelsHidden()
+              }
+              .contextMenu {
+                Text(toolset.configured
+                  ? (chinese ? "已配置" : "Configured")
+                  : (chinese ? "需要配置凭据" : "Credentials required"))
+                if !toolset.tools.isEmpty {
+                  Text(toolset.tools.joined(separator: ", "))
+                }
+                if let config = toolset.configJSON, !config.isEmpty {
+                  Button {
+                    toolsetConfigName = toolset.name
+                    toolsetConfigJSON = config
+                    toolsetModelsJSON = toolset.modelsJSON ?? ""
+                    toolsetProvidersJSON = toolset.providersJSON ?? ""
+                    showingToolsetConfig = true
+                  } label: {
+                    Label(chinese ? "查看官方配置" : "View official configuration", systemImage: "doc.text.magnifyingglass")
+                  }
+                }
+                Button {
+                  onAction(.toolsetPostSetup, HermesRouteActionPayload(route: "skills", id: toolset.id, value: toolset.id))
+                } label: {
+                  Label(chinese ? "运行官方 Setup" : "Run official setup", systemImage: "terminal")
+                }
+                Button {
+                  editorID = toolset.id; editorName = toolset.name; editorValue = ""; editorDetail = ""; editor = .toolsetProvider
+                } label: { Label(chinese ? "选择 Provider" : "Select provider", systemImage: "slider.horizontal.3") }
+                Button {
+                  editorID = toolset.id; editorName = toolset.name; editorValue = ""; editorDetail = ""; editor = .toolsetModel
+                } label: { Label(chinese ? "选择模型" : "Select model", systemImage: "cpu") }
+                Button {
+                  editorID = toolset.id; editorName = toolset.name; editorValue = "{}"; editorDetail = ""; editor = .toolsetEnvironment
+                } label: { Label(chinese ? "编辑环境 JSON" : "Edit environment JSON", systemImage: "key") }
+              }
             }
-            .accessibilityLabel(chinese ? "重新扫描插件" : "Rescan plugins")
+          }
+        }
+        if let terminal = data.terminalBackendsJSON, !terminal.isEmpty {
+          Section(chinese ? "Terminal 后端" : "Terminal backends") {
+            Text(terminal).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary).textSelection(.enabled).lineLimit(4)
+            ForEach(terminalBackendKeys, id: \.self) { backend in
+              Button {
+                onAction(.terminalBackend, HermesRouteActionPayload(route: "skills", value: backend))
+              } label: { Label(chinese ? "使用 \(backend)" : "Use \(backend)", systemImage: "terminal") }
+            }
+          }
+        }
+        if let computer = data.computerUseJSON, !computer.isEmpty {
+          Section(chinese ? "Computer Use" : "Computer Use") {
+            Text(computer).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary).textSelection(.enabled).lineLimit(4)
+            Button {
+              onAction(.computerUseGrant, HermesRouteActionPayload(route: "skills"))
+            } label: { Label(chinese ? "授予 Computer Use 权限" : "Grant Computer Use permissions", systemImage: "lock.open") }
           }
         }
       }
@@ -825,6 +1152,20 @@ private struct HermesRemoteRoutePage: View {
                 onAction(.mcpTest, HermesRouteActionPayload(route: "mcp", id: item.id))
               } label: {
                 Label(chinese ? "测试连接" : "Test connection", systemImage: "bolt")
+              }
+            }
+            if route == .mcp && item.catalogEntry != true {
+              Button {
+                onAction(.mcpAuth, HermesRouteActionPayload(route: "mcp", id: item.id))
+              } label: {
+                Label(chinese ? "启动 OAuth" : "Start OAuth", systemImage: "person.badge.key")
+              }
+            }
+            if route == .channels && item.canTest == true {
+              Button {
+                onAction(.integrationTest, HermesRouteActionPayload(route: "channels", id: item.id))
+              } label: {
+                Label(chinese ? "测试渠道" : "Test channel", systemImage: "bolt")
               }
             }
           }
@@ -877,6 +1218,28 @@ private struct HermesRemoteRoutePage: View {
         }
       }
       .hermesListStyle()
+      .toolbar {
+        if route == .plugins {
+          ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+              onAction(.pluginRescan, HermesRouteActionPayload(route: "plugins"))
+            } label: {
+              Image(systemName: "arrow.triangle.2.circlepath")
+            }
+            .accessibilityLabel(chinese ? "重新扫描插件" : "Rescan plugins")
+          }
+        }
+        if route == .webhooks {
+          ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+              onAction(.webhooksEnable, HermesRouteActionPayload(route: "webhooks"))
+            } label: {
+              Label(chinese ? "启用 Webhook" : "Enable webhooks", systemImage: "bolt.horizontal.circle")
+            }
+            .accessibilityLabel(chinese ? "启用 Webhook 服务" : "Enable webhook service")
+          }
+        }
+      }
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: route.rawValue)) }
     case .pairing:
       List {
@@ -1125,6 +1488,36 @@ private struct HermesRemoteRoutePage: View {
         }
         .contextMenu {
           Button {
+            editorID = profile.id
+            editorName = profile.name
+            editorValue = ""
+            editorDetail = profile.description ?? profile.detail
+            editor = .profileDescription
+          } label: { Label(chinese ? "编辑描述" : "Edit description", systemImage: "text.alignleft") }
+          Button {
+            editorID = profile.id
+            editorName = profile.name
+            editorValue = profile.model
+            editorDetail = ""
+            editor = .profileModel
+          } label: { Label(chinese ? "编辑模型" : "Edit model", systemImage: "cpu") }
+          Button {
+            onAction(.profileAutoDescribe, HermesRouteActionPayload(route: route.rawValue, id: profile.id))
+          } label: { Label(chinese ? "自动生成描述" : "Auto-describe", systemImage: "wand.and.stars") }
+          Button {
+            onAction(.profileSetup, HermesRouteActionPayload(route: route.rawValue, id: profile.id))
+          } label: { Label(chinese ? "查看 Setup 命令" : "View setup command", systemImage: "terminal") }
+          Button {
+            onAction(.profileExport, HermesRouteActionPayload(route: route.rawValue, id: profile.id))
+          } label: { Label(chinese ? "导出 Profile" : "Export profile", systemImage: "square.and.arrow.up") }
+          Button {
+            editorID = profile.id
+            editorName = profile.name
+            editorValue = profile.name
+            editorDetail = ""
+            editor = .profiles
+          } label: { Label(chinese ? "重命名" : "Rename", systemImage: "pencil") }
+          Button {
             editorName = profile.id
             editorDetail = profile.soul
             editor = .soul
@@ -1184,7 +1577,23 @@ private struct HermesRemoteRoutePage: View {
     case .env:
       List(data.environment) { secret in
         HermesRemoteRow(icon: "key.fill", title: secret.key, detail: secret.maskedValue, tint: appearance.palette.accent) {
-          Button(role: .destructive) { onAction(.environmentDelete, HermesRouteActionPayload(route: "env", id: secret.id)) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+          HStack(spacing: 8) {
+            Button {
+              onAction(.environmentReveal, HermesRouteActionPayload(route: "env", id: secret.id))
+            } label: { Image(systemName: "eye") }
+              .buttonStyle(.borderless)
+              .accessibilityLabel(chinese ? "显示变量值" : "Reveal variable")
+            Button {
+              editorID = secret.id
+              editorName = secret.key
+              editorValue = ""
+              editorDetail = ""
+              editor = .environment
+            } label: { Image(systemName: "square.and.pencil") }
+              .buttonStyle(.borderless)
+              .accessibilityLabel(chinese ? "编辑变量" : "Edit variable")
+            Button(role: .destructive) { onAction(.environmentDelete, HermesRouteActionPayload(route: "env", id: secret.id)) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+          }
         }
       }.hermesListStyle().refreshable { onAction(.refresh, HermesRouteActionPayload(route: "env")) }
     case .system:
@@ -1284,6 +1693,31 @@ private struct HermesRemoteRoutePage: View {
           Button { onAction(.systemRestart, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "重启网关" : "Restart gateway", systemImage: "arrow.clockwise") }.buttonStyle(HermesPrimaryButtonStyle())
           Button { onAction(.systemUpdateCheck, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "检查更新" : "Check updates", systemImage: "magnifyingglass") }.buttonStyle(.bordered)
           Button { onAction(.systemUpdate, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "更新 Hermes" : "Update Hermes", systemImage: "arrow.down.circle") }.buttonStyle(.bordered)
+        }
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack {
+          Button { onAction(.systemDoctor, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "运行 Doctor" : "Run Doctor", systemImage: "stethoscope") }.buttonStyle(.bordered)
+          Button { onAction(.systemSecurityAudit, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "安全审计" : "Security audit", systemImage: "checkmark.shield") }.buttonStyle(.bordered)
+          Button { onAction(.systemBackup, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "创建备份" : "Create backup", systemImage: "externaldrive.badge.timemachine") }.buttonStyle(.bordered)
+          Button { onAction(.systemDebugShare, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "调试报告" : "Debug share", systemImage: "square.and.arrow.up") }.buttonStyle(.bordered)
+          Button { onAction(.systemDiagnostics, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "诊断报告" : "Diagnostics", systemImage: "stethoscope") }.buttonStyle(.bordered)
+          Button { onAction(.systemCheckpoints, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "检查点" : "Checkpoints", systemImage: "point.3.connected.trianglepath.dotted") }.buttonStyle(.bordered)
+          Button { onAction(.systemCheckpointPrune, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "清理检查点" : "Prune checkpoints", systemImage: "scissors") }.buttonStyle(.bordered)
+          Button { onAction(.systemCuratorRun, HermesRouteActionPayload(route: "system")) } label: { Label(chinese ? "运行 Curator" : "Run Curator", systemImage: "wand.and.stars") }.buttonStyle(.bordered)
+          if let curatorPaused = data.system.curatorPaused {
+            Button {
+              onAction(.systemCuratorPause, HermesRouteActionPayload(route: "system", enabled: !curatorPaused))
+            } label: {
+              Label(
+                curatorPaused
+                  ? (chinese ? "恢复 Curator" : "Resume Curator")
+                  : (chinese ? "暂停 Curator" : "Pause Curator"),
+                systemImage: curatorPaused ? "play.circle" : "pause.circle"
+              )
+            }.buttonStyle(.bordered)
+          }
+          }
+          .padding(.horizontal, 1)
         }
       }.refreshable { onAction(.refresh, HermesRouteActionPayload(route: "system")) }
     default:
@@ -1386,9 +1820,35 @@ private struct HermesRemoteRoutePage: View {
     case .kanban: return .kanban
     case .collaboration: return .collaboration
     case .config: return .config
+    case .env: return .environment
     case .skills: return .skill
     default: return nil
     }
+  }
+
+  private var cronBlueprintKeys: [String] {
+    guard route == .cron,
+          let text = data.cronBlueprintsJSON,
+          let raw = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    else { return [] }
+    if let rows = object["blueprints"] as? [[String: Any]] {
+      return rows.compactMap { row in
+        (row["key"] as? String) ?? (row["name"] as? String)
+      }
+    }
+    return object.keys.sorted()
+  }
+
+  private var terminalBackendKeys: [String] {
+    guard let text = data.terminalBackendsJSON,
+          let raw = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    else { return [] }
+    if let rows = object["backends"] as? [[String: Any]] {
+      return rows.compactMap { ($0["id"] as? String) ?? ($0["name"] as? String) }
+    }
+    return object.keys.sorted()
   }
 
   private func prepareEditor(_ kind: HermesRemoteEditor) {
@@ -1401,6 +1861,7 @@ private struct HermesRemoteRoutePage: View {
         : ""
     editorDetail = ""
     if kind == .config { editorDetail = data.config.exportText }
+    if kind == .environment { editorValue = "" }
     if kind == .skill {
       editorValue = "custom"
       editorDetail = """
@@ -1443,7 +1904,17 @@ private struct HermesRemoteRoutePage: View {
       onAction(.pairingApprove, HermesRouteActionPayload(route: "pairing", id: name, value: value))
     case .profiles:
       guard !name.isEmpty else { return }
-      onAction(.profileCreate, HermesRouteActionPayload(route: route.rawValue, name: name, fields: ["description": detail, "model": value]))
+      if editorID.isEmpty {
+        onAction(.profileCreate, HermesRouteActionPayload(route: route.rawValue, name: name, fields: ["description": detail, "model": value]))
+      } else {
+        onAction(.profileRename, HermesRouteActionPayload(route: route.rawValue, id: editorID, name: name))
+      }
+    case .profileDescription:
+      guard !editorID.isEmpty else { return }
+      onAction(.profileDescription, HermesRouteActionPayload(route: route.rawValue, id: editorID, detail: detail))
+    case .profileModel:
+      guard !editorID.isEmpty, !value.isEmpty else { return }
+      onAction(.profileModel, HermesRouteActionPayload(route: route.rawValue, id: editorID, value: value))
     case .soul:
       guard !name.isEmpty else { return }
       onAction(.profileUpdate, HermesRouteActionPayload(route: "profiles", id: name, detail: editorDetail))
@@ -1468,6 +1939,18 @@ private struct HermesRemoteRoutePage: View {
     case .config:
       guard !detail.isEmpty else { return }
       onAction(.configUpdate, HermesRouteActionPayload(route: "config", value: detail))
+    case .environment:
+      guard !name.isEmpty else { return }
+      onAction(.environmentSet, HermesRouteActionPayload(route: "env", id: name, detail: value))
+    case .toolsetProvider:
+      guard !editorID.isEmpty, !value.isEmpty else { return }
+      onAction(.toolsetProvider, HermesRouteActionPayload(route: "skills", id: editorID, value: value))
+    case .toolsetModel:
+      guard !editorID.isEmpty, !value.isEmpty else { return }
+      onAction(.toolsetModel, HermesRouteActionPayload(route: "skills", id: editorID, value: value))
+    case .toolsetEnvironment:
+      guard !editorID.isEmpty, !value.isEmpty else { return }
+      onAction(.toolsetEnvironment, HermesRouteActionPayload(route: "skills", id: editorID, detail: value))
     case .plugin:
       guard !name.isEmpty else { return }
       onAction(
@@ -1523,8 +2006,8 @@ private struct HermesRemoteEditorSheet: View {
               .textInputAutocapitalization(.never)
               .autocorrectionDisabled()
           }
-        } else if kind == .config || kind == .soul || kind == .channel {
-          Section(kind == .soul ? "SOUL.md" : kind == .skill ? "SKILL.md" : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : "config.json") {
+        } else if kind == .config || kind == .soul || kind == .channel || kind == .profileDescription {
+          Section(kind == .soul ? "SOUL.md" : kind == .profileDescription ? (chinese ? "Profile 描述" : "Profile description") : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : "config.json") {
             TextEditor(text: $detail)
               .font(HermesFonts.mono(12))
               .frame(minHeight: 320)
@@ -1532,10 +2015,12 @@ private struct HermesRemoteEditorSheet: View {
               .autocorrectionDisabled()
           }
         } else {
-          TextField(nameLabel, text: $name)
-            .textInputAutocapitalization(.never)
-            .autocorrectionDisabled()
-          if kind == .collaboration || kind == .cron || kind == .mcp || kind == .pairing || kind == .profiles || kind == .kanban {
+          if kind != .toolsetEnvironment {
+            TextField(nameLabel, text: $name)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+          }
+          if kind == .collaboration || kind == .cron || kind == .mcp || kind == .pairing || kind == .profiles || kind == .profileModel || kind == .kanban || kind == .environment || kind == .toolsetProvider || kind == .toolsetModel {
             Group {
               if kind == .kanban {
                 Picker(chinese ? "状态" : "Status", selection: $value) {
@@ -1548,6 +2033,15 @@ private struct HermesRemoteEditorSheet: View {
                   .textInputAutocapitalization(.never)
                   .autocorrectionDisabled()
               }
+            }
+          }
+          if kind == .toolsetEnvironment {
+            Section(chinese ? "Toolset 环境 JSON" : "Toolset environment JSON") {
+              TextEditor(text: $value)
+                .font(HermesFonts.mono(12))
+                .frame(minHeight: 240)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
             }
           }
           if kind == .cron || kind == .webhooks || kind == .profiles || kind == .kanban {
@@ -1575,7 +2069,7 @@ private struct HermesRemoteEditorSheet: View {
         }
       }
     }
-    .presentationDetents(kind == .config || kind == .soul || kind == .skill || kind == .channel ? [.large] : [.medium, .large])
+    .presentationDetents(kind == .config || kind == .soul || kind == .skill || kind == .channel || kind == .profileDescription ? [.large] : [.medium, .large])
     .presentationDragIndicator(.visible)
   }
 
@@ -1583,10 +2077,16 @@ private struct HermesRemoteEditorSheet: View {
     if !chinese {
       if kind == .config { return "Edit Configuration" }
       if kind == .soul { return "Edit SOUL.md" }
+      if kind == .profileDescription { return isCreating ? "Add Profile description" : "Edit Profile description" }
+      if kind == .profileModel { return isCreating ? "Add Profile model" : "Edit Profile model" }
       if kind == .skill { return isCreating ? "New Skill" : "Edit SKILL.md" }
       if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
       if kind == .channel { return "Edit Channel Configuration" }
       if kind == .plugin { return "Install Plugin" }
+      if kind == .environment { return isCreating ? "Add Environment Variable" : "Edit Environment Variable" }
+      if kind == .toolsetProvider { return "Select Toolset Provider" }
+      if kind == .toolsetModel { return "Select Toolset Model" }
+      if kind == .toolsetEnvironment { return "Edit Toolset Environment" }
       return "Add \(kind.rawValue.capitalized)"
     }
     switch kind {
@@ -1596,12 +2096,18 @@ private struct HermesRemoteEditorSheet: View {
     case .webhooks: return "添加 Webhook"
     case .pairing: return "批准配对用户"
     case .profiles: return "新建 Profile"
+    case .profileDescription: return "编辑 Profile 描述"
+    case .profileModel: return "编辑 Profile 模型"
     case .soul: return "编辑 SOUL.md"
     case .skill: return isCreating ? "新建 Skill" : "编辑 SKILL.md"
     case .kanban: return name.isEmpty ? "新建任务" : "编辑任务"
     case .channel: return "编辑渠道配置"
     case .config: return "编辑配置"
     case .plugin: return "安装插件"
+    case .environment: return isCreating ? "新增环境变量" : "编辑环境变量"
+    case .toolsetProvider: return "选择 Toolset Provider"
+    case .toolsetModel: return "选择 Toolset 模型"
+    case .toolsetEnvironment: return "编辑 Toolset 环境"
     }
   }
 
@@ -1610,17 +2116,19 @@ private struct HermesRemoteEditorSheet: View {
     if kind == .pairing { return chinese ? "平台" : "Platform" }
     if kind == .kanban { return chinese ? "标题" : "Title" }
     if kind == .plugin { return chinese ? "插件标识符或仓库" : "Plugin identifier or repository" }
+    if kind == .environment { return chinese ? "变量名" : "Variable name" }
     return chinese ? "名称" : "Name"
   }
   private var valueLabel: String {
     if kind == .skill { return chinese ? "分类（可选）" : "Category (optional)" }
-    if !chinese { return kind == .collaboration ? "Profiles, separated by commas" : kind == .cron ? "Schedule" : kind == .mcp ? "Server URL" : kind == .pairing ? "Pairing code" : kind == .profiles ? "Model" : "Secret value" }
+    if !chinese { return kind == .collaboration ? "Profiles, separated by commas" : kind == .cron ? "Schedule" : kind == .mcp ? "Server URL" : kind == .pairing ? "Pairing code" : kind == .profiles ? "Model" : kind == .environment ? "Value" : "Secret value" }
     switch kind {
     case .collaboration: return "Profile（用逗号分隔）"
     case .cron: return "计划表达式"
     case .mcp: return "服务器 URL"
     case .pairing: return "配对码"
     case .profiles: return "模型"
+    case .environment: return "变量值"
     case .kanban: return "状态"
     default: return "密钥值"
     }
@@ -1845,6 +2353,17 @@ private struct HermesSessionsPage: View {
                   .foregroundStyle(appearance.palette.secondary)
               }
               Spacer()
+              if session.pinned == true {
+                Image(systemName: "pin.fill")
+                  .foregroundStyle(appearance.palette.accent)
+                  .accessibilityLabel(chinese ? "已置顶" : "Pinned")
+              }
+              if session.unread == true {
+                HermesStatusPill(text: chinese ? "未读" : "Unread", color: appearance.palette.warning)
+              }
+              if session.archived == true {
+                HermesStatusPill(text: chinese ? "已归档" : "Archived", color: appearance.palette.tertiary)
+              }
               if session.running {
                 HermesStatusPill(text: chinese ? "运行中" : "Running")
               }
@@ -1904,6 +2423,33 @@ private struct HermesSessionsPage: View {
             } label: {
               Label(chinese ? "删除会话" : "Delete Session", systemImage: "trash")
             }
+            Button {
+              onAction(
+                .sessionExport,
+                HermesRouteActionPayload(
+                  route: "sessions",
+                  id: session.id,
+                  fields: session.profile.map { ["profile": $0] }
+                )
+              )
+            } label: {
+              Label(chinese ? "导出会话" : "Export session", systemImage: "square.and.arrow.up")
+            }
+            Button {
+              onAction(.sessionPin, HermesRouteActionPayload(route: "sessions", id: session.id, enabled: session.pinned != true, fields: session.profile.map { ["profile": $0] }))
+            } label: {
+              Label(session.pinned == true ? (chinese ? "取消置顶" : "Unpin") : (chinese ? "置顶" : "Pin"), systemImage: "pin")
+            }
+            Button {
+              onAction(.sessionUnread, HermesRouteActionPayload(route: "sessions", id: session.id, enabled: session.unread != true, fields: session.profile.map { ["profile": $0] }))
+            } label: {
+              Label(session.unread == true ? (chinese ? "标为已读" : "Mark read") : (chinese ? "标为未读" : "Mark unread"), systemImage: "envelope.badge")
+            }
+            Button {
+              onAction(.sessionArchive, HermesRouteActionPayload(route: "sessions", id: session.id, enabled: session.archived != true, fields: session.profile.map { ["profile": $0] }))
+            } label: {
+              Label(session.archived == true ? (chinese ? "取消归档" : "Unarchive") : (chinese ? "归档" : "Archive"), systemImage: "archivebox")
+            }
           }
         }
       } header: {
@@ -1914,6 +2460,16 @@ private struct HermesSessionsPage: View {
     .hermesListStyle()
     .background(appearance.palette.background)
     .searchable(text: $search, prompt: chinese ? "搜索会话" : "Search sessions")
+    .toolbar {
+      ToolbarItem(placement: .navigationBarTrailing) {
+        Button {
+          onAction(.sessionDeleteEmpty, HermesRouteActionPayload(route: "sessions"))
+        } label: {
+          Image(systemName: "trash.slash")
+        }
+        .accessibilityLabel(chinese ? "清理空会话" : "Delete empty sessions")
+      }
+    }
     .refreshable {
       onAction(.refresh, HermesRouteActionPayload(route: "sessions"))
     }
@@ -2363,6 +2919,8 @@ private struct HermesModelsPage: View {
   let models: [HermesModelSnapshot]
   let auxiliary: HermesModelAuxiliarySnapshot
   let moa: HermesModelMoaSnapshot
+  let providerOauthJSON: String?
+  let customProviderEndpointsJSON: String?
   let confirmation: HermesModelConfirmationSnapshot?
   let operation: HermesRouteOperationSnapshot?
   let onAction: HermesRouteActionSink
@@ -2376,6 +2934,10 @@ private struct HermesModelsPage: View {
   @State private var modelName = ""
   @State private var reasoningEffort = "none"
   @State private var presentedConfirmation: HermesModelConfirmationSnapshot?
+  @State private var providerOauthID = ""
+  @State private var providerOauthCode = ""
+  @State private var customEndpointJSON = "{}"
+  @State private var customEndpointID = ""
 
   private var configuration: HermesModelSnapshot? {
     models.first { $0.provider == "custom" && !$0.baseUrl.isEmpty }
@@ -2398,6 +2960,8 @@ private struct HermesModelsPage: View {
         availableModelsPanel
         auxiliaryPanel
         customModelPanel
+        providerConnectionsPanel
+        customProviderEndpointsPanel
       }
       .padding(14)
     }
@@ -2627,6 +3191,64 @@ private struct HermesModelsPage: View {
         reasoningEffortPicker
         modelActionButtons
         operationStatus
+      }
+    }
+  }
+
+  @ViewBuilder private var providerConnectionsPanel: some View {
+    if let metadata = providerOauthJSON, !metadata.isEmpty {
+      HermesPanel {
+        VStack(alignment: .leading, spacing: 10) {
+          Label(chinese ? "官方 Provider OAuth" : "Official provider OAuth", systemImage: "person.badge.key")
+            .font(HermesFonts.display(15))
+          Text(metadata).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary).textSelection(.enabled).lineLimit(8)
+          HStack {
+            TextField(chinese ? "Provider 标识符" : "Provider id", text: $providerOauthID)
+              .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button {
+              onAction(.providerOauthStart, HermesRouteActionPayload(route: "models", id: providerOauthID))
+            } label: { Label(chinese ? "连接" : "Connect", systemImage: "link") }
+              .buttonStyle(.borderedProminent)
+              .disabled(providerOauthID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
+          HStack {
+            TextField(chinese ? "授权码（若 Provider 要求）" : "Authorization code (if required)", text: $providerOauthCode)
+              .textInputAutocapitalization(.never).autocorrectionDisabled()
+            Button {
+              onAction(.providerOauthSubmit, HermesRouteActionPayload(route: "models", id: providerOauthID, fields: ["code": providerOauthCode]))
+            } label: { Label(chinese ? "提交" : "Submit", systemImage: "paperplane") }
+              .buttonStyle(.bordered)
+              .disabled(providerOauthID.isEmpty || providerOauthCode.isEmpty)
+          }
+          Text(chinese ? "连接会打开官方 OAuth 页面，并在后台轮询完成状态。" : "The official OAuth page opens and completion is polled in the background.")
+            .font(HermesFonts.body(11)).foregroundStyle(appearance.palette.secondary)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private var customProviderEndpointsPanel: some View {
+    if let endpoints = customProviderEndpointsJSON, !endpoints.isEmpty {
+      HermesPanel {
+        VStack(alignment: .leading, spacing: 10) {
+          Label(chinese ? "自定义 Provider 端点" : "Custom provider endpoints", systemImage: "point.3.connected.trianglepath.dotted")
+            .font(HermesFonts.display(15))
+          Text(endpoints).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary).textSelection(.enabled).lineLimit(8)
+          TextEditor(text: $customEndpointJSON)
+            .font(HermesFonts.mono(11)).frame(minHeight: 110)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+          HStack {
+            Button { onAction(.customEndpointValidate, HermesRouteActionPayload(route: "models", value: customEndpointJSON)) } label: { Label(chinese ? "验证" : "Validate", systemImage: "checkmark.shield") }.buttonStyle(.bordered)
+            Button { onAction(.customEndpointSave, HermesRouteActionPayload(route: "models", value: customEndpointJSON)) } label: { Label(chinese ? "保存端点" : "Save endpoint", systemImage: "square.and.arrow.down") }.buttonStyle(.borderedProminent)
+          }
+          TextField(chinese ? "端点 ID（激活/删除）" : "Endpoint id (activate / delete)", text: $customEndpointID)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+          HStack {
+            Button { onAction(.customEndpointActivate, HermesRouteActionPayload(route: "models", id: customEndpointID)) } label: { Label(chinese ? "激活" : "Activate", systemImage: "checkmark.circle") }.buttonStyle(.bordered)
+            Button(role: .destructive) { onAction(.customEndpointDelete, HermesRouteActionPayload(route: "models", id: customEndpointID)) } label: { Label(chinese ? "删除" : "Delete", systemImage: "trash") }.buttonStyle(.bordered)
+          }
+          .disabled(customEndpointID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
       }
     }
   }

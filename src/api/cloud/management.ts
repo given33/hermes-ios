@@ -176,6 +176,14 @@ export class HermesManagementCloudApi {
     );
   }
 
+  renameProfile(name: string, newName: string) {
+    return this.transport.json<JsonRecord>(
+      `/api/profiles/${encodeURIComponent(name)}`,
+      'PATCH',
+      { new_name: newName },
+    );
+  }
+
   updateProfileDescription(name: string, description: string) {
     return this.transport.json<JsonRecord>(
       `/api/profiles/${encodeURIComponent(name)}/description`, 'PUT', { description },
@@ -320,8 +328,10 @@ export class HermesManagementCloudApi {
     return this.transport.request<JsonRecord>('/api/hermes/update', { method: 'POST' });
   }
 
-  checkHermesUpdate() {
-    return this.transport.request<JsonRecord>('/api/hermes/update/check');
+  checkHermesUpdate(force = false) {
+    return this.transport.request<JsonRecord>('/api/hermes/update/check', {
+      query: force ? { force: 'true' } : undefined,
+    });
   }
 
   getHermesUpdateReceipt() {

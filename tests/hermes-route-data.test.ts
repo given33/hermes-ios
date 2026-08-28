@@ -110,6 +110,34 @@ test('session snapshots are derived from the current server response', async () 
   assert.equal(snapshot.sessions?.[0].detail, '8 条消息 · 3 次工具调用');
 });
 
+test('native skills and cron snapshots hydrate official desktop metadata', async () => {
+  const api = {
+    loadRoute: async (route: string) => route === 'skills'
+      ? { skills: [], toolsets: [{ name: 'web', description: 'Search', enabled: true, configured: true, tools: ['web.search'] }] }
+      : { jobs: [] },
+    getToolsetConfig: async () => ({ providers: [{ name: 'ddgs', env_vars: [] }] }),
+    getToolsetModels: async () => ({ has_models: false }),
+    getToolsetProviders: async () => ({ providers: ['ddgs'] }),
+    getTerminalBackends: async () => ({ backends: [{ id: 'local' }] }),
+    getComputerUseStatus: async () => ({ granted: false }),
+    getSkillHubSources: async () => ({ sources: [{ id: 'official' }] }),
+    getLearningGraph: async () => ({ nodes: [{ id: 'n1' }] }),
+    getCronBlueprints: async () => ({ blueprints: [{ key: 'daily_digest' }] }),
+    getDeliveryTargets: async () => ({ targets: [{ id: 'ios' }] }),
+  } as unknown as HermesCloudApi;
+
+  const skills = await loadHermesSwiftUIRouteSnapshot(api, 'skills', 'default');
+  assert.match(skills.toolsets?.[0]?.configJSON || '', /ddgs/);
+  assert.match(skills.terminalBackendsJSON || '', /local/);
+  assert.match(skills.computerUseJSON || '', /granted/);
+  assert.match(skills.skillHubSourcesJSON || '', /official/);
+  assert.match(skills.learningGraphJSON || '', /n1/);
+
+  const cron = await loadHermesSwiftUIRouteSnapshot(api, 'cron', 'default');
+  assert.match(cron.cronBlueprintsJSON || '', /daily_digest/);
+  assert.match(cron.cronDeliveryTargetsJSON || '', /ios/);
+});
+
 test('analytics and model snapshots do not invent unavailable server values', async () => {
   const responses: Record<string, unknown> = {
     analytics: {
@@ -298,6 +326,45 @@ test('native route actions mutate the server and request a fresh snapshot', asyn
     ['model-save', custom, 'reviewer'],
     ['model-test', custom, 'reviewer'],
     ['model-discover', 'https://model.example/v1', 'secret', 'reviewer'],
+  ]);
+});
+
+test('native session, SkillHub, and provider controls complete official action flows', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    setSessionArchived: async (...args: unknown[]) => { calls.push(['archive', ...args]); },
+    setSessionPinned: async (...args: unknown[]) => { calls.push(['pin', ...args]); },
+    setSessionUnread: async (...args: unknown[]) => { calls.push(['unread', ...args]); },
+    searchSkillHub: async (...args: unknown[]) => { calls.push(['search', ...args]); return { results: ['skill'] }; },
+    previewSkillHub: async (...args: unknown[]) => { calls.push(['preview', ...args]); return { id: args[0] }; },
+    scanSkillHub: async (...args: unknown[]) => { calls.push(['scan', ...args]); return { safe: true }; },
+    installSkillHub: async (...args: unknown[]) => { calls.push(['install', ...args]); },
+    uninstallSkillHub: async (...args: unknown[]) => { calls.push(['uninstall', ...args]); },
+    startProviderOauth: async (...args: unknown[]) => { calls.push(['oauth-start', ...args]); return { authorization_url: 'https://auth.example', session_id: 'oauth-1' }; },
+    submitProviderOauth: async (...args: unknown[]) => { calls.push(['oauth-submit', ...args]); },
+    validateCustomProviderEndpoint: async (...args: unknown[]) => { calls.push(['endpoint-validate', ...args]); return { ok: true }; },
+    saveCustomProviderEndpoint: async (...args: unknown[]) => { calls.push(['endpoint-save', ...args]); },
+  } as unknown as HermesCloudApi;
+  await performHermesSwiftUIRouteAction(api, { action: 'session.archive', payload: { route: 'sessions', id: 's1', enabled: true, fields: { profile: 'hk-worker' } } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'session.pin', payload: { route: 'sessions', id: 's1', enabled: true } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'session.unread', payload: { route: 'sessions', id: 's1', enabled: false } }, 'default');
+  const search = await performHermesSwiftUIRouteAction(api, { action: 'skillhub.search', payload: { route: 'skills', value: 'browser' } }, 'default');
+  assert.equal(typeof search, 'object');
+  await performHermesSwiftUIRouteAction(api, { action: 'skillhub.preview', payload: { route: 'skills', value: 'owner/skill' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'skillhub.scan', payload: { route: 'skills', value: 'owner/skill' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'skillhub.install', payload: { route: 'skills', value: 'owner/skill' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'skillhub.uninstall', payload: { route: 'skills', value: 'browser' } }, 'default');
+  const oauth = await performHermesSwiftUIRouteAction(api, { action: 'provider.oauth.start', payload: { route: 'models', id: 'openai' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'provider.oauth.submit', payload: { route: 'models', id: 'openai', fields: { code: '1234' } } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'provider.custom.validate', payload: { route: 'models', value: '{"id":"edge"}' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'provider.custom.save', payload: { route: 'models', value: '{"id":"edge"}' } }, 'hk-worker');
+  assert.equal((oauth as { oauthSessionId?: string }).oauthSessionId, 'oauth-1');
+  assert.deepEqual(calls, [
+    ['archive', 's1', true, 'hk-worker'], ['pin', 's1', true, 'default'], ['unread', 's1', false, 'default'],
+    ['search', 'browser', 'all', 20, 'default'], ['preview', 'owner/skill', 'default'], ['scan', 'owner/skill', 'default'],
+    ['install', 'owner/skill', 'default'], ['uninstall', 'browser', 'default'],
+    ['oauth-start', 'openai', {}], ['oauth-submit', 'openai', { code: '1234' }],
+    ['endpoint-validate', { id: 'edge' }], ['endpoint-save', { id: 'edge' }, 'hk-worker'],
   ]);
 });
 

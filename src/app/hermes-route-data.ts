@@ -10,13 +10,12 @@ import {
   HermesCloudApi,
   parseOfficialConversationPlaceholderId,
 } from '../api/HermesCloudApi';
-import { writeBoundedDownload } from '../api/bounded-download';
 import {
   isRecord,
+  isStringRecord,
   positiveRevision,
   routeLocalizer,
   stringValue,
-  structuredContent,
   type HermesRouteLocaleInput,
 } from './route-snapshots/support';
 import {
@@ -44,6 +43,7 @@ import {
   pairingSnapshot,
   profilesSnapshot,
   skillsSnapshot,
+  toolsetsSnapshot,
 } from './route-snapshots/management';
 import {
   decodeModelSelection,
@@ -56,14 +56,16 @@ import {
 } from './route-snapshots/models';
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
-
+import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
+import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata';
+// Account previews use temporaryPlaintextFile(name, 'account-file') and stream through
+// consumeAccountFile(... writeBoundedDownload); implementation lives in presentation.ts.
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
 export {
   createHermesSwiftUISessionsSnapshot,
   createHermesSwiftUISessionsSnapshotFromConversations,
 } from './route-snapshots/sessions-files';
 export { decodeModelSelection, encodeModelSelection } from './route-snapshots/model-selection';
-
 export async function loadHermesSwiftUIRouteSnapshot(
   api: HermesCloudApi,
   routeId: string,
@@ -119,18 +121,24 @@ export async function loadHermesSwiftUIRouteSnapshot(
           activePreset: stringValue(moa.active_preset) || stringValue(moa.activePreset) || stringValue(moa.default_preset),
           presetCount: Object.keys(presets).length,
         },
+        ...await loadModelProviderMetadata(api, profile),
       };
     }
     case 'logs':
       return { ...base, logs: logsSnapshot(source, localizer) };
-    case 'cron':
-      return { ...base, cron: cronSnapshot(source, localizer) };
-    case 'skills':
+    case 'cron': return { ...base, cron: cronSnapshot(source, localizer), ...await loadCronMetadata(api, profile, source) };
+    case 'skills': {
+      const hydratedToolsets = await hydrateToolsetConfigs(api, toolsetsSnapshot(source, localizer), profile); const runtimeMetadata = await loadToolRuntimeMetadata(api, profile); const skillHubMetadata = await loadSkillHubMetadata(api, profile); const learningMetadata = await loadLearningMetadata(api, profile);
       return {
         ...base,
         skills: skillsSnapshot(source, localizer),
+        toolsets: hydratedToolsets,
+        ...runtimeMetadata,
+        ...skillHubMetadata,
+        ...learningMetadata,
         installations: managedInstallationsSnapshot(source, 'skill'),
       };
+    }
     case 'plugins':
       return { ...base, integrations: integrationsSnapshot(source, 'plugins', localizer) };
     case 'mcp':
@@ -160,15 +168,36 @@ export async function loadHermesSwiftUIRouteSnapshot(
       return { ...base, config: configSnapshot(source) };
     case 'env':
       return { ...base, environment: environmentSnapshot(source) };
-    case 'system':
-      return { ...base, system: systemSnapshot(source, localizer) };
-    case 'memory':
-      return { ...base, memory: memorySnapshot(source) };
+    case 'system': {
+      const curator = typeof api.getCurator === 'function'
+        ? await api.getCurator().catch(() => undefined)
+        : undefined;
+      return { ...base, system: systemSnapshot(
+        isRecord(source) && curator !== undefined ? { ...source, curator } : source,
+        localizer,
+      ) };
+    }
+    case 'memory': {
+      const providers = isRecord(source) && Array.isArray(source.providers) ? source.providers : [];
+      const providerRows = providers.filter(isRecord);
+      const [oauthStatuses, providerConfigs] = await Promise.all([
+        Promise.all(providerRows.map((provider) => (
+          typeof api.getMemoryProviderOAuthStatus === 'function'
+            ? api.getMemoryProviderOAuthStatus(stringValue(provider.name), profile).catch(() => undefined)
+            : Promise.resolve(undefined)
+        ))),
+        Promise.all(providerRows.map((provider) => (
+          typeof api.getMemoryProviderConfig === 'function'
+            ? api.getMemoryProviderConfig(stringValue(provider.name), profile, 'declared').catch(() => undefined)
+            : Promise.resolve(undefined)
+        ))),
+      ]);
+      return { ...base, memory: memorySnapshot(source, oauthStatuses, providerConfigs) };
+    }
     default:
       return base;
   }
 }
-
 export async function performHermesSwiftUIRouteAction(
   api: HermesCloudApi,
   event: HermesSwiftUIRouteActionEvent,
@@ -182,6 +211,11 @@ export async function performHermesSwiftUIRouteAction(
   model?: string;
   provider?: string;
   reload?: boolean;
+  skillHubResultJSON?: string;
+  url?: string;
+  flowId?: string;
+  oauthProvider?: string;
+  oauthSessionId?: string;
 }> {
   const localizer = routeLocalizer(locale);
   const chinese = localizer.isChinese;
@@ -206,7 +240,7 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id || !value) return 'none';
       if (payload.id.startsWith('official:')) {
         const placeholder = parseOfficialConversationPlaceholderId(payload.id);
-        await api.renameSession(
+      await api.renameSession(
           placeholder?.sessionId || payload.id.slice('official:'.length),
           value,
           placeholder?.profile || payload.fields?.profile || profile,
@@ -357,6 +391,14 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       await api.triggerCronJob(payload.id, profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionArchive:
+      if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionArchived(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionPin:
+      if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionPinned(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionUnread:
+      if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionUnread(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.cronBlueprintCreate:
+      if (!payload.id) return 'none'; { const values = payload.fields?.values ? parseJsonRecord(payload.fields.values) || {} : payload.fields || {}; await api.instantiateCronBlueprint(payload.id, values, profile); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronDelete:
       if (!payload.id) return 'none';
       await api.deleteCronJob(payload.id, profile);
@@ -381,6 +423,18 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.skillUpdate:
       if (!payload.id) return 'none';
       await api.updateSkillContent(payload.id, payload.detail || '', profile);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.skillHubUpdate:
+      await api.updateSkillsHub(profile);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.skillHubSearch: { const result = await api.searchSkillHub(value, payload.fields?.source || 'all', Number(payload.fields?.limit || 20), profile); return { message: chinese ? 'SkillHub 搜索完成' : 'SkillHub search complete', skillHubResultJSON: JSON.stringify(result) }; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.skillHubPreview: { if (!value) return 'none'; const result = await api.previewSkillHub(value, profile); return { message: chinese ? 'SkillHub 预览已加载' : 'SkillHub preview loaded', skillHubResultJSON: JSON.stringify(result) }; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.skillHubScan: { if (!value) return 'none'; const result = await api.scanSkillHub(value, profile); return { message: chinese ? 'SkillHub 安全扫描完成' : 'SkillHub security scan complete', skillHubResultJSON: JSON.stringify(result) }; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.skillHubInstall:
+      if (!value) return 'none'; await api.installSkillHub(value, profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.skillHubUninstall:
+      if (!value) return 'none'; await api.uninstallSkillHub(value, profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.learningGraphRefresh:
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.installationRollback:
       if (!payload.id) return 'none';
@@ -437,6 +491,12 @@ export async function performHermesSwiftUIRouteAction(
       if (!result.ok) throw new Error(result.error || (chinese ? 'MCP 连接测试失败' : 'MCP connection test failed'));
       return { message: chinese ? `连接成功：${result.tools.length} 个工具` : `Connection succeeded: ${result.tools.length} tools` };
     }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.mcpAuth: {
+      if (!payload.id || payload.route !== 'mcp') return 'none'; const flow = await api.authMcpServer(payload.id, profile);
+      const url = stringValue(flow.authorization_url) || stringValue(flow.url);
+      const flowId = stringValue(flow.flow_id) || stringValue(flow.flowId);
+      return { message: url ? `${chinese ? '请在浏览器完成 MCP OAuth：' : 'Complete MCP OAuth in your browser: '} ${url}` : (chinese ? 'MCP OAuth 已启动' : 'MCP OAuth started'), url, flowId };
+    }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationUpdate:
       if (!payload.id || payload.route !== 'channels') return 'none';
       {
@@ -490,6 +550,35 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       if (payload.detail !== undefined) await api.updateProfileSoul(payload.id, payload.detail);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.profileRename:
+      if (!payload.id || !payload.name?.trim()) return 'none';
+      await api.renameProfile(payload.id, payload.name.trim());
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.profileDescription:
+      if (!payload.id || payload.detail === undefined) return 'none';
+      await api.updateProfileDescription(payload.id, payload.detail);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.profileModel: {
+      if (!payload.id || !value) return 'none';
+      const explicitProvider = payload.fields?.provider?.trim() || '';
+      const separator = value.indexOf('/');
+      const provider = explicitProvider || (separator > 0 ? value.slice(0, separator) : '');
+      const model = separator > 0 ? value.slice(separator + 1) : value;
+      if (!provider || !model) {
+        throw new Error(chinese ? '模型格式应为 provider/model' : 'Model must use provider/model format');
+      }
+      await api.updateProfileModel(payload.id, provider, model);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.profileAutoDescribe:
+      if (!payload.id) return 'none';
+      await api.autoDescribeProfile(payload.id);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.profileSetup: {
+      if (!payload.id) return 'none'; const result = await api.getProfileSetupCommand(payload.id); return { message: stringValue(result.command) || stringValue(result.message) || payload.id };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.profileExport:
+      if (!payload.id) return 'none'; await presentProfileExport(api, payload.id, locale); return 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.configUpdate:
     case HERMES_SWIFTUI_ROUTE_ACTIONS.configImport: {
       const config = payload.value ? parseJsonRecord(payload.value) : payload.fields;
@@ -501,13 +590,112 @@ export async function performHermesSwiftUIRouteAction(
       if (!payload.id) return 'none';
       await api.deleteEnvironmentVariable(payload.id, profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.environmentSet: {
+      const key = payload.id || payload.name || '';
+      if (!key || payload.detail === undefined) return 'none';
+      await api.setEnvironmentVariable(key, payload.detail, profile);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.environmentReveal: {
+      if (!payload.id) return 'none';
+      const result = await api.revealEnvironmentVariable(payload.id, profile);
+      return {
+        message: stringValue(result.value) || stringValue(result.revealed_value)
+          || (chinese ? '当前变量没有可显示的值' : 'No value is available for this variable.'),
+      };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthStart: {
+      if (!payload.id) return 'none';
+      const result = await api.startProviderOauth(payload.id, payload.fields ? { ...payload.fields } : {});
+      const url = stringValue(result.authorization_url) || stringValue(result.url);
+      const sessionId = stringValue(result.session_id) || stringValue(result.sessionId);
+      return { message: url ? (chinese ? 'Provider OAuth 页面已打开' : 'Provider OAuth page opened') : (chinese ? 'Provider OAuth 已启动' : 'Provider OAuth started'), url, oauthProvider: payload.id, oauthSessionId: sessionId };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthSubmit:
+      if (!payload.id) return 'none'; await api.submitProviderOauth(payload.id, payload.fields || {}); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthCancel:
+      if (!value) return 'none'; await api.cancelProviderOauth(value); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.customEndpointValidate: {
+      const config = parseJsonRecord(value); if (!config) return 'none'; const result = await api.validateCustomProviderEndpoint(config); return { message: stringValue(result.message) || (result.ok === false ? (chinese ? '自定义端点验证失败' : 'Custom endpoint validation failed') : (chinese ? '自定义端点验证通过' : 'Custom endpoint validated')) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.customEndpointSave: {
+      const config = parseJsonRecord(value); if (!config) return 'none'; await api.saveCustomProviderEndpoint(config, profile); return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.customEndpointActivate:
+      if (!payload.id) return 'none'; await api.activateCustomProviderEndpoint(payload.id, profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.customEndpointDelete:
+      if (!payload.id) return 'none'; await api.deleteCustomProviderEndpoint(payload.id, profile); return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.memoryProvider:
       if (!payload.id && !value) return 'none';
-      await api.setMemoryProvider(payload.id || value);
+      await api.setMemoryProvider(payload.id || value, profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.toolsetToggle:
+      if (!payload.id || payload.enabled === undefined) return 'none';
+      await api.setToolsetEnabled(payload.id, payload.enabled, profile);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.toolsetProvider:
+      if (!payload.id || !value) return 'none'; await api.setToolsetProvider(payload.id, value, payload.fields?.capability as 'search' | 'extract' | undefined, profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.toolsetModel:
+      if (!payload.id || !value) return 'none'; await api.setToolsetModel(payload.id, value, payload.fields?.provider, profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.toolsetEnvironment: {
+      if (!payload.id) return 'none'; const env = payload.detail ? parseJsonRecord(payload.detail) : payload.fields;
+      if (!env || !isStringRecord(env)) return 'none'; await api.saveToolsetEnvironment(payload.id, env, profile); return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.toolsetPostSetup:
+      if (!payload.id) return 'none'; await api.runToolsetPostSetup(payload.id, value || payload.fields?.key || payload.id, profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.terminalBackend:
+      if (!value) return 'none'; await api.setTerminalBackend(value, profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.computerUseGrant:
+      await api.grantComputerUsePermissions(profile); return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationTest: {
+      if (!payload.id || payload.route !== 'channels') return 'none';
+      const result = await api.testChannel(payload.id, profile);
+      if (result.ok === false) {
+        throw new Error(stringValue(result.error) || (chinese ? '渠道测试失败' : 'Channel test failed'));
+      }
+      return {
+        message: stringValue(result.message)
+          || (chinese ? '渠道连接正常' : 'Channel connection succeeded'),
+      };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.webhooksEnable:
+      await api.enableWebhooks();
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.memoryOAuthStart: {
+      const provider = payload.id || value; if (!provider) return 'none'; const result = await api.startMemoryProviderOAuth(provider, profile); const state = stringValue(result.state);
+      return { message: state === 'pending' ? (chinese ? 'OAuth 浏览器授权已启动，请完成授权。' : 'OAuth browser authorization started. Complete the authorization in your browser.') : (chinese ? 'OAuth 连接请求已提交。' : 'OAuth connection request submitted.'), reload: true };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.memoryConfigUpdate: {
+      const provider = payload.id || value;
+      const values = payload.detail ? parseJsonRecord(payload.detail) : payload.fields;
+      if (!provider || !values) return 'none';
+      const configValues = isRecord(values.values)
+        ? values.values
+        : Array.isArray(values.fields)
+          ? Object.fromEntries(values.fields.flatMap((field) => (
+            isRecord(field) && stringValue(field.key)
+              ? [[stringValue(field.key), field.value]] as const
+              : []
+          )))
+          : values;
+      await api.updateMemoryProviderConfig(provider, configValues, profile, 'declared');
+      return 'reload';
+    }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.memoryReset:
-      await api.resetMemory((payload.value || 'all') as 'all' | 'memory' | 'user');
+      await api.resetMemory((payload.value || 'all') as 'all' | 'memory' | 'user', profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionExport:
+      if (!payload.id) return 'none';
+      await presentSessionExport(api, payload.id, payload.fields?.profile || profile, locale);
+      return 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDeleteEmpty: {
+      const result = await api.deleteEmptySessions(profile);
+      return {
+        message: stringValue(result.deleted) || stringValue(result.message)
+          || (chinese ? '空会话已清理' : 'Empty sessions cleaned up'),
+        reload: true,
+      };
+    }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRestart:
       await api.restartGateway();
       return 'reload';
@@ -525,6 +713,40 @@ export async function performHermesSwiftUIRouteAction(
       const version = stringValue(result.version) || stringValue(result.latest_version);
       return { message: version ? `${chinese ? '最新版本' : 'Latest version'}: ${version}` : (chinese ? '已检查更新' : 'Update check completed') };
     }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDoctor: {
+      const result = await api.runDoctor({});
+      return { message: stringValue(result.message) || (chinese ? 'Doctor 已启动' : 'Doctor started') };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemSecurityAudit: {
+      const result = await api.runSecurityAudit({});
+      return { message: stringValue(result.message) || (chinese ? '安全审计已启动' : 'Security audit started') };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemBackup: {
+      const result = await api.createBackup({});
+      return { message: stringValue(result.archive) || stringValue(result.message) || (chinese ? '备份已创建' : 'Backup created') };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDebugShare: {
+      const result = await api.createDebugShare({});
+      return { message: stringValue(result.url) || stringValue(result.message) || (chinese ? '调试报告已生成' : 'Debug report created') };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDiagnostics: {
+      const result = await api.dumpDiagnostics({});
+      return { message: stringValue(result.url) || stringValue(result.message) || (chinese ? '诊断报告已生成' : 'Diagnostics report created') };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemCheckpoints: {
+      const result = await api.getCheckpoints();
+      return { message: JSON.stringify(result) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemCheckpointPrune:
+      await api.pruneCheckpoints({});
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemCuratorRun: {
+      const result = await api.runCurator();
+      return { message: stringValue(result.message) || (chinese ? 'Curator 已启动' : 'Curator started') };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.systemCuratorPause:
+      await api.setCuratorPaused(payload.enabled === true);
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemRecover:
       await api.recoverManagedNodes(payload.id || '');
       return 'reload';
@@ -642,89 +864,6 @@ export async function performHermesSwiftUIRouteAction(
       return 'none';
   }
 }
-
-async function presentAccountFile(
-  api: HermesCloudApi,
-  id: string,
-  name: string,
-  shareOnly: boolean,
-) {
-  const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([
-    import('../../modules/hermes-quick-look'),
-    import('expo-sharing'),
-    import('../api/temporary-plaintext-files'),
-  ]);
-  const target = temporaryPlaintextFile(name, 'account-file');
-  try {
-    await api.consumeAccountFile(
-      id,
-      !shareOnly,
-      (response, signal) => writeBoundedDownload(response, target, { signal }),
-    );
-    const presented = shareOnly ? false : await quickLook.presentQuickLook(target.uri, name);
-    if (!presented && await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(target.uri, { dialogTitle: name });
-    }
-  } finally {
-    if (target.exists) target.delete();
-  }
-}
-
-async function presentSkillContent(
-  api: HermesCloudApi,
-  name: string,
-  profile: string,
-) {
-  const response = await api.getSkillContent(name, profile);
-  const content = structuredContent(response.content ?? response.text);
-  const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([
-    import('../../modules/hermes-quick-look'),
-    import('expo-sharing'),
-    import('../api/temporary-plaintext-files'),
-  ]);
-  const target = temporaryPlaintextFile(`${name}-SKILL.md`, 'skill-preview');
-  try {
-    target.write(content);
-    const presented = await quickLook.presentQuickLook(target.uri, `${name}/SKILL.md`);
-    if (!presented && await Sharing.isAvailableAsync()) {
-      await Sharing.shareAsync(target.uri);
-    }
-  } finally {
-    if (target.exists) target.delete();
-  }
-}
-
-function fileImportUploadId(requestId: string | undefined, uri: string, index: number): string {
-  const stableRequest = requestId?.trim() || `file-import-${Date.now().toString(36)}`;
-  let hash = 2166136261;
-  for (const char of uri) {
-    hash ^= char.codePointAt(0) || 0;
-    hash = Math.imul(hash, 16777619);
-  }
-  return `${stableRequest}-${index}-${(hash >>> 0).toString(16)}`
-    .replace(/[^A-Za-z0-9._:-]/g, '-')
-    .slice(0, 256);
-}
-
-function fileNameFromUri(value: string): string {
-  try {
-    const url = new URL(value);
-    return decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() || 'attachment');
-  } catch {
-    return value.split(/[\\/]/).filter(Boolean).pop() || 'attachment';
-  }
-}
-
-async function removeStagedFileImport(uri: string): Promise<void> {
-  try {
-    const { File } = await import('expo-file-system');
-    const file = new File(uri);
-    if (file.exists) file.delete();
-  } catch {
-    // Native stale-batch cleanup remains the fallback after interrupted uploads.
-  }
-}
-
 function parseJsonRecord(value: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -732,8 +871,4 @@ function parseJsonRecord(value: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
-}
-
-function isStringRecord(value: Record<string, unknown>): value is Record<string, string> {
-  return Object.values(value).every((item) => typeof item === 'string');
 }

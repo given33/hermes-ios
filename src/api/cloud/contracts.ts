@@ -15,6 +15,9 @@ export interface SessionSummary {
   output_tokens: number;
   preview: string | null;
   profile?: string;
+  archived?: boolean;
+  pinned?: boolean;
+  unread?: boolean;
 }
 
 export interface PaginatedSessions {

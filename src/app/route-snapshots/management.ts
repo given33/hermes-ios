@@ -11,6 +11,7 @@ import type {
   HermesSwiftUIProfileSnapshot,
   HermesSwiftUIPairingSnapshot,
   HermesSwiftUISkillSnapshot,
+  HermesSwiftUIToolsetSnapshot,
 } from '../swiftui-route-contract';
 import {
   localizeHermesIntegrationDescription,
@@ -84,6 +85,23 @@ export function skillsSnapshot(source: unknown, localizer: HermesRouteLocalizer)
   });
 }
 
+export function toolsetsSnapshot(source: unknown, localizer: HermesRouteLocalizer): HermesSwiftUIToolsetSnapshot[] {
+  const rows = isRecord(source) && Array.isArray(source.toolsets) ? source.toolsets : [];
+  return rows.flatMap((entry, index) => {
+    if (!isRecord(entry)) return [];
+    const id = stringValue(entry.name) || `toolset-${index}`;
+    return [{
+      id,
+      name: localizer.serverText(stringValue(entry.label) || id),
+      detail: localizer.serverText(stringValue(entry.description) || ''),
+      enabled: entry.enabled === true,
+      configured: entry.configured === true,
+      tools: stringArray(entry.tools),
+      ...(typeof entry.configJSON === 'string' ? { configJSON: entry.configJSON } : {}),
+    }];
+  });
+}
+
 export function integrationsSnapshot(source: unknown, kind: string, localizer: HermesRouteLocalizer): HermesSwiftUIIntegrationSnapshot[] {
   const mcpPayload = isRecord(source) && isRecord(source.servers) ? source.servers : {};
   const candidates = isRecord(source)
@@ -123,7 +141,7 @@ export function integrationsSnapshot(source: unknown, kind: string, localizer: H
         authRequired: entry.auth_required === true,
         authCommand: stringValue(entry.auth_command),
       } : {}),
-      ...(kind === 'mcp' ? { canTest: true } : {}),
+      ...(kind === 'mcp' || kind === 'channels' ? { canTest: true } : {}),
       ...(kind === 'channels' ? { configuration: channelConfiguration(entry) } : {}),
     }];
   });
@@ -387,6 +405,7 @@ export function profilesSnapshot(source: unknown, localizer: HermesRouteLocalize
       id,
       name: localizer.serverText(stringValue(entry.display_name) || stringValue(entry.name) || id),
       model: stringValue(entry.model) || '',
+      description,
       detail: [description, botStatus].filter(Boolean).join(' · '),
       ...(botMode && canonical && canonicalSessionId
         ? { botSessionId: officialConversationPlaceholderId(id, canonicalSessionId) }

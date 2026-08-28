@@ -523,9 +523,8 @@ export class HermesCloudApi {
     return this.management.getProfileSoul(name);
   }
 
-  updateProfileSoul(name: string, content: string) {
-    return this.management.updateProfileSoul(name, content);
-  }
+  updateProfileSoul(name: string, content: string) { return this.management.updateProfileSoul(name, content); }
+  renameProfile(name: string, newName: string) { return this.management.renameProfile(name, newName); }
   getConfig(profile = 'default') {
     return this.management.getConfig(profile);
   }

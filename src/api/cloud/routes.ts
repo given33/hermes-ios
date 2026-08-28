@@ -104,7 +104,7 @@ export async function loadCloudRoute(
       ]);
       return { ...system, health, egress, updateCheck, updateReceipt };
     }
-    case 'memory': return api.getMemoryStatus();
+    case 'memory': return api.getMemoryStatus(profile);
     case 'achievements': return api.getAchievements();
     case 'kanban': return api.getKanbanBoard();
     case 'collaboration': {

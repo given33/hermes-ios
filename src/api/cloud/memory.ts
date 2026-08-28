@@ -52,16 +52,16 @@ export class HermesMemoryCloudApi {
     return normalizeStudioMemory(value);
   }
 
-  getMemoryStatus() {
-    return this.transport.request<JsonRecord>('/api/memory');
+  getMemoryStatus(profile?: string) {
+    return this.transport.request<JsonRecord>('/api/memory', profile ? { profile } : undefined);
   }
 
-  setMemoryProvider(provider: string) {
-    return this.transport.json<JsonRecord>('/api/memory/provider', 'PUT', { provider });
+  setMemoryProvider(provider: string, profile?: string) {
+    return this.transport.json<JsonRecord>('/api/memory/provider', 'PUT', { provider }, profile ? { profile } : undefined);
   }
 
-  resetMemory(target: 'all' | 'memory' | 'user' = 'all') {
-    return this.transport.json<JsonRecord>('/api/memory/reset', 'POST', { target });
+  resetMemory(target: 'all' | 'memory' | 'user' = 'all', profile?: string) {
+    return this.transport.json<JsonRecord>('/api/memory/reset', 'POST', { target }, profile ? { profile } : undefined);
   }
 
   getMemoryProviderConfig(name: string, profile = 'default', surface = '') {
@@ -81,6 +81,25 @@ export class HermesMemoryCloudApi {
     return this.transport.json<JsonRecord>(
       `/api/memory/providers/${encodeURIComponent(name)}/config`, 'PUT', { values },
       { query: { profile, surface: surface || undefined } },
+    );
+  }
+
+  /** Begin a provider-owned OAuth loopback flow. Providers without an OAuth
+   * implementation return the same 404 as the upstream desktop client. */
+  startMemoryProviderOAuth(name: string, profile = 'default') {
+    return this.transport.json<JsonRecord>(
+      `/api/memory/providers/${encodeURIComponent(name)}/oauth/start`,
+      'POST',
+      {},
+      { profile },
+    );
+  }
+
+  /** Read the pending/connected/error state of a provider OAuth flow. */
+  getMemoryProviderOAuthStatus(name: string, profile = 'default') {
+    return this.transport.request<JsonRecord>(
+      `/api/memory/providers/${encodeURIComponent(name)}/oauth/status`,
+      { profile },
     );
   }
 }
