@@ -289,6 +289,27 @@ struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {
   let running: Bool
   let profile: String?
   let detail: String?
+  let archived: Bool?
+  let pinned: Bool?
+  let unread: Bool?
+
+  private enum CodingKeys: String, CodingKey {
+    case id, title, model, date, running, profile, detail, archived, pinned, unread
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    id = try container.decode(String.self, forKey: .id)
+    title = try container.decode(String.self, forKey: .title)
+    model = try container.decode(String.self, forKey: .model)
+    date = try container.decode(String.self, forKey: .date)
+    running = try container.decode(Bool.self, forKey: .running)
+    profile = try container.decodeIfPresent(String.self, forKey: .profile)
+    detail = try container.decodeIfPresent(String.self, forKey: .detail)
+    archived = try container.decodeIfPresent(Bool.self, forKey: .archived)
+    pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned)
+    unread = try container.decodeIfPresent(Bool.self, forKey: .unread)
+  }
 }
 
 struct HermesSessionLineageSnapshot: Decodable, Equatable, Identifiable {
