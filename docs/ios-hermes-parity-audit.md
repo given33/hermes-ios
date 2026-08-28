@@ -13,7 +13,7 @@ exist. “API only” is deliberately not treated as completion.
 | --- | --- | --- | --- | --- |
 | Basic hosted chat | `apps/desktop/src/app/chat` | Hosted conversation enqueue + ordered lifecycle projection in `src/studio/chat`; native API uses `/api/plugins/collaboration/single/...` | `tests/hosted-conversation-events.test.ts`, `tests/low-latency-event-reducer.test.ts` | verified |
 | Low-latency chat events | Desktop event stream contract | WebSocket is preferred, authenticated with one-time `/api/auth/ws-ticket`; automatic SSE fallback remains for old gateways/proxies | `src/api/HermesApiClient.ts`, `src/studio/chat/useHostedConversationStream.ts`, `tests/api-client.test.ts` | verified |
-| Bot Mode | Desktop Bot Mode roster/chat | `/api/bots` and canonical `official:v3:` session placeholders; Bots route opens the same hosted chat surface | `tests/cloud-api.test.ts`, `tests/hermes-route-data.test.ts` | verified |
+| Bot Mode core | Desktop Bot Mode roster/chat | `/api/bots` and canonical `official:v3:` session placeholders; Bots route opens the same hosted chat surface | `tests/cloud-api.test.ts`, `tests/hermes-route-data.test.ts` | verified (core) |
 | Worker collaboration | Desktop collaboration panel | Dispatcher + durable worker queue + `/api/plugins/collaboration/worker/ws`; iOS collaboration route uses the canonical room endpoints | backend role/deployment test suite; iOS collaboration source | verified |
 
 ## Native route matrix
@@ -71,6 +71,19 @@ exist. “API only” is deliberately not treated as completion.
 Each item must add a typed route snapshot, a named action in
 `docs/spec/swiftui-route-actions.json`, a backend-wire test, and a native source
 assertion before it can move to **verified**.
+
+### Bot Mode scope boundary
+
+The mobile bridge currently verifies the interoperable core: profile roster and
+CRUD, canonical Bot Chat, and server-persisted title/visibility/pin/group
+metadata. The upstream desktop plugin still owns several presentation and
+orchestration surfaces that are not yet represented by a mobile REST contract:
+the local group-chat round engine (including member holds and @mention
+handoffs), image/pet/avatar generation and picker state, cross-connection
+roster/relay management, and the dedicated Routines pane. Those are deliberately
+not marked as mobile parity until each has a typed endpoint, native route/action,
+and contract test; the generic profile, cron, collaboration, and authenticated
+gateway-WebSocket APIs remain available for future bridges.
 
 ## Role/deployment parity
 
