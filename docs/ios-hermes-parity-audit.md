@@ -21,7 +21,7 @@ exist. “API only” is deliberately not treated as completion.
 | Desktop capability | iOS route/action surface | Test/evidence | Status |
 | --- | --- | --- | --- |
 | Sessions: open, rename, delete, context/lineage, compact, fork, archive/pin/unread, project tree, PR scan, bulk import/delete | `/sessions`; native list/search/context/lineage/compaction/fork/export, official sidebar/project-tree/PR/statistics catalogs, bulk selection/delete and JSON import | `tests/swiftui-partial-frontend-source.test.ts`, `tests/hermes-route-data.test.ts`, route-data/API domain tests | verified |
-| Files: browse, import, download/share, delete, folders | `/files`; bounded staged importer and protected temp files | file/import source tests and contract tests | verified |
+| Files: browse, import, download/share, delete, folders | `/files`; bounded staged importer and protected temp files; native “New folder” form submits an explicit server path through the official `folder.create` → `/api/files/mkdir` contract | file/import/folder source tests and contract tests | verified |
 | Models: select, expensive-model confirmation, discover, provider OAuth, custom endpoint | `/models`; model picker, confirmation, discovery, official provider OAuth start/submit/poll and custom endpoint validate/save/activate/delete | model route tests, provider API domain tests, contract tests | verified |
 | Analytics | `/analytics`; deferred chart rendering and metrics | analytics snapshot/source tests | verified |
 | Logs | `/logs`; filter and refresh | route contract/source tests | verified |
@@ -43,6 +43,12 @@ exist. “API only” is deliberately not treated as completion.
 | Workflows/approvals/runtime | dedicated native pages with revision/digest guarded actions | workflow/approval/runtime route tests | verified |
 
 ## Change log
+
+- 2026-08-29: exposed the previously action-only managed workspace folder
+  operation on the native Files page. Users can enter a server-relative or
+  absolute Hermes workspace path, submit `folder.create`, and receive the
+  normal route refresh/result notification; the page does not invent a local
+  folder model for the account-scoped cloud file library.
 
 - 2026-08-29: moved Toolsets out of the SwiftUI toolbar content (where a
   `Section` could not render), added official toolset schema/model/provider and
