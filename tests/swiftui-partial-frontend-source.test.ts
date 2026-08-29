@@ -81,6 +81,8 @@ test('native Bot Mode controls expose official profile capability and avatar act
   assert.match(pages, /botRelaySend/);
   assert.match(pages, /botAvatarGenerate/);
   assert.match(pages, /botPetSelect/);
+  assert.match(pages, /Avatar color/);
+  assert.match(pages, /Avatar shape/);
   assert.match(pages, /Cross-connection Bot Relay/);
   assert.match(pages, /allowedContentTypes: \[\.image\]/);
   assert.match(actions, /case botProfileConfigure = "bot\.profile\.configure"/);
@@ -94,6 +96,17 @@ test('native Bot Mode controls expose official profile capability and avatar act
   assert.match(api, /\/assets\/avatar\/generate/);
   assert.match(api, /\/api\/bot-mode\/pets\/gallery/);
   assert.match(api, /\/assets\/avatar\/pet/);
+});
+
+test('native Cron and Bot Mode expose editable, profile-scoped routines', () => {
+  const pages = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const routeData = read('src/app/hermes-route-data.ts');
+  const routes = read('src/api/cloud/routes.ts');
+  assert.match(pages, /cronUpdate/);
+  assert.match(pages, /Bot Routines/);
+  assert.match(pages, /Add routine for this bot/);
+  assert.match(routeData, /updateCronJob\(payload\.id, updates, payload\.fields\?\.profile \|\| profile\)/);
+  assert.match(routes, /bot_routines/);
 });
 
 test('signed iOS builds keep native route surfaces while the JS sidebar remains authoritative', () => {

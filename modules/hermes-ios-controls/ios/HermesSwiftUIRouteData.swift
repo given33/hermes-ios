@@ -44,6 +44,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let profiles: [HermesProfileSnapshot]
   let botRelayJSON: String?
   let botPetJSON: String?
+  let botRoutinesJSON: String?
   let config: HermesConfigSnapshot
   let environment: [HermesEnvironmentSecretSnapshot]
   let system: HermesSystemSnapshot
@@ -93,6 +94,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     profiles: [HermesProfileSnapshot] = [],
     botRelayJSON: String? = nil,
     botPetJSON: String? = nil,
+    botRoutinesJSON: String? = nil,
     config: HermesConfigSnapshot = .empty,
     environment: [HermesEnvironmentSecretSnapshot] = [],
     system: HermesSystemSnapshot = .empty,
@@ -141,6 +143,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.profiles = profiles
     self.botRelayJSON = botRelayJSON
     self.botPetJSON = botPetJSON
+    self.botRoutinesJSON = botRoutinesJSON
     self.config = config
     self.environment = environment
     self.system = system
@@ -241,6 +244,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     profiles = try container.decodeIfPresent([HermesProfileSnapshot].self, forKey: .profiles) ?? []
     botRelayJSON = try container.decodeIfPresent(String.self, forKey: .botRelayJSON)
     botPetJSON = try container.decodeIfPresent(String.self, forKey: .botPetJSON)
+    botRoutinesJSON = try container.decodeIfPresent(String.self, forKey: .botRoutinesJSON)
     config = try container.decodeIfPresent(HermesConfigSnapshot.self, forKey: .config) ?? .empty
     environment = try container.decodeIfPresent(
       [HermesEnvironmentSecretSnapshot].self,

@@ -25,14 +25,14 @@ exist. “API only” is deliberately not treated as completion.
 | Models: select, expensive-model confirmation, discover, provider OAuth, custom endpoint | `/models`; model picker, confirmation, discovery, official provider OAuth start/submit/poll and custom endpoint validate/save/activate/delete | model route tests, provider API domain tests, contract tests | verified |
 | Analytics | `/analytics`; deferred chart rendering and metrics | analytics snapshot/source tests | verified |
 | Logs | `/logs`; filter and refresh | route contract/source tests | verified |
-| Cron jobs | `/cron`; create, toggle, run, delete; official blueprint and delivery-target catalogs, typed values JSON, and per-job run history are displayed; blueprints can be instantiated | cron API domain tests + route contract | verified |
+| Cron jobs | `/cron`; create, edit, toggle, run, delete; official blueprint and delivery-target catalogs, typed values JSON, and per-job run history are displayed; blueprints can be instantiated | cron API domain tests + route contract | verified |
 | Skills | `/skills`; list, toggle, edit/view `SKILL.md`, managed-installation status, SkillHub source/update/search/preview/scan/install/uninstall, and Learning graph refresh | skills route/source tests and route-data action tests | verified |
 | Toolsets | Skills → Toolsets section; toggle, official provider/schema/model catalogs, native declared-key form, provider/model/environment selection, post-setup, Terminal backend and Computer Use status/actions | toolset/runtime metadata hydration in `hermes-route-data.ts`; native `HermesToolsetSchemaSheet` submits the official environment endpoint | `tests/hermes-route-data.test.ts`, `tests/swiftui-partial-frontend-source.test.ts`, generated cross-language contract | verified |
 | Plugins | `/plugins`; rescan, install/update/remove, visibility, managed rollback | managed-installation tests | verified |
 | MCP | `/mcp`; catalog install, toggle, test, delete, OAuth start; safe browser open and completion polling | MCP route/source tests; OAuth action returns the official authorization URL and the native hook polls the official flow endpoint | verified |
 | Channels/Webhooks | `/channels`, `/webhooks`; toggle/edit/test, webhook enable/create/delete | route action contract + API domain tests | verified |
 | Pairing | `/pairing`; approve/revoke/clear pending | route action contract | verified |
-| Profiles/Bots | `/profiles`, `/bots`; create, activate, rename, description, model, auto-describe, SOUL, setup command, export; Bot Chat opens canonical session | management API tests and route source tests | verified |
+| Profiles/Bots | `/profiles`, `/bots`; create, activate, rename, description, model, auto-describe, SOUL, setup command, export; Bot Chat opens canonical session; Bot Routines are hydrated per Profile and expose create/edit/toggle/run/delete | management API tests, route data/action tests and native source tests | verified |
 | Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset`, and generation delegates to `image.generate` then `profiles.set_asset`, with native iOS controls and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
 | Bot Petdex avatar picker | Bots context menu reads a bounded (96-entry) projection of the upstream `pet.gallery` catalog and applies a selected first-frame thumbnail through `pet.thumb` → `profiles.set_asset`; native selection menu carries slug and manifest URL, while the dedicated gallery API remains available for future paging/search | backend pet bridge test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
 | Bot Mode cross-connection relay | Bots route reads the upstream relay roster and exposes a native target/message sheet; send queues through the canonical `tools.bot_relay.enqueue_envelope` helper with ambiguity/liveness/TTL safeguards | backend relay route test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; native source/action assertions | verified (official bridge) |
@@ -86,6 +86,11 @@ exist. “API only” is deliberately not treated as completion.
   applies a selected pet through server-side `pet.thumb` cropping followed by
   the canonical Bot `profiles.set_asset` handler. Petdex catalog/install
   semantics remain owned by the upstream gateway.
+- 2026-08-29: closed the Bot Mode Routines gap. The iOS Bots route now
+  hydrates bounded cron stores for every advertised Profile, exposes the
+  desktop-equivalent routine controls, and carries an explicit profile scope
+  through create/edit/toggle/run/delete/blueprint actions. Added the official
+  `cron.update` route action and regression coverage.
 
 Each item must add a typed route snapshot, a named action in
 `docs/spec/swiftui-route-actions.json`, a backend-wire test, and a native source
@@ -93,16 +98,17 @@ assertion before it can move to **verified**.
 
 ### Bot Mode scope boundary
 
-The mobile bridge currently verifies the interoperable core: profile roster and
-CRUD, canonical Bot Chat, and server-persisted title/visibility/pin/group
-metadata. The upstream desktop plugin still owns several presentation and
-orchestration surfaces that are not yet represented by a mobile REST contract:
-the local group-chat round engine (including member holds and @mention
-handoffs), pixel-pet runtime animation/state controls, and the dedicated
-Routines pane. Those are deliberately
-not marked as mobile parity until each has a typed endpoint, native route/action,
-and contract test; the generic profile, cron, collaboration, and authenticated
-gateway-WebSocket APIs remain available for future bridges.
+The mobile bridge verifies the interoperable Bot Mode core: profile roster and
+CRUD, canonical Bot Chat, server-persisted title/visibility/pin/group metadata,
+per-profile Routines, official profile capability/assets, Petdex avatar
+selection, and cross-connection relay. The upstream desktop plugin still owns
+one window-local orchestration detail that has no server contract: its local
+group-chat round engine (member holds and @mention handoffs). iOS uses the
+server-backed Hermes Studio collaboration room surface for group chat, with
+mentions, member management, interruption, approvals, workspace files, and
+authenticated low-latency event delivery. Pixel-pet runtime animation/state
+controls remain explicitly out of scope by product decision; Petdex selection
+and static avatar rendering are supported.
 
 ## Role/deployment parity
 

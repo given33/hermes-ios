@@ -592,6 +592,8 @@ export interface HermesSwiftUIRouteSnapshot {
   botRelayJSON?: string;
   /** JSON-encoded upstream Petdex gallery used by Bot avatar selection. */
   botPetJSON?: string;
+  /** JSON-encoded cron jobs keyed by Bot profile for the Bot Mode routines view. */
+  botRoutinesJSON?: string;
   config?: HermesSwiftUIConfigSnapshot;
   environment?: readonly HermesSwiftUIEnvironmentSecretSnapshot[];
   system?: HermesSwiftUISystemSnapshot;

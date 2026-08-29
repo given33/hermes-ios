@@ -116,9 +116,12 @@ SwiftUI 审批快照现在显式携带后端返回的 `payload_digest`，用户�
   iOS 聊天依赖。
 - 复验结果：`pnpm typecheck`、`pnpm contract:check`、全量 `pnpm test` 均通过，
   当前统计为 802 tests / 802 pass。原生 Xcode 编译仍需 macOS runner。
-- 明确范围：Bot Mode 的桌面 group-round 引擎、宠物运行时动画/状态控制和
-  Routines 专用面板尚未被宣称为 iOS parity；它们只有在各自拥有 typed API、
-  原生 route/action 和回归测试后才会升级为 verified。Petdex gallery/选择器
+- 明确范围：宠物运行时动画/状态控制按产品决定不做。桌面 Bot Mode 的
+  window-local group-round 引擎仍没有可复用的后端协议，iOS 使用服务端
+  Hermes Studio Agent 房间（含 @mention、成员管理、中断、审批、工作区和
+  低延迟事件）承载同类群聊能力。Routines 已补齐：Bots 页面按 Profile
+  加载官方 cron store，并支持创建/编辑/暂停/运行/删除；新增 `cron.update`
+  跨语言动作契约和回归测试。Petdex gallery/选择器
   已通过官方 `pet.gallery` → `pet.thumb` → `profiles.set_asset` 桥接完成。头像生成已通过
   `/api/bots/{name}/assets/avatar/generate` 接入官方 `image.generate` →
   `profiles.set_asset` 链路；跨连接 relay 已通过
@@ -129,3 +132,12 @@ SwiftUI 审批快照现在显式携带后端返回的 `payload_digest`，用户�
   `profiles.describe|configure|get_asset|set_asset` handler；iOS Bots 上下文菜单
   提供官方能力读取、JSON 能力编辑和原生头像导入（≤2 MB），服务端 roster
   同步 `has_avatar` 状态。新增 backend-wire、Cloud API、SwiftUI action 测试。
+
+## 9. 2026-08-29 增量安全回归
+
+- BlueBubbles webhook 对空密码和空 token 现在一律拒绝，并使用
+  `hmac.compare_digest`；认证网关公共路径按完整路由或目录边界匹配，
+  `/auth/logout-all`、`/api/auth/providers-evil` 等相似路径不会绕过登录。
+- 后端回归：BlueBubbles、公共路径和可信代理 IP 测试共 44 项通过；iOS
+  路由/契约/原生源码测试 67 项通过，新增 Bot Routines 与 `cron.update`
+  覆盖。

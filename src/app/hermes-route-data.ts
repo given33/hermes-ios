@@ -159,7 +159,7 @@ export async function loadHermesSwiftUIRouteSnapshot(
     case 'profiles':
     case 'profile-new':
       return { ...base, profiles: profilesSnapshot(source, localizer) };
-    case 'bots': { const relay = isRecord(source) && isRecord(source.bot_relay) ? source.bot_relay : undefined; const pets = isRecord(source) && isRecord(source.bot_pet_gallery) ? source.bot_pet_gallery : undefined; return { ...base, profiles: profilesSnapshot(source, localizer), ...(relay ? { botRelayJSON: JSON.stringify(relay) } : {}), ...(pets ? { botPetJSON: JSON.stringify(pets) } : {}) }; }
+    case 'bots': { const relay = isRecord(source) && isRecord(source.bot_relay) ? source.bot_relay : undefined; const pets = isRecord(source) && isRecord(source.bot_pet_gallery) ? source.bot_pet_gallery : undefined; const routines = isRecord(source) && isRecord(source.bot_routines) ? source.bot_routines : undefined; const normalizedRoutines = routines ? Object.fromEntries(Object.entries(routines).map(([owner, jobs]) => [owner, cronSnapshot(jobs, localizer)])) : undefined; return { ...base, profiles: profilesSnapshot(source, localizer), ...(relay ? { botRelayJSON: JSON.stringify(relay) } : {}), ...(pets ? { botPetJSON: JSON.stringify(pets) } : {}), ...(normalizedRoutines ? { botRoutinesJSON: JSON.stringify(normalizedRoutines) } : {}) }; }
     case 'config':
       return { ...base, config: configSnapshot(source) };
     case 'env':
@@ -380,15 +380,16 @@ export async function performHermesSwiftUIRouteAction(
         prompt: payload.detail || payload.value || '',
         schedule: payload.fields?.schedule || payload.value || '0 * * * *',
         enabled: payload.enabled ?? true,
-      }, profile);
+      }, payload.fields?.profile || profile);
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.cronUpdate: { if (!payload.id) return 'none'; const updates = payload.detail ? parseJsonRecord(payload.detail) : payload.fields; if (!updates || Object.keys(updates).length === 0) return 'none'; await api.updateCronJob(payload.id, updates, payload.fields?.profile || profile); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronToggle:
       if (!payload.id || payload.enabled === undefined) return 'none';
-      await api.setCronJobPaused(payload.id, !payload.enabled, profile);
+      await api.setCronJobPaused(payload.id, !payload.enabled, payload.fields?.profile || profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronRun:
       if (!payload.id) return 'none';
-      await api.triggerCronJob(payload.id, profile);
+      await api.triggerCronJob(payload.id, payload.fields?.profile || profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionArchive:
       if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionArchived(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
@@ -402,10 +403,10 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionPullRequests:
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronBlueprintCreate:
-      if (!payload.id) return 'none'; { const values = payload.fields?.values ? parseJsonRecord(payload.fields.values) || {} : payload.fields || {}; await api.instantiateCronBlueprint(payload.id, values, profile); return 'reload'; }
+      if (!payload.id) return 'none'; { const values = payload.fields?.values ? parseJsonRecord(payload.fields.values) || {} : payload.fields || {}; await api.instantiateCronBlueprint(payload.id, values, payload.fields?.profile || profile); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronDelete:
       if (!payload.id) return 'none';
-      await api.deleteCronJob(payload.id, profile);
+      await api.deleteCronJob(payload.id, payload.fields?.profile || profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.skillCreate:
       if (!payload.name || !payload.detail) return 'none';

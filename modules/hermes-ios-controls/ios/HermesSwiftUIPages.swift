@@ -790,6 +790,7 @@ private struct HermesRemoteRoutePage: View {
   @State private var hookApprove = false
   @State private var hookDeleteEvent = ""
   @State private var hookDeleteCommand = ""
+  @State private var routineEditorProfile = ""
 
   var body: some View {
     routeBody
@@ -1038,6 +1039,23 @@ private struct HermesRemoteRoutePage: View {
             Image(systemName: job.enabled ? "pause.fill" : "play.fill")
           }
           .buttonStyle(.borderless)
+        }
+        .contextMenu {
+          Button {
+            editorID = job.id
+            editorName = job.name
+            editorValue = job.schedule
+            editorDetail = job.prompt
+            routineEditorProfile = ""
+            editor = .cron
+          } label: {
+            Label(chinese ? "编辑定时任务" : "Edit scheduled job", systemImage: "square.and.pencil")
+          }
+          Button {
+            onAction(.cronRun, HermesRouteActionPayload(route: "cron", id: job.id))
+          } label: {
+            Label(chinese ? "立即运行" : "Run now", systemImage: "play.fill")
+          }
         }
         .swipeActions {
           Button {
@@ -1601,6 +1619,73 @@ private struct HermesRemoteRoutePage: View {
             }
           }
         }
+        if route == .bots, !botRoutineGroups.isEmpty {
+          Section(chinese ? "Bot Routines（按机器人）" : "Bot Routines (per bot)") {
+            Text(chinese
+              ? "这里对应桌面端 Bot Mode 的 Routines 面板；每个任务使用自己的 Profile 调度存储。"
+              : "This mirrors the desktop Bot Mode Routines pane; every job uses its own Profile-scoped scheduler store.")
+              .font(HermesFonts.body(11))
+              .foregroundStyle(appearance.palette.secondary)
+            ForEach(Array(botRoutineGroups.enumerated()), id: \.offset) { group in
+              VStack(alignment: .leading, spacing: 7) {
+                Text(group.element.profile)
+                  .font(HermesFonts.bodyBold(13))
+                ForEach(group.element.jobs) { job in
+                  HStack(spacing: 8) {
+                    Image(systemName: job.enabled ? "clock.arrow.circlepath" : "pause.circle")
+                      .foregroundStyle(job.enabled ? appearance.palette.accent : appearance.palette.tertiary)
+                    VStack(alignment: .leading, spacing: 2) {
+                      Text(job.name).font(HermesFonts.bodyBold(12))
+                      Text([job.schedule, job.lastRun].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(HermesFonts.mono(10))
+                        .foregroundStyle(appearance.palette.secondary)
+                    }
+                    Spacer()
+                    Button {
+                      onAction(.cronToggle, HermesRouteActionPayload(route: "bots", id: job.id, enabled: !job.enabled, fields: ["profile": group.element.profile]))
+                    } label: {
+                      Image(systemName: job.enabled ? "pause.fill" : "play.fill")
+                    }.buttonStyle(.borderless)
+                    Button {
+                      onAction(.cronRun, HermesRouteActionPayload(route: "bots", id: job.id, fields: ["profile": group.element.profile]))
+                    } label: {
+                      Image(systemName: "play.circle")
+                    }.buttonStyle(.borderless)
+                  }
+                  .contextMenu {
+                    Button {
+                      routineEditorProfile = group.element.profile
+                      editorID = job.id
+                      editorName = job.name
+                      editorValue = job.schedule
+                      editorDetail = job.prompt
+                      editor = .cron
+                    } label: {
+                      Label(chinese ? "编辑例程" : "Edit routine", systemImage: "square.and.pencil")
+                    }
+                    Button(role: .destructive) {
+                      onAction(.cronDelete, HermesRouteActionPayload(route: "bots", id: job.id, fields: ["profile": group.element.profile]))
+                    } label: {
+                      Label(chinese ? "删除例程" : "Delete routine", systemImage: "trash")
+                    }
+                  }
+                }
+                Button {
+                  routineEditorProfile = group.element.profile
+                  editorID = ""
+                  editorName = ""
+                  editorValue = "0 * * * *"
+                  editorDetail = ""
+                  editor = .cron
+                } label: {
+                  Label(chinese ? "为此机器人新增例程" : "Add routine for this bot", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+              }
+              .padding(.vertical, 4)
+            }
+          }
+        }
         ForEach(data.profiles) { profile in
         HermesRemoteRow(icon: profile.botHasAvatar == true ? "person.crop.circle.fill" : (profile.active ? "person.crop.circle.fill" : "person.crop.circle"), iconData: profile.botAvatarData, title: profile.name, detail: "\(profile.model) · \(profile.detail)", tint: profile.active ? appearance.palette.success : appearance.palette.secondary) {
           if !profile.active {
@@ -1664,6 +1749,27 @@ private struct HermesRemoteRoutePage: View {
             Button {
               onAction(.botProfileDescribe, HermesRouteActionPayload(route: "bots", id: profile.id))
             } label: { Label(chinese ? "读取官方能力配置" : "Load official capabilities", systemImage: "list.bullet.rectangle") }
+            Menu {
+              Button(chinese ? "跟随名称（自动颜色）" : "Follow name (automatic color)") {
+                onAction(.botMetaUpdate, HermesRouteActionPayload(route: "bots", id: profile.id, detail: "{\"color\":\"\"}"))
+              }
+              ForEach(botAvatarColorChoices, id: \.self) { color in
+                Button(color) {
+                  onAction(.botMetaUpdate, HermesRouteActionPayload(route: "bots", id: profile.id, detail: "{\"color\":\"\(color)\"}"))
+                }
+              }
+            } label: {
+              Label(chinese ? "头像颜色" : "Avatar color", systemImage: "paintpalette")
+            }
+            Menu {
+              ForEach(botAvatarShapeChoices, id: \.self) { shape in
+                Button(shape.capitalized) {
+                  onAction(.botMetaUpdate, HermesRouteActionPayload(route: "bots", id: profile.id, detail: "{\"shape\":\"\(shape)\"}"))
+                }
+              }
+            } label: {
+              Label(chinese ? "头像形状" : "Avatar shape", systemImage: "seal")
+            }
             Button {
               avatarBotID = profile.id
               importingBotAvatar = true
@@ -2139,6 +2245,28 @@ private struct HermesRemoteRoutePage: View {
     }
   }
 
+  private var botRoutineGroups: [(profile: String, jobs: [HermesCronJobSnapshot])] {
+    guard route == .bots,
+          let text = data.botRoutinesJSON,
+          let raw = text.data(using: .utf8),
+          let decoded = try? JSONDecoder().decode([String: [HermesCronJobSnapshot]].self, from: raw)
+    else { return [] }
+    return decoded.keys.sorted().compactMap { profile in
+      guard let jobs = decoded[profile], !jobs.isEmpty else { return nil }
+      return (profile: profile, jobs: jobs)
+    }
+  }
+
+  // Keep the same stable vocabulary as the upstream desktop avatar picker;
+  // values are persisted via the official ``ui_meta['hermes-bots']`` patch.
+  private var botAvatarShapeChoices: [String] {
+    ["circle", "blob", "squircle", "pill", "triangle", "hexagon", "cloud", "drop"]
+  }
+
+  private var botAvatarColorChoices: [String] {
+    stride(from: 0, to: 360, by: 30).map { "hsl(\($0) 68% 58%)" }
+  }
+
   private var terminalBackendKeys: [String] {
     guard let text = data.terminalBackendsJSON,
           let raw = text.data(using: .utf8),
@@ -2159,6 +2287,7 @@ private struct HermesRemoteRoutePage: View {
         ? data.collaboration.availableProfiles.joined(separator: ", ")
         : ""
     editorDetail = ""
+    if kind == .cron { routineEditorProfile = "" }
     if kind == .config { editorDetail = data.config.exportText }
     if kind == .environment { editorValue = "" }
     if kind == .skill {
@@ -2191,7 +2320,20 @@ private struct HermesRemoteRoutePage: View {
       onAction(.collaborationCreate, HermesRouteActionPayload(route: "collaboration", name: name, fields: ["profiles": profiles.joined(separator: ",")]))
     case .cron:
       guard !name.isEmpty, !detail.isEmpty else { return }
-      onAction(.cronCreate, HermesRouteActionPayload(route: "cron", name: name, detail: detail, enabled: true, fields: ["schedule": value.isEmpty ? "0 * * * *" : value]))
+      let schedule = value.isEmpty ? "0 * * * *" : value
+      if editorID.isEmpty {
+        var fields = ["schedule": schedule]
+        if !routineEditorProfile.isEmpty { fields["profile"] = routineEditorProfile }
+        onAction(.cronCreate, HermesRouteActionPayload(route: "cron", name: name, detail: detail, enabled: true, fields: fields))
+      } else if let encoded = try? JSONSerialization.data(withJSONObject: [
+        "name": name,
+        "prompt": detail,
+        "schedule": schedule,
+      ], options: [.sortedKeys]), let json = String(data: encoded, encoding: .utf8) {
+        var fields: [String: String] = [:]
+        if !routineEditorProfile.isEmpty { fields["profile"] = routineEditorProfile }
+        onAction(.cronUpdate, HermesRouteActionPayload(route: "cron", id: editorID, detail: json, fields: fields))
+      }
     case .mcp:
       guard !name.isEmpty, !value.isEmpty else { return }
       onAction(.integrationCreate, HermesRouteActionPayload(route: "mcp", name: name, fields: ["url": value]))
@@ -2418,6 +2560,7 @@ private struct HermesRemoteEditorSheet: View {
       if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
       if kind == .channel { return "Edit Channel Configuration" }
       if kind == .plugin { return "Install Plugin" }
+      if kind == .cron { return isCreating ? "New Scheduled Job" : "Edit Scheduled Job" }
       if kind == .environment { return isCreating ? "Add Environment Variable" : "Edit Environment Variable" }
       if kind == .toolsetProvider { return "Select Toolset Provider" }
       if kind == .toolsetModel { return "Select Toolset Model" }
@@ -2426,7 +2569,7 @@ private struct HermesRemoteEditorSheet: View {
     }
     switch kind {
     case .collaboration: return "新建协作房间"
-    case .cron: return "新建定时任务"
+    case .cron: return isCreating ? "新建定时任务" : "编辑定时任务"
     case .mcp: return "添加 MCP 服务器"
     case .webhooks: return "添加 Webhook"
     case .pairing: return "批准配对用户"

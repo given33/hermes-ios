@@ -790,6 +790,7 @@ test('native management actions write through the canonical cloud APIs', async (
     },
     rescanAchievements: async (...args: unknown[]) => { calls.push(['achievement-rescan', ...args]); },
     setCronJobPaused: async (...args: unknown[]) => { calls.push(['cron-toggle', ...args]); },
+    triggerCronJob: async (...args: unknown[]) => { calls.push(['cron-run', ...args]); },
     toggleSkill: async (...args: unknown[]) => { calls.push(['skill-toggle', ...args]); },
     updateChannel: async (...args: unknown[]) => { calls.push(['channel-update', ...args]); },
     setPluginEnabled: async (...args: unknown[]) => { calls.push(['plugin-toggle', ...args]); },
@@ -802,6 +803,7 @@ test('native management actions write through the canonical cloud APIs', async (
   } as unknown as HermesCloudApi;
 
   await performHermesSwiftUIRouteAction(api, { action: 'cron.toggle', payload: { route: 'cron', id: 'cron-1', enabled: false } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'cron.run', payload: { route: 'bots', id: 'routine-1', fields: { profile: 'hk-worker' } } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'skill.toggle', payload: { route: 'skills', id: 'browser', enabled: true } }, 'reviewer');
   await performHermesSwiftUIRouteAction(api, { action: 'integration.toggle', payload: { route: 'plugins', id: 'kanban', enabled: false } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'profile.activate', payload: { route: 'profiles', id: 'worker' } }, 'default');
@@ -816,6 +818,7 @@ test('native management actions write through the canonical cloud APIs', async (
 
   assert.deepEqual(calls, [
     ['cron-toggle', 'cron-1', true, 'default'],
+    ['cron-run', 'routine-1', 'hk-worker'],
     ['skill-toggle', 'browser', true, 'reviewer'],
     ['plugin-toggle', 'kanban', false],
     ['profile-active', 'worker'],
@@ -1071,6 +1074,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
         }],
         bot_relay: { agents: [{ handle: 'worker', connection_id: 'hk-primary' }] },
         bot_pet_gallery: { pets: [{ slug: 'otter', displayName: 'Otter' }] },
+        bot_routines: { 'hk-worker': [{ id: 'routine-1', name: 'HK heartbeat', schedule: '*/5 * * * *', prompt: 'check worker', enabled: true }] },
       };
     },
   } as unknown as HermesCloudApi, 'bots', 'default');
@@ -1085,6 +1089,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
   assert.match(snapshot.profiles?.[0]?.botSessionId || '', /^official:v3:/);
   assert.match(snapshot.botRelayJSON || '', /hk-primary/);
   assert.match(snapshot.botPetJSON || '', /otter/);
+  assert.match(snapshot.botRoutinesJSON || '', /HK heartbeat/);
 });
 
 test('Bot Mode route bounds the large Petdex catalog in native snapshots', async () => {
@@ -1096,6 +1101,20 @@ test('Bot Mode route bounds the large Petdex catalog in native snapshots', async
   } as unknown as HermesCloudApi, 'bots', 'default');
   const gallery = source as { bot_pet_gallery?: { pets?: unknown[] } };
   assert.equal(gallery.bot_pet_gallery?.pets?.length, 96);
+});
+
+test('Bot Mode route hydrates per-profile Routines from the official cron store', async () => {
+  const source = await loadCloudRoute({
+    getBots: async () => ({ bot_mode: true, profiles: [{ name: 'hk-worker' }] }),
+    getCronJobs: async (profile: string) => profile === 'hk-worker'
+      ? [{ id: 'routine-1', name: 'HK heartbeat', schedule: '*/5 * * * *', prompt: 'check worker', enabled: true }]
+      : [],
+    getBotRelayRoster: async () => ({}),
+    getBotPetGallery: async () => ({ pets: [] }),
+  } as unknown as HermesCloudApi, 'bots', 'default');
+  assert.deepEqual((source as { bot_routines?: Record<string, unknown[]> }).bot_routines, {
+    'hk-worker': [{ id: 'routine-1', name: 'HK heartbeat', schedule: '*/5 * * * *', prompt: 'check worker', enabled: true }],
+  });
 });
 
 test('Bot Mode metadata action uses the dedicated REST endpoint', async () => {

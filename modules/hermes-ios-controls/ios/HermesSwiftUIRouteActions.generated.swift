@@ -45,6 +45,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case profiles
   case botRelayJSON
   case botPetJSON
+  case botRoutinesJSON
   case config
   case environment
   case system
@@ -129,6 +130,7 @@ enum HermesRouteAction: String, CaseIterable {
   case customEndpointDelete = "provider.custom.delete"
   case logsFilter = "logs.filter"
   case cronCreate = "cron.create"
+  case cronUpdate = "cron.update"
   case cronToggle = "cron.toggle"
   case cronRun = "cron.run"
   case cronDelete = "cron.delete"

@@ -124,7 +124,29 @@ export async function loadCloudRoute(
       const boundedPetGallery = isRecord(petGallery) && Array.isArray(petGallery.pets)
         ? { ...petGallery, pets: petGallery.pets.slice(0, 96) }
         : petGallery;
-      return { ...roster, profiles, ...(relay ? { bot_relay: relay } : {}), ...(boundedPetGallery ? { bot_pet_gallery: boundedPetGallery } : {}) };
+      // Bot Mode's desktop Routines pane follows the selected bot rather than
+      // the launch profile. Hydrate the same official cron store for every
+      // advertised profile so iOS can present the equivalent per-bot view and
+      // send mutations with an explicit profile scope. Keep both the profile
+      // count and each job list bounded; the dedicated /cron route remains the
+      // full-fidelity surface for large installations.
+      const routineRows = typeof api.getCronJobs === 'function' ? await Promise.all(profiles
+        .filter((entry): entry is JsonRecord => isRecord(entry) && typeof entry.name === 'string')
+        .slice(0, 32)
+        .map(async (entry) => {
+          const name = String(entry.name).trim();
+          if (!name) return null;
+          const jobs = await api.getCronJobs(name).catch(() => []);
+          return [name, Array.isArray(jobs) ? jobs.slice(0, 128) : []] as const;
+        })) : [];
+      const botRoutines = Object.fromEntries(routineRows.filter((row): row is readonly [string, JsonRecord[]] => row !== null));
+      return {
+        ...roster,
+        profiles,
+        ...(relay ? { bot_relay: relay } : {}),
+        ...(boundedPetGallery ? { bot_pet_gallery: boundedPetGallery } : {}),
+        bot_routines: botRoutines,
+      };
     }
     case 'config': return api.getConfig(profile);
     // `/api/model/credentials` was retired upstream.  Environment secrets are
