@@ -123,10 +123,12 @@ GET `/api/dashboard/themes`（公开）；PUT `/api/dashboard/theme` `{name}`；
 | `renameConversation` | PATCH `/single/conversations/{id}` | `{title}` | `{conversation}` |
 | `deleteConversation` | DELETE `/single/conversations/{id}` | — | `{ok}`；404 |
 | `recordConversationMessage` | POST `/single/conversations/{id}/record` | CollaborationMessage（只记不跑 agent） | `{message}` |
+| `registerConversationArtifact` | POST `/single/conversations/{id}/artifacts` | `{relative_path, name, artifact_id, status: uploading\|available\|failed, mime_type, message_id, turn_id, profile, error}`；`available` 由服务器校验 outputs 路径并写入账号文件库 | `{file}`；路径逃逸=403，文件缺失=404，状态非法=422 |
 | `saveRuntimeSession` | POST `/single/conversations/{id}/runtime-session` | `{profile, session_id, turn_id, status: running|completed|failed}` | 绑定运行时会话映射 |
 | `enqueueHostedTurn` | POST `/single/conversations/{id}/enqueue` | `{request_id, turn_id, message, profiles?, recent_messages, attachment_ids, attachment_context, delivery_context}` | `{accepted, replayed, message, route(RouteDecision), hosted_turn, error?{code,message,retryable}}`；409=幂等冲突 |
 | `createHostedTurn` | POST `/single/conversations/{id}/hosted-turns` | `{turn_id, content, title, profiles, artifact_required, attachment_*, mode, route_metadata}` | 直接开一轮；409/422 |
 | `cancelHostedTurn` | POST `…/hosted-turns/{turnId}/cancel` | `{reason}` | 404 |
+| `retryHostedTurn` | POST `…/hosted-turns/{turnId}/retry` | `{request_id}`（≥8 字符，幂等） | `{hosted_turn}`；404=原轮次不存在，409=原轮次不可重试或幂等结果缺失 |
 | `interveneHostedTurn` | POST `…/hosted-turns/{turnId}/interventions` | `{content, message_id}` | `{accepted, hosted_turn, message, targets[]}`；409=非运行中 |
 | `cancelRuntimeRun`/`retryRuntimeRun` | POST（服务器下发的 action URL） | URL 必须匹配 `^/api/plugins/collaboration/single/conversations/…/hosted-turns/…/(cancel|retry)$` 否则客户端拒绝 | `Idempotency-Key` + `{request_id, reason?}`（来源:HermesCloudApi.ts:1163-1174、2005-2015） |
 | `routeMessage` | POST `/route` | `{content, recent_messages, attachments, mode:'auto'}` | `RouteDecision{mode:chat|work, profiles[], …}`；422 |
@@ -176,6 +178,7 @@ GET `/definitions?profile_id=`；GET `/definitions/{id}`；POST `/definitions/{i
 iOS 通过 `HermesCloudApi` 的官方 Kanban 域封装覆盖看板的完整 dashboard API，而不是只保留三条 CRUD 路径：
 
 - 看板/任务：GET `/board`、GET `/tasks/{id}`、POST `/tasks`、PATCH/DELETE `/tasks/{id}`、POST `/tasks/bulk`；支持 `board`、租户、工作流步骤及运行状态筛选。
+- 实时事件：认证 WebSocket GET `/events?since=N&board=slug`（通过 `/api/auth/ws-ticket` 获取一次性 ticket）；服务端按 `{events, cursor}` 批次推送，握手时固定 board，断线后从最新 cursor 续接。
 - 任务协作：GET/POST `/tasks/{id}/comments`、POST/DELETE `/links`、GET/POST `/tasks/{id}/attachments`、GET/DELETE `/attachments/{id}`、GET `/tasks/{id}/log`。
 - 运行与恢复：GET `/diagnostics`、`/workers/active`、`/runs/{id}`、`/runs/{id}/inspect`；POST `/runs/{id}/terminate`、`/tasks/{id}/reclaim`、`/tasks/{id}/specify`、`/tasks/{id}/reassign`、`/tasks/{id}/estimate`、`/tasks/{id}/decompose`、`/dispatch`；POST `/estimate` 支持创建前估算。
 - 配置与目录：GET `/config`、`/model-options`、`/home-channels`、`/stats`、`/assignees`、`/projects`、`/boards`、`/profiles`、`/orchestration`；POST/PUT `/tasks/{id}/home-subscribe/{platform}`、`/boards`、`/boards/{slug}/export`、`/boards/import`、`/boards/{slug}/switch`、`/orchestration`；PATCH `/boards/{slug}`、`/profiles/{name}`；DELETE `/boards/{slug}`。

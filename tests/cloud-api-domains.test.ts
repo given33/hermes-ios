@@ -4,7 +4,11 @@ import { dirname, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApiClient';
+import type {
+  HermesApiClient,
+  HermesRequestOptions,
+  HermesWebSocketOptions,
+} from '../src/api/HermesApiClient';
 import { HermesCloudApi } from '../src/api/HermesCloudApi';
 
 // Audit finding H8: HermesCloudApi is being split into src/api/cloud/<domain>
@@ -16,7 +20,11 @@ import { HermesCloudApi } from '../src/api/HermesCloudApi';
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 interface RecordedCall {
-  options: HermesRequestOptions;
+  options: Omit<HermesRequestOptions, 'signal'> & {
+    connectTimeoutMs?: number;
+    protocols?: string | string[];
+    signal?: AbortSignal | null;
+  };
   path: string;
 }
 
@@ -47,6 +55,10 @@ function recordingApi() {
     consumeDownload<T>(path: string, _consume: unknown, options: HermesRequestOptions = {}): Promise<T> {
       calls.push({ options, path });
       return Promise.resolve({} as T);
+    },
+    openWebSocket(path: string, options: HermesWebSocketOptions = {}): Promise<WebSocket> {
+      calls.push({ options: options as RecordedCall['options'], path });
+      return Promise.resolve({} as WebSocket);
     },
   } as HermesApiClient;
   return { api: new HermesCloudApi(client), calls };
@@ -479,8 +491,19 @@ test('conversation and hosted-turn methods keep their wire contract through clou
     profiles: ['manager'],
     recentMessages: [{ content: 'Context', role: 'user' }],
   });
+  await api.registerConversationArtifact('conversation one', {
+    relativePath: 'report/result.md',
+    name: 'result.md',
+    artifactId: 'artifact-1',
+    status: 'available',
+    mimeType: 'text/markdown',
+    messageId: 'message-1',
+    turnId: 'turn-1',
+    profile: 'manager',
+  });
   await api.interveneHostedTurn('conversation one', 'turn-1', '@reviewer recheck', 'message-2');
   await api.cancelHostedTurn('conversation one', 'turn-1', 'user_cancelled');
+  await api.retryHostedTurn('conversation one', 'turn-1', 'retry-request-1');
   await api.renameConversation('conversation one', 'Release review');
   await api.deleteConversation('conversation one');
 
@@ -513,11 +536,19 @@ test('conversation and hosted-turn methods keep their wire contract through clou
       ['/api/plugins/collaboration/mobile/conversations/conversation%20one/compress', 'POST'],
       ['/api/plugins/collaboration/single/conversations/conversation%20one/enqueue', 'POST'],
       [
+        '/api/plugins/collaboration/single/conversations/conversation%20one/artifacts',
+        'POST',
+      ],
+      [
         '/api/plugins/collaboration/single/conversations/conversation%20one/hosted-turns/turn-1/interventions',
         'POST',
       ],
       [
         '/api/plugins/collaboration/single/conversations/conversation%20one/hosted-turns/turn-1/cancel',
+        'POST',
+      ],
+      [
+        '/api/plugins/collaboration/single/conversations/conversation%20one/hosted-turns/turn-1/retry',
         'POST',
       ],
       ['/api/plugins/collaboration/single/conversations/conversation%20one', 'PATCH'],
@@ -560,13 +591,25 @@ test('conversation and hosted-turn methods keep their wire contract through clou
     turn_id: 'turn-1',
   });
   assert.deepEqual(parsedBody(calls[10]), {
+    artifact_id: 'artifact-1',
+    error: '',
+    message_id: 'message-1',
+    mime_type: 'text/markdown',
+    name: 'result.md',
+    profile: 'manager',
+    relative_path: 'report/result.md',
+    status: 'available',
+    turn_id: 'turn-1',
+  });
+  assert.deepEqual(parsedBody(calls[11]), {
     content: '@reviewer recheck',
     message_id: 'message-2',
   });
-  assert.deepEqual(parsedBody(calls[11]), {
+  assert.deepEqual(parsedBody(calls[12]), {
     reason: 'user_cancelled',
     request_id: 'cancel-turn-1',
   });
+  assert.deepEqual(parsedBody(calls[13]), { request_id: 'retry-request-1' });
 });
 
 test('unified conversation session flags use the collaboration PATCH contract', async () => {
@@ -1064,6 +1107,7 @@ test('the iOS Kanban facade exposes the complete official dashboard surface', as
   const { api, calls } = recordingApi();
 
   await api.getKanbanTask('task one', { board: 'hk', runStateType: 'status', runStateName: 'running' });
+  await api.openKanbanEventsWebSocket(17, 'hk', 4_000);
   await api.createKanbanTask({ title: 'new' }, 'hk');
   await api.deleteKanbanTask('task one', 'hk');
   await api.addKanbanComment('task one', 'hello', 'ios', 'hk');
@@ -1100,8 +1144,9 @@ test('the iOS Kanban facade exposes the complete official dashboard surface', as
   await api.getKanbanOrchestration();
   await api.setKanbanOrchestration({ auto_decompose: false });
 
-  assert.deepEqual(calls.slice(0, 8).map(({ path, options }) => [path, options.method ?? 'GET']), [
+  assert.deepEqual(calls.slice(0, 9).map(({ path, options }) => [path, options.method ?? 'GET']), [
     ['/api/plugins/kanban/tasks/task%20one', 'GET'],
+    ['/api/plugins/kanban/events', 'GET'],
     ['/api/plugins/kanban/tasks', 'POST'],
     ['/api/plugins/kanban/tasks/task%20one', 'DELETE'],
     ['/api/plugins/kanban/tasks/task%20one/comments', 'POST'],
@@ -1113,9 +1158,11 @@ test('the iOS Kanban facade exposes the complete official dashboard surface', as
   assert.deepEqual(calls[0].options.query, {
     run_state_type: 'status', run_state_name: 'running', board: 'hk',
   });
-  assert.deepEqual(parsedBody(calls[3]), { body: 'hello', author: 'ios' });
-  assert.deepEqual(parsedBody(calls[6]), { ids: ['one', 'two'], status: 'ready' });
-  assert.equal(calls.length, 36);
+  assert.deepEqual(calls[1].options.query, { since: 17, board: 'hk' });
+  assert.equal(calls[1].options.connectTimeoutMs, 4_000);
+  assert.deepEqual(parsedBody(calls[4]), { body: 'hello', author: 'ios' });
+  assert.deepEqual(parsedBody(calls[7]), { ids: ['one', 'two'], status: 'ready' });
+  assert.equal(calls.length, 37);
 });
 
 test('room mailbox and dependency graph APIs stay reachable from iOS', async () => {

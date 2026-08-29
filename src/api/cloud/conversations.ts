@@ -290,6 +290,45 @@ export class HermesConversationsCloudApi {
     );
   }
 
+  /**
+   * Register the lifecycle of a model-created file in the conversation
+   * outputs directory.  This is the official artifact endpoint; iOS must not
+   * infer availability from an event alone because the server owns the file
+   * library record and path-safety check.
+   */
+  registerConversationArtifact(
+    conversationId: string,
+    input: {
+      relativePath?: string;
+      name?: string;
+      artifactId?: string;
+      status?: 'uploading' | 'available' | 'failed';
+      mimeType?: string;
+      messageId?: string;
+      turnId?: string;
+      profile?: string;
+      error?: string;
+    },
+    signal?: AbortSignal,
+  ) {
+    return this.transport.json<{ file: JsonRecord }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/artifacts`,
+      'POST',
+      {
+        relative_path: input.relativePath || '',
+        name: input.name || '',
+        artifact_id: input.artifactId || '',
+        status: input.status || 'available',
+        mime_type: input.mimeType || '',
+        message_id: input.messageId || '',
+        turn_id: input.turnId || '',
+        profile: input.profile || '',
+        error: input.error || '',
+      },
+      { signal },
+    );
+  }
+
   saveRuntimeSession(
     conversationId: string,
     profile: string,
@@ -376,6 +415,21 @@ export class HermesConversationsCloudApi {
       + `/hosted-turns/${encodeURIComponent(turnId)}/cancel`,
       'POST',
       { reason, request_id: requestId },
+      { signal },
+    );
+  }
+
+  retryHostedTurn(
+    conversationId: string,
+    turnId: string,
+    requestId: string,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.json<{ hosted_turn: JsonRecord }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}`
+      + `/hosted-turns/${encodeURIComponent(turnId)}/retry`,
+      'POST',
+      { request_id: requestId },
       { signal },
     );
   }

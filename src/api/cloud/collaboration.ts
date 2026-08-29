@@ -41,6 +41,25 @@ export class HermesCollaborationCloudApi {
     });
   }
 
+  /** Stream durable Kanban task events through the authenticated WebSocket
+   * ticket seam. The server pins board selection at handshake and returns
+   * `{ events, cursor }` batches so callers can resume without polling. */
+  openKanbanEventsWebSocket(
+    cursor = 0,
+    board = '',
+    deadlineMs = 5_000,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.openWebSocket(`${KANBAN}/events`, {
+      query: {
+        since: Math.max(0, Math.floor(cursor)),
+        ...(board.trim() ? { board: board.trim() } : {}),
+      },
+      signal,
+      connectTimeoutMs: deadlineMs,
+    });
+  }
+
   getKanbanTask(id: string, options: { board?: string; runStateType?: 'status' | 'outcome'; runStateName?: string } = {}) {
     return this.transport.request<JsonRecord>(`${KANBAN}/tasks/${encodeURIComponent(id)}`, {
       query: this.kanbanQuery(options.board, {

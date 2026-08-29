@@ -98,7 +98,10 @@ export interface HermesCloudApi {
   searchSessions(query: string, limit?: number, profile?: string, filters?: JsonRecord): Promise<JsonRecord>; getLatestDescendant(id: string, profile?: string): Promise<JsonRecord>; exportSession(id: string, profile?: string): Promise<JsonRecord>; setSessionArchived(id: string, archived: boolean, profile?: string): Promise<JsonRecord>; setSessionPinned(id: string, pinned: boolean, profile?: string): Promise<JsonRecord>; setSessionUnread(id: string, unread: boolean, profile?: string): Promise<JsonRecord>; bulkDeleteSessions(ids: string[], profile?: string): Promise<JsonRecord>; importSessions(sessions: JsonRecord[], profile?: string): Promise<JsonRecord>; countEmptySessions(profile?: string): Promise<JsonRecord>; deleteEmptySessions(profile?: string): Promise<JsonRecord>; getSessionStats(profile?: string): Promise<JsonRecord>; pruneSessions(payload?: JsonRecord, profile?: string): Promise<JsonRecord>;
   getProfileSessionsSidebar(options?: JsonRecord): Promise<JsonRecord>; getProfileProjectsTree(previewLimit?: number, sessionLimit?: number): Promise<JsonRecord>; scanProfileSessionPullRequests(ids: string[]): Promise<JsonRecord>;
   setConversationArchived(id: string, archived: boolean): Promise<JsonRecord>; setConversationPinned(id: string, pinned: boolean): Promise<JsonRecord>; setConversationUnread(id: string, unread: boolean): Promise<JsonRecord>;
+  registerConversationArtifact(conversationId: string, input: { relativePath?: string; name?: string; artifactId?: string; status?: 'uploading' | 'available' | 'failed'; mimeType?: string; messageId?: string; turnId?: string; profile?: string; error?: string }, signal?: AbortSignal): Promise<{ file: JsonRecord }>;
+  retryHostedTurn(conversationId: string, turnId: string, requestId: string, signal?: AbortSignal): Promise<{ hosted_turn: JsonRecord }>;
   getKanbanTask(id: string, options?: { board?: string; runStateType?: 'status' | 'outcome'; runStateName?: string }): Promise<JsonRecord>;
+  openKanbanEventsWebSocket(cursor?: number, board?: string, deadlineMs?: number, signal?: AbortSignal): Promise<WebSocket>;
   deleteKanbanTask(id: string, board?: string): Promise<JsonRecord>;
   listKanbanTaskAttachments(taskId: string, board?: string): Promise<JsonRecord>;
   uploadKanbanTaskAttachment(taskId: string, file: Blob, filename: string, uploadedBy?: string, board?: string): Promise<JsonRecord>;
@@ -231,7 +234,10 @@ Object.assign(CloudApi.prototype, {
   setConversationArchived(this: any, i: string, a: boolean) { return this.conversations.setConversationArchived(i, a); },
   setConversationPinned(this: any, i: string, p: boolean) { return this.conversations.setConversationPinned(i, p); },
   setConversationUnread(this: any, i: string, u: boolean) { return this.conversations.setConversationUnread(i, u); },
+  registerConversationArtifact(this: any, i: string, p: any, s?: AbortSignal) { return this.conversations.registerConversationArtifact(i, p, s); },
+  retryHostedTurn(this: any, i: string, t: string, r: string, s?: AbortSignal) { return this.conversations.retryHostedTurn(i, t, r, s); },
   getKanbanTask(this: any, i: string, o = {}) { return this.collaboration.getKanbanTask(i, o); },
+  openKanbanEventsWebSocket(this: any, c = 0, b = '', d = 5_000, s?: AbortSignal) { return this.collaboration.openKanbanEventsWebSocket(c, b, d, s); },
   deleteKanbanTask(this: any, i: string, b?: string) { return this.collaboration.deleteKanbanTask(i, b); },
   listKanbanTaskAttachments(this: any, i: string, b?: string) { return this.collaboration.listKanbanTaskAttachments(i, b); },
   uploadKanbanTaskAttachment(this: any, i: string, f: Blob, n: string, u?: string, b?: string) { return this.collaboration.uploadKanbanTaskAttachment(i, f, n, u, b); },
