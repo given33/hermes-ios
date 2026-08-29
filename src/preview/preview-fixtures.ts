@@ -312,6 +312,6 @@ export const PREVIEW_MEMORY = {
   memoryMtime: '今天 22:35',
   user: '偏好中文沟通和直接、可验证的结果。\n\n重视 iOS 原生适配、流畅动画和真实数据隔离。',
   userMtime: '今天 17:43',
-  soul: '提供基于事实的进度和结论，不编造执行结果。\n\n复杂任务先规划，再执行、审阅和汇报。',
+  soul: '提供基于事实的进度和结论，不编造执行结果。\n\n复杂任务先规划，再由 worker 执行并汇报。',
   soulMtime: '昨天 23:45',
 } as const;

@@ -882,6 +882,7 @@ test('Chinese preview mode translates every shared visible control surface', () 
 
 test('narrow admin rows use mobile-safe action layouts instead of scattered icon buttons', () => {
   const settings = read('src/preview/PreviewSettingsPages.tsx');
+  const fixtures = read('src/preview/preview-fixtures.ts');
 
   assert.doesNotMatch(settings, /function ProfileActionsSheet|Profile actions|Set active/);
   assert.match(settings, /主服务器 Hermes/);
@@ -892,6 +893,8 @@ test('narrow admin rows use mobile-safe action layouts instead of scattered icon
   assert.match(settings, /四台 Hermes/);
   assert.match(settings, /four Hermes/);
   assert.doesNotMatch(settings, /默认审阅节点|可迁移审阅节点|default review node|optional review node/);
+  assert.match(fixtures, /再由 worker 执行并汇报/);
+  assert.doesNotMatch(fixtures, /执行、审阅和汇报/);
   assert.match(settings, /gatewayStatuses/);
   assert.match(settings, /styles\.envValueRow/);
   assert.match(settings, /styles\.envValue/);
