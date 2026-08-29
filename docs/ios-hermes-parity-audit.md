@@ -151,3 +151,12 @@ the complete iOS JavaScript test suite, and the backend role/deployment test
 subset run here. A native Xcode compile and the Linux-only/full backend suite
 require their respective host environments; until those are run, this ledger
 must not claim release-level native-build verification.
+
+### 2026-08-29 continuation: managed-file facade budget
+
+- Adding the bounded `consumeManagedFile` streaming facade briefly crossed the
+  `HermesCloudApi` 1110-line architecture ratchet. The facade was compacted
+  without changing its `Response`/`AbortSignal` contract or chunked-download
+  semantics, bringing the module back to 1109 lines.
+- `pnpm test` is green at 811 passed / 0 failed; `pnpm typecheck` and
+  `pnpm contract:check` also pass after the change.

@@ -296,7 +296,6 @@ export class HermesCloudApi {
   getSessionMessages(id: string, profile = 'default') {
     return this.sessions.getSessionMessages(id, profile);
   }
-
   renameSession(id: string, title: string, profile = 'default') {
     return this.sessions.renameSession(id, title, profile);
   }
@@ -320,16 +319,10 @@ export class HermesCloudApi {
   deleteFile(path: string, recursive = false) {
     return this.files.deleteFile(path, recursive);
   }
-
   downloadManagedFile(path: string) {
     return this.files.downloadManagedFile(path);
   }
-
-  consumeManagedFile<T>(
-    path: string,
-    consume: (response: Response, signal: AbortSignal) => Promise<T>,
-    signal?: AbortSignal,
-  ) {
+  consumeManagedFile<T>(path: string, consume: (response: Response, signal: AbortSignal) => Promise<T>, signal?: AbortSignal) {
     return this.files.consumeManagedFile(path, consume, signal);
   }
 
