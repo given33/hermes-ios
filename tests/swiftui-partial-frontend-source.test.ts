@@ -112,6 +112,9 @@ test('native Git workspace exposes the official status, review, and mutation sur
   assert.match(routes, /case 'git'/);
   assert.match(routes, /getGitReviewDiff/);
   assert.match(routes, /listGitPullRequests/);
+  assert.match(pages, /Create or open Pull Request/);
+  assert.match(pages, /Create worktree/);
+  assert.match(pages, /Remove worktree/);
 });
 
 test('native Cron and Bot Mode expose editable, profile-scoped routines', () => {

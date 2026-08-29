@@ -758,6 +758,11 @@ private struct HermesGitPage: View {
   let onAction: HermesRouteActionSink
   @State private var commitMessage = ""
   @State private var branch = ""
+  @State private var worktreeBranch = ""
+  @State private var worktreeName = ""
+  @State private var worktreeBase = ""
+  @State private var removeWorktreePath = ""
+  @State private var forceRemoveWorktree = false
 
   var body: some View {
     Group {
@@ -851,6 +856,59 @@ private struct HermesGitPage: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
+          Section(chinese ? "发布与工作树" : "Ship and worktrees") {
+            Button {
+              onAction(.gitCreatePR, HermesRouteActionPayload(route: "git", fields: ["path": data.root]))
+            } label: {
+              Label(chinese ? "创建或打开 Pull Request" : "Create or open Pull Request", systemImage: "arrow.triangle.pull")
+            }
+            .buttonStyle(.borderedProminent)
+
+            TextField(chinese ? "工作树分支（必填）" : "Worktree branch (required)", text: $worktreeBranch)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+            TextField(chinese ? "工作树名称（可选）" : "Worktree name (optional)", text: $worktreeName)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+            TextField(chinese ? "基础分支（可选）" : "Base branch (optional)", text: $worktreeBase)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+            Button {
+              let branchValue = worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines)
+              guard !branchValue.isEmpty else { return }
+              var options: [String: String] = ["branch": branchValue]
+              let nameValue = worktreeName.trimmingCharacters(in: .whitespacesAndNewlines)
+              let baseValue = worktreeBase.trimmingCharacters(in: .whitespacesAndNewlines)
+              if !nameValue.isEmpty { options["name"] = nameValue }
+              if !baseValue.isEmpty { options["base"] = baseValue }
+              guard let encoded = try? JSONSerialization.data(withJSONObject: options, options: [.sortedKeys]),
+                    let json = String(data: encoded, encoding: .utf8) else { return }
+              onAction(.gitAddWorktree, HermesRouteActionPayload(route: "git", detail: json, fields: ["path": data.root]))
+              worktreeBranch = ""
+              worktreeName = ""
+              worktreeBase = ""
+            } label: {
+              Label(chinese ? "创建工作树" : "Create worktree", systemImage: "plus.rectangle.on.folder")
+            }
+            .buttonStyle(.bordered)
+            .disabled(worktreeBranch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            TextField(chinese ? "要移除的工作树路径" : "Worktree path to remove", text: $removeWorktreePath)
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+            Toggle(chinese ? "强制移除（丢弃未提交更改）" : "Force remove (discard uncommitted changes)", isOn: $forceRemoveWorktree)
+            Button(role: .destructive) {
+              let path = removeWorktreePath.trimmingCharacters(in: .whitespacesAndNewlines)
+              guard !path.isEmpty else { return }
+              onAction(.gitRemoveWorktree, HermesRouteActionPayload(route: "git", id: path, enabled: forceRemoveWorktree, fields: ["path": data.root]))
+              removeWorktreePath = ""
+              forceRemoveWorktree = false
+            } label: {
+              Label(chinese ? "移除工作树" : "Remove worktree", systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+            .disabled(removeWorktreePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
           }
           if let selected = data.selectedFile, !selected.isEmpty, let diff = data.diffJSON, !diff.isEmpty {
             Section(chinese ? "差异 · \(selected)" : "Diff · \(selected)") {
