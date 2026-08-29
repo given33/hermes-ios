@@ -44,6 +44,10 @@ function recordingApi() {
       }
       return Promise.resolve({} as T);
     },
+    consumeDownload<T>(path: string, _consume: unknown, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ options, path });
+      return Promise.resolve({} as T);
+    },
   } as HermesApiClient;
   return { api: new HermesCloudApi(client), calls };
 }
@@ -572,6 +576,7 @@ test('managed and account files keep their wire contract through cloud/files', a
   await api.readFile('workspace/reports/a.md');
   await api.createDirectory('workspace/results');
   await api.deleteFile('workspace/old', true);
+  await api.consumeManagedFile('workspace/reports/a.md', async () => ({}));
   await api.getAccountFiles({ keyword: 'report', limit: 25, offset: 5, status: 'available' });
   await api.getAccountFile('file one');
   await api.deleteAccountFile('file one');
@@ -583,6 +588,7 @@ test('managed and account files keep their wire contract through cloud/files', a
       ['/api/files/read', 'GET'],
       ['/api/files/mkdir', 'POST'],
       ['/api/files', 'DELETE'],
+      ['/api/files/download', 'GET'],
       ['/api/plugins/collaboration/files', 'GET'],
       ['/api/plugins/collaboration/files/file%20one', 'GET'],
       ['/api/plugins/collaboration/files/file%20one', 'DELETE'],
@@ -592,7 +598,8 @@ test('managed and account files keep their wire contract through cloud/files', a
   assert.deepEqual(calls[1].options.query, { path: 'workspace/reports/a.md' });
   assert.deepEqual(parsedBody(calls[2]), { path: 'workspace/results' });
   assert.deepEqual(parsedBody(calls[3]), { path: 'workspace/old', recursive: true });
-  assert.deepEqual(calls[4].options.query, {
+  assert.deepEqual(calls[4].options.query, { path: 'workspace/reports/a.md' });
+  assert.deepEqual(calls[5].options.query, {
     date_from: undefined,
     date_to: undefined,
     filter_contract: 'account-files-v1',
