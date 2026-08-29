@@ -22,7 +22,21 @@ export interface ApnsRegistrationConfig {
 
 export interface MobileNotificationDevice {
   id: string;
+  name: string;
+  model: string;
+  osVersion: string;
+  appVersion: string;
+  createdAt: number;
+  lastSeenAt: number;
+  active: boolean;
   current: boolean;
+  apns: Array<{
+    id: string;
+    environment: string;
+    bundleId: string;
+    tokenSuffix: string;
+    updatedAt: number;
+  }>;
 }
 
 export interface MobileNotificationApi {
@@ -46,6 +60,25 @@ export type ApnsSynchronizationResult =
  */
 export class HermesMobileNotificationApi implements MobileNotificationApi {
   constructor(private readonly client: HermesApiClient) {}
+
+  /** Read the account-scoped mobile sessions through the official owner API. */
+  async listDevices(): Promise<MobileNotificationDevice[]> {
+    const response = await this.client.request<unknown>('/api/mobile/v1/devices');
+    if (!isRecord(response) || !Array.isArray(response.devices)) {
+      throw new Error('Hermes returned an invalid device list');
+    }
+    return response.devices
+      .map(normalizeMobileDevice)
+      .filter((device): device is MobileNotificationDevice => device !== null);
+  }
+
+  /** Revoke every refresh/access session owned by one account device. */
+  async revokeDevice(deviceId: string): Promise<void> {
+    await this.client.request(
+      `/api/mobile/v1/devices/${encodeURIComponent(requireDeviceId(deviceId))}`,
+      { method: 'DELETE' },
+    );
+  }
 
   async resolveCurrentDeviceId(preferredDeviceId = ''): Promise<string> {
     const preferred = preferredDeviceId.trim();
@@ -140,4 +173,34 @@ function requireDeviceId(value: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeMobileDevice(value: unknown): MobileNotificationDevice | null {
+  if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim()) return null;
+  const rawApns = Array.isArray(value.apns) ? value.apns : [];
+  return {
+    id: value.id.trim(),
+    name: typeof value.name === 'string' ? value.name.trim() : '',
+    model: typeof value.model === 'string' ? value.model.trim() : '',
+    osVersion: typeof value.os_version === 'string' ? value.os_version.trim() : '',
+    appVersion: typeof value.app_version === 'string' ? value.app_version.trim() : '',
+    createdAt: finiteNumber(value.created_at),
+    lastSeenAt: finiteNumber(value.last_seen_at),
+    active: value.active === true,
+    current: value.current === true,
+    apns: rawApns
+      .filter(isRecord)
+      .map((item) => ({
+        id: typeof item.id === 'string' ? item.id : '',
+        environment: typeof item.environment === 'string' ? item.environment : '',
+        bundleId: typeof item.bundle_id === 'string' ? item.bundle_id : '',
+        tokenSuffix: typeof item.token_suffix === 'string' ? item.token_suffix : '',
+        updatedAt: finiteNumber(item.updated_at),
+      })),
+  };
+}
+
+function finiteNumber(value: unknown): number {
+  const result = Number(value);
+  return Number.isFinite(result) ? result : 0;
 }

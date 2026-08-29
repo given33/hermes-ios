@@ -1,5 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
-import { Copy, Download, FileText, LogOut, ShieldCheck, Trash2 } from 'lucide-react-native';
+import { Copy, Download, FileText, LogOut, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
@@ -17,11 +17,13 @@ import {
 import type { NativeRouteLocale } from '../app/route-composition';
 import { IOSIntelligenceApi } from '../context/IOSIntelligenceApi';
 import { HermesIOSContext } from '../../modules/hermes-ios-context';
+import { HermesMobileNotificationApi, type MobileNotificationDevice } from '../notifications/mobile-notifications';
 import {
   PreviewBadge,
   PreviewDataRow,
   PreviewModal,
   PreviewPage,
+  PreviewRow,
   PreviewText,
 } from '../studio/PreviewPrimitives';
 
@@ -47,6 +49,10 @@ export function AccountPage({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showThirdPartyNotices, setShowThirdPartyNotices] = useState(false);
   const [exportPassphrase, setExportPassphrase] = useState('');
+  const [devices, setDevices] = useState<MobileNotificationDevice[]>([]);
+  const [devicesBusy, setDevicesBusy] = useState(false);
+  const [revokingDeviceId, setRevokingDeviceId] = useState<string | null>(null);
+  const devicesBusyRef = useRef(false);
   const mounted = useRef(true);
   const chinese = locale === 'zh';
   const displayFont = resolveNativeFontStack(tokens.typography.fontDisplay, 600);
@@ -116,6 +122,51 @@ export function AccountPage({
     ].join('\n'));
     notify(chinese ? '账户信息已复制' : 'Account information copied');
   }, [chinese, client, notify, username]);
+
+  const refreshDevices = useCallback(async () => {
+    if (!client || devicesBusyRef.current) return;
+    devicesBusyRef.current = true;
+    setDevicesBusy(true);
+    try {
+      setDevices(await new HermesMobileNotificationApi(client).listDevices());
+    } catch (error) {
+      if (mounted.current) {
+        notify(error instanceof Error
+          ? error.message
+          : (chinese ? '设备会话读取失败，请重试。' : 'Could not load device sessions.'));
+      }
+    } finally {
+      devicesBusyRef.current = false;
+      if (mounted.current) setDevicesBusy(false);
+    }
+  }, [chinese, client, notify]);
+
+  const revokeDevice = useCallback(async (device: MobileNotificationDevice) => {
+    if (!client || revokingDeviceId || device.current || !device.active) return;
+    setRevokingDeviceId(device.id);
+    try {
+      await new HermesMobileNotificationApi(client).revokeDevice(device.id);
+      setDevices((current) => current.map((item) => item.id === device.id
+        ? { ...item, active: false }
+        : item));
+      notify(chinese ? '设备会话已撤销' : 'Device session revoked');
+    } catch (error) {
+      notify(error instanceof Error
+        ? error.message
+        : (chinese ? '撤销设备会话失败，请重试。' : 'Could not revoke the device session.'));
+    } finally {
+      if (mounted.current) setRevokingDeviceId(null);
+    }
+  }, [chinese, client, notify, revokingDeviceId]);
+
+  useEffect(() => {
+    if (!client) {
+      setDevices([]);
+      devicesBusyRef.current = false;
+      return;
+    }
+    void refreshDevices();
+  }, [client, refreshDevices]);
 
   return (
     <PreviewPage title={chinese ? '账户' : 'Account'}>
@@ -189,6 +240,54 @@ export function AccountPage({
       </View>
 
       <View style={[styles.section, { borderTopColor: tokens.colors.border }]}>
+        <PreviewRow style={styles.deviceHeader}>
+          <PreviewText variant="label">{chinese ? '设备会话' : 'Device sessions'}</PreviewText>
+          <NativeButton
+            accessibilityLabel={chinese ? '刷新设备会话' : 'Refresh device sessions'}
+            disabled={!client || devicesBusy || busy !== null || revokingDeviceId !== null}
+            ghost
+            onPress={() => { void refreshDevices(); }}
+            size="icon"
+          >
+            <RefreshCw />
+          </NativeButton>
+        </PreviewRow>
+        {!client ? (
+          <PreviewText variant="muted">{chinese ? '登录后可管理移动设备会话。' : 'Sign in to manage mobile device sessions.'}</PreviewText>
+        ) : devices.length ? devices.map((device) => (
+          <PreviewRow key={device.id} style={styles.deviceRow}>
+            <View style={styles.deviceCopy}>
+              <PreviewText>{device.name || device.model || device.id}</PreviewText>
+              <PreviewText variant="muted">
+                {[device.model, device.osVersion && `iOS ${device.osVersion}`, device.appVersion && `v${device.appVersion}`]
+                  .filter(Boolean)
+                  .join(' · ') || device.id}
+              </PreviewText>
+            </View>
+            <PreviewBadge tone={device.current ? 'success' : device.active ? 'default' : 'outline'}>
+              {device.current ? (chinese ? '当前设备' : 'CURRENT') : device.active ? (chinese ? '活跃' : 'ACTIVE') : (chinese ? '已撤销' : 'REVOKED')}
+            </PreviewBadge>
+            {device.current || !device.active ? null : (
+              <NativeButton
+                destructive
+                disabled={revokingDeviceId !== null || busy !== null}
+                onPress={() => { void revokeDevice(device); }}
+                size="sm"
+              >
+                {revokingDeviceId === device.id
+                  ? (chinese ? '撤销中' : 'Revoking')
+                  : (chinese ? '撤销' : 'Revoke')}
+              </NativeButton>
+            )}
+          </PreviewRow>
+        )) : (
+          <PreviewText variant="muted">
+            {devicesBusy ? (chinese ? '正在读取设备会话…' : 'Loading device sessions…') : (chinese ? '暂无其他设备会话。' : 'No other device sessions.')}
+          </PreviewText>
+        )}
+      </View>
+
+      <View style={[styles.section, { borderTopColor: tokens.colors.border }]}>
         <PreviewText variant="label">{chinese ? '关于' : 'About'}</PreviewText>
         <NativeButton
           onPress={() => setShowThirdPartyNotices(true)}
@@ -257,6 +356,19 @@ const styles = StyleSheet.create({
   actions: {
     alignItems: 'flex-start',
     gap: 12,
+  },
+  deviceCopy: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  deviceHeader: {
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  deviceRow: {
+    alignItems: 'center',
+    gap: 8,
   },
   identity: {
     alignItems: 'center',

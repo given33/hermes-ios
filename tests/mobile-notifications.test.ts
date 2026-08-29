@@ -456,6 +456,40 @@ test('Hermes notification taps accept conversation and smart-weather deep links'
   );
 });
 
+test('notification API exposes account device sessions and revocation', async () => {
+  const requests: Array<{ path: string; init: RequestInit }> = [];
+  const client = new HermesApiClient(
+    'https://hermes.test',
+    'access-token',
+    async (input, init) => {
+      const url = String(input);
+      requests.push({ path: new URL(url).pathname, init: init ?? {} });
+      return jsonResponse(url, {
+        devices: [{
+          id: 'ios-current', name: 'Owner iPhone', model: 'iPhone 16 Pro',
+          os_version: '18.5', app_version: '2.0.0', created_at: 10,
+          last_seen_at: 20, active: true, current: true,
+          apns: [{ id: 'apns-1', environment: 'production', bundle_id: 'com.test.hermes', token_suffix: 'deadbeef', updated_at: 20 }],
+        }, {
+          id: 'ipad-old', name: 'Owner iPad', model: 'iPad', os_version: '18.4',
+          app_version: '1.9.0', created_at: 5, last_seen_at: 7, active: true, current: false, apns: [],
+        }],
+      });
+    },
+  );
+  const api = new HermesMobileNotificationApi(client);
+  const devices = await api.listDevices();
+  await api.revokeDevice('ipad-old');
+
+  assert.equal(devices[0]?.name, 'Owner iPhone');
+  assert.equal(devices[0]?.apns[0]?.tokenSuffix, 'deadbeef');
+  assert.equal(devices[1]?.current, false);
+  assert.deepEqual(requests.map(({ path, init }) => [path, init.method ?? 'GET']), [
+    ['/api/mobile/v1/devices', 'GET'],
+    ['/api/mobile/v1/devices/ipad-old', 'DELETE'],
+  ]);
+});
+
 test('notification account fences reject old generations and scope dedupe keys', () => {
   const target = parseHermesNotificationPayload({
     hermes: {

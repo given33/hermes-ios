@@ -38,6 +38,7 @@ Dashboard 登录引导还可通过同一 Bearer facade 调用 `getAuthProviders`
 |---|---|---|
 | 登录/恢复后的契约探针 `assertMobileHandshake` | GET `/api/mobile/v1/handshake` | `{api_version, hermes_version, profiles, capabilities, …}`；形状不符 → "incompatible mobile handshake"（判终态失效）。来源:AuthProvider.tsx:314-323、908-914，hermes-types.ts |
 | 设备清单 | GET `/api/mobile/v1/devices` | `{devices:[…]}`；找当前 device 判断 APNs 状态。来源:mobile-notifications.ts:53-58 |
+| 设备会话管理 | GET 同上 / DELETE `/api/mobile/v1/devices/{deviceId}` | 账户页展示 name/model/OS/app、活跃/当前状态和 APNs 数量；撤销其他设备会话后立即标为 revoked，不允许从当前设备自撤销。来源:mobile-notifications.ts、AccountPage.tsx |
 | APNs 登记 | PUT `/api/mobile/v1/devices/{deviceId}/apns` | 限当前设备；403/422/404 见后端文档。来源:mobile-notifications.ts:72 |
 | APNs 注销 | DELETE 同路径 | 登出前 2.5s deadline 尽力执行。来源:AuthProvider.tsx:925-946 |
 
