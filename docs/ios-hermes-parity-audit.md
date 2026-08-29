@@ -184,7 +184,7 @@ must not claim release-level native-build verification.
   Swift/Xcode archive and live four-node latency still require macOS CI and a
   production rehearsal.
 
-发布锚点：iOS 提交 `0b98d5a` 已推送到 `origin/main`；它与后端
+发布锚点：iOS 提交 `37469d8` 已推送到 `origin/main`；它与后端
 `c02c3b143d` 配套，消费同一份官方 hosted command/event 契约。
 
 ### 2026-08-30 continuation: unified Sessions write paths
@@ -212,3 +212,7 @@ unread flags, mapped-session de-duplication, tombstones, and 404-only fallback
 for older gateways are covered by the cloud API tests. This closes the gap where
 the official backend session endpoint existed but iOS Sessions could not display
 or reopen those sessions.
+
+The low-latency event reducer also keeps missing historical timestamps
+deterministic (`0` instead of wall-clock time), so replayed frames do not
+change ordering or fingerprints on every refresh.
