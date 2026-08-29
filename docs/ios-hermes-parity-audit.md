@@ -1,6 +1,6 @@
 # iOS Hermes parity audit
 
-Last audited: 2026-08-29 (Asia/Shanghai)
+Last audited: 2026-08-30 (Asia/Shanghai)
 
 This is the working ledger for the iOS Hermes integration. A row is only
 marked **verified** when the upstream desktop control, the gateway endpoint,
