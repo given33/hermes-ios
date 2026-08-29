@@ -1102,6 +1102,23 @@ test('Bot Mode metadata action uses the dedicated REST endpoint', async () => {
   assert.deepEqual(calls, [['hk-worker', { hidden: true, pinned: true, groups: ['ops'] }]]);
 });
 
+test('Bot Mode capability actions call official configure and avatar contracts', async () => {
+  const calls: Array<[string, string, Record<string, unknown> | string]> = [];
+  const api = {
+    describeBotProfile: async (name: string) => { calls.push(['describe', name, {}]); return { skills: [{ name: 'coding' }], toolsets: [], mcp_servers: [] }; },
+    configureBotProfile: async (name: string, patch: Record<string, unknown>) => { calls.push(['configure', name, patch]); return { ok: true, applied: { soul: true } }; },
+    setBotAsset: async (name: string, data: string) => { calls.push(['avatar', name, data]); return { ok: true }; },
+  } as unknown as HermesCloudApi;
+  const described = await performHermesSwiftUIRouteAction(api, { action: 'bot.profile.describe', payload: { route: 'bots', id: 'coder' } }, 'default', 'en');
+  const configured = await performHermesSwiftUIRouteAction(api, { action: 'bot.profile.configure', payload: { route: 'bots', id: 'coder', detail: '{"soul":"# coder"}' } }, 'default');
+  const uploaded = await performHermesSwiftUIRouteAction(api, { action: 'bot.avatar.upload', payload: { route: 'bots', id: 'coder', detail: 'data:image/png;base64,AA==' } }, 'default');
+  assert.match(typeof described === 'object' ? described.message : '', /1 skills/);
+  assert.equal(configured, 'reload');
+  assert.equal(uploaded, 'reload');
+  assert.deepEqual(calls[1], ['configure', 'coder', { soul: '# coder' }]);
+  assert.equal(calls[2][0], 'avatar');
+});
+
 test('system snapshots share managed-node aliases with the sidebar status', async () => {
   const checkedAt = Math.floor((Date.now() - 1_000) / 1_000);
   const api = {

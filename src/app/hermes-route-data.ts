@@ -45,22 +45,14 @@ import {
   skillsSnapshot,
   toolsetsSnapshot,
 } from './route-snapshots/management';
-import {
-  decodeModelSelection,
-  encodeModelSelection,
-} from './route-snapshots/model-selection';
-import {
-  customModelConfiguration,
-  customModelOperationError,
-  modelsSnapshot,
-} from './route-snapshots/models';
+import { decodeModelSelection, encodeModelSelection } from './route-snapshots/model-selection';
+import { customModelConfiguration, customModelOperationError, modelsSnapshot } from './route-snapshots/models';
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport } from './route-actions/session-surfaces';
-import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata';
-// Account previews use temporaryPlaintextFile(name, 'account-file') and stream through
-// consumeAccountFile(... writeBoundedDownload); implementation lives in presentation.ts.
+import { configureBot, describeBot, uploadBotAvatar } from './route-actions/bot-mode';
+import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata'; // Account previews use temporaryPlaintextFile(name, 'account-file') and consumeAccountFile(... writeBoundedDownload) through presentation.ts.
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
 export {
   createHermesSwiftUISessionsSnapshot,
@@ -564,6 +556,9 @@ export async function performHermesSwiftUIRouteAction(
       await api.deleteProfile(payload.id, payload.route === 'bots');
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botMetaUpdate: { if (payload.route !== 'bots' || !payload.id || typeof api.updateBotMeta !== 'function') return 'none'; const patch = parseJsonRecord(payload.detail || payload.value || payload.fields?.meta || '{}'); if (!patch) return 'none'; await api.updateBotMeta(payload.id, patch); return 'reload'; }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.botProfileDescribe: return payload.route === 'bots' && payload.id ? describeBot(api, payload.id, chinese) : 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.botProfileConfigure: return payload.route === 'bots' && payload.id ? configureBot(api, payload.id, payload.detail || payload.value || '{}', chinese) : 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.botAvatarUpload: return payload.route === 'bots' && payload.id ? uploadBotAvatar(api, payload.id, payload.detail || payload.value || '') : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileUpdate:
       if (!payload.id) return 'none';
       if (payload.detail !== undefined) await api.updateProfileSoul(payload.id, payload.detail);

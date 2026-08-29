@@ -815,6 +815,29 @@ test('management methods keep their wire contract through cloud/management', asy
   assert.deepEqual(parsedBody(calls[21]), { node_id: 'dbb3' });
 });
 
+test('Bot Mode profile capability and asset methods keep official REST paths', async () => {
+  const calls: RecordedCall[] = [];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ options, path });
+      return Promise.resolve({} as T);
+    },
+  } as HermesApiClient;
+  const api = new HermesCloudApi(client);
+  await api.describeBotProfile('bot one');
+  await api.configureBotProfile('bot one', { soul: '# bot' });
+  await api.getBotAsset('bot one');
+  await api.setBotAsset('bot one', 'data:image/png;base64,AA==');
+  await api.clearBotAsset('bot one');
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/bots/bot%20one/describe', 'GET'],
+    ['/api/bots/bot%20one/configure', 'PATCH'],
+    ['/api/bots/bot%20one/assets/avatar', 'GET'],
+    ['/api/bots/bot%20one/assets/avatar', 'PUT'],
+    ['/api/bots/bot%20one/assets/avatar', 'DELETE'],
+  ]);
+});
+
 test('kanban and collaboration methods keep their wire contract through cloud/collaboration', async () => {
   const { api, calls } = recordingApi();
 

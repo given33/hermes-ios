@@ -119,3 +119,8 @@ SwiftUI 审批快照现在显式携带后端返回的 `payload_digest`，用户�
 - 明确范围：Bot Mode 的桌面 group-round 引擎、跨连接 relay、头像/宠物生成器和
   Routines 专用面板尚未被宣称为 iOS parity；它们只有在各自拥有 typed API、
   原生 route/action 和回归测试后才会升级为 verified。
+- 2026-08-29 增补：Bot Mode 的官方 profile 能力与资产接口现已接入。后端
+  `/api/bots/{name}/describe|configure|assets/{asset}` 直接调用已注册的
+  `profiles.describe|configure|get_asset|set_asset` handler；iOS Bots 上下文菜单
+  提供官方能力读取、JSON 能力编辑和原生头像导入（≤2 MB），服务端 roster
+  同步 `has_avatar` 状态。新增 backend-wire、Cloud API、SwiftUI action 测试。

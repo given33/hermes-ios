@@ -1,6 +1,7 @@
 import type { HermesCloudApi } from '../HermesCloudApi';
 import { conversationSessionSummary } from '../conversation-summary';
 import type { JsonRecord } from './transport';
+import { isRecord } from '../../app/route-snapshots/support';
 
 type RouteApi = Pick<
   HermesCloudApi,
@@ -15,6 +16,7 @@ type RouteApi = Pick<
   | 'getCronJobs'
   | 'getEnvironment'
   | 'getBots'
+  | 'getBotAsset'
   | 'getLogs'
   | 'getMcp'
   | 'getModelCredentials'
@@ -87,7 +89,25 @@ export async function loadCloudRoute(
     case 'webhooks': return api.getWebhooks();
     case 'profiles':
     case 'profile-new': return api.getProfiles();
-    case 'bots': return api.getBots();
+    case 'bots': {
+      const roster = await api.getBots();
+      // Avatar bytes are fetched through the official asset endpoint only for
+      // rows that advertise an asset. Keep the route snapshot bounded so a
+      // large roster cannot stall the native bridge; the dedicated asset API
+      // remains available for full-resolution consumers.
+      if (!isRecord(roster) || !Array.isArray(roster.profiles)) return roster;
+      const profiles = await Promise.all(roster.profiles.map(async (entry) => {
+        if (!isRecord(entry) || entry.has_avatar !== true || typeof entry.name !== 'string') return entry;
+        try {
+          const asset = await api.getBotAsset(entry.name, 'avatar');
+          const data = isRecord(asset) && typeof asset.data === 'string' ? asset.data : '';
+          return data.length > 700_000 ? { ...entry, bot_avatar_data: '' } : { ...entry, bot_avatar_data: data };
+        } catch {
+          return entry;
+        }
+      }));
+      return { ...roster, profiles };
+    }
     case 'config': return api.getConfig(profile);
     // `/api/model/credentials` was retired upstream.  Environment secrets are
     // now exposed by the canonical `/api/env` route, which also includes

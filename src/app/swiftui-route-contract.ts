@@ -443,6 +443,10 @@ export interface HermesSwiftUIProfileSnapshot {
   botHidden?: boolean;
   botPinned?: boolean;
   botGroups?: readonly string[];
+  /** True when the upstream profile has a server-side avatar asset. */
+  botHasAvatar?: boolean;
+  /** Bounded data URL fetched from the official profile asset endpoint. */
+  botAvatarData?: string;
   active: boolean;
   soul: string;
   terminalAccess: boolean;

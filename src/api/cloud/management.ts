@@ -161,6 +161,43 @@ export class HermesManagementCloudApi {
     );
   }
 
+  /** Full upstream Bot Mode profile capability snapshot. */
+  describeBotProfile(name: string) {
+    return this.transport.request<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/describe`,
+    );
+  }
+
+  /** Apply the canonical profiles.configure fields to a Bot Mode profile. */
+  configureBotProfile(name: string, patch: JsonRecord) {
+    return this.transport.json<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/configure`,
+      'PATCH',
+      patch,
+    );
+  }
+
+  getBotAsset(name: string, asset = 'avatar') {
+    return this.transport.request<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/assets/${encodeURIComponent(asset)}`,
+    );
+  }
+
+  setBotAsset(name: string, data: string, asset = 'avatar') {
+    return this.transport.json<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/assets/${encodeURIComponent(asset)}`,
+      'PUT',
+      { data },
+    );
+  }
+
+  clearBotAsset(name: string, asset = 'avatar') {
+    return this.transport.request<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/assets/${encodeURIComponent(asset)}`,
+      { method: 'DELETE' },
+    );
+  }
+
   setActiveProfile(name: string) {
     return this.transport.json<JsonRecord>('/api/profiles/active', 'POST', { name });
   }

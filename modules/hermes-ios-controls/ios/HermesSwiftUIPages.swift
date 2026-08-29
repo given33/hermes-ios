@@ -586,6 +586,7 @@ private enum HermesRemoteEditor: String, Identifiable {
   case profileDescription
   case profileModel
   case botMeta
+  case botProfileConfigure
   case soul
   case skill
   case kanban
@@ -763,6 +764,8 @@ private struct HermesRemoteRoutePage: View {
   @State private var editorValue = ""
   @State private var editorDetail = ""
   @State private var importingConfiguration = false
+  @State private var importingBotAvatar = false
+  @State private var avatarBotID = ""
   @State private var requestedSkillID = ""
   @State private var rollbackInstallationID = ""
   @State private var showingToolsetConfig = false
@@ -814,6 +817,24 @@ private struct HermesRemoteRoutePage: View {
           onSave: { saveEditor(kind) }
         )
         .environmentObject(appearance)
+      }
+      .fileImporter(
+        isPresented: $importingBotAvatar,
+        allowedContentTypes: [.image],
+        allowsMultipleSelection: false
+      ) { result in
+        guard route == .bots,
+              case let .success(urls) = result,
+              let url = urls.first,
+              !avatarBotID.isEmpty else { return }
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        guard let bytes = try? Data(contentsOf: url), !bytes.isEmpty, bytes.count <= 2_000_000 else { return }
+        let ext = url.pathExtension.lowercased()
+        let mime = ext == "png" ? "image/png" : ext == "webp" ? "image/webp" : "image/jpeg"
+        let dataURL = "data:\(mime);base64,\(bytes.base64EncodedString())"
+        onAction(.botAvatarUpload, HermesRouteActionPayload(route: "bots", id: avatarBotID, detail: dataURL))
+        avatarBotID = ""
       }
       .sheet(isPresented: $showingToolsetConfig) {
         NavigationStack {
@@ -1563,7 +1584,7 @@ private struct HermesRemoteRoutePage: View {
       .background(appearance.palette.background)
     case .profiles, .bots:
       List(data.profiles) { profile in
-        HermesRemoteRow(icon: profile.active ? "person.crop.circle.fill" : "person.crop.circle", title: profile.name, detail: "\(profile.model) · \(profile.detail)", tint: profile.active ? appearance.palette.success : appearance.palette.secondary) {
+        HermesRemoteRow(icon: profile.botHasAvatar == true ? "person.crop.circle.fill" : (profile.active ? "person.crop.circle.fill" : "person.crop.circle"), iconData: profile.botAvatarData, title: profile.name, detail: "\(profile.model) · \(profile.detail)", tint: profile.active ? appearance.palette.success : appearance.palette.secondary) {
           if !profile.active {
             Button { onAction(.profileActivate, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Image(systemName: "checkmark") }.buttonStyle(.borderless)
           }
@@ -1622,6 +1643,20 @@ private struct HermesRemoteRoutePage: View {
               editorDetail = ""
               editor = .botMeta
             } label: { Label(chinese ? "编辑标题与分组" : "Edit title and groups", systemImage: "tag") }
+            Button {
+              onAction(.botProfileDescribe, HermesRouteActionPayload(route: "bots", id: profile.id))
+            } label: { Label(chinese ? "读取官方能力配置" : "Load official capabilities", systemImage: "list.bullet.rectangle") }
+            Button {
+              avatarBotID = profile.id
+              importingBotAvatar = true
+            } label: { Label(chinese ? "上传头像" : "Upload avatar", systemImage: "person.crop.circle.badge.plus") }
+            Button {
+              editorID = profile.id
+              editorName = profile.name
+              editorValue = ""
+              editorDetail = "{}"
+              editor = .botProfileConfigure
+            } label: { Label(chinese ? "编辑技能 / Toolset / MCP" : "Edit skills / toolsets / MCP", systemImage: "slider.horizontal.3") }
             Button {
               onAction(
                 .botMetaUpdate,
@@ -2091,6 +2126,9 @@ private struct HermesRemoteRoutePage: View {
       let groups = value.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
       guard let encoded = try? JSONSerialization.data(withJSONObject: ["title": name, "groups": groups]), let json = String(data: encoded, encoding: .utf8) else { return }
       onAction(.botMetaUpdate, HermesRouteActionPayload(route: "bots", id: editorID, detail: json))
+    case .botProfileConfigure:
+      guard !editorID.isEmpty, let object = try? JSONSerialization.jsonObject(with: Data(detail.utf8)), object is [String: Any] else { return }
+      onAction(.botProfileConfigure, HermesRouteActionPayload(route: "bots", id: editorID, detail: detail))
     case .profileDescription:
       guard !editorID.isEmpty else { return }
       onAction(.profileDescription, HermesRouteActionPayload(route: route.rawValue, id: editorID, detail: detail))
@@ -2197,13 +2235,18 @@ private struct HermesRemoteEditorSheet: View {
               .textInputAutocapitalization(.never)
               .autocorrectionDisabled()
           }
-        } else if kind == .config || kind == .soul || kind == .channel || kind == .profileDescription {
-          Section(kind == .soul ? "SOUL.md" : kind == .profileDescription ? (chinese ? "Profile 描述" : "Profile description") : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : "config.json") {
+        } else if kind == .config || kind == .soul || kind == .channel || kind == .profileDescription || kind == .botProfileConfigure {
+          Section(kind == .soul ? "SOUL.md" : kind == .profileDescription ? (chinese ? "Profile 描述" : "Profile description") : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : (chinese ? "官方 Bot 能力 JSON" : "Official Bot capabilities JSON")) {
             TextEditor(text: $detail)
               .font(HermesFonts.mono(12))
               .frame(minHeight: 320)
               .textInputAutocapitalization(.never)
               .autocorrectionDisabled()
+            if kind == .botProfileConfigure {
+              Text(chinese ? "字段遵循官方 profiles.configure：description、soul、provider、model、disabled_skills、enabled_toolsets、enabled_mcp_servers、ui_meta。保存时直接调用官方接口。" : "Fields follow official profiles.configure: description, soul, provider, model, disabled_skills, enabled_toolsets, enabled_mcp_servers, and ui_meta. Save calls the upstream contract directly.")
+                .font(HermesFonts.body(11))
+                .foregroundStyle(.secondary)
+            }
           }
         } else {
           if kind != .toolsetEnvironment {
@@ -2402,6 +2445,7 @@ private struct HermesToolsetSchemaSheet: View {
 private struct HermesRemoteRow<Trailing: View>: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let icon: String
+  let iconData: String? = nil
   let title: String
   let detail: String
   let tint: Color
@@ -2409,7 +2453,16 @@ private struct HermesRemoteRow<Trailing: View>: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      Image(systemName: icon).foregroundStyle(tint).frame(width: 26)
+      if let iconData, let image = Self.image(from: iconData) {
+        Image(uiImage: image)
+          .resizable()
+          .scaledToFill()
+          .frame(width: 26, height: 26)
+          .clipShape(Circle())
+          .overlay(Circle().stroke(tint.opacity(0.5), lineWidth: 1))
+      } else {
+        Image(systemName: icon).foregroundStyle(tint).frame(width: 26)
+      }
       VStack(alignment: .leading, spacing: 3) {
         Text(title).font(HermesFonts.bodyBold(15))
         if !detail.isEmpty { Text(detail).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary) }
@@ -2417,6 +2470,12 @@ private struct HermesRemoteRow<Trailing: View>: View {
       Spacer()
       trailing()
     }.padding(.vertical, 4)
+  }
+
+  private static func image(from dataURL: String) -> UIImage? {
+    guard let comma = dataURL.firstIndex(of: ","),
+          let data = Data(base64Encoded: String(dataURL[dataURL.index(after: comma)...])) else { return nil }
+    return UIImage(data: data)
   }
 }
 

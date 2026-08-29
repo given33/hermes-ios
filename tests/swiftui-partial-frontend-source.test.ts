@@ -71,6 +71,19 @@ test('SwiftUI route snapshots stay split by product domain', () => {
   );
 });
 
+test('native Bot Mode controls expose official profile capability and avatar actions', () => {
+  const pages = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const actions = read('modules/hermes-ios-controls/ios/HermesSwiftUIRouteActions.generated.swift');
+  const api = read('src/api/cloud/management.ts');
+  assert.match(pages, /botProfileDescribe/);
+  assert.match(pages, /botProfileConfigure/);
+  assert.match(pages, /botAvatarUpload/);
+  assert.match(pages, /allowedContentTypes: \[\.image\]/);
+  assert.match(actions, /case botProfileConfigure = "bot\.profile\.configure"/);
+  assert.match(api, /\/api\/bots\/\$\{encodeURIComponent\(name\)\}\/describe/);
+  assert.match(api, /\/assets\/\$\{encodeURIComponent\(asset\)\}/);
+});
+
 test('signed iOS builds keep native route surfaces while the JS sidebar remains authoritative', () => {
   const config = JSON.parse(
     read('modules/hermes-ios-controls/expo-module.config.json'),

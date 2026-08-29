@@ -416,6 +416,8 @@ export function profilesSnapshot(source: unknown, localizer: HermesRouteLocalize
         botHidden: botMeta.hidden === true,
         botPinned: botMeta.pinned === true,
         botGroups,
+        botHasAvatar: entry.has_avatar === true,
+        botAvatarData: stringValue(entry.bot_avatar_data),
       } : {}),
       active: Boolean(entry.active) || id === active,
       soul: stringValue(entry.soul),

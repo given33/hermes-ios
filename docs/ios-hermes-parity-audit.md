@@ -33,6 +33,7 @@ exist. “API only” is deliberately not treated as completion.
 | Channels/Webhooks | `/channels`, `/webhooks`; toggle/edit/test, webhook enable/create/delete | route action contract + API domain tests | verified |
 | Pairing | `/pairing`; approve/revoke/clear pending | route action contract | verified |
 | Profiles/Bots | `/profiles`, `/bots`; create, activate, rename, description, model, auto-describe, SOUL, setup command, export; Bot Chat opens canonical session | management API tests and route source tests | verified |
+| Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset` with a native iOS file importer and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
 | Configuration | `/config`; raw config import/export, stream/compact toggles | config API tests | verified |
 | Environment | `/env`; set/reveal/delete with profile scope | environment route source test | verified |
 | System/maintenance | `/system`; gateway lifecycle, node reconnect, update check/update, Doctor, security audit, backup create/import, hooks list/create/delete, debug share, Curator run/pause, diagnostics, checkpoints and prune | system route source + API domain tests | verified |
@@ -67,6 +68,12 @@ exist. “API only” is deliberately not treated as completion.
   route displays title/groups and exposes hide/show and pin/unpin actions, and
   bot renames use the dedicated Bot Mode REST route. Legacy `mcp.catalog.install`
   action events are also routed through the official catalog installer.
+- 2026-08-29: completed the official profile capability/asset bridge. New
+  `/api/bots/{name}/describe`, `/configure`, and `/assets/{asset}` routes call
+  the registered upstream `profiles.describe`, `profiles.configure`,
+  `profiles.get_asset`, and `profiles.set_asset` handlers directly. iOS now
+  exposes a raw JSON advanced capability editor and native avatar importer;
+  no duplicate profile config writer was introduced.
 
 Each item must add a typed route snapshot, a named action in
 `docs/spec/swiftui-route-actions.json`, a backend-wire test, and a native source
@@ -79,7 +86,7 @@ CRUD, canonical Bot Chat, and server-persisted title/visibility/pin/group
 metadata. The upstream desktop plugin still owns several presentation and
 orchestration surfaces that are not yet represented by a mobile REST contract:
 the local group-chat round engine (including member holds and @mention
-handoffs), image/pet/avatar generation and picker state, cross-connection
+handoffs), AI/pixel-pet/avatar generation and picker state, cross-connection
 roster/relay management, and the dedicated Routines pane. Those are deliberately
 not marked as mobile parity until each has a typed endpoint, native route/action,
 and contract test; the generic profile, cron, collaboration, and authenticated
