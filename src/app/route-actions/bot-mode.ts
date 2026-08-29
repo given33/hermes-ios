@@ -52,6 +52,12 @@ export async function generateBotAvatar(api: HermesCloudApi, id: string, prompt:
   return { message: chinese ? '头像已生成并保存' : 'Avatar generated and saved' };
 }
 
+export async function selectBotPet(api: HermesCloudApi, id: string, slug: string, url: string, chinese: boolean): Promise<BotModeActionResult> {
+  if (!id || !slug.trim() || typeof api.setBotPetAvatar !== 'function') return 'none';
+  await api.setBotPetAvatar(id, slug.trim(), url.trim());
+  return { message: chinese ? 'Petdex 头像已应用' : 'Petdex avatar applied' };
+}
+
 export async function sendBotRelay(
   api: HermesCloudApi,
   target: string,

@@ -590,6 +590,8 @@ export interface HermesSwiftUIRouteSnapshot {
   profiles?: readonly HermesSwiftUIProfileSnapshot[];
   /** JSON-encoded upstream Bot Mode cross-connection roster. */
   botRelayJSON?: string;
+  /** JSON-encoded upstream Petdex gallery used by Bot avatar selection. */
+  botPetJSON?: string;
   config?: HermesSwiftUIConfigSnapshot;
   environment?: readonly HermesSwiftUIEnvironmentSecretSnapshot[];
   system?: HermesSwiftUISystemSnapshot;

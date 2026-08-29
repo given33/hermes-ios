@@ -34,6 +34,7 @@ exist. “API only” is deliberately not treated as completion.
 | Pairing | `/pairing`; approve/revoke/clear pending | route action contract | verified |
 | Profiles/Bots | `/profiles`, `/bots`; create, activate, rename, description, model, auto-describe, SOUL, setup command, export; Bot Chat opens canonical session | management API tests and route source tests | verified |
 | Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset`, and generation delegates to `image.generate` then `profiles.set_asset`, with native iOS controls and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
+| Bot Petdex avatar picker | Bots context menu reads the upstream `pet.gallery` catalog and applies a selected first-frame thumbnail through `pet.thumb` → `profiles.set_asset`; native selection menu carries slug and manifest URL | backend pet bridge test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
 | Bot Mode cross-connection relay | Bots route reads the upstream relay roster and exposes a native target/message sheet; send queues through the canonical `tools.bot_relay.enqueue_envelope` helper with ambiguity/liveness/TTL safeguards | backend relay route test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; native source/action assertions | verified (official bridge) |
 | Configuration | `/config`; raw config import/export, stream/compact toggles | config API tests | verified |
 | Environment | `/env`; set/reveal/delete with profile scope | environment route source test | verified |
@@ -80,6 +81,11 @@ exist. “API only” is deliberately not treated as completion.
   `handle@connection-id` targets, and queues messages through the official
   `enqueue_envelope` helper; ambiguous/offline targets fail explicitly and
   no connection credential crosses the mobile API.
+- 2026-08-29: added the mobile Petdex avatar bridge. The Bots route now
+  hydrates the official `pet.gallery` response and its native context menu
+  applies a selected pet through server-side `pet.thumb` cropping followed by
+  the canonical Bot `profiles.set_asset` handler. Petdex catalog/install
+  semantics remain owned by the upstream gateway.
 
 Each item must add a typed route snapshot, a named action in
 `docs/spec/swiftui-route-actions.json`, a backend-wire test, and a native source
@@ -92,7 +98,7 @@ CRUD, canonical Bot Chat, and server-persisted title/visibility/pin/group
 metadata. The upstream desktop plugin still owns several presentation and
 orchestration surfaces that are not yet represented by a mobile REST contract:
 the local group-chat round engine (including member holds and @mention
-handoffs), pixel-pet gallery/selection and picker state, and the dedicated
+handoffs), pixel-pet runtime animation/state controls, and the dedicated
 Routines pane. Those are deliberately
 not marked as mobile parity until each has a typed endpoint, native route/action,
 and contract test; the generic profile, cron, collaboration, and authenticated

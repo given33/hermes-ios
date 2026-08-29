@@ -1220,6 +1220,17 @@ test('Bot Mode roster uses the canonical mobile bot endpoint', async () => {
   assert.equal(calls[2].options.method, 'PATCH');
 });
 
+test('Bot Mode Petdex avatar methods use the canonical mobile endpoints', async () => {
+  const { api, calls } = createApi();
+  await api.getBotPetGallery();
+  await api.setBotPetAvatar('hk worker', 'otter', 'https://petdex/otter.webp');
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/bot-mode/pets/gallery', 'GET'],
+    ['/api/bots/hk%20worker/assets/avatar/pet', 'POST'],
+  ]);
+  assert.deepEqual(JSON.parse(String(calls[1].options.body)), { slug: 'otter', url: 'https://petdex/otter.webp' });
+});
+
 test('session summaries keep preview, model precedence, and tool counts after the single-pass rewrite', () => {
   const now = 1_800_000_000_000;
   const summary = conversationSessionSummary({

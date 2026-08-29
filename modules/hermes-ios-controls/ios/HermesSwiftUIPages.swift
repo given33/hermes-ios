@@ -1668,6 +1668,25 @@ private struct HermesRemoteRoutePage: View {
               avatarBotID = profile.id
               importingBotAvatar = true
             } label: { Label(chinese ? "上传头像" : "Upload avatar", systemImage: "person.crop.circle.badge.plus") }
+            if let petEntries = botPetEntries, !petEntries.isEmpty {
+              Menu {
+                ForEach(Array(petEntries.prefix(24).enumerated()), id: \.offset) { item in
+                  Button(item.element.name) {
+                    onAction(
+                      .botPetSelect,
+                      HermesRouteActionPayload(
+                        route: "bots",
+                        id: profile.id,
+                        targetId: item.element.slug,
+                        detail: item.element.url
+                      )
+                    )
+                  }
+                }
+              } label: {
+                Label(chinese ? "选择 Petdex 头像" : "Choose Petdex avatar", systemImage: "pawprint")
+              }
+            }
             Button {
               onAction(.botAvatarGenerate, HermesRouteActionPayload(route: "bots", id: profile.id))
             } label: { Label(chinese ? "生成头像" : "Generate avatar", systemImage: "wand.and.stars") }
@@ -2101,6 +2120,23 @@ private struct HermesRemoteRoutePage: View {
     return chinese
       ? "可达机器人：\(labels.joined(separator: "、"))\(suffix)"
       : "Reachable bots: \(labels.joined(separator: ", "))\(suffix)"
+  }
+
+  private var botPetEntries: [(slug: String, name: String, url: String)]? {
+    guard route == .bots,
+          let text = data.botPetJSON,
+          let raw = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+          let pets = object["pets"] as? [[String: Any]]
+    else { return nil }
+    return pets.compactMap { row in
+      guard let slug = row["slug"] as? String, !slug.isEmpty else { return nil }
+      let name = {
+        guard let value = row["displayName"] as? String, !value.isEmpty else { return slug }
+        return value
+      }()
+      return (slug: slug, name: name, url: (row["spritesheetUrl"] as? String) ?? "")
+    }
   }
 
   private var terminalBackendKeys: [String] {

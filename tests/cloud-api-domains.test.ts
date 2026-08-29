@@ -830,6 +830,8 @@ test('Bot Mode profile capability and asset methods keep official REST paths', a
   await api.setBotAsset('bot one', 'data:image/png;base64,AA==');
   await api.clearBotAsset('bot one');
   await api.generateBotAvatar('bot one', 'friendly robot');
+  await api.getBotPetGallery();
+  await api.setBotPetAvatar('bot one', 'otter', 'https://petdex/otter.webp');
   await api.getBotRelayRoster();
   await api.sendBotRelayMessage('hk-worker@hk-primary', 'hello', 'default');
   assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
@@ -839,6 +841,8 @@ test('Bot Mode profile capability and asset methods keep official REST paths', a
     ['/api/bots/bot%20one/assets/avatar', 'PUT'],
     ['/api/bots/bot%20one/assets/avatar', 'DELETE'],
     ['/api/bots/bot%20one/assets/avatar/generate', 'POST'],
+    ['/api/bot-mode/pets/gallery', 'GET'],
+    ['/api/bots/bot%20one/assets/avatar/pet', 'POST'],
     ['/api/bot-mode/relay/roster', 'GET'],
     ['/api/bot-mode/relay/send', 'POST'],
   ]);
@@ -846,6 +850,9 @@ test('Bot Mode profile capability and asset methods keep official REST paths', a
     prompt: 'friendly robot',
   });
   assert.deepEqual(JSON.parse(String(calls[7].options.body)), {
+    slug: 'otter', url: 'https://petdex/otter.webp',
+  });
+  assert.deepEqual(JSON.parse(String(calls[9].options.body)), {
     target: 'hk-worker@hk-primary', message: 'hello', sender_profile: 'default',
   });
 });

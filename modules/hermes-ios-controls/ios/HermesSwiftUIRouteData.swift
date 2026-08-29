@@ -43,6 +43,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let kanban: [HermesKanbanColumnSnapshot]
   let profiles: [HermesProfileSnapshot]
   let botRelayJSON: String?
+  let botPetJSON: String?
   let config: HermesConfigSnapshot
   let environment: [HermesEnvironmentSecretSnapshot]
   let system: HermesSystemSnapshot
@@ -91,6 +92,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     kanban: [HermesKanbanColumnSnapshot] = [],
     profiles: [HermesProfileSnapshot] = [],
     botRelayJSON: String? = nil,
+    botPetJSON: String? = nil,
     config: HermesConfigSnapshot = .empty,
     environment: [HermesEnvironmentSecretSnapshot] = [],
     system: HermesSystemSnapshot = .empty,
@@ -138,6 +140,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.kanban = kanban
     self.profiles = profiles
     self.botRelayJSON = botRelayJSON
+    self.botPetJSON = botPetJSON
     self.config = config
     self.environment = environment
     self.system = system
@@ -237,6 +240,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     kanban = try container.decodeIfPresent([HermesKanbanColumnSnapshot].self, forKey: .kanban) ?? []
     profiles = try container.decodeIfPresent([HermesProfileSnapshot].self, forKey: .profiles) ?? []
     botRelayJSON = try container.decodeIfPresent(String.self, forKey: .botRelayJSON)
+    botPetJSON = try container.decodeIfPresent(String.self, forKey: .botPetJSON)
     config = try container.decodeIfPresent(HermesConfigSnapshot.self, forKey: .config) ?? .empty
     environment = try container.decodeIfPresent(
       [HermesEnvironmentSecretSnapshot].self,

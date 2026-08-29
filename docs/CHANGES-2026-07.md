@@ -115,10 +115,11 @@ SwiftUI 审批快照现在显式携带后端返回的 `payload_digest`，用户�
   SSE/轮询；这条链路不是旧 TUI JSON-RPC 聊天栈，旧 `/api/ws` 实现仍不作为
   iOS 聊天依赖。
 - 复验结果：`pnpm typecheck`、`pnpm contract:check`、全量 `pnpm test` 均通过，
-  当前统计为 800 tests / 800 pass。原生 Xcode 编译仍需 macOS runner。
-- 明确范围：Bot Mode 的桌面 group-round 引擎、宠物 gallery/选择器和 Routines
-  专用面板尚未被宣称为 iOS parity；它们只有在各自拥有 typed API、原生
-  route/action 和回归测试后才会升级为 verified。头像生成已通过
+  当前统计为 802 tests / 802 pass。原生 Xcode 编译仍需 macOS runner。
+- 明确范围：Bot Mode 的桌面 group-round 引擎、宠物运行时动画/状态控制和
+  Routines 专用面板尚未被宣称为 iOS parity；它们只有在各自拥有 typed API、
+  原生 route/action 和回归测试后才会升级为 verified。Petdex gallery/选择器
+  已通过官方 `pet.gallery` → `pet.thumb` → `profiles.set_asset` 桥接完成。头像生成已通过
   `/api/bots/{name}/assets/avatar/generate` 接入官方 `image.generate` →
   `profiles.set_asset` 链路；跨连接 relay 已通过
   `/api/bot-mode/relay/{roster,send}` 接入 Bots 页面，并由官方 outbox helper

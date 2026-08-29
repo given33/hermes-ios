@@ -80,16 +80,20 @@ test('native Bot Mode controls expose official profile capability and avatar act
   assert.match(pages, /botAvatarUpload/);
   assert.match(pages, /botRelaySend/);
   assert.match(pages, /botAvatarGenerate/);
+  assert.match(pages, /botPetSelect/);
   assert.match(pages, /Cross-connection Bot Relay/);
   assert.match(pages, /allowedContentTypes: \[\.image\]/);
   assert.match(actions, /case botProfileConfigure = "bot\.profile\.configure"/);
   assert.match(actions, /case botRelaySend = "bot\.relay\.send"/);
   assert.match(actions, /case botAvatarGenerate = "bot\.avatar\.generate"/);
+  assert.match(actions, /case botPetSelect = "bot\.pet\.select"/);
   assert.match(api, /\/api\/bots\/\$\{encodeURIComponent\(name\)\}\/describe/);
   assert.match(api, /\/assets\/\$\{encodeURIComponent\(asset\)\}/);
   assert.match(api, /\/api\/bot-mode\/relay\/roster/);
   assert.match(api, /\/api\/bot-mode\/relay\/send/);
   assert.match(api, /\/assets\/avatar\/generate/);
+  assert.match(api, /\/api\/bot-mode\/pets\/gallery/);
+  assert.match(api, /\/assets\/avatar\/pet/);
 });
 
 test('signed iOS builds keep native route surfaces while the JS sidebar remains authoritative', () => {

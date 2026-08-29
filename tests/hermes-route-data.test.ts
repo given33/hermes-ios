@@ -1069,6 +1069,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
           canonical_session: { id: 'bot-chat', resolved_id: 'bot-chat' },
         }],
         bot_relay: { agents: [{ handle: 'worker', connection_id: 'hk-primary' }] },
+        bot_pet_gallery: { pets: [{ slug: 'otter', displayName: 'Otter' }] },
       };
     },
   } as unknown as HermesCloudApi, 'bots', 'default');
@@ -1082,6 +1083,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
   assert.deepEqual(snapshot.profiles?.[0]?.botGroups, ['ops', 'hk']);
   assert.match(snapshot.profiles?.[0]?.botSessionId || '', /^official:v3:/);
   assert.match(snapshot.botRelayJSON || '', /hk-primary/);
+  assert.match(snapshot.botPetJSON || '', /otter/);
 });
 
 test('Bot Mode metadata action uses the dedicated REST endpoint', async () => {
@@ -1143,6 +1145,22 @@ test('Bot Mode relay action queues through the official cross-connection endpoin
   }, 'default');
   assert.match(typeof result === 'object' ? result.message : '', /排队/);
   assert.deepEqual(calls, [['worker@hk-primary', '继续执行', 'default']]);
+});
+
+test('Bot Mode Petdex action stores the selected first-frame avatar', async () => {
+  const calls: Array<[string, string, string]> = [];
+  const api = {
+    setBotPetAvatar: async (name: string, slug: string, url: string) => {
+      calls.push([name, slug, url]);
+      return { ok: true };
+    },
+  } as unknown as HermesCloudApi;
+  const result = await performHermesSwiftUIRouteAction(api, {
+    action: 'bot.pet.select',
+    payload: { route: 'bots', id: 'coder', targetId: 'otter', detail: 'https://petdex/otter.webp' },
+  }, 'default', 'en');
+  assert.match(typeof result === 'object' ? result.message : '', /Petdex|avatar/);
+  assert.deepEqual(calls, [['coder', 'otter', 'https://petdex/otter.webp']]);
 });
 
 test('system snapshots share managed-node aliases with the sidebar status', async () => {

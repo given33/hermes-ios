@@ -206,6 +206,20 @@ export class HermesManagementCloudApi {
     );
   }
 
+  /** Read the official Petdex gallery used by the desktop Bot avatar picker. */
+  getBotPetGallery() {
+    return this.transport.request<JsonRecord>('/api/bot-mode/pets/gallery');
+  }
+
+  /** Store a Petdex first-frame thumbnail through the canonical asset RPC. */
+  setBotPetAvatar(name: string, slug: string, url = '') {
+    return this.transport.json<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/assets/avatar/pet`,
+      'POST',
+      url.trim() ? { slug, url: url.trim() } : { slug },
+    );
+  }
+
   /** Read the official Bot Mode cross-connection roster maintained by the
    * desktop relay. The server never returns connection credentials. */
   getBotRelayRoster() {

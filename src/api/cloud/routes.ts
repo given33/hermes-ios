@@ -18,6 +18,7 @@ type RouteApi = Pick<
   | 'getBots'
   | 'getBotAsset'
   | 'getBotRelayRoster'
+  | 'getBotPetGallery'
   | 'getLogs'
   | 'getMcp'
   | 'getModelCredentials'
@@ -91,18 +92,21 @@ export async function loadCloudRoute(
     case 'profiles':
     case 'profile-new': return api.getProfiles();
     case 'bots': {
-      const [roster, relay] = await Promise.all([
+      const [roster, relay, petGallery] = await Promise.all([
         api.getBots(),
         typeof api.getBotRelayRoster === 'function'
           ? api.getBotRelayRoster().catch(() => undefined)
+          : Promise.resolve(undefined),
+        typeof api.getBotPetGallery === 'function'
+          ? api.getBotPetGallery().catch(() => undefined)
           : Promise.resolve(undefined),
       ]);
       // Avatar bytes are fetched through the official asset endpoint only for
       // rows that advertise an asset. Keep the route snapshot bounded so a
       // large roster cannot stall the native bridge; the dedicated asset API
       // remains available for full-resolution consumers.
-      if (!isRecord(roster) || !Array.isArray(roster.profiles)) return relay
-        ? { ...roster, bot_relay: relay }
+      if (!isRecord(roster) || !Array.isArray(roster.profiles)) return relay || petGallery
+        ? { ...roster, ...(relay ? { bot_relay: relay } : {}), ...(petGallery ? { bot_pet_gallery: petGallery } : {}) }
         : roster;
       const profiles = await Promise.all(roster.profiles.map(async (entry) => {
         if (!isRecord(entry) || entry.has_avatar !== true || typeof entry.name !== 'string') return entry;
@@ -114,7 +118,7 @@ export async function loadCloudRoute(
           return entry;
         }
       }));
-      return { ...roster, profiles, ...(relay ? { bot_relay: relay } : {}) };
+      return { ...roster, profiles, ...(relay ? { bot_relay: relay } : {}), ...(petGallery ? { bot_pet_gallery: petGallery } : {}) };
     }
     case 'config': return api.getConfig(profile);
     // `/api/model/credentials` was retired upstream.  Environment secrets are
