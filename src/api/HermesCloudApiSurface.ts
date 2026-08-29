@@ -74,6 +74,7 @@ export interface HermesCloudApi {
   renameProfile(name: string, newName: string): Promise<JsonRecord>;
   exportProfile(name: string, output?: string, extraFiles?: string[]): Promise<JsonRecord>; importProfiles(payload: JsonRecord): Promise<JsonRecord>;
   startGateway(profile?: string): Promise<JsonRecord>; stopGateway(profile?: string): Promise<JsonRecord>; drainGateway(profile?: string): Promise<JsonRecord>;
+  getAuthProviders(): Promise<JsonRecord>; getAuthMe(): Promise<JsonRecord>;
   checkHermesUpdate(force?: boolean): Promise<JsonRecord>; getHermesUpdateReceipt(): Promise<JsonRecord>; getHealth(): Promise<JsonRecord>; getEgressStatus(): Promise<JsonRecord>;
   getCredentialPool(): Promise<JsonRecord>; addCredentialPoolEntry(provider: string, apiKey: string, label?: string): Promise<JsonRecord>;
   removeCredentialPoolEntry(provider: string, index: number): Promise<JsonRecord>;
@@ -97,6 +98,47 @@ export interface HermesCloudApi {
   searchSessions(query: string, limit?: number, profile?: string, filters?: JsonRecord): Promise<JsonRecord>; getLatestDescendant(id: string, profile?: string): Promise<JsonRecord>; exportSession(id: string, profile?: string): Promise<JsonRecord>; setSessionArchived(id: string, archived: boolean, profile?: string): Promise<JsonRecord>; setSessionPinned(id: string, pinned: boolean, profile?: string): Promise<JsonRecord>; setSessionUnread(id: string, unread: boolean, profile?: string): Promise<JsonRecord>; bulkDeleteSessions(ids: string[], profile?: string): Promise<JsonRecord>; importSessions(sessions: JsonRecord[], profile?: string): Promise<JsonRecord>; countEmptySessions(profile?: string): Promise<JsonRecord>; deleteEmptySessions(profile?: string): Promise<JsonRecord>; getSessionStats(profile?: string): Promise<JsonRecord>; pruneSessions(payload?: JsonRecord, profile?: string): Promise<JsonRecord>;
   getProfileSessionsSidebar(options?: JsonRecord): Promise<JsonRecord>; getProfileProjectsTree(previewLimit?: number, sessionLimit?: number): Promise<JsonRecord>; scanProfileSessionPullRequests(ids: string[]): Promise<JsonRecord>;
   setConversationArchived(id: string, archived: boolean): Promise<JsonRecord>; setConversationPinned(id: string, pinned: boolean): Promise<JsonRecord>; setConversationUnread(id: string, unread: boolean): Promise<JsonRecord>;
+  getKanbanTask(id: string, options?: { board?: string; runStateType?: 'status' | 'outcome'; runStateName?: string }): Promise<JsonRecord>;
+  deleteKanbanTask(id: string, board?: string): Promise<JsonRecord>;
+  listKanbanTaskAttachments(taskId: string, board?: string): Promise<JsonRecord>;
+  uploadKanbanTaskAttachment(taskId: string, file: Blob, filename: string, uploadedBy?: string, board?: string): Promise<JsonRecord>;
+  downloadKanbanAttachment(id: number | string, board?: string): Promise<Blob>;
+  deleteKanbanAttachment(id: number | string, board?: string): Promise<JsonRecord>;
+  addKanbanComment(taskId: string, body: string, author?: string, board?: string): Promise<JsonRecord>;
+  linkKanbanTasks(parentId: string, childId: string, board?: string): Promise<JsonRecord>;
+  unlinkKanbanTasks(parentId: string, childId: string, board?: string): Promise<JsonRecord>;
+  bulkUpdateKanbanTasks(ids: string[], update: JsonRecord, board?: string): Promise<JsonRecord>;
+  getKanbanDiagnostics(options?: { board?: string; severity?: string }): Promise<JsonRecord>;
+  getKanbanActiveWorkers(board?: string): Promise<JsonRecord>;
+  getKanbanRun(id: number | string, board?: string): Promise<JsonRecord>;
+  inspectKanbanRun(id: number | string, board?: string): Promise<JsonRecord>;
+  terminateKanbanRun(id: number | string, reason?: string, board?: string): Promise<JsonRecord>;
+  reclaimKanbanTask(taskId: string, reason?: string, board?: string): Promise<JsonRecord>;
+  specifyKanbanTask(taskId: string, options?: { author?: string }, board?: string): Promise<JsonRecord>;
+  reassignKanbanTask(taskId: string, profile: string, reclaim?: boolean, board?: string, reason?: string): Promise<JsonRecord>;
+  estimateKanbanText(title: string, body?: string): Promise<JsonRecord>;
+  estimateKanbanTask(taskId: string, board?: string): Promise<JsonRecord>;
+  decomposeKanbanTask(taskId: string, options?: { author?: string }, board?: string): Promise<JsonRecord>;
+  getKanbanTaskLog(taskId: string, options?: { board?: string; tail?: number }): Promise<JsonRecord>;
+  dispatchKanban(options?: { board?: string; dryRun?: boolean; max?: number }): Promise<JsonRecord>;
+  getKanbanModelOptions(): Promise<JsonRecord>; getKanbanConfig(): Promise<JsonRecord>;
+  getKanbanHomeChannels(taskId?: string, board?: string): Promise<JsonRecord>;
+  subscribeKanbanHome(taskId: string, platform: string, board?: string): Promise<JsonRecord>;
+  unsubscribeKanbanHome(taskId: string, platform: string, board?: string): Promise<JsonRecord>;
+  getKanbanStats(board?: string): Promise<JsonRecord>; getKanbanAssignees(board?: string): Promise<JsonRecord>;
+  getKanbanProjects(): Promise<JsonRecord>; getKanbanBoards(includeArchived?: boolean): Promise<JsonRecord>;
+  createKanbanBoard(payload: JsonRecord): Promise<JsonRecord>; updateKanbanBoard(slug: string, payload: JsonRecord): Promise<JsonRecord>;
+  deleteKanbanBoard(slug: string, hardDelete?: boolean): Promise<JsonRecord>; exportKanbanBoard(slug: string, options?: { output?: string; attachments?: boolean; logs?: boolean }): Promise<JsonRecord>;
+  importKanbanBoard(archive: string, slug?: string, switchBoard?: boolean): Promise<JsonRecord>; switchKanbanBoard(slug: string): Promise<JsonRecord>;
+  getKanbanProfiles(): Promise<JsonRecord>; updateKanbanProfile(profile: string, description: string): Promise<JsonRecord>;
+  describeKanbanProfile(profile: string, overwrite?: boolean): Promise<JsonRecord>;
+  getKanbanOrchestration(): Promise<JsonRecord>; setKanbanOrchestration(payload: JsonRecord): Promise<JsonRecord>;
+  getAchievementScanStatus(): Promise<JsonRecord>; getRecentAchievementUnlocks(): Promise<JsonRecord>;
+  getSessionAchievementBadges(sessionId: string): Promise<JsonRecord>; resetAchievementState(): Promise<JsonRecord>;
+  getCollaborationRoomMailbox(id: string, recipientId: string, afterId?: string, limit?: number): Promise<JsonRecord>;
+  sendCollaborationRoomMailboxMessage(id: string, senderId: string, recipientId: string, body: JsonRecord, idempotencyKey?: string): Promise<JsonRecord>;
+  getCollaborationRoomDependencies(id: string): Promise<JsonRecord>;
+  setCollaborationRoomDependencies(id: string, nodes: JsonRecord[]): Promise<JsonRecord>;
   executeMobileHostedCommand(conversationId: string, command: MobileHostedCommand, text?: string, value?: string): Promise<MobileHostedCommandResult>;
 }
 }
@@ -189,5 +231,58 @@ Object.assign(CloudApi.prototype, {
   setConversationArchived(this: any, i: string, a: boolean) { return this.conversations.setConversationArchived(i, a); },
   setConversationPinned(this: any, i: string, p: boolean) { return this.conversations.setConversationPinned(i, p); },
   setConversationUnread(this: any, i: string, u: boolean) { return this.conversations.setConversationUnread(i, u); },
+  getKanbanTask(this: any, i: string, o = {}) { return this.collaboration.getKanbanTask(i, o); },
+  deleteKanbanTask(this: any, i: string, b?: string) { return this.collaboration.deleteKanbanTask(i, b); },
+  listKanbanTaskAttachments(this: any, i: string, b?: string) { return this.collaboration.listKanbanTaskAttachments(i, b); },
+  uploadKanbanTaskAttachment(this: any, i: string, f: Blob, n: string, u?: string, b?: string) { return this.collaboration.uploadKanbanTaskAttachment(i, f, n, u, b); },
+  downloadKanbanAttachment(this: any, i: number | string, b?: string) { return this.collaboration.downloadKanbanAttachment(i, b); },
+  deleteKanbanAttachment(this: any, i: number | string, b?: string) { return this.collaboration.deleteKanbanAttachment(i, b); },
+  addKanbanComment(this: any, i: string, body: string, author?: string, b?: string) { return this.collaboration.addKanbanComment(i, body, author, b); },
+  linkKanbanTasks(this: any, p: string, c: string, b?: string) { return this.collaboration.linkKanbanTasks(p, c, b); },
+  unlinkKanbanTasks(this: any, p: string, c: string, b?: string) { return this.collaboration.unlinkKanbanTasks(p, c, b); },
+  bulkUpdateKanbanTasks(this: any, ids: string[], update: JsonRecord, b?: string) { return this.collaboration.bulkUpdateKanbanTasks(ids, update, b); },
+  getKanbanDiagnostics(this: any, o = {}) { return this.collaboration.getKanbanDiagnostics(o); },
+  getKanbanActiveWorkers(this: any, b?: string) { return this.collaboration.getKanbanActiveWorkers(b); },
+  getKanbanRun(this: any, i: number | string, b?: string) { return this.collaboration.getKanbanRun(i, b); },
+  inspectKanbanRun(this: any, i: number | string, b?: string) { return this.collaboration.inspectKanbanRun(i, b); },
+  terminateKanbanRun(this: any, i: number | string, reason = '', b?: string) { return this.collaboration.terminateKanbanRun(i, reason, b); },
+  reclaimKanbanTask(this: any, i: string, reason = '', b?: string) { return this.collaboration.reclaimKanbanTask(i, reason, b); },
+  specifyKanbanTask(this: any, i: string, o = {}, b?: string) { return this.collaboration.specifyKanbanTask(i, o, b); },
+  reassignKanbanTask(this: any, i: string, p: string, r = false, b?: string, reason = '') { return this.collaboration.reassignKanbanTask(i, p, r, b, reason); },
+  estimateKanbanText(this: any, t: string, body = '') { return this.collaboration.estimateKanbanText(t, body); },
+  estimateKanbanTask(this: any, i: string, b?: string) { return this.collaboration.estimateKanbanTask(i, b); },
+  decomposeKanbanTask(this: any, i: string, o = {}, b?: string) { return this.collaboration.decomposeKanbanTask(i, o, b); },
+  getKanbanTaskLog(this: any, i: string, o = {}) { return this.collaboration.getKanbanTaskLog(i, o); },
+  dispatchKanban(this: any, o = {}) { return this.collaboration.dispatchKanban(o); },
+  getKanbanModelOptions(this: any) { return this.collaboration.getKanbanModelOptions(); },
+  getKanbanConfig(this: any) { return this.collaboration.getKanbanConfig(); },
+  getKanbanHomeChannels(this: any, i?: string, b?: string) { return this.collaboration.getKanbanHomeChannels(i, b); },
+  subscribeKanbanHome(this: any, i: string, p: string, b?: string) { return this.collaboration.subscribeKanbanHome(i, p, b); },
+  unsubscribeKanbanHome(this: any, i: string, p: string, b?: string) { return this.collaboration.unsubscribeKanbanHome(i, p, b); },
+  getKanbanStats(this: any, b?: string) { return this.collaboration.getKanbanStats(b); },
+  getKanbanAssignees(this: any, b?: string) { return this.collaboration.getKanbanAssignees(b); },
+  getKanbanProjects(this: any) { return this.collaboration.getKanbanProjects(); },
+  getKanbanBoards(this: any, a = false) { return this.collaboration.getKanbanBoards(a); },
+  createKanbanBoard(this: any, p: JsonRecord) { return this.collaboration.createKanbanBoard(p); },
+  updateKanbanBoard(this: any, s: string, p: JsonRecord) { return this.collaboration.updateKanbanBoard(s, p); },
+  deleteKanbanBoard(this: any, s: string, d = false) { return this.collaboration.deleteKanbanBoard(s, d); },
+  exportKanbanBoard(this: any, s: string, o = {}) { return this.collaboration.exportKanbanBoard(s, o); },
+  importKanbanBoard(this: any, a: string, s?: string, sw = false) { return this.collaboration.importKanbanBoard(a, s, sw); },
+  switchKanbanBoard(this: any, s: string) { return this.collaboration.switchKanbanBoard(s); },
+  getKanbanProfiles(this: any) { return this.collaboration.getKanbanProfiles(); },
+  updateKanbanProfile(this: any, p: string, d: string) { return this.collaboration.updateKanbanProfile(p, d); },
+  describeKanbanProfile(this: any, p: string, o = false) { return this.collaboration.describeKanbanProfile(p, o); },
+  getKanbanOrchestration(this: any) { return this.collaboration.getKanbanOrchestration(); },
+  setKanbanOrchestration(this: any, p: JsonRecord) { return this.collaboration.setKanbanOrchestration(p); },
+  getAchievementScanStatus(this: any) { return this.management.getAchievementScanStatus(); },
+  getRecentAchievementUnlocks(this: any) { return this.management.getRecentAchievementUnlocks(); },
+  getSessionAchievementBadges(this: any, i: string) { return this.management.getSessionAchievementBadges(i); },
+  resetAchievementState(this: any) { return this.management.resetAchievementState(); },
+  getAuthProviders(this: any) { return this.management.getAuthProviders(); },
+  getAuthMe(this: any) { return this.management.getAuthMe(); },
+  getCollaborationRoomMailbox(this: any, i: string, r: string, a = '', l = 100) { return this.collaboration.getCollaborationRoomMailbox(i, r, a, l); },
+  sendCollaborationRoomMailboxMessage(this: any, i: string, s: string, r: string, b: JsonRecord, k = '') { return this.collaboration.sendCollaborationRoomMailboxMessage(i, s, r, b, k); },
+  getCollaborationRoomDependencies(this: any, i: string) { return this.collaboration.getCollaborationRoomDependencies(i); },
+  setCollaborationRoomDependencies(this: any, i: string, n: JsonRecord[]) { return this.collaboration.setCollaborationRoomDependencies(i, n); },
 });
 }

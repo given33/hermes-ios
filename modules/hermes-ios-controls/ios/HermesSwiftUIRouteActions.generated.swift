@@ -45,6 +45,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case achievements
   case collaboration
   case kanban
+  case kanbanMetaJSON
   case profiles
   case botRelayJSON
   case botPetJSON

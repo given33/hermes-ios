@@ -1841,8 +1841,24 @@ private struct HermesRemoteRoutePage: View {
             description: Text(chinese ? "点击右上角创建真实 Hermes 看板任务。" : "Create a Hermes Kanban task from the toolbar.")
           )
         } else {
-          ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: 12) {
+          VStack(alignment: .leading, spacing: 10) {
+            if let metadata = kanbanMetadataSummary {
+              HermesPanel {
+                HStack(spacing: 14) {
+                  Label(chinese ? "官方 Kanban 状态" : "Official Kanban status", systemImage: "chart.bar.xaxis")
+                    .font(HermesFonts.bodyBold(12))
+                  Spacer()
+                  Text(metadata)
+                    .font(HermesFonts.mono(11))
+                    .foregroundStyle(appearance.palette.secondary)
+                    .multilineTextAlignment(.trailing)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(metadata)
+              }
+            }
+            ScrollView(.horizontal) {
+              HStack(alignment: .top, spacing: 12) {
               ForEach(data.kanban) { column in
             VStack(alignment: .leading, spacing: 8) {
               Text(column.title).font(HermesFonts.display(14))
@@ -1879,8 +1895,32 @@ private struct HermesRemoteRoutePage: View {
                 }
               }
               }.frame(width: 250, alignment: .topLeading)
+              }
+              .padding(14)
             }
-            .padding(14)
+          }
+        }
+        if let status = data.achievements.scanStatus, !status.isEmpty || data.achievements.recentUnlocksJSON != nil {
+          HermesPanel {
+            HStack(spacing: 10) {
+              Image(systemName: statusIcon(data.achievements.scanStatus))
+                .foregroundStyle(appearance.palette.accent)
+              VStack(alignment: .leading, spacing: 3) {
+                Text(chinese ? "官方扫描状态" : "Official scan status")
+                  .font(HermesFonts.bodyBold(12))
+                Text(data.achievements.scanStatus?.isEmpty == false
+                  ? data.achievements.scanStatus!
+                  : (chinese ? "就绪" : "Ready"))
+                  .font(HermesFonts.mono(11))
+                  .foregroundStyle(appearance.palette.secondary)
+              }
+              Spacer()
+              if let recent = recentAchievementCount {
+                Text((chinese ? "最近解锁 " : "Recent unlocks ") + String(recent))
+                  .font(HermesFonts.body(11))
+                  .foregroundStyle(appearance.palette.secondary)
+              }
+            }
           }
         }
       }
@@ -2710,6 +2750,54 @@ private struct HermesRemoteRoutePage: View {
     return chinese
       ? "可达机器人：\(labels.joined(separator: "、"))\(suffix)"
       : "Reachable bots: \(labels.joined(separator: ", "))\(suffix)"
+  }
+
+  /// Compact, human-readable projection of the official Kanban catalog.
+  /// The full JSON remains available to JS/native extensions, while this
+  /// summary makes diagnostics, worker liveness, board switching and profile
+  /// catalogs visible on the phone without forcing a second network roundtrip.
+  private var kanbanMetadataSummary: String? {
+    guard route == .kanban,
+          let text = data.kanbanMetaJSON,
+          let raw = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    else { return nil }
+    let boards = (object["boards"] as? [String: Any])?["boards"] as? [[String: Any]]
+      ?? object["boards"] as? [[String: Any]] ?? []
+    let stats = object["stats"] as? [String: Any]
+    let workers = (object["workers"] as? [String: Any])?["workers"] as? [[String: Any]]
+      ?? []
+    let diagnostics = (object["diagnostics"] as? [String: Any])?["diagnostics"] as? [[String: Any]]
+      ?? object["diagnostics"] as? [[String: Any]] ?? []
+    let profiles = (object["profile_catalog"] as? [String: Any])?["profiles"] as? [[String: Any]]
+      ?? []
+    var parts: [String] = []
+    if !boards.isEmpty { parts.append((chinese ? "看板 " : "boards ") + String(boards.count)) }
+    if let stats {
+      let total = (stats["total"] as? Int)
+        ?? ((stats["by_status"] as? [String: Any])?.values.compactMap { $0 as? Int }.reduce(0, +) ?? 0)
+      if total > 0 { parts.append((chinese ? "任务 " : "tasks ") + String(total)) }
+    }
+    if !workers.isEmpty { parts.append((chinese ? "运行中 " : "running ") + String(workers.count)) }
+    if !diagnostics.isEmpty { parts.append((chinese ? "诊断 " : "diagnostics ") + String(diagnostics.count)) }
+    if !profiles.isEmpty { parts.append((chinese ? "Profile " : "profiles ") + String(profiles.count)) }
+    return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+
+  private var recentAchievementCount: Int? {
+    guard let text = data.achievements.recentUnlocksJSON,
+          let raw = text.data(using: .utf8),
+          let rows = try? JSONSerialization.jsonObject(with: raw) as? [Any]
+    else { return nil }
+    return rows.count
+  }
+
+  private func statusIcon(_ status: String?) -> String {
+    switch status?.lowercased() {
+    case "running", "scanning", "pending": return "arrow.triangle.2.circlepath"
+    case "error", "failed": return "exclamationmark.triangle"
+    default: return "checkmark.circle"
+    }
   }
 
   private var botPetEntries: [(slug: String, name: String, url: String)]? {

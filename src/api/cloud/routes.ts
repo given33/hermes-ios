@@ -6,6 +6,8 @@ import { isRecord } from '../../app/route-snapshots/support';
 type RouteApi = Pick<
   HermesCloudApi,
   | 'getAchievements'
+  | 'getAchievementScanStatus'
+  | 'getRecentAchievementUnlocks'
   | 'getAllAccountFiles'
   | 'getAnalytics'
   | 'getChannels'
@@ -49,6 +51,15 @@ type RouteApi = Pick<
   | 'getWriteApproval'
   | 'getWriteApprovals'
   | 'getKanbanBoard'
+  | 'getKanbanBoards'
+  | 'getKanbanStats'
+  | 'getKanbanAssignees'
+  | 'getKanbanActiveWorkers'
+  | 'getKanbanDiagnostics'
+  | 'getKanbanConfig'
+  | 'getKanbanModelOptions'
+  | 'getKanbanProfiles'
+  | 'getKanbanOrchestration'
   | 'getMemoryStatus'
   | 'getDefaultCwd'
   | 'getGitRoot'
@@ -214,8 +225,56 @@ export async function loadCloudRoute(
       return { ...system, health, egress, updateCheck, updateReceipt };
     }
     case 'memory': return api.getMemoryStatus(profile);
-    case 'achievements': return api.getAchievements();
-    case 'kanban': return api.getKanbanBoard();
+    case 'achievements': {
+      const achievements = await api.getAchievements();
+      const optional = async <T>(loader: (() => Promise<T>) | undefined): Promise<T | undefined> => {
+        if (typeof loader !== 'function') return undefined;
+        try { return await loader(); } catch { return undefined; }
+      };
+      const [scanStatus, recentUnlocks] = await Promise.all([
+        optional(api.getAchievementScanStatus?.bind(api)),
+        optional(api.getRecentAchievementUnlocks?.bind(api)),
+      ]);
+      return {
+        ...((isRecord(achievements) ? achievements : {}) as JsonRecord),
+        ...(scanStatus ? { scan_status: scanStatus } : {}),
+        ...(recentUnlocks ? { recent_unlocks: recentUnlocks } : {}),
+      };
+    }
+    case 'kanban': {
+      // Keep the board route useful on older Hermes servers while hydrating
+      // every official Kanban projection that the native client can render.
+      // Each auxiliary projection is best-effort: a server that predates a
+      // route still returns its board instead of making the whole tab fail.
+      const board = await api.getKanbanBoard();
+      const optional = async <T>(loader: (() => Promise<T>) | undefined): Promise<T | undefined> => {
+        if (typeof loader !== 'function') return undefined;
+        try { return await loader(); } catch { return undefined; }
+      };
+      const [boards, stats, assignees, workers, diagnostics, config, modelOptions, profiles, orchestration] = await Promise.all([
+        optional(api.getKanbanBoards?.bind(api)),
+        optional(api.getKanbanStats?.bind(api)),
+        optional(api.getKanbanAssignees?.bind(api)),
+        optional(api.getKanbanActiveWorkers?.bind(api)),
+        optional(api.getKanbanDiagnostics?.bind(api)),
+        optional(api.getKanbanConfig?.bind(api)),
+        optional(api.getKanbanModelOptions?.bind(api)),
+        optional(api.getKanbanProfiles?.bind(api)),
+        optional(api.getKanbanOrchestration?.bind(api)),
+      ]);
+      return {
+        ...((isRecord(board) ? board : {}) as JsonRecord),
+        ...(boards ? { boards } : {}),
+        ...(stats ? { stats } : {}),
+        ...(assignees ? { assignees_catalog: assignees } : {}),
+        ...(workers ? { workers } : {}),
+        ...(diagnostics ? { diagnostics } : {}),
+        ...(config ? { config } : {}),
+        ...(modelOptions ? { model_options: modelOptions } : {}),
+        ...(profiles ? { profile_catalog: profiles } : {}),
+        ...(orchestration ? { orchestration } : {}),
+      };
+    }
     case 'collaboration': {
       const [rooms, profiles] = await Promise.all([
         api.getCollaborationRooms(),

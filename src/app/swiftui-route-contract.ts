@@ -401,6 +401,8 @@ export interface HermesSwiftUIAchievementsSnapshot {
   dayStreak: string;
   shareText: string;
   items: readonly HermesSwiftUIAchievementItemSnapshot[];
+  scanStatus?: string;
+  recentUnlocksJSON?: string;
 }
 
 export interface HermesSwiftUICollaborationRoomSnapshot {
@@ -619,6 +621,9 @@ export interface HermesSwiftUIRouteSnapshot {
   achievements?: HermesSwiftUIAchievementsSnapshot;
   collaboration?: HermesSwiftUICollaborationSnapshot;
   kanban?: readonly HermesSwiftUIKanbanColumnSnapshot[];
+  /** JSON-encoded official Kanban board metadata/projections (boards, stats,
+   * diagnostics, active workers, model options, profiles, orchestration). */
+  kanbanMetaJSON?: string;
   profiles?: readonly HermesSwiftUIProfileSnapshot[];
   /** JSON-encoded upstream Bot Mode cross-connection roster. */
   botRelayJSON?: string;

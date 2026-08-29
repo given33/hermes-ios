@@ -307,6 +307,11 @@ export function achievementsSnapshot(source: unknown, localizer: HermesRouteLoca
     tasksCompleted: String(root.tasks_completed ?? root.completed ?? root.unlocked_count ?? '-'),
     dayStreak: String(root.day_streak ?? root.streak ?? '-'),
     shareText: stringValue(root.share_text) || 'Hermes Agent achievements',
+    scanStatus: (() => {
+      const status = isRecord(root.scan_status) ? root.scan_status : {};
+      return stringValue(status.state) || stringValue(status.status) || stringValue(root.scan_status);
+    })(),
+    recentUnlocksJSON: root.recent_unlocks !== undefined ? JSON.stringify(root.recent_unlocks) : undefined,
     items: rows.flatMap((entry, index) => {
       if (!isRecord(entry)) return [];
       return [{

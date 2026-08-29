@@ -811,12 +811,24 @@ test('all native management routes render the current cloud workspace response',
       pending: [{ platform: 'telegram', user_id: '42', user_name: 'Alice', request_id: 'pair-42', age_minutes: 3 }],
       approved: [{ platform: 'discord', user_id: '84', user_name: 'Bob' }],
     },
-    achievements: { tasks_completed: 7, day_streak: 3, achievements: [{ id: 'first', title: '首次任务', progress: 1 }] },
+    achievements: {
+      tasks_completed: 7,
+      day_streak: 3,
+      achievements: [{ id: 'first', title: '首次任务', progress: 1 }],
+      scan_status: { state: 'idle' },
+      recent_unlocks: [{ id: 'first' }],
+    },
     collaboration: {
       rooms: [{ id: 'room-1', name: '原生开发' }],
       room: { id: 'room-1', name: '原生开发', messages: [{ id: 'm1', content: '云端消息' }] },
     },
-    kanban: { tasks: [{ id: 'task-1', title: '接入后端', status: 'doing' }] },
+    kanban: {
+      tasks: [{ id: 'task-1', title: '接入后端', status: 'doing' }],
+      boards: { boards: [{ slug: 'default' }], current: 'default' },
+      stats: { total: 1 },
+      workers: { workers: [{ task_id: 'task-1' }] },
+      diagnostics: { diagnostics: [{ task_id: 'task-1' }] },
+    },
     profiles: { active: { active: 'default', current: 'default' }, profiles: [{ name: 'default', model: 'model-a', description: '主 Agent' }] },
     config: { config: { model: { default: 'model-a' }, agent: { max_turns: 42 }, timezone: 'Asia/Shanghai' }, schema: {} },
     env: {
@@ -879,8 +891,12 @@ test('all native management routes render the current cloud workspace response',
   assert.equal(pairing.pairing?.pending[0].requestId, 'pair-42');
   assert.equal(pairing.pairing?.approved[0].userId, '84');
   assert.equal(achievements.achievements?.items[0].title, '首次任务');
+  assert.equal(achievements.achievements?.scanStatus, 'idle');
+  assert.match(achievements.achievements?.recentUnlocksJSON ?? '', /first/);
   assert.equal(collaboration.collaboration?.messages[0].text, '云端消息');
   assert.equal(kanban.kanban?.[0].cards[0].title, '接入后端');
+  assert.match(kanban.kanbanMetaJSON ?? '', /"current":"default"/);
+  assert.match(kanban.kanbanMetaJSON ?? '', /"total":1/);
   assert.equal(profiles.profiles?.[0].active, true);
   assert.equal(config.config?.maxIterations, 42);
   assert.equal(environment.environment?.[0].key, 'custom · model-a');

@@ -180,8 +180,7 @@ export async function loadHermesSwiftUIRouteSnapshot(
       return { ...base, achievements: achievementsSnapshot(source, localizer) };
     case 'collaboration':
       return { ...base, collaboration: collaborationSnapshot(source) };
-    case 'kanban':
-      return { ...base, kanban: kanbanSnapshot(source, localizer) };
+    case 'kanban': return { ...base, kanban: kanbanSnapshot(source, localizer), kanbanMetaJSON: isRecord(source) ? JSON.stringify({ boards: source.boards, stats: source.stats, assignees_catalog: source.assignees_catalog, workers: source.workers, diagnostics: source.diagnostics, config: source.config, model_options: source.model_options, profile_catalog: source.profile_catalog, orchestration: source.orchestration }) : undefined };
     case 'profiles':
     case 'profile-new':
       return { ...base, profiles: profilesSnapshot(source, localizer) };

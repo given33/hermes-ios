@@ -84,6 +84,33 @@ export class HermesCodingPiApi {
     return this.request<{ nodes: HermesCodingPiNode[]; local_node_id: string }>('/nodes');
   }
 
+  getHealth(): Promise<HermesCodingPiJson> { return this.request<HermesCodingPiJson>('/health'); }
+  getDiscovery(): Promise<HermesCodingPiJson> { return this.request<HermesCodingPiJson>('/discovery'); }
+
+  registerNode(node: HermesCodingPiJson): Promise<HermesCodingPiJson> {
+    return this.request<HermesCodingPiJson>('/nodes/register', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(node),
+    });
+  }
+
+  heartbeatNode(nodeId: string, payload: HermesCodingPiJson = {}): Promise<HermesCodingPiJson> {
+    return this.request<HermesCodingPiJson>(`/nodes/${encodeURIComponent(nodeId)}/heartbeat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  }
+
+  dispatch(payload: HermesCodingPiJson = {}): Promise<HermesCodingPiJson> {
+    return this.request<HermesCodingPiJson>('/dispatch', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  }
+
+  importSessions(payload: HermesCodingPiJson): Promise<HermesCodingPiJson> {
+    return this.request<HermesCodingPiJson>('/sessions/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+  }
+
   handoff(profile: string, sessionId: string, targetNodeId: string, instructions?: string): Promise<HermesCodingPiJson> {
     return this.request<HermesCodingPiJson>(`/sessions/${encodeURIComponent(sessionId)}/handoff`, {
       method: 'POST',

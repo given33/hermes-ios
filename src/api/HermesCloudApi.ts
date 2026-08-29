@@ -727,17 +727,9 @@ export class HermesCloudApi {
     return this.workflows.retryRuntimeRun(actionUrl, requestId);
   }
 
-  getKanbanBoard() {
-    return this.collaboration.getKanbanBoard();
-  }
-
-  createKanbanTask(task: JsonRecord) {
-    return this.collaboration.createKanbanTask(task);
-  }
-
-  updateKanbanTask(id: string, update: JsonRecord) {
-    return this.collaboration.updateKanbanTask(id, update);
-  }
+  getKanbanBoard(options: { board?: string; tenant?: string; includeArchived?: boolean; workflowTemplateId?: string; currentStepKey?: string } = {}) { return this.collaboration.getKanbanBoard(options); }
+  createKanbanTask(task: JsonRecord, board?: string) { return this.collaboration.createKanbanTask(task, board); }
+  updateKanbanTask(id: string, update: JsonRecord, board?: string) { return this.collaboration.updateKanbanTask(id, update, board); }
 
   getCollaborationProfiles() {
     return this.collaboration.getCollaborationProfiles();

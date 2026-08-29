@@ -47,6 +47,7 @@ SNAPSHOT_FIELDS: Final = (
     "achievements",
     "collaboration",
     "kanban",
+    "kanbanMetaJSON",
     "profiles",
     "botRelayJSON",
     "botPetJSON",

@@ -43,6 +43,7 @@
     "achievements",
     "collaboration",
     "kanban",
+    "kanbanMetaJSON",
     "profiles",
     "botRelayJSON",
     "botPetJSON",

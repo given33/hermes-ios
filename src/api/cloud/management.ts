@@ -472,12 +472,37 @@ export class HermesManagementCloudApi {
     );
   }
 
+  /** Public login bootstrap and the authenticated dashboard identity. */
+  getAuthProviders() {
+    return this.transport.request<JsonRecord>('/api/auth/providers');
+  }
+
+  getAuthMe() {
+    return this.transport.request<JsonRecord>('/api/auth/me');
+  }
+
   getAchievements() {
     return this.transport.request<JsonRecord>(`${ACHIEVEMENTS}/achievements`);
   }
 
   rescanAchievements() {
     return this.transport.request<JsonRecord>(`${ACHIEVEMENTS}/rescan`, { method: 'POST' });
+  }
+
+  getAchievementScanStatus() {
+    return this.transport.request<JsonRecord>(`${ACHIEVEMENTS}/scan-status`);
+  }
+
+  getRecentAchievementUnlocks() {
+    return this.transport.request<JsonRecord>(`${ACHIEVEMENTS}/recent-unlocks`);
+  }
+
+  getSessionAchievementBadges(sessionId: string) {
+    return this.transport.request<JsonRecord>(`${ACHIEVEMENTS}/sessions/${encodeURIComponent(sessionId)}/badges`);
+  }
+
+  resetAchievementState() {
+    return this.transport.request<JsonRecord>(`${ACHIEVEMENTS}/reset-state`, { method: 'POST' });
   }
 }
 

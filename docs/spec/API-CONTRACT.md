@@ -28,6 +28,8 @@
 | `refresh` | POST `/auth/mobile/refresh` | `{refresh_token}` | 同上（**refresh token 轮换**：客户端先持久化后继再 handshake） | 401 → 会话失效（或触发删号终态判定） |
 | `logout` | POST `/auth/mobile/logout` | `{refresh_token}` + 可选 Bearer | `{ok,revoked}` | 失败忽略（本地登出必须完成） |
 
+Dashboard 登录引导还可通过同一 Bearer facade 调用 `getAuthProviders`（GET `/api/auth/providers`，公开 provider 能力目录）与 `getAuthMe`（GET `/api/auth/me`，当前已验证会话身份）。这两个接口不会把 token 放入 URL，旧服务器缺失时由统一错误边界处理。
+
 ## 2. 设备/握手/APNs（Bearer）
 
 对齐 API-HTTP.md §2.6。
@@ -171,11 +173,18 @@ GET `/definitions?profile_id=`；GET `/definitions/{id}`；POST `/definitions/{i
 
 ### 5.2 Kanban（`/api/plugins/kanban`）
 
-GET `/board`；POST `/tasks`；PATCH `/tasks/{id}`（来源:HermesCloudApi.ts:1176-1186）。
+iOS 通过 `HermesCloudApi` 的官方 Kanban 域封装覆盖看板的完整 dashboard API，而不是只保留三条 CRUD 路径：
+
+- 看板/任务：GET `/board`、GET `/tasks/{id}`、POST `/tasks`、PATCH/DELETE `/tasks/{id}`、POST `/tasks/bulk`；支持 `board`、租户、工作流步骤及运行状态筛选。
+- 任务协作：GET/POST `/tasks/{id}/comments`、POST/DELETE `/links`、GET/POST `/tasks/{id}/attachments`、GET/DELETE `/attachments/{id}`、GET `/tasks/{id}/log`。
+- 运行与恢复：GET `/diagnostics`、`/workers/active`、`/runs/{id}`、`/runs/{id}/inspect`；POST `/runs/{id}/terminate`、`/tasks/{id}/reclaim`、`/tasks/{id}/specify`、`/tasks/{id}/reassign`、`/tasks/{id}/estimate`、`/tasks/{id}/decompose`、`/dispatch`；POST `/estimate` 支持创建前估算。
+- 配置与目录：GET `/config`、`/model-options`、`/home-channels`、`/stats`、`/assignees`、`/projects`、`/boards`、`/profiles`、`/orchestration`；POST/PUT `/tasks/{id}/home-subscribe/{platform}`、`/boards`、`/boards/{slug}/export`、`/boards/import`、`/boards/{slug}/switch`、`/orchestration`；PATCH `/boards/{slug}`、`/profiles/{name}`；DELETE `/boards/{slug}`。
+
+看板首屏 `loadRoute('kanban')` 并行加载 board、board catalog、统计、活跃 worker、诊断、模型、Profile 和编排投影；旧服务器缺少某个可选投影时只忽略该投影，不影响基础看板显示。路径、动词、query 和 JSON body 均由 `tests/cloud-api-domains.test.ts` 锁定。
 
 ### 5.3 Achievements（`/api/plugins/hermes-achievements`）
 
-GET `/achievements`；POST `/rescan`（来源:HermesCloudApi.ts:1005-1011）。
+GET `/achievements`、`/scan-status`、`/recent-unlocks`、`/sessions/{session_id}/badges`；POST `/rescan`、`/reset-state`。iOS 成就页首屏并行读取主快照、扫描状态和最近解锁列表，状态/数量在原生页面显示；重置状态仅保留在显式 API 方法中，不会被普通刷新误触发。
 
 ### 5.4 iOS Intelligence（`/api/plugins/ios-intelligence`，`src/context/IOSIntelligenceApi.ts`）
 

@@ -44,6 +44,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let achievements: HermesAchievementsSnapshot
   let collaboration: HermesCollaborationSnapshot
   let kanban: [HermesKanbanColumnSnapshot]
+  let kanbanMetaJSON: String?
   let profiles: [HermesProfileSnapshot]
   let botRelayJSON: String?
   let botPetJSON: String?
@@ -97,6 +98,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     achievements: HermesAchievementsSnapshot = .empty,
     collaboration: HermesCollaborationSnapshot = .empty,
     kanban: [HermesKanbanColumnSnapshot] = [],
+    kanbanMetaJSON: String? = nil,
     profiles: [HermesProfileSnapshot] = [],
     botRelayJSON: String? = nil,
     botPetJSON: String? = nil,
@@ -149,6 +151,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.achievements = achievements
     self.collaboration = collaboration
     self.kanban = kanban
+    self.kanbanMetaJSON = kanbanMetaJSON
     self.profiles = profiles
     self.botRelayJSON = botRelayJSON
     self.botPetJSON = botPetJSON
@@ -252,6 +255,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       forKey: .collaboration
     ) ?? .empty
     kanban = try container.decodeIfPresent([HermesKanbanColumnSnapshot].self, forKey: .kanban) ?? []
+    kanbanMetaJSON = try container.decodeIfPresent(String.self, forKey: .kanbanMetaJSON)
     profiles = try container.decodeIfPresent([HermesProfileSnapshot].self, forKey: .profiles) ?? []
     botRelayJSON = try container.decodeIfPresent(String.self, forKey: .botRelayJSON)
     botPetJSON = try container.decodeIfPresent(String.self, forKey: .botPetJSON)
@@ -989,12 +993,16 @@ struct HermesAchievementsSnapshot: Decodable, Equatable {
   let dayStreak: String
   let shareText: String
   let items: [HermesAchievementItemSnapshot]
+  let scanStatus: String?
+  let recentUnlocksJSON: String?
 
   static let empty = HermesAchievementsSnapshot(
     tasksCompleted: "-",
     dayStreak: "-",
     shareText: "",
-    items: []
+    items: [],
+    scanStatus: nil,
+    recentUnlocksJSON: nil
   )
 }
 

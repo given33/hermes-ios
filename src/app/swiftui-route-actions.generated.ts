@@ -44,6 +44,7 @@ export const HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS = [
   'achievements',
   'collaboration',
   'kanban',
+  'kanbanMetaJSON',
   'profiles',
   'botRelayJSON',
   'botPetJSON',

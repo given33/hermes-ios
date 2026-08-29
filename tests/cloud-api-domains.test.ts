@@ -879,6 +879,30 @@ test('Bot Mode profile capability and asset methods keep official REST paths', a
   });
 });
 
+test('achievement status, unlocks, session badges, and reset use official plugin routes', async () => {
+  const { api, calls } = recordingApi();
+  await api.getAchievementScanStatus();
+  await api.getRecentAchievementUnlocks();
+  await api.getSessionAchievementBadges('session one');
+  await api.resetAchievementState();
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/plugins/hermes-achievements/scan-status', 'GET'],
+    ['/api/plugins/hermes-achievements/recent-unlocks', 'GET'],
+    ['/api/plugins/hermes-achievements/sessions/session%20one/badges', 'GET'],
+    ['/api/plugins/hermes-achievements/reset-state', 'POST'],
+  ]);
+});
+
+test('mobile auth exposes provider bootstrap and verified identity through the same facade', async () => {
+  const { api, calls } = recordingApi();
+  await api.getAuthProviders();
+  await api.getAuthMe();
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/auth/providers', 'GET'],
+    ['/api/auth/me', 'GET'],
+  ]);
+});
+
 test('kanban and collaboration methods keep their wire contract through cloud/collaboration', async () => {
   const { api, calls } = recordingApi();
 
@@ -1034,6 +1058,83 @@ test('the extended iOS surface reaches upstream system, memory, model, MCP, Git,
     profile: 'hk-worker',
     yaml_text: 'model:\n  default: test',
   });
+});
+
+test('the iOS Kanban facade exposes the complete official dashboard surface', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.getKanbanTask('task one', { board: 'hk', runStateType: 'status', runStateName: 'running' });
+  await api.createKanbanTask({ title: 'new' }, 'hk');
+  await api.deleteKanbanTask('task one', 'hk');
+  await api.addKanbanComment('task one', 'hello', 'ios', 'hk');
+  await api.linkKanbanTasks('parent', 'child', 'hk');
+  await api.unlinkKanbanTasks('parent', 'child', 'hk');
+  await api.bulkUpdateKanbanTasks(['one', 'two'], { status: 'ready' }, 'hk');
+  await api.getKanbanDiagnostics({ board: 'hk', severity: 'critical' });
+  await api.getKanbanRun(7, 'hk');
+  await api.inspectKanbanRun(7, 'hk');
+  await api.terminateKanbanRun(7, 'stuck', 'hk');
+  await api.reclaimKanbanTask('task one', 'retry', 'hk');
+  await api.specifyKanbanTask('task one', { author: 'ios' }, 'hk');
+  await api.reassignKanbanTask('task one', 'hk-worker', true, 'hk');
+  await api.estimateKanbanText('title', 'body');
+  await api.estimateKanbanTask('task one', 'hk');
+  await api.decomposeKanbanTask('task one', { author: 'ios' }, 'hk');
+  await api.getKanbanTaskLog('task one', { board: 'hk', tail: 200 });
+  await api.dispatchKanban({ board: 'hk', dryRun: true, max: 2 });
+  await api.getKanbanHomeChannels('task one', 'hk');
+  await api.subscribeKanbanHome('task one', 'telegram', 'hk');
+  await api.unsubscribeKanbanHome('task one', 'telegram', 'hk');
+  await api.getKanbanStats('hk');
+  await api.getKanbanAssignees('hk');
+  await api.getKanbanBoards();
+  await api.createKanbanBoard({ slug: 'hk' });
+  await api.updateKanbanBoard('hk', { name: 'Hong Kong' });
+  await api.deleteKanbanBoard('hk');
+  await api.exportKanbanBoard('hk', { attachments: true, logs: false });
+  await api.importKanbanBoard('/tmp/hk.tar.gz', 'hk-copy', true);
+  await api.switchKanbanBoard('hk');
+  await api.getKanbanProfiles();
+  await api.updateKanbanProfile('hk-worker', 'Hong Kong worker');
+  await api.describeKanbanProfile('hk-worker', true);
+  await api.getKanbanOrchestration();
+  await api.setKanbanOrchestration({ auto_decompose: false });
+
+  assert.deepEqual(calls.slice(0, 8).map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/plugins/kanban/tasks/task%20one', 'GET'],
+    ['/api/plugins/kanban/tasks', 'POST'],
+    ['/api/plugins/kanban/tasks/task%20one', 'DELETE'],
+    ['/api/plugins/kanban/tasks/task%20one/comments', 'POST'],
+    ['/api/plugins/kanban/links', 'POST'],
+    ['/api/plugins/kanban/links', 'DELETE'],
+    ['/api/plugins/kanban/tasks/bulk', 'POST'],
+    ['/api/plugins/kanban/diagnostics', 'GET'],
+  ]);
+  assert.deepEqual(calls[0].options.query, {
+    run_state_type: 'status', run_state_name: 'running', board: 'hk',
+  });
+  assert.deepEqual(parsedBody(calls[3]), { body: 'hello', author: 'ios' });
+  assert.deepEqual(parsedBody(calls[6]), { ids: ['one', 'two'], status: 'ready' });
+  assert.equal(calls.length, 36);
+});
+
+test('room mailbox and dependency graph APIs stay reachable from iOS', async () => {
+  const { api, calls } = recordingApi();
+  await api.getCollaborationRoomMailbox('room one', 'hk-worker', 'm-1', 20);
+  await api.sendCollaborationRoomMailboxMessage('room one', 'user', 'hk-worker', { type: 'handoff' }, 'mb-1');
+  await api.getCollaborationRoomDependencies('room one');
+  await api.setCollaborationRoomDependencies('room one', [{ node_id: 'hk', requires: [] }]);
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/plugins/collaboration/rooms/room%20one/mailbox', 'GET'],
+    ['/api/plugins/collaboration/rooms/room%20one/mailbox', 'POST'],
+    ['/api/plugins/collaboration/rooms/room%20one/dependencies', 'GET'],
+    ['/api/plugins/collaboration/rooms/room%20one/dependencies', 'PUT'],
+  ]);
+  assert.deepEqual(calls[0].options.query, { recipient_id: 'hk-worker', after_id: 'm-1', limit: 20 });
+  assert.deepEqual(parsedBody(calls[1]), {
+    sender_id: 'user', recipient_id: 'hk-worker', body: { type: 'handoff' }, idempotency_key: 'mb-1',
+  });
+  assert.deepEqual(parsedBody(calls[3]), { nodes: [{ node_id: 'hk', requires: [] }] });
 });
 
 test('toolset, SkillHub, Learning, and session export calls keep official wire paths', async () => {

@@ -437,6 +437,65 @@ export class HermesStudioGroupChatApi {
     ).then((response) => normalizeRoomDetail(response));
   }
 
+  /** Read direct member-to-member messages from the official room mailbox. */
+  getRoomMailbox(roomId: string, recipientId: string, options: { afterId?: string; limit?: number; signal?: AbortSignal } = {}) {
+    return this.client.request<Record<string, unknown>>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/mailbox`,
+      {
+        query: {
+          recipient_id: recipientId,
+          ...(options.afterId ? { after_id: options.afterId } : {}),
+          limit: Math.min(500, Math.max(1, Math.floor(options.limit || 100))),
+        },
+        signal: options.signal,
+      },
+    );
+  }
+
+  /** Append one idempotent direct mailbox message without broadcasting it. */
+  sendRoomMailboxMessage(
+    roomId: string,
+    senderId: string,
+    recipientId: string,
+    body: Record<string, unknown>,
+    idempotencyKey = '',
+    signal?: AbortSignal,
+  ) {
+    return this.client.request<Record<string, unknown>>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/mailbox`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sender_id: senderId,
+          recipient_id: recipientId,
+          body,
+          ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+        }),
+        signal,
+      },
+    );
+  }
+
+  getRoomDependencies(roomId: string, signal?: AbortSignal) {
+    return this.client.request<Record<string, unknown>>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/dependencies`,
+      { signal },
+    );
+  }
+
+  setRoomDependencies(roomId: string, nodes: Record<string, unknown>[], signal?: AbortSignal) {
+    return this.client.request<Record<string, unknown>>(
+      `${COLLABORATION}/rooms/${encodeURIComponent(roomId)}/dependencies`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nodes }),
+        signal,
+      },
+    );
+  }
+
   async createRoom(input: HermesStudioCreateRoomInput) {
     const profiles = [...new Set((input.agents || [])
       .map((agent) => agent.profile.trim())
