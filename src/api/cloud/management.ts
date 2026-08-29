@@ -198,6 +198,21 @@ export class HermesManagementCloudApi {
     );
   }
 
+  /** Read the official Bot Mode cross-connection roster maintained by the
+   * desktop relay. The server never returns connection credentials. */
+  getBotRelayRoster() {
+    return this.transport.request<JsonRecord>('/api/bot-mode/relay/roster');
+  }
+
+  /** Queue a cross-connection Bot Mode DM through the canonical relay helper. */
+  sendBotRelayMessage(target: string, message: string, senderProfile = 'default') {
+    return this.transport.json<JsonRecord>('/api/bot-mode/relay/send', 'POST', {
+      target,
+      message,
+      sender_profile: senderProfile,
+    });
+  }
+
   setActiveProfile(name: string) {
     return this.transport.json<JsonRecord>('/api/profiles/active', 'POST', { name });
   }

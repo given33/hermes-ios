@@ -116,9 +116,11 @@ SwiftUI 审批快照现在显式携带后端返回的 `payload_digest`，用户�
   iOS 聊天依赖。
 - 复验结果：`pnpm typecheck`、`pnpm contract:check`、全量 `pnpm test` 均通过，
   当前统计为 799 tests / 799 pass。原生 Xcode 编译仍需 macOS runner。
-- 明确范围：Bot Mode 的桌面 group-round 引擎、跨连接 relay、头像/宠物生成器和
-  Routines 专用面板尚未被宣称为 iOS parity；它们只有在各自拥有 typed API、
-  原生 route/action 和回归测试后才会升级为 verified。
+- 明确范围：Bot Mode 的桌面 group-round 引擎、头像/宠物生成器和 Routines
+  专用面板尚未被宣称为 iOS parity；它们只有在各自拥有 typed API、原生
+  route/action 和回归测试后才会升级为 verified。跨连接 relay 已通过
+  `/api/bot-mode/relay/{roster,send}` 接入 Bots 页面，并由官方 outbox helper
+  处理目标歧义、在线状态和过期策略。
 - 2026-08-29 增补：Bot Mode 的官方 profile 能力与资产接口现已接入。后端
   `/api/bots/{name}/describe|configure|assets/{asset}` 直接调用已注册的
   `profiles.describe|configure|get_asset|set_asset` handler；iOS Bots 上下文菜单

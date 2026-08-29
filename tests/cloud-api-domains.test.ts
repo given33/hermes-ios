@@ -829,13 +829,20 @@ test('Bot Mode profile capability and asset methods keep official REST paths', a
   await api.getBotAsset('bot one');
   await api.setBotAsset('bot one', 'data:image/png;base64,AA==');
   await api.clearBotAsset('bot one');
+  await api.getBotRelayRoster();
+  await api.sendBotRelayMessage('hk-worker@hk-primary', 'hello', 'default');
   assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
     ['/api/bots/bot%20one/describe', 'GET'],
     ['/api/bots/bot%20one/configure', 'PATCH'],
     ['/api/bots/bot%20one/assets/avatar', 'GET'],
     ['/api/bots/bot%20one/assets/avatar', 'PUT'],
     ['/api/bots/bot%20one/assets/avatar', 'DELETE'],
+    ['/api/bot-mode/relay/roster', 'GET'],
+    ['/api/bot-mode/relay/send', 'POST'],
   ]);
+  assert.deepEqual(JSON.parse(String(calls[6].options.body)), {
+    target: 'hk-worker@hk-primary', message: 'hello', sender_profile: 'default',
+  });
 });
 
 test('kanban and collaboration methods keep their wire contract through cloud/collaboration', async () => {

@@ -587,6 +587,7 @@ private enum HermesRemoteEditor: String, Identifiable {
   case profileModel
   case botMeta
   case botProfileConfigure
+  case botRelay
   case soul
   case skill
   case kanban
@@ -1583,7 +1584,24 @@ private struct HermesRemoteRoutePage: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .background(appearance.palette.background)
     case .profiles, .bots:
-      List(data.profiles) { profile in
+      List {
+        if route == .bots, let relay = botRelaySummary {
+          Section(chinese ? "跨连接 Bot Relay" : "Cross-connection Bot Relay") {
+            Text(relay)
+              .font(HermesFonts.body(12))
+              .foregroundStyle(appearance.palette.secondary)
+            Button {
+              editorID = ""
+              editorName = ""
+              editorValue = ""
+              editorDetail = ""
+              editor = .botRelay
+            } label: {
+              Label(chinese ? "发送跨连接消息" : "Send cross-connection message", systemImage: "arrow.up.right.square")
+            }
+          }
+        }
+        ForEach(data.profiles) { profile in
         HermesRemoteRow(icon: profile.botHasAvatar == true ? "person.crop.circle.fill" : (profile.active ? "person.crop.circle.fill" : "person.crop.circle"), iconData: profile.botAvatarData, title: profile.name, detail: "\(profile.model) · \(profile.detail)", tint: profile.active ? appearance.palette.success : appearance.palette.secondary) {
           if !profile.active {
             Button { onAction(.profileActivate, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Image(systemName: "checkmark") }.buttonStyle(.borderless)
@@ -1658,6 +1676,13 @@ private struct HermesRemoteRoutePage: View {
               editor = .botProfileConfigure
             } label: { Label(chinese ? "编辑技能 / Toolset / MCP" : "Edit skills / toolsets / MCP", systemImage: "slider.horizontal.3") }
             Button {
+              editorID = profile.id
+              editorName = profile.name
+              editorValue = ""
+              editorDetail = ""
+              editor = .botRelay
+            } label: { Label(chinese ? "发送跨连接消息" : "Send cross-connection message", systemImage: "arrow.up.right.square") }
+            Button {
               onAction(
                 .botMetaUpdate,
                 HermesRouteActionPayload(
@@ -1688,6 +1713,7 @@ private struct HermesRemoteRoutePage: View {
             editor = .soul
           } label: { Label(chinese ? "编辑 SOUL.md" : "Edit SOUL.md", systemImage: "doc.text") }
           if !profile.active { Button(role: .destructive) { onAction(.profileDelete, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Label(chinese ? "删除机器人" : "Delete bot", systemImage: "trash") } }
+        }
         }
       }.hermesListStyle().refreshable { onAction(.refresh, HermesRouteActionPayload(route: route.rawValue)) }
     case .config:
@@ -2052,6 +2078,28 @@ private struct HermesRemoteRoutePage: View {
     return object.keys.sorted()
   }
 
+  private var botRelaySummary: String? {
+    guard route == .bots,
+          let text = data.botRelayJSON,
+          let raw = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    else { return nil }
+    let agents = object["agents"] as? [[String: Any]] ?? []
+    if agents.isEmpty {
+      return chinese ? "当前没有可达的其他连接机器人。" : "No reachable bots on other connections."
+    }
+    let labels = agents.prefix(8).compactMap { row in
+      let handle = row["handle"] as? String
+      let connection = row["connection_id"] as? String
+      guard let handle, !handle.isEmpty else { return nil }
+      return connection.map { "\(handle)@\($0)" } ?? handle
+    }
+    let suffix = agents.count > labels.count ? (chinese ? " 等" : " more") : ""
+    return chinese
+      ? "可达机器人：\(labels.joined(separator: "、"))\(suffix)"
+      : "Reachable bots: \(labels.joined(separator: ", "))\(suffix)"
+  }
+
   private var terminalBackendKeys: [String] {
     guard let text = data.terminalBackendsJSON,
           let raw = text.data(using: .utf8),
@@ -2129,6 +2177,9 @@ private struct HermesRemoteRoutePage: View {
     case .botProfileConfigure:
       guard !editorID.isEmpty, let object = try? JSONSerialization.jsonObject(with: Data(detail.utf8)), object is [String: Any] else { return }
       onAction(.botProfileConfigure, HermesRouteActionPayload(route: "bots", id: editorID, detail: detail))
+    case .botRelay:
+      guard !value.isEmpty, !detail.isEmpty else { return }
+      onAction(.botRelaySend, HermesRouteActionPayload(route: "bots", targetId: value, detail: detail, fields: ["profile": editorID.isEmpty ? "default" : editorID]))
     case .profileDescription:
       guard !editorID.isEmpty else { return }
       onAction(.profileDescription, HermesRouteActionPayload(route: route.rawValue, id: editorID, detail: detail))
@@ -2235,8 +2286,13 @@ private struct HermesRemoteEditorSheet: View {
               .textInputAutocapitalization(.never)
               .autocorrectionDisabled()
           }
-        } else if kind == .config || kind == .soul || kind == .channel || kind == .profileDescription || kind == .botProfileConfigure {
-          Section(kind == .soul ? "SOUL.md" : kind == .profileDescription ? (chinese ? "Profile 描述" : "Profile description") : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : (chinese ? "官方 Bot 能力 JSON" : "Official Bot capabilities JSON")) {
+        } else if kind == .config || kind == .soul || kind == .channel || kind == .profileDescription || kind == .botProfileConfigure || kind == .botRelay {
+          Section(kind == .soul ? "SOUL.md" : kind == .profileDescription ? (chinese ? "Profile 描述" : "Profile description") : kind == .channel ? (chinese ? "渠道配置 JSON" : "Channel configuration JSON") : kind == .botRelay ? (chinese ? "跨连接 Bot Relay" : "Cross-connection Bot Relay") : (chinese ? "官方 Bot 能力 JSON" : "Official Bot capabilities JSON")) {
+            if kind == .botRelay {
+              TextField(chinese ? "目标（handle@connection-id）" : "Target (handle@connection-id)", text: $value)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            }
             TextEditor(text: $detail)
               .font(HermesFonts.mono(12))
               .frame(minHeight: 320)
@@ -2244,6 +2300,10 @@ private struct HermesRemoteEditorSheet: View {
               .autocorrectionDisabled()
             if kind == .botProfileConfigure {
               Text(chinese ? "字段遵循官方 profiles.configure：description、soul、provider、model、disabled_skills、enabled_toolsets、enabled_mcp_servers、ui_meta。保存时直接调用官方接口。" : "Fields follow official profiles.configure: description, soul, provider, model, disabled_skills, enabled_toolsets, enabled_mcp_servers, and ui_meta. Save calls the upstream contract directly.")
+                .font(HermesFonts.body(11))
+                .foregroundStyle(.secondary)
+            } else if kind == .botRelay {
+              Text(chinese ? "消息经官方 Bot Mode relay outbox 排队；目标不在线或不明确时不会静默丢失。" : "The message is queued through the official Bot Mode relay outbox; offline or ambiguous targets fail explicitly.")
                 .font(HermesFonts.body(11))
                 .foregroundStyle(.secondary)
             }
@@ -2314,6 +2374,7 @@ private struct HermesRemoteEditorSheet: View {
       if kind == .profileDescription { return isCreating ? "Add Profile description" : "Edit Profile description" }
       if kind == .profileModel { return isCreating ? "Add Profile model" : "Edit Profile model" }
       if kind == .botMeta { return isCreating ? "Bot Mode metadata" : "Edit Bot Mode metadata" }
+      if kind == .botRelay { return "Send Bot Mode message" }
       if kind == .skill { return isCreating ? "New Skill" : "Edit SKILL.md" }
       if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
       if kind == .channel { return "Edit Channel Configuration" }
@@ -2334,6 +2395,7 @@ private struct HermesRemoteEditorSheet: View {
     case .profileDescription: return "编辑 Profile 描述"
     case .profileModel: return "编辑 Profile 模型"
     case .botMeta: return "编辑 Bot Mode 信息"
+    case .botRelay: return "发送跨连接 Bot 消息"
     case .soul: return "编辑 SOUL.md"
     case .skill: return isCreating ? "新建 Skill" : "编辑 SKILL.md"
     case .kanban: return name.isEmpty ? "新建任务" : "编辑任务"
@@ -2357,6 +2419,7 @@ private struct HermesRemoteEditorSheet: View {
   }
   private var valueLabel: String {
     if kind == .skill { return chinese ? "分类（可选）" : "Category (optional)" }
+    if kind == .botRelay { return chinese ? "目标" : "Target" }
     if !chinese { return kind == .collaboration ? "Profiles, separated by commas" : kind == .cron ? "Schedule" : kind == .mcp ? "Server URL" : kind == .pairing ? "Pairing code" : kind == .profiles ? "Model" : kind == .environment ? "Value" : "Secret value" }
     switch kind {
     case .collaboration: return "Profile（用逗号分隔）"
@@ -2370,7 +2433,7 @@ private struct HermesRemoteEditorSheet: View {
     }
   }
   private var detailLabel: String {
-    chinese ? (kind == .cron ? "任务提示词" : kind == .kanban ? "任务内容" : "说明") : (kind == .cron ? "Prompt" : kind == .kanban ? "Task details" : "Description")
+    chinese ? (kind == .cron ? "任务提示词" : kind == .kanban ? "任务内容" : kind == .botRelay ? "消息" : "说明") : (kind == .cron ? "Prompt" : kind == .kanban ? "Task details" : kind == .botRelay ? "Message" : "Description")
   }
 }
 

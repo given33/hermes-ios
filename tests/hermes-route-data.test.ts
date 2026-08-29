@@ -1068,6 +1068,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
           bot_meta: { title: 'HK Worker', hidden: true, pinned: true, groups: ['ops', 'hk'] },
           canonical_session: { id: 'bot-chat', resolved_id: 'bot-chat' },
         }],
+        bot_relay: { agents: [{ handle: 'worker', connection_id: 'hk-primary' }] },
       };
     },
   } as unknown as HermesCloudApi, 'bots', 'default');
@@ -1080,6 +1081,7 @@ test('Bot Mode route projects the upstream profile roster', async () => {
   assert.equal(snapshot.profiles?.[0]?.botPinned, true);
   assert.deepEqual(snapshot.profiles?.[0]?.botGroups, ['ops', 'hk']);
   assert.match(snapshot.profiles?.[0]?.botSessionId || '', /^official:v3:/);
+  assert.match(snapshot.botRelayJSON || '', /hk-primary/);
 });
 
 test('Bot Mode metadata action uses the dedicated REST endpoint', async () => {
@@ -1117,6 +1119,27 @@ test('Bot Mode capability actions call official configure and avatar contracts',
   assert.equal(uploaded, 'reload');
   assert.deepEqual(calls[1], ['configure', 'coder', { soul: '# coder' }]);
   assert.equal(calls[2][0], 'avatar');
+});
+
+test('Bot Mode relay action queues through the official cross-connection endpoint', async () => {
+  const calls: Array<[string, string, string]> = [];
+  const api = {
+    sendBotRelayMessage: async (target: string, message: string, profile: string) => {
+      calls.push([target, message, profile]);
+      return { ok: true, envelope_id: 'abcdef0123456789' };
+    },
+  } as unknown as HermesCloudApi;
+  const result = await performHermesSwiftUIRouteAction(api, {
+    action: 'bot.relay.send',
+    payload: {
+      route: 'bots',
+      targetId: 'worker@hk-primary',
+      detail: '继续执行',
+      fields: { profile: 'default' },
+    },
+  }, 'default');
+  assert.match(typeof result === 'object' ? result.message : '', /排队/);
+  assert.deepEqual(calls, [['worker@hk-primary', '继续执行', 'default']]);
 });
 
 test('system snapshots share managed-node aliases with the sidebar status', async () => {

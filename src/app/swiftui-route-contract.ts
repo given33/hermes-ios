@@ -588,6 +588,8 @@ export interface HermesSwiftUIRouteSnapshot {
   collaboration?: HermesSwiftUICollaborationSnapshot;
   kanban?: readonly HermesSwiftUIKanbanColumnSnapshot[];
   profiles?: readonly HermesSwiftUIProfileSnapshot[];
+  /** JSON-encoded upstream Bot Mode cross-connection roster. */
+  botRelayJSON?: string;
   config?: HermesSwiftUIConfigSnapshot;
   environment?: readonly HermesSwiftUIEnvironmentSecretSnapshot[];
   system?: HermesSwiftUISystemSnapshot;

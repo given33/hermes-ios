@@ -17,6 +17,7 @@ type RouteApi = Pick<
   | 'getEnvironment'
   | 'getBots'
   | 'getBotAsset'
+  | 'getBotRelayRoster'
   | 'getLogs'
   | 'getMcp'
   | 'getModelCredentials'
@@ -90,12 +91,19 @@ export async function loadCloudRoute(
     case 'profiles':
     case 'profile-new': return api.getProfiles();
     case 'bots': {
-      const roster = await api.getBots();
+      const [roster, relay] = await Promise.all([
+        api.getBots(),
+        typeof api.getBotRelayRoster === 'function'
+          ? api.getBotRelayRoster().catch(() => undefined)
+          : Promise.resolve(undefined),
+      ]);
       // Avatar bytes are fetched through the official asset endpoint only for
       // rows that advertise an asset. Keep the route snapshot bounded so a
       // large roster cannot stall the native bridge; the dedicated asset API
       // remains available for full-resolution consumers.
-      if (!isRecord(roster) || !Array.isArray(roster.profiles)) return roster;
+      if (!isRecord(roster) || !Array.isArray(roster.profiles)) return relay
+        ? { ...roster, bot_relay: relay }
+        : roster;
       const profiles = await Promise.all(roster.profiles.map(async (entry) => {
         if (!isRecord(entry) || entry.has_avatar !== true || typeof entry.name !== 'string') return entry;
         try {
@@ -106,7 +114,7 @@ export async function loadCloudRoute(
           return entry;
         }
       }));
-      return { ...roster, profiles };
+      return { ...roster, profiles, ...(relay ? { bot_relay: relay } : {}) };
     }
     case 'config': return api.getConfig(profile);
     // `/api/model/credentials` was retired upstream.  Environment secrets are

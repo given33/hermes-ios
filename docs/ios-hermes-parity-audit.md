@@ -34,6 +34,7 @@ exist. “API only” is deliberately not treated as completion.
 | Pairing | `/pairing`; approve/revoke/clear pending | route action contract | verified |
 | Profiles/Bots | `/profiles`, `/bots`; create, activate, rename, description, model, auto-describe, SOUL, setup command, export; Bot Chat opens canonical session | management API tests and route source tests | verified |
 | Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset` with a native iOS file importer and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
+| Bot Mode cross-connection relay | Bots route reads the upstream relay roster and exposes a native target/message sheet; send queues through the canonical `tools.bot_relay.enqueue_envelope` helper with ambiguity/liveness/TTL safeguards | backend relay route test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; native source/action assertions | verified (official bridge) |
 | Configuration | `/config`; raw config import/export, stream/compact toggles | config API tests | verified |
 | Environment | `/env`; set/reveal/delete with profile scope | environment route source test | verified |
 | System/maintenance | `/system`; gateway lifecycle, node reconnect, update check/update, Doctor, security audit, backup create/import, hooks list/create/delete, debug share, Curator run/pause, diagnostics, checkpoints and prune | system route source + API domain tests | verified |
@@ -74,6 +75,11 @@ exist. “API only” is deliberately not treated as completion.
   `profiles.get_asset`, and `profiles.set_asset` handlers directly. iOS now
   exposes a raw JSON advanced capability editor and native avatar importer;
   no duplicate profile config writer was introduced.
+- 2026-08-29: added the mobile cross-connection relay bridge. The Bots route
+  reads the desktop-maintained `bot_relay/roster.json`, renders reachable
+  `handle@connection-id` targets, and queues messages through the official
+  `enqueue_envelope` helper; ambiguous/offline targets fail explicitly and
+  no connection credential crosses the mobile API.
 
 Each item must add a typed route snapshot, a named action in
 `docs/spec/swiftui-route-actions.json`, a backend-wire test, and a native source
@@ -86,8 +92,8 @@ CRUD, canonical Bot Chat, and server-persisted title/visibility/pin/group
 metadata. The upstream desktop plugin still owns several presentation and
 orchestration surfaces that are not yet represented by a mobile REST contract:
 the local group-chat round engine (including member holds and @mention
-handoffs), AI/pixel-pet/avatar generation and picker state, cross-connection
-roster/relay management, and the dedicated Routines pane. Those are deliberately
+handoffs), AI/pixel-pet/avatar generation and picker state, and the dedicated
+Routines pane. Those are deliberately
 not marked as mobile parity until each has a typed endpoint, native route/action,
 and contract test; the generic profile, cron, collaboration, and authenticated
 gateway-WebSocket APIs remain available for future bridges.

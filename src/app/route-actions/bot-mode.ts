@@ -45,3 +45,20 @@ export async function uploadBotAvatar(api: HermesCloudApi, id: string, raw: stri
   await api.setBotAsset(id, raw, 'avatar');
   return 'reload';
 }
+
+export async function sendBotRelay(
+  api: HermesCloudApi,
+  target: string,
+  message: string,
+  senderProfile: string,
+  chinese: boolean,
+): Promise<BotModeActionResult> {
+  if (!target.trim() || !message.trim() || typeof api.sendBotRelayMessage !== 'function') return 'none';
+  const result = await api.sendBotRelayMessage(target.trim(), message.trim(), senderProfile.trim() || 'default');
+  const envelope = isRecord(result) ? stringValue(result.envelope_id) : '';
+  return {
+    message: chinese
+      ? `跨连接消息已排队${envelope ? `（${envelope.slice(0, 8)}）` : ''}`
+      : `Cross-connection message queued${envelope ? ` (${envelope.slice(0, 8)})` : ''}`,
+  };
+}

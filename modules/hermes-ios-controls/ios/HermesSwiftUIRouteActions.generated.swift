@@ -43,6 +43,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case collaboration
   case kanban
   case profiles
+  case botRelayJSON
   case config
   case environment
   case system
@@ -183,6 +184,7 @@ enum HermesRouteAction: String, CaseIterable {
   case botProfileDescribe = "bot.profile.describe"
   case botProfileConfigure = "bot.profile.configure"
   case botAvatarUpload = "bot.avatar.upload"
+  case botRelaySend = "bot.relay.send"
   case configUpdate = "config.update"
   case configImport = "config.import"
   case environmentDelete = "environment.delete"
