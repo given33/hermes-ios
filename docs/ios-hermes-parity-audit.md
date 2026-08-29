@@ -30,7 +30,7 @@ exist. “API only” is deliberately not treated as completion.
 | Toolsets | Skills → Toolsets section; toggle, official provider/schema/model catalogs, native declared-key form, provider/model/environment selection, post-setup, Terminal backend and Computer Use status/actions | toolset/runtime metadata hydration in `hermes-route-data.ts`; native `HermesToolsetSchemaSheet` submits the official environment endpoint | `tests/hermes-route-data.test.ts`, `tests/swiftui-partial-frontend-source.test.ts`, generated cross-language contract | verified |
 | Plugins | `/plugins`; rescan, install/update/remove, visibility, managed rollback | managed-installation tests | verified |
 | MCP | `/mcp`; catalog install, toggle, test, delete, OAuth start; safe browser open and completion polling | MCP route/source tests; OAuth action returns the official authorization URL and the native hook polls the official flow endpoint | verified |
-| Channels/Webhooks | `/channels`, `/webhooks`; toggle/edit/test, webhook enable/create/delete | route action contract + API domain tests | verified |
+| Channels/Webhooks | `/channels`, `/webhooks`; toggle/edit/test, webhook enable/create/delete; Telegram/WhatsApp official QR onboarding start/status/apply/cancel | route action contract + API domain tests; native QR rendering and bounded status polling | verified |
 | Pairing | `/pairing`; approve/revoke/clear pending | route action contract | verified |
 | Profiles/Bots | `/profiles`, `/bots`; create, activate, rename, description, model, auto-describe, SOUL, setup command, export; Bot Chat opens canonical session; Bot Routines are hydrated per Profile and expose create/edit/toggle/run/delete | management API tests, route data/action tests and native source tests | verified |
 | Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset`, and generation delegates to `image.generate` then `profiles.set_asset`, with native iOS controls and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
@@ -43,6 +43,12 @@ exist. “API only” is deliberately not treated as completion.
 | Workflows/approvals/runtime | dedicated native pages with revision/digest guarded actions | workflow/approval/runtime route tests | verified |
 
 ## Change log
+
+- 2026-08-29: added native official channel onboarding for Telegram and
+  WhatsApp. The Channels page now starts the upstream QR flow, renders the
+  returned payload with Core Image, polls the official pairing status, and
+  submits/cancels through the same profile-scoped management APIs. No channel
+  credentials or QR state are persisted locally.
 
 - 2026-08-29: exposed the previously action-only managed workspace folder
   operation on the native Files page. Users can enter a server-relative or
