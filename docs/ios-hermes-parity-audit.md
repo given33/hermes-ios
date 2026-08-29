@@ -184,8 +184,8 @@ must not claim release-level native-build verification.
   Swift/Xcode archive and live four-node latency still require macOS CI and a
   production rehearsal.
 
-发布锚点：iOS 提交 `79dd2f1` 已推送到 `origin/main`；它与后端
-`1a13129011` 配套，消费同一份官方 hosted command/event 契约。
+发布锚点：iOS 提交 `0b98d5a` 已推送到 `origin/main`；它与后端
+`c02c3b143d` 配套，消费同一份官方 hosted command/event 契约。
 
 ### 2026-08-30 continuation: unified Sessions write paths
 
