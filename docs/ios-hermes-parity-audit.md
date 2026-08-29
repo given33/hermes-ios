@@ -183,3 +183,6 @@ must not claim release-level native-build verification.
   `pnpm typecheck`, and `pnpm contract:check` all pass on Windows. Native
   Swift/Xcode archive and live four-node latency still require macOS CI and a
   production rehearsal.
+
+发布锚点：iOS 提交 `79dd2f1` 已推送到 `origin/main`；它与后端
+`1a13129011` 配套，消费同一份官方 hosted command/event 契约。
