@@ -186,3 +186,17 @@ must not claim release-level native-build verification.
 
 发布锚点：iOS 提交 `79dd2f1` 已推送到 `origin/main`；它与后端
 `1a13129011` 配套，消费同一份官方 hosted command/event 契约。
+
+### 2026-08-30 continuation: unified Sessions write paths
+
+The native Sessions list combines account conversations and official runtime
+sessions. Previously archive/pin/unread/bulk-delete/export always used the
+runtime `/api/sessions` contract, so account rows failed with 404 and
+`official:v3` UI envelopes were sent as literal SQLite ids.
+
+The collaboration PATCH now accepts account-scoped `archived`, `pinned`, and
+`unread` flags (stored under `session_*` keys so they cannot collide with the
+internal archive-placeholder marker). The iOS action bridge resolves official
+envelopes, preserves profile ownership, groups mixed bulk deletion by profile,
+and selects the correct export endpoint for each store. `pnpm test` passes with
+`819 passed / 0 failed`; TypeScript and SwiftUI contract checks pass.
