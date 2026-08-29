@@ -199,7 +199,7 @@ The collaboration PATCH now accepts account-scoped `archived`, `pinned`, and
 internal archive-placeholder marker). The iOS action bridge resolves official
 envelopes, preserves profile ownership, groups mixed bulk deletion by profile,
 and selects the correct export endpoint for each store. `pnpm test` passes with
-`819 passed / 0 failed`; TypeScript, SwiftUI contract checks, and `expo-doctor`
+`821 passed / 0 failed`; TypeScript, SwiftUI contract checks, and `expo-doctor`
 (`18/18` checks) pass.
 
 ### 2026-08-30 continuation: official sessions are visible in the unified list
