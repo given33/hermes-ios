@@ -263,6 +263,9 @@ test('SwiftUI management pages expose the server write operations', () => {
   assert.match(routes, /updateConfigValue\("stream_output"/);
   assert.match(routes, /updateConfigValue\("auto_compact"/);
   assert.match(routes, /\.fileImporter\(/);
+  assert.match(routes, /folderCreateOpen/);
+  assert.match(routes, /\.folderCreate/);
+  assert.match(routes, /\/api\/files\/mkdir/);
   assert.match(routes, /startAccessingSecurityScopedResource\(\)/);
   assert.match(routes, /stopAccessingSecurityScopedResource\(\)/);
   assert.match(routes, /NSFileCoordinator\(\)\.coordinate\(/);

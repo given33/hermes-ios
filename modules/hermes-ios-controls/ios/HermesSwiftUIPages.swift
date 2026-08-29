@@ -3607,6 +3607,8 @@ private struct HermesFilesPage: View {
   let onAction: HermesRouteActionSink
   @State private var search = ""
   @State private var importerOpen = false
+  @State private var folderCreateOpen = false
+  @State private var folderPath = ""
   @State private var filterByDate = false
   @State private var selectedDate = Date()
   @State private var sourceFilter = HermesFileSourceFilter.all
@@ -3758,6 +3760,12 @@ private struct HermesFilesPage: View {
         } label: {
           Label(chinese ? "导入文件" : "Import file", systemImage: "square.and.arrow.down")
         }
+        Button {
+          folderPath = ""
+          folderCreateOpen = true
+        } label: {
+          Label(chinese ? "新建文件夹" : "New folder", systemImage: "folder.badge.plus")
+        }
       }
     }
     return toolbarContent
@@ -3779,7 +3787,53 @@ private struct HermesFilesPage: View {
           }
         }
       }
-    }
+      }
+      .sheet(isPresented: $folderCreateOpen) {
+        NavigationStack {
+          Form {
+            Section {
+              TextField(
+                chinese ? "服务器文件夹路径" : "Server folder path",
+                text: $folderPath
+              )
+              .textInputAutocapitalization(.never)
+              .autocorrectionDisabled()
+              .keyboardType(.URL)
+            } header: {
+              Text(chinese ? "托管工作区" : "Managed workspace")
+            } footer: {
+              Text(chinese
+                ? "填写 Hermes 服务器上的路径，例如 workspace/results。创建操作直接调用官方 /api/files/mkdir。"
+                : "Enter a path on the Hermes server, for example workspace/results. This calls the official /api/files/mkdir contract directly.")
+            }
+          }
+          .scrollContentBackground(.hidden)
+          .background(appearance.palette.background)
+          .navigationTitle(chinese ? "新建文件夹" : "New folder")
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button(chinese ? "取消" : "Cancel") {
+                folderCreateOpen = false
+              }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+              Button(chinese ? "创建" : "Create") {
+                let path = folderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !path.isEmpty else { return }
+                onAction(
+                  .folderCreate,
+                  HermesRouteActionPayload(route: "files", value: path)
+                )
+                folderCreateOpen = false
+              }
+              .disabled(folderPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+          }
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+      }
   }
 
   private func symbol(for file: HermesFileSnapshot) -> String {
