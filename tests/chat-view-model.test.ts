@@ -846,6 +846,17 @@ test('attachments and stream events remain structured for the native chat UI', (
   }]);
 });
 
+test('official side-question completion renders as a completed status activity', () => {
+  const streamActivity = streamEventToActivity('btw.complete', {
+    task_id: 'btw_123',
+    question: 'what changed?',
+    text: 'The provider was updated.',
+  });
+  assert.equal(streamActivity?.status, 'completed');
+  assert.equal(streamActivity?.name, '旁支回答');
+  assert.equal(streamActivity?.output, 'The provider was updated.');
+});
+
 test('missing model credentials produce one terminal error without a second pending assistant', () => {
   assert.match(
     chatModelConfigurationError({ info: { model: '', provider: '' }, options: {} }) ?? '',

@@ -1111,7 +1111,9 @@ export function streamEventToActivity(
     'secret.expire',
     'sudo.expire',
   ].includes(eventType);
-  const isBackground = eventType === 'background.complete' || eventType === 'review.summary';
+  const isBackground = eventType === 'background.complete'
+    || eventType === 'btw.complete'
+    || eventType === 'review.summary';
   if (
     !isTool
     && !isSubagent
@@ -1150,7 +1152,9 @@ export function streamEventToActivity(
                 : isInteraction
                   ? interactionActivityName(eventType)
                   : isBackground
-                    ? eventType === 'review.summary' ? '审查摘要' : '后台任务'
+                    ? eventType === 'review.summary'
+                      ? '审查摘要'
+                      : eventType === 'btw.complete' ? '旁支回答' : '后台任务'
                     : toolName || '工具调用';
   const status = eventType === 'tool.error' || eventType === 'tool.failed'
       || eventType === 'subagent.failed'
@@ -1164,6 +1168,7 @@ export function streamEventToActivity(
         || eventType === 'subagent.completed'
         || eventType === 'command.completed'
         || eventType === 'background.complete'
+        || eventType === 'btw.complete'
         || eventType === 'review.summary'
         || eventType === 'secret.expire'
         || eventType === 'sudo.expire'

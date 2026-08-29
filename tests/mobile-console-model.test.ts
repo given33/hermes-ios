@@ -7,6 +7,7 @@ import {
   isRemoteConsoleCommand,
   isStopSlashCommand,
   mobileConsoleResultText,
+  parseHostedCommand,
 } from '../src/studio/chat/mobile-console-model';
 
 test('console results only mutate the conversation view that launched them', () => {
@@ -45,6 +46,14 @@ test('remote console command matching excludes local stop handling', () => {
   assert.equal(isRemoteConsoleCommand('/config set theme dark'), true);
   assert.equal(isRemoteConsoleCommand('/stop'), false);
   assert.equal(isRemoteConsoleCommand('hello'), false);
+});
+
+test('official hosted commands are parsed separately from the legacy console', () => {
+  assert.deepEqual(parseHostedCommand('/bg run tests'), { command: 'bg', argument: 'run tests' });
+  assert.deepEqual(parseHostedCommand('/background investigate'), { command: 'bg', argument: 'investigate' });
+  assert.deepEqual(parseHostedCommand('/btw what changed?'), { command: 'btw', argument: 'what changed?' });
+  assert.deepEqual(parseHostedCommand('/busy queue'), { command: 'busy', argument: 'queue' });
+  assert.equal(parseHostedCommand('/review this'), null);
 });
 
 test('console result text preserves server output and supplies truthful fallback text', () => {

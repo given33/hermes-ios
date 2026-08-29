@@ -27,6 +27,7 @@ import {
   hasNativeSwiftUIRoute,
 } from '../../modules/hermes-ios-controls';
 import type { HermesCloudApi, JsonRecord } from '../api/HermesCloudApi';
+import { officialConversationPlaceholderId } from '../api/conversation-identifiers';
 import { hermesCloudApiFor } from '../api/hermes-api-registry';
 import {
   MANAGED_NODE_FRESHNESS_MS,
@@ -466,6 +467,7 @@ function PreviewRoute({
   serverOnline: boolean;
 }) {
   const { tokens } = useTheme();
+  const botChatOpenFlights = useRef(new Map<string, Promise<void>>());
   const routeData = useHermesSwiftUIRouteData({
     cacheOwner,
     client,
@@ -474,6 +476,39 @@ function PreviewRoute({
     profile,
     routeId: route.routeId ?? '',
   });
+  const openBotCanonicalChat = useCallback((requestedProfile: string) => {
+    const botProfile = requestedProfile.trim();
+    if (!client || !botProfile) {
+      notify(locale === 'zh' ? 'Bot Chat 暂时不可用。' : 'Bot Chat is unavailable.');
+      return Promise.resolve();
+    }
+    const current = botChatOpenFlights.current.get(botProfile);
+    if (current) return current;
+
+    let flight: Promise<void>;
+    flight = (async () => {
+      const result = await hermesCloudApiFor(client).ensureBotCanonicalChat(botProfile);
+      const canonical = isRecord(result.canonical_session)
+        ? result.canonical_session
+        : {};
+      const sessionId = stringField(result, 'session_id')
+        || stringField(canonical, 'id')
+        || stringField(result, 'resolved_session_id')
+        || stringField(canonical, 'resolved_id');
+      if (!sessionId) throw new Error('Hermes returned no canonical Bot Chat session');
+      const ownerProfile = stringField(result, 'profile') || botProfile;
+      onOpenConversation(officialConversationPlaceholderId(ownerProfile, sessionId));
+      navigate('/chat');
+    })()
+      .catch((error) => notify(serverActionError(error, locale ?? 'zh')))
+      .finally(() => {
+        if (botChatOpenFlights.current.get(botProfile) === flight) {
+          botChatOpenFlights.current.delete(botProfile);
+        }
+      });
+    botChatOpenFlights.current.set(botProfile, flight);
+    return flight;
+  }, [client, locale, navigate, notify, onOpenConversation]);
   const props = {
     gatewayStatuses,
     locale,
@@ -518,6 +553,14 @@ function PreviewRoute({
             event.nativeEvent.action,
             event.nativeEvent.payload,
           );
+          if (action?.action === HERMES_SWIFTUI_ROUTE_ACTIONS.botChatOpen) {
+            void openBotCanonicalChat(action.payload.id || '');
+            return;
+          }
+          if (action?.action === HERMES_SWIFTUI_ROUTE_ACTIONS.botGroupsOpen) {
+            navigate('/agent-group');
+            return;
+          }
           if (action?.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionOpen) {
             if (action.payload.id) {
               onOpenConversation(action.payload.id);

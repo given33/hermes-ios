@@ -168,6 +168,8 @@ ACTIONS: Final = {
     "profileExport": "profile.export",
     "profileActivate": "profile.activate",
     "profileDelete": "profile.delete",
+    "botChatOpen": "bot.chat.open",
+    "botGroupsOpen": "bot.groups.open",
     "botMetaUpdate": "bot.meta.update",
     "botProfileDescribe": "bot.profile.describe",
     "botProfileConfigure": "bot.profile.configure",

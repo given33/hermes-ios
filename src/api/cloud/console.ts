@@ -38,6 +38,17 @@ export interface MobileConsoleResult {
   status: MobileConsoleStatus;
 }
 
+export type MobileHostedCommand = 'bg' | 'btw' | 'busy';
+
+export interface MobileHostedCommandResult {
+  accepted: boolean;
+  command: MobileHostedCommand;
+  conversation_id?: string;
+  event_type?: string;
+  task_id?: string;
+  value?: string;
+}
+
 export interface MobileConsoleCompletionSuggestion {
   value: string;
   display_name: string;
@@ -77,6 +88,19 @@ export class HermesConsoleCloudApi {
       '/api/plugins/collaboration/mobile/console/execute',
       'POST',
       { confirmed, line, profile },
+    );
+  }
+
+  executeHostedCommand(
+    conversationId: string,
+    command: MobileHostedCommand,
+    text = '',
+    value = '',
+  ) {
+    return this.transport.json<MobileHostedCommandResult>(
+      `/api/plugins/collaboration/mobile/conversations/${encodeURIComponent(conversationId)}/commands`,
+      'POST',
+      { command, text, value },
     );
   }
 }

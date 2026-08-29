@@ -52,6 +52,33 @@ const LOCAL_SLASH_COMMANDS: readonly SlashCommandDescriptor[] = [
     en: 'Set the goal for this task as the highest priority',
     zh: '明确任务目标（最高优先级）',
   },
+  {
+    command: '/bg',
+    usage: 'bg <prompt>',
+    category: 'task',
+    requiresArgument: true,
+    requiresConfirmation: false,
+    en: 'Run a prompt in a separate background session',
+    zh: '在后台会话运行任务',
+  },
+  {
+    command: '/btw',
+    usage: 'btw <question>',
+    category: 'task',
+    requiresArgument: true,
+    requiresConfirmation: false,
+    en: 'Ask a side question without interrupting the current turn',
+    zh: '不打断当前任务询问旁支问题',
+  },
+  {
+    command: '/busy',
+    usage: 'busy <status|queue|steer|interrupt>',
+    category: 'task',
+    requiresArgument: true,
+    requiresConfirmation: false,
+    en: 'Inspect or change busy-input handling',
+    zh: '查看或设置忙碌输入处理方式',
+  },
 ] as const;
 
 const COMMAND_TRANSLATIONS: Readonly<Record<string, string>> = {
@@ -63,6 +90,9 @@ const COMMAND_TRANSLATIONS: Readonly<Record<string, string>> = {
   '/status': '检查 Hermes 与工作节点状态',
   '/plan': '只调查并制定方案（不派发执行）',
   '/goal': '明确任务目标（最高优先级）',
+  '/bg': '在后台会话运行任务',
+  '/btw': '不打断当前任务询问旁支问题',
+  '/busy': '查看或设置忙碌输入处理方式',
 };
 
 function commandDescriptor(command: MobileConsoleCommand): SlashCommandDescriptor {

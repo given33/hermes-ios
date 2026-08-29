@@ -1889,6 +1889,15 @@ private struct HermesRemoteRoutePage: View {
       .background(appearance.palette.background)
     case .profiles, .bots:
       List {
+        if route == .bots {
+          Section {
+            Button {
+              onAction(.botGroupsOpen, HermesRouteActionPayload(route: "bots"))
+            } label: {
+              Label(chinese ? "群聊" : "Group chats", systemImage: "person.3.fill")
+            }
+          }
+        }
         if route == .bots, let relay = botRelaySummary {
           Section(chinese ? "跨连接 Bot Relay" : "Cross-connection Bot Relay") {
             Text(relay)
@@ -1977,14 +1986,13 @@ private struct HermesRemoteRoutePage: View {
           if !profile.active {
             Button { onAction(.profileActivate, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Image(systemName: "checkmark") }.buttonStyle(.borderless)
           }
-          if route == .bots, let botSessionId = profile.botSessionId, !botSessionId.isEmpty {
+          if route == .bots {
             Button {
               onAction(
-                .sessionOpen,
+                .botChatOpen,
                 HermesRouteActionPayload(
-                  route: "sessions",
-                  id: botSessionId,
-                  fields: ["profile": profile.id]
+                  route: "bots",
+                  id: profile.id
                 )
               )
             } label: { Image(systemName: "bubble.left.and.bubble.right.fill") }

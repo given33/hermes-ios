@@ -91,7 +91,21 @@ enum HermesRoute: String, Hashable {
     default: break
     }
     if path == "/profiles/new" { return .profiles }
-    return HermesRoute(rawValue: path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))) ?? .chat
+    // The desktop shell exposes a few overlay/legacy paths that intentionally
+    // share an existing mobile surface.  Deep links can enter through the
+    // native bridge without passing through the TypeScript shell resolver, so
+    // keep the alias table here as well.  This prevents a valid desktop link
+    // from silently rendering the chat fallback on a signed iOS build.
+    let normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    let aliases: [String: String] = [
+      "agents": "agent-hub",
+      "artifacts": "files",
+      "command-center": "sessions",
+      "messaging": "channels",
+      "settings": "config",
+      "starmap": "skills",
+    ]
+    return HermesRoute(rawValue: aliases[normalized] ?? normalized) ?? .chat
   }
 }
 

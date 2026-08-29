@@ -160,3 +160,26 @@ must not claim release-level native-build verification.
   semantics, bringing the module back to 1109 lines.
 - `pnpm test` is green at 811 passed / 0 failed; `pnpm typecheck` and
   `pnpm contract:check` also pass after the change.
+
+### 2026-08-30 continuation: official hosted commands and role boundary
+
+- The mobile composer now recognizes the upstream `/bg`, `/btw`, and `/busy`
+  commands as a separate hosted-command path. `HermesCloudApi` calls the
+  account-owned `/mobile/conversations/{conversation_id}/commands` endpoint;
+  the backend forwards directly to the official `tui_gateway` JSON-RPC methods
+  (`prompt.background`, `prompt.btw`, and `config.set busy`).
+- `btw.complete` and `background.complete` are persisted in the same hosted
+  event cursor and assistant message snapshot, so the existing WebSocket-first
+  stream (with SSE fallback) displays the final result after reconnects. The
+  client shows an immediate acknowledgement without persisting a duplicate
+  assistant answer.
+- The former reviewer/supervisor model lane is intentionally absent from iOS:
+  `/review` is not catalogued or executable, and server-side Kanban reviewer
+  dispatch is fail-closed. The only hosted roles are one dispatcher and the
+  independent DBB3, PC/WSL, and HK workers. Petdex static avatar selection is
+  supported; pet runtime animation/state control is out of scope.
+- Focused verification: `pnpm exec tsx --test
+  tests/mobile-console-model.test.ts tests/chat-view-model.test.ts` (`37 passed`),
+  `pnpm typecheck`, and `pnpm contract:check` all pass on Windows. Native
+  Swift/Xcode archive and live four-node latency still require macOS CI and a
+  production rehearsal.

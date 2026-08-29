@@ -223,6 +223,27 @@ test('signed iOS builds keep native route surfaces while the JS sidebar remains 
   );
 });
 
+test('native route resolution keeps official desktop overlay deep links usable', () => {
+  const native = read(
+    'modules/hermes-ios-controls/ios/HermesSwiftUIPartialFrontendModule.swift',
+  );
+
+  // These names are emitted by the desktop shell and may arrive directly at
+  // the Expo SwiftUI bridge (for example from a notification or copied link).
+  // Keep this source-level contract in sync with route-registry.ts aliases.
+  for (const [alias, canonical] of [
+    ['agents', 'agent-hub'],
+    ['artifacts', 'files'],
+    ['command-center', 'sessions'],
+    ['messaging', 'channels'],
+    ['settings', 'config'],
+    ['starmap', 'skills'],
+  ]) {
+    assert.match(native, new RegExp(`"${alias}"\\s*:\\s*"${canonical}"`));
+  }
+  assert.match(native, /aliases\[normalized\] \?\? normalized/);
+});
+
 test('the cloud files page splits its generic view chain for Release compilation', () => {
   const pages = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
   assert.match(pages, /private struct HermesFilesPage:[\s\S]*let content = List/);

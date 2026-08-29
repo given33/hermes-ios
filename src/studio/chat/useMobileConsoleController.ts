@@ -17,6 +17,7 @@ import {
   consoleInvocationOwnsActiveView,
   isRemoteConsoleCommand,
   mobileConsoleResultText,
+  parseHostedCommand,
 } from './mobile-console-model';
 
 interface MobileConsoleControllerOptions {
@@ -198,6 +199,62 @@ export function useMobileConsoleController({
           optimisticUserId,
           authoritativeUser,
         ));
+      }
+
+      const hostedCommand = parseHostedCommand(line);
+      if (hostedCommand) {
+        if (!conversationId) throw new Error('Hosted command requires a conversation');
+        const hostedResult = await cloudApi.executeMobileHostedCommand(
+          conversationId,
+          hostedCommand.command,
+          hostedCommand.command === 'busy' ? '' : hostedCommand.argument,
+          hostedCommand.command === 'busy' ? hostedCommand.argument : '',
+        );
+        if (!lifecycleCurrent()) return true;
+        const acceptedText = hostedCommand.command === 'busy'
+          ? (isChinese
+            ? `忙碌输入模式：${hostedResult.value || hostedCommand.argument}`
+            : `Busy-input mode: ${hostedResult.value || hostedCommand.argument}`)
+          : (isChinese
+            ? `/${hostedCommand.command} 已提交（任务 ${hostedResult.task_id || 'queued'}），结果会通过实时连接返回。`
+            : `/${hostedCommand.command} accepted (task ${hostedResult.task_id || 'queued'}); the result will arrive on the live connection.`);
+        const responseId = uniqueTurnId('hosted-command-result');
+        const completedAt = Date.now();
+        const localResponse: ChatMessage = {
+          avatarRole: 'hermes',
+          content: acceptedText,
+          createdAt: completedAt,
+          id: responseId,
+          name: 'Hermes',
+          role: 'assistant',
+          status: 'completed',
+          updatedAt: completedAt,
+        };
+        if (ownsActiveView()) {
+          setMessages((current) => upsertChatMessage(current, localResponse));
+        }
+        commandCompleted = true;
+        // Async commands persist their authoritative assistant result from
+        // the server-side gateway callback.  Persist the immediate busy
+        // status locally because it is already terminal and has no follow-up
+        // event payload.
+        if (hostedCommand.command === 'busy') {
+          const response = await cloudApi.recordConversationMessage(conversationId, {
+            content: acceptedText,
+            id: responseId,
+            kind: 'console',
+            meta: { console_command: line, console_status: 'ok' },
+            name: 'Hermes',
+            role: 'assistant',
+            status: 'completed',
+          });
+          if (!lifecycleCurrent()) return true;
+          const responseView = collaborationMessageToView(response.message, isChinese);
+          if (responseView && ownsActiveView()) {
+            setMessages((current) => replaceOptimisticMessage(current, responseId, responseView));
+          }
+        }
+        return true;
       }
 
       let result = await cloudApi.executeMobileConsoleCommand(line, profile, false);

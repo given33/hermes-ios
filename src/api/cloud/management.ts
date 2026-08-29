@@ -147,6 +147,15 @@ export class HermesManagementCloudApi {
     return this.transport.request<JsonRecord>('/api/bots');
   }
 
+  /** Resolve or create the profile's title-registered Bot Chat. */
+  ensureBotCanonicalChat(name: string) {
+    return this.transport.json<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/canonical-chat`,
+      'POST',
+      {},
+    );
+  }
+
   getBotMeta(name: string) {
     return this.transport.request<JsonRecord>(
       `/api/bots/${encodeURIComponent(name)}/meta`,

@@ -123,6 +123,7 @@ export type {
   MobileConsoleResult,
   MobileConsoleStatus,
 } from './cloud/console';
+export type { MobileHostedCommand, MobileHostedCommandResult } from './cloud/console';
 export {
   customApiMode,
   customModelApiKeyAction,
@@ -272,7 +273,6 @@ export class HermesCloudApi {
   ): Promise<MobileConsoleResult> {
     return this.console.execute(line, profile, confirmed);
   }
-
   getSessions(limit = 50, offset = 0, profile = 'default') {
     return this.sessions.getSessions(limit, offset, profile);
   }

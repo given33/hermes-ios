@@ -194,6 +194,8 @@ enum HermesRouteAction: String, CaseIterable {
   case profileExport = "profile.export"
   case profileActivate = "profile.activate"
   case profileDelete = "profile.delete"
+  case botChatOpen = "bot.chat.open"
+  case botGroupsOpen = "bot.groups.open"
   case botMetaUpdate = "bot.meta.update"
   case botProfileDescribe = "bot.profile.describe"
   case botProfileConfigure = "bot.profile.configure"

@@ -82,3 +82,24 @@ export const HERMES_NATIVE_ROUTES = [
 ] as const satisfies readonly NativeRouteDefinition[];
 
 export type NativeRoutePath = (typeof HERMES_NATIVE_ROUTES)[number]['path'];
+
+/**
+ * Route names used by the official desktop shell that are intentionally
+ * overlays (or historical names) rather than separate mobile screens.
+ *
+ * Desktop notifications, copied links, and server-side redirects can still
+ * hand the iOS client `/artifacts`, `/messaging`, etc.  Falling through to
+ * `/chat` made those links look broken even though the mobile equivalent was
+ * already implemented.  Resolve them at the navigation boundary so we keep
+ * one canonical API/config implementation per feature.
+ */
+export const HERMES_DESKTOP_ROUTE_ALIASES = {
+  '/agents': '/agent-hub',
+  '/artifacts': '/files',
+  '/command-center': '/sessions',
+  '/messaging': '/channels',
+  '/settings': '/config',
+  '/starmap': '/skills',
+} as const satisfies Readonly<Record<string, NativeRoutePath>>;
+
+export type HermesDesktopRouteAlias = keyof typeof HERMES_DESKTOP_ROUTE_ALIASES;

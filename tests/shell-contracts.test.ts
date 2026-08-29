@@ -194,3 +194,21 @@ test('root, unknown, removed, and cyclic routes resolve to a real active path', 
     { key: 'b', path: '/b', source: 'plugin' as const, redirectTo: '/a' },
   ], '/a'), '/sessions');
 });
+
+test('official desktop overlay links resolve to the existing mobile surfaces', () => {
+  const routes = [
+    { key: 'chat', path: '/chat', source: 'builtin' as const },
+    { key: 'files', path: '/files', source: 'builtin' as const },
+    { key: 'channels', path: '/channels', source: 'builtin' as const },
+    { key: 'sessions', path: '/sessions', source: 'builtin' as const },
+    { key: 'config', path: '/config', source: 'builtin' as const },
+    { key: 'skills', path: '/skills', source: 'builtin' as const },
+    { key: 'agent-hub', path: '/agent-hub', source: 'builtin' as const },
+  ];
+  assert.equal(resolveNativeShellPath(routes, '/artifacts'), '/files');
+  assert.equal(resolveNativeShellPath(routes, '/messaging'), '/channels');
+  assert.equal(resolveNativeShellPath(routes, '/command-center'), '/sessions');
+  assert.equal(resolveNativeShellPath(routes, '/settings'), '/config');
+  assert.equal(resolveNativeShellPath(routes, '/starmap'), '/skills');
+  assert.equal(resolveNativeShellPath(routes, '/agents'), '/agent-hub');
+});

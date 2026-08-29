@@ -1,6 +1,7 @@
 import type { NativeThemeTokens } from '../design/theme-types';
 import { IOS_MOTION } from '../design/ios-motion';
 import type { ComposedRoute } from './route-composition';
+import { HERMES_DESKTOP_ROUTE_ALIASES } from './route-registry';
 import {
   ADAPTIVE_LAYOUT_METRICS,
   type AdaptiveLayoutMode,
@@ -237,7 +238,12 @@ export function resolveNativeShellPath(
   const fallback = routes.find(
     (route) => route.path === '/chat' && !route.redirectTo,
   ) ?? routes.find((route) => !route.redirectTo);
-  let path = requestedPath;
+  // The desktop shell has a handful of overlay/legacy names that do not
+  // warrant a second mobile route. Resolve them before looking in the route
+  // registry; otherwise a deep link silently falls back to chat.
+  let path: string = HERMES_DESKTOP_ROUTE_ALIASES[
+    requestedPath as keyof typeof HERMES_DESKTOP_ROUTE_ALIASES
+  ] ?? requestedPath;
   const visited = new Set<string>();
 
   while (!visited.has(path)) {

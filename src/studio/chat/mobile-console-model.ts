@@ -9,6 +9,23 @@ export function isRemoteConsoleCommand(value: string): boolean {
   return command.startsWith('/') && !isStopSlashCommand(command);
 }
 
+export interface ParsedHostedCommand {
+  command: 'bg' | 'btw' | 'busy';
+  argument: string;
+}
+
+/** Parse only the official hosted commands; all other slash commands retain
+ * the legacy mobile-console path. */
+export function parseHostedCommand(value: string): ParsedHostedCommand | null {
+  const match = value.trim().match(/^\/(bg|background|btw|busy)(?:\s+([\s\S]*))?$/i);
+  if (!match) return null;
+  const raw = match[1].toLowerCase();
+  return {
+    command: raw === 'background' ? 'bg' : raw as ParsedHostedCommand['command'],
+    argument: (match[2] || '').trim(),
+  };
+}
+
 export function consoleInvocationOwnsActiveView(
   activeConversationId: string,
   invocationConversationId: string,
