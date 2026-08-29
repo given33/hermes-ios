@@ -69,6 +69,21 @@ test('Hermes Studio group chat uses the collaboration room contract', async () =
   });
 });
 
+test('Hermes Studio room management fails closed when the server omits can_manage', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const api = new HermesStudioGroupChatApi(testClient(calls, () => ({
+    rooms: [
+      { id: 'room-owner', name: 'Owner', can_manage: true },
+      { id: 'room-unknown', name: 'Unknown' },
+      { id: 'room-denied', name: 'Denied', can_manage: false },
+    ],
+  })));
+  const rooms = await api.listRooms();
+  assert.equal(rooms.find((room) => room.id === 'room-owner')?.canManage, true);
+  assert.equal(rooms.find((room) => room.id === 'room-unknown')?.canManage, false);
+  assert.equal(rooms.find((room) => room.id === 'room-denied')?.canManage, false);
+});
+
 test('Hermes Studio room detail normalizes collaboration messages and sends hosted turns', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const client = testClient(calls, (url) => url.endsWith('/messages')

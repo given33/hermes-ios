@@ -962,7 +962,9 @@ function normalizeRoom(value: unknown): HermesStudioRoomInfo | null {
     messageCount: numberValue(alias(value, 'messageCount', 'message_count'), 0),
     conversationId: stringValue(alias(value, 'conversationId', 'conversation_id')) || undefined,
     hostedTurns,
-    canManage: value.can_manage !== false,
+    // The backend always emits the caller-scoped can_manage bit.  Unknown
+    // values must not grant room mutations on older/malformed gateways.
+    canManage: value.can_manage === true,
     canMentionAll: value.can_mention_all === true || profiles.length > 1,
     accountGeneration: stringValue(alias(value, 'account_generation', 'accountGeneration')) || undefined,
     summaryProfile: stringValue(alias(summaryConfig, 'profile')) || undefined,
