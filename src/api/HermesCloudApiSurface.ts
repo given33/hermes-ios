@@ -104,9 +104,28 @@ const optionalDomains = new WeakMap<HermesCloudApiType, { git: HermesGitCloudApi
 function git(self: HermesCloudApiType) {
   let domains = optionalDomains.get(self);
   if (!domains) {
-    const transport = (self as unknown as { client: { request: Function } }).client;
-    // Git methods use the same authenticated client via a tiny transport shim.
-    const t = { request: (p: string, o?: any) => transport.request(p, o), json: (p: string, m: any, b: any, o?: any) => transport.request(p, { ...o, method: m, body: JSON.stringify(b) }) } as any;
+    const facade = self as unknown as {
+      client: { request: Function };
+      request: Function;
+    };
+    // Git is the one optional domain that cannot be retained as a facade
+    // field because the facade has a physical-size budget.  Keep its tiny
+    // transport shim on the same authenticated facade request path.  The
+    // previous shim called the raw client directly for JSON mutations and
+    // omitted Content-Type, which made FastAPI treat the body as text/plain
+    // on real iOS requests (all Git writes then failed validation with 422).
+    const t = {
+      request: (p: string, o?: any) => facade.client.request(p, o),
+      json: (p: string, m: any, b: any, o?: any) => facade.request(p, {
+        ...o,
+        method: m,
+        headers: {
+          ...Object.fromEntries(new Headers(o?.headers).entries()),
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(b),
+      }),
+    } as any;
     domains = { git: new HermesGitCloudApi(t) };
     optionalDomains.set(self, domains);
   }

@@ -1010,6 +1010,11 @@ test('the extended iOS surface reaches upstream system, memory, model, MCP, Git,
   assert.deepEqual(calls[1].options.query, { profile: 'hk-worker' });
   assert.deepEqual(calls[6].options.query, { path: '/workspace', depth: '2' });
   assert.deepEqual(parsedBody(calls[8]), { path: '/workspace', file: 'src/app.ts' });
+  assert.equal(
+    new Headers(calls[8].options.headers).get('content-type'),
+    'application/json',
+    'Git mutation requests must carry JSON content type for FastAPI body parsing',
+  );
   assert.deepEqual(parsedBody(calls[10]), {
     profile: 'hk-worker',
     yaml_text: 'model:\n  default: test',
