@@ -149,6 +149,59 @@ test('system backup import and hook actions use official operations endpoints', 
   ]);
 });
 
+test('Git route exposes every official review read surface and selected diffs', async () => {
+  const calls: unknown[] = [];
+  const api = {
+    getDefaultCwd: async () => ({ cwd: '/srv/hermes' }),
+    getGitRoot: async (path: string) => { calls.push(['root', path]); return { root: '/srv/hermes/repo' }; },
+    getGitStatus: async (path: string) => { calls.push(['status', path]); return { branch: 'main', files: [] }; },
+    getGitBranches: async () => ({ branches: ['main', 'feature'] }),
+    getGitBaseBranches: async () => ({ branches: ['main'] }),
+    getGitWorktrees: async () => ({ worktrees: [] }),
+    getGitReviewList: async () => ({ files: [{ path: 'README.md', status: 'M' }] }),
+    getGitShipInfo: async () => ({ ready: false }),
+    getGitGhAuth: async () => ({ authenticated: true, login: 'hermes' }),
+    getGitCommitContext: async () => ({ staged: 1 }),
+    getGitRevParse: async () => ({ sha: 'abc123' }),
+    listGitPullRequests: async () => ({ pull_requests: [{ number: 7 }] }),
+    getGitReviewDiff: async (path: string, file: string) => { calls.push(['review-diff', path, file]); return { patch: '@@' }; },
+    getGitFileDiff: async (path: string, file: string) => { calls.push(['file-diff', path, file]); return { patch: 'diff' }; },
+  } as unknown as HermesCloudApi;
+  const result = await loadCloudRoute(api, 'git', 'default', 'README.md') as Record<string, unknown>;
+  assert.equal(result.root, '/srv/hermes/repo');
+  assert.equal(result.branch, 'main');
+  assert.deepEqual(result.ghAuth, { authenticated: true, login: 'hermes' });
+  assert.deepEqual(result.pullRequests, { pull_requests: [{ number: 7 }] });
+  assert.deepEqual(calls, [
+    ['root', '/srv/hermes'],
+    ['status', '/srv/hermes/repo'],
+    ['review-diff', '/srv/hermes/repo', 'README.md'],
+    ['file-diff', '/srv/hermes/repo', 'README.md'],
+  ]);
+});
+
+test('Git native actions call confirmed upstream operations with the resolved repository path', async () => {
+  const calls: unknown[] = [];
+  const api = {
+    getDefaultCwd: async () => ({ cwd: '/srv/hermes' }),
+    getGitRoot: async () => ({ root: '/srv/hermes/repo' }),
+    stageGitFile: async (...args: unknown[]) => { calls.push(['stage', ...args]); return {}; },
+    commitGit: async (...args: unknown[]) => { calls.push(['commit', ...args]); return {}; },
+    createGitPullRequest: async (...args: unknown[]) => { calls.push(['pr', ...args]); return { url: 'https://example/pr/1' }; },
+    addGitWorktree: async (...args: unknown[]) => { calls.push(['worktree-add', ...args]); return {}; },
+  } as unknown as HermesCloudApi;
+  await performHermesSwiftUIRouteAction(api, { action: 'git.stage', payload: { route: 'git', id: 'README.md' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'git.commit', payload: { route: 'git', detail: 'test commit' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'git.create-pr', payload: { route: 'git' } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'git.worktree.add', payload: { route: 'git', detail: '{"branch":"feature"}' } }, 'default');
+  assert.deepEqual(calls, [
+    ['stage', '/srv/hermes/repo', 'README.md'],
+    ['commit', '/srv/hermes/repo', 'test commit', false],
+    ['pr', '/srv/hermes/repo'],
+    ['worktree-add', '/srv/hermes/repo', { branch: 'feature' }],
+  ]);
+});
+
 test('native skills and cron snapshots hydrate official desktop metadata', async () => {
   const api = {
     loadRoute: async (route: string) => route === 'skills'

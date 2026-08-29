@@ -1,5 +1,5 @@
 import * as DocumentPicker from 'expo-document-picker';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { StyleSheet, TextInput, View } from 'react-native';
 
 import type { HermesApiClient } from '../api/HermesApiClient';
@@ -171,6 +171,36 @@ function renderRoute({
     return <PreviewRow key={row.id} style={styles.row}><View style={styles.grow}><TextInput onChangeText={(value) => setRenameDrafts((current) => ({ ...current, [row.id]: value }))} placeholder={chinese ? '会话名称' : 'Session name'} placeholderTextColor="#8b929c" style={styles.input} value={title} /><PreviewText variant="muted">{row.detail || row.model || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => onOpenConversation(row.id)} size="sm">{chinese ? '打开' : 'Open'}</NativeButton><NativeButton disabled={busy || !title.trim()} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionRename, { id: row.id, value: title })} size="sm">{chinese ? '保存名称' : 'Save name'}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionCompress, { id: row.id, detail: title })} size="sm">{chinese ? '压缩' : 'Compact'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDelete, { id: row.id })} size="icon">×</NativeButton></PreviewRow>;
   })}</PreviewCard>;
   if (routeId === 'files') return <><PreviewRow style={styles.actions}><NativeButton disabled={busy} onPress={() => void importFiles()} size="sm">{chinese ? '导入文件' : 'Import files'}</NativeButton></PreviewRow><PreviewCard title={chinese ? '文件' : 'Files'}>{rows(snapshot.files).map((row) => <PreviewRow key={row.id} style={styles.row}><View style={styles.grow}><PreviewText>{row.name || row.id}</PreviewText><PreviewText variant="muted">{row.detail || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileDownload, { id: row.id, name: row.name })} size="sm">{chinese ? '下载' : 'Get'}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileShare, { id: row.id, name: row.name })} size="sm">{chinese ? '分享' : 'Share'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.fileDelete, { id: row.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard></>;
+  if (routeId === 'git') {
+    const git = isRecord(snapshot.git) ? snapshot.git : {};
+    const field = (name: string) => typeof git[name] === 'string' ? git[name] : '';
+    const path = field('root') || field('cwd');
+    const reviewRows = rows(parseJsonValue(field('reviewJSON')));
+    return <>
+      <PreviewRow style={styles.actions}>
+        <NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.gitRefresh)} size="sm">{chinese ? '刷新' : 'Refresh'}</NativeButton>
+        <NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.gitPush, { fields: { path } })} size="sm">{chinese ? '推送' : 'Push'}</NativeButton>
+        <NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.gitGhAuth, { fields: { path } })} size="sm">{chinese ? '检查 GitHub' : 'Check GitHub'}</NativeButton>
+      </PreviewRow>
+      <PreviewCard title={chinese ? 'Git 工作区' : 'Git workspace'}>
+        <PreviewRow style={styles.row}><PreviewText variant="label">{chinese ? '路径' : 'Path'}</PreviewText><PreviewText variant="mono">{path || '—'}</PreviewText></PreviewRow>
+        <PreviewRow style={styles.row}><PreviewText variant="label">{chinese ? '分支' : 'Branch'}</PreviewText><PreviewText variant="mono">{field('branch') || '—'}</PreviewText></PreviewRow>
+      </PreviewCard>
+      {gitJsonCard(chinese ? '状态' : 'Status', field('statusJSON'))}
+      <PreviewCard title={chinese ? '待审阅文件' : 'Review files'}>
+        {reviewRows.length ? reviewRows.map((row) => <PreviewRow key={row.id} style={styles.row}><View style={styles.grow}><PreviewText>{row.name || row.id}</PreviewText><PreviewText variant="muted">{row.status || row.change || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.gitSelect, { id: row.id, fields: { path } })} size="sm">{chinese ? '查看差异' : 'View diff'}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.gitStage, { id: row.id, fields: { path } })} size="sm">{chinese ? '暂存' : 'Stage'}</NativeButton></PreviewRow>) : <ScreenState kind="empty" message={chinese ? '没有待审阅文件' : 'No files need review'} />}
+      </PreviewCard>
+      {gitJsonCard(chinese ? '提交前检查' : 'Ship checks', field('shipInfoJSON'))}
+      {gitJsonCard(chinese ? '分支' : 'Branches', field('branchesJSON'))}
+      {gitJsonCard(chinese ? 'Worktree' : 'Worktrees', field('worktreesJSON'))}
+      {gitJsonCard(chinese ? '基础分支' : 'Base branches', field('baseBranchesJSON'))}
+      {gitJsonCard(chinese ? 'GitHub 登录状态' : 'GitHub auth', field('ghAuthJSON'))}
+      {gitJsonCard(chinese ? '提交上下文' : 'Commit context', field('commitContextJSON'))}
+      {gitJsonCard(chinese ? '版本解析' : 'Revision', field('revParseJSON'))}
+      {gitJsonCard(chinese ? 'Pull Requests' : 'Pull requests', field('pullRequestsJSON'))}
+      {gitJsonCard(chinese ? '文件 Diff' : 'File diff', field('fileDiffJSON'))}
+    </>;
+  }
   if (routeId === 'cron') {
     const jobs = Array.isArray(snapshot.cron) ? snapshot.cron : [];
     return <><CreateBar busy={busy} chinese={chinese} draft={draft} onChange={setDraft} onSubmit={() => { const [name, schedule, ...prompt] = draft.split('|'); void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronCreate, { name: name || 'Hermes job', detail: prompt.join('|'), fields: { schedule: schedule || '0 * * * *' } }).then(() => setDraft('')); }} placeholder={chinese ? '名称|cron|提示词' : 'name|cron|prompt'} /><PreviewCard title={chinese ? '定时任务' : 'Scheduled jobs'}>{jobs.map((job) => <PreviewRow key={job.id} style={styles.row}><View style={styles.grow}><PreviewText>{job.name || job.id}</PreviewText><PreviewText variant="muted">{job.schedule || ''}</PreviewText></View><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronToggle, { id: job.id, enabled: job.enabled !== false })} size="sm">{job.enabled === false ? (chinese ? '启用' : 'Enable') : (chinese ? '停用' : 'Pause')}</NativeButton><NativeButton disabled={busy} onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronRun, { id: job.id })} size="sm">{chinese ? '运行' : 'Run'}</NativeButton><NativeButton disabled={busy} destructive onPress={() => void send(HERMES_SWIFTUI_ROUTE_ACTIONS.cronDelete, { id: job.id })} size="icon">×</NativeButton></PreviewRow>)}</PreviewCard></>;
@@ -231,6 +261,17 @@ function CreateBar({ busy, chinese, draft, onChange, onSubmit, placeholder }: { 
 function rows(value: unknown): JsonRecord[] { return Array.isArray(value) ? value.filter(isRecord) : []; }
 function isRecord(value: unknown): value is JsonRecord { return typeof value === 'object' && value !== null && !Array.isArray(value); }
 function displayValue(value: unknown): string { return typeof value === 'string' ? value : JSON.stringify(value); }
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
+}
+function gitJsonCard(title: string, value: string): ReactNode {
+  if (!value) return null;
+  return <PreviewCard title={title}><PreviewText variant="mono">{value}</PreviewText></PreviewCard>;
+}
 function parseJsonRecord(value: string): JsonRecord | null {
   try {
     const parsed = JSON.parse(value) as unknown;
@@ -240,7 +281,7 @@ function parseJsonRecord(value: string): JsonRecord | null {
   }
 }
 function routeTitle(routeId: string, locale: NativeRouteLocale): string {
-  const titles: Record<string, [string, string]> = { sessions: ['会话', 'Sessions'], files: ['文件', 'Files'], analytics: ['分析', 'Analytics'], logs: ['日志', 'Logs'], cron: ['定时任务', 'Cron'], plugins: ['插件', 'Plugins'], mcp: ['MCP', 'MCP'], pairing: ['配对', 'Pairing'], channels: ['渠道', 'Channels'], webhooks: ['Webhooks', 'Webhooks'], profiles: ['Profiles', 'Profiles'], bots: ['机器人', 'Bots'], 'profile-new': ['新建 Profile', 'New Profile'], config: ['配置', 'Configuration'], env: ['环境变量', 'Environment'], system: ['系统', 'System'], docs: ['文档', 'Documentation'] };
+  const titles: Record<string, [string, string]> = { sessions: ['会话', 'Sessions'], files: ['文件', 'Files'], git: ['Git 工作区', 'Git workspace'], analytics: ['分析', 'Analytics'], logs: ['日志', 'Logs'], cron: ['定时任务', 'Cron'], plugins: ['插件', 'Plugins'], mcp: ['MCP', 'MCP'], pairing: ['配对', 'Pairing'], channels: ['渠道', 'Channels'], webhooks: ['Webhooks', 'Webhooks'], profiles: ['Profiles', 'Profiles'], bots: ['机器人', 'Bots'], 'profile-new': ['新建 Profile', 'New Profile'], config: ['配置', 'Configuration'], env: ['环境变量', 'Environment'], system: ['系统', 'System'], docs: ['文档', 'Documentation'] };
   return (titles[routeId] || [routeId, routeId])[locale === 'zh' ? 0 : 1];
 }
 const styles = StyleSheet.create({

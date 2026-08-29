@@ -38,6 +38,8 @@ struct HermesRouteContent: View {
         files: data.files,
         onAction: onAction
       )
+    case .git:
+      HermesGitPage(data: data.git, chinese: chinese, onAction: onAction)
     case .analytics:
       HermesAnalyticsPage(
         analytics: data.analytics,
@@ -747,6 +749,191 @@ private struct HermesMemoryConfigSheet: View {
     .presentationDetents([.large])
     .presentationDragIndicator(.visible)
   }
+}
+
+private struct HermesGitPage: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let data: HermesSwiftUIGitSnapshot?
+  let chinese: Bool
+  let onAction: HermesRouteActionSink
+  @State private var commitMessage = ""
+  @State private var branch = ""
+
+  var body: some View {
+    Group {
+      if let data {
+        List {
+          Section(chinese ? "工作区" : "Workspace") {
+            LabeledContent(chinese ? "路径" : "Path", value: data.root.isEmpty ? data.cwd : data.root)
+            LabeledContent(chinese ? "分支" : "Branch", value: data.branch.isEmpty ? "—" : data.branch)
+            HStack {
+              Button {
+                onAction(.gitRefresh, HermesRouteActionPayload(route: "git"))
+              } label: {
+                Label(chinese ? "刷新" : "Refresh", systemImage: "arrow.clockwise")
+              }
+              .buttonStyle(.bordered)
+              Button {
+                onAction(.gitPush, HermesRouteActionPayload(route: "git", fields: ["path": data.root]))
+              } label: {
+                Label(chinese ? "推送" : "Push", systemImage: "arrow.up.circle")
+              }
+              .buttonStyle(.borderedProminent)
+              Button {
+                onAction(.gitGhAuth, HermesRouteActionPayload(route: "git", fields: ["path": data.root]))
+              } label: {
+                Label(chinese ? "检查 GitHub" : "Check GitHub", systemImage: "person.crop.circle.badge.checkmark")
+              }
+              .buttonStyle(.bordered)
+            }
+            if !branchChoices.isEmpty {
+              Picker(chinese ? "切换分支" : "Switch branch", selection: Binding(
+                get: { branch.isEmpty ? data.branch : branch },
+                set: { next in
+                  branch = next
+                  onAction(.gitSwitchBranch, HermesRouteActionPayload(route: "git", value: next, fields: ["path": data.root]))
+                }
+              )) {
+                ForEach(branchChoices, id: \.self) { Text($0).tag($0) }
+              }
+            }
+          }
+          gitJSONSection(chinese ? "工作区状态" : "Status", data.statusJSON)
+          if !gitFiles.isEmpty {
+            Section(chinese ? "待审阅文件" : "Review files") {
+              ForEach(gitFiles) { file in
+                VStack(alignment: .leading, spacing: 6) {
+                  Text(file.path).font(HermesFonts.mono(12))
+                  if !file.detail.isEmpty {
+                    Text(file.detail).font(HermesFonts.body(11)).foregroundStyle(appearance.palette.secondary)
+                  }
+                  HStack {
+                    Button { onAction(.gitSelect, HermesRouteActionPayload(route: "git", id: file.path, fields: ["path": data.root])) } label: {
+                      Label(chinese ? "查看差异" : "View diff", systemImage: "doc.text.magnifyingglass")
+                    }
+                    .buttonStyle(.bordered)
+                    Button { onAction(.gitFileDiff, HermesRouteActionPayload(route: "git", id: file.path, fields: ["path": data.root])) } label: {
+                      Label(chinese ? "文件 Diff" : "File diff", systemImage: "doc.plaintext")
+                    }
+                    .buttonStyle(.bordered)
+                    Button { onAction(.gitStage, HermesRouteActionPayload(route: "git", id: file.path, fields: ["path": data.root])) } label: {
+                      Label(chinese ? "暂存" : "Stage", systemImage: "plus.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    Button { onAction(.gitUnstage, HermesRouteActionPayload(route: "git", id: file.path, fields: ["path": data.root])) } label: {
+                      Label(chinese ? "取消暂存" : "Unstage", systemImage: "minus.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    Button(role: .destructive) { onAction(.gitRevert, HermesRouteActionPayload(route: "git", id: file.path, fields: ["path": data.root])) } label: {
+                      Label(chinese ? "还原" : "Revert", systemImage: "arrow.uturn.backward.circle")
+                    }
+                    .buttonStyle(.bordered)
+                  }
+                }
+                .padding(.vertical, 4)
+              }
+            }
+          } else {
+            Text(chinese ? "没有待审阅文件" : "No files need review")
+              .foregroundStyle(appearance.palette.secondary)
+          }
+          gitJSONSection(chinese ? "提交前检查" : "Ship checks", data.shipInfoJSON)
+          Section(chinese ? "提交" : "Commit") {
+            TextField(chinese ? "提交信息" : "Commit message", text: $commitMessage, axis: .vertical)
+              .lineLimit(2...5)
+            Button {
+              let message = commitMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+              guard !message.isEmpty else { return }
+              onAction(.gitCommit, HermesRouteActionPayload(route: "git", detail: message, fields: ["path": data.root]))
+              commitMessage = ""
+            } label: {
+              Label(chinese ? "提交更改" : "Commit changes", systemImage: "checkmark.circle")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(commitMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
+          if let selected = data.selectedFile, !selected.isEmpty, let diff = data.diffJSON, !diff.isEmpty {
+            Section(chinese ? "差异 · \(selected)" : "Diff · \(selected)") {
+              Text(diff)
+                .font(HermesFonts.mono(10))
+                .foregroundStyle(appearance.palette.secondary)
+                .textSelection(.enabled)
+            }
+          }
+          gitJSONSection(chinese ? "分支" : "Branches", data.branchesJSON)
+          gitJSONSection(chinese ? "Worktree" : "Worktrees", data.worktreesJSON)
+          gitJSONSection(chinese ? "基础分支" : "Base branches", data.baseBranchesJSON)
+          gitJSONSection(chinese ? "GitHub 登录状态" : "GitHub auth", data.ghAuthJSON ?? "")
+          gitJSONSection(chinese ? "提交上下文" : "Commit context", data.commitContextJSON ?? "")
+          gitJSONSection(chinese ? "版本解析" : "Revision", data.revParseJSON ?? "")
+          gitJSONSection(chinese ? "Pull Requests" : "Pull requests", data.pullRequestsJSON ?? "")
+          gitJSONSection(chinese ? "文件 Diff" : "File diff", data.fileDiffJSON ?? "")
+        }
+        .hermesListStyle()
+        .refreshable { onAction(.gitRefresh, HermesRouteActionPayload(route: "git")) }
+      } else {
+        ContentUnavailableView(
+          chinese ? "Git 不可用" : "Git unavailable",
+          systemImage: "arrow.triangle.branch",
+          description: Text(chinese ? "当前 Hermes 工作区没有可用的 Git 仓库。" : "The current Hermes workspace has no usable Git repository.")
+        )
+      }
+    }
+    .background(appearance.palette.background)
+  }
+
+  private var gitFiles: [HermesGitFileSnapshot] {
+    guard let data, let raw = data.reviewJSON.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) else { return [] }
+    let candidates: [[String: Any]]
+    if let dict = object as? [String: Any], let files = dict["files"] as? [[String: Any]] {
+      candidates = files
+    } else if let dict = object as? [String: Any], let files = dict["items"] as? [[String: Any]] {
+      candidates = files
+    } else if let files = object as? [[String: Any]] {
+      candidates = files
+    } else {
+      candidates = []
+    }
+    return candidates.compactMap { item in
+      let path = (item["path"] as? String) ?? (item["file"] as? String) ?? (item["name"] as? String) ?? ""
+      guard !path.isEmpty else { return nil }
+      let status = (item["status"] as? String) ?? (item["change"] as? String) ?? ""
+      return HermesGitFileSnapshot(path: path, detail: status)
+    }
+  }
+
+  private var branchChoices: [String] {
+    guard let data, let raw = data.branchesJSON.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) else { return [] }
+    if let values = object as? [String] { return values.filter { !$0.isEmpty } }
+    if let dict = object as? [String: Any] {
+      if let values = dict["branches"] as? [String] { return values.filter { !$0.isEmpty } }
+      if let values = dict["items"] as? [[String: Any]] {
+        return values.compactMap { ($0["name"] as? String) ?? ($0["branch"] as? String) }
+      }
+    }
+    return []
+  }
+
+  @ViewBuilder
+  private func gitJSONSection(_ title: String, _ value: String) -> some View {
+    if !value.isEmpty {
+      Section(title) {
+        Text(value)
+          .font(HermesFonts.mono(10))
+          .foregroundStyle(appearance.palette.secondary)
+          .textSelection(.enabled)
+          .lineLimit(24)
+      }
+    }
+  }
+}
+
+private struct HermesGitFileSnapshot: Identifiable {
+  let path: String
+  let detail: String
+  var id: String { path }
 }
 
 private struct HermesRemoteRoutePage: View {

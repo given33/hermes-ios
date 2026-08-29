@@ -525,6 +525,7 @@ export function useHermesSwiftUIRouteData({
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.fileSelect
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.sessionSelect
         || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.skillSelect
+        || event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.gitSelect
       )
       && event.payload.id
     ) {

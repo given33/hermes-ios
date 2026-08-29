@@ -50,6 +50,20 @@ type RouteApi = Pick<
   | 'getWriteApprovals'
   | 'getKanbanBoard'
   | 'getMemoryStatus'
+  | 'getDefaultCwd'
+  | 'getGitRoot'
+  | 'getGitStatus'
+  | 'getGitBranches'
+  | 'getGitBaseBranches'
+  | 'getGitWorktrees'
+  | 'getGitReviewList'
+  | 'getGitShipInfo'
+  | 'getGitReviewDiff'
+  | 'getGitGhAuth'
+  | 'getGitFileDiff'
+  | 'getGitCommitContext'
+  | 'getGitRevParse'
+  | 'listGitPullRequests'
 >;
 
 /** Resolve one native management route from canonical domain APIs. */
@@ -66,6 +80,41 @@ export async function loadCloudRoute(
       return { sessions, total: sessions.length, limit: sessions.length, offset: 0 };
     }
     case 'files': return api.getAllAccountFiles();
+    case 'git': {
+      // The official Git API is path-based because a Hermes server may expose
+      // more than one workspace.  Start at the server's canonical cwd and
+      // resolve its repository root before loading the review projections.
+      const cwdResult = await api.getDefaultCwd().catch(() => ({}));
+      const cwd = isRecord(cwdResult) && typeof cwdResult.cwd === 'string' ? cwdResult.cwd : '';
+      const rootResult = await api.getGitRoot(cwd).catch(() => ({}));
+      const root = isRecord(rootResult) && typeof rootResult.root === 'string' ? rootResult.root : '';
+      const path = root || cwd;
+      if (!path) return { cwd, root, branch: '', status: {}, branches: {}, baseBranches: {}, worktrees: {}, review: {}, shipInfo: {} };
+      const [status, branches, baseBranches, worktrees, review, shipInfo, ghAuth, commitContext, revParse, pullRequests] = await Promise.all([
+        api.getGitStatus(path).catch(() => ({})),
+        api.getGitBranches(path).catch(() => ({})),
+        api.getGitBaseBranches(path).catch(() => ({})),
+        api.getGitWorktrees(path).catch(() => ({})),
+        api.getGitReviewList(path).catch(() => ({})),
+        api.getGitShipInfo(path).catch(() => ({})),
+        api.getGitGhAuth(false).catch(() => ({})),
+        api.getGitCommitContext(path).catch(() => ({})),
+        api.getGitRevParse(path).catch(() => ({})),
+        api.listGitPullRequests(path).catch(() => ({})),
+      ]);
+      const branch = isRecord(status) && typeof status.branch === 'string'
+        ? status.branch
+        : isRecord(status) && typeof status.current_branch === 'string' ? status.current_branch : '';
+      let diff: unknown;
+      let fileDiff: unknown;
+      if (selectedId) {
+        [diff, fileDiff] = await Promise.all([
+          api.getGitReviewDiff(path, selectedId).catch(() => undefined),
+          api.getGitFileDiff(path, selectedId).catch(() => undefined),
+        ]);
+      }
+      return { cwd, root: path, branch, status, branches, baseBranches, worktrees, review, shipInfo, ghAuth, commitContext, revParse, pullRequests, ...(diff !== undefined ? { diff, selectedFile: selectedId } : {}), ...(fileDiff !== undefined ? { fileDiff } : {}) };
+    }
     case 'analytics': return api.getAnalytics(30, profile);
     case 'models': {
       const [models, auxiliary, moa, customEndpoints] = await Promise.all([

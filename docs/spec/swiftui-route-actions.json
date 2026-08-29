@@ -10,6 +10,7 @@
     "sessionPullRequestsJSON",
     "sessionStatsJSON",
     "files",
+    "git",
     "workflows",
     "approvals",
     "runtime",
@@ -206,6 +207,22 @@
     "approvalReject": "approval.reject",
     "runtimeSelect": "runtime.select",
     "runtimeCancel": "runtime.cancel",
-    "runtimeRetry": "runtime.retry"
+    "runtimeRetry": "runtime.retry",
+    "gitSelect": "git.select",
+    "gitStage": "git.stage",
+    "gitUnstage": "git.unstage",
+    "gitRevert": "git.revert",
+    "gitCommit": "git.commit",
+    "gitPush": "git.push",
+    "gitSwitchBranch": "git.branch.switch",
+    "gitRefresh": "git.refresh",
+    "gitGhAuth": "git.gh-auth",
+    "gitFileDiff": "git.file-diff",
+    "gitCommitContext": "git.commit-context",
+    "gitRevParse": "git.rev-parse",
+    "gitPullRequests": "git.pull-requests",
+    "gitCreatePR": "git.create-pr",
+    "gitAddWorktree": "git.worktree.add",
+    "gitRemoveWorktree": "git.worktree.remove"
   }
 }

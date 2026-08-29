@@ -11,6 +11,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let sessionPullRequestsJSON: String?
   let sessionStatsJSON: String?
   let files: [HermesFileSnapshot]
+  let git: HermesSwiftUIGitSnapshot?
   let workflows: HermesWorkflowSnapshot
   let approvals: HermesApprovalsSnapshot
   let runtime: HermesRuntimeSnapshot
@@ -61,6 +62,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     sessionPullRequestsJSON: String? = nil,
     sessionStatsJSON: String? = nil,
     files: [HermesFileSnapshot] = [],
+    git: HermesSwiftUIGitSnapshot? = nil,
     workflows: HermesWorkflowSnapshot = .empty,
     approvals: HermesApprovalsSnapshot = .empty,
     runtime: HermesRuntimeSnapshot = .empty,
@@ -110,6 +112,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.sessionPullRequestsJSON = sessionPullRequestsJSON
     self.sessionStatsJSON = sessionStatsJSON
     self.files = files
+    self.git = git
     self.workflows = workflows
     self.approvals = approvals
     self.runtime = runtime
@@ -172,6 +175,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [HermesFileSnapshot].self,
       forKey: .files
     ) ?? []
+    git = try container.decodeIfPresent(HermesSwiftUIGitSnapshot.self, forKey: .git)
     workflows = try container.decodeIfPresent(
       HermesWorkflowSnapshot.self,
       forKey: .workflows
@@ -322,6 +326,100 @@ struct HermesSessionSnapshot: Decodable, Equatable, Identifiable {
     pinned = try container.decodeIfPresent(Bool.self, forKey: .pinned)
     unread = try container.decodeIfPresent(Bool.self, forKey: .unread)
   }
+}
+
+struct HermesSwiftUIGitSnapshot: Decodable, Equatable {
+  let cwd: String
+  let root: String
+  let branch: String
+  let statusJSON: String
+  let branchesJSON: String
+  let baseBranchesJSON: String
+  let worktreesJSON: String
+  let reviewJSON: String
+  let shipInfoJSON: String
+  let ghAuthJSON: String?
+  let fileDiffJSON: String?
+  let commitContextJSON: String?
+  let revParseJSON: String?
+  let pullRequestsJSON: String?
+  let selectedFile: String?
+  let diffJSON: String?
+
+  init(
+    cwd: String = "",
+    root: String = "",
+    branch: String = "",
+    statusJSON: String = "",
+    branchesJSON: String = "",
+    baseBranchesJSON: String = "",
+    worktreesJSON: String = "",
+    reviewJSON: String = "",
+    shipInfoJSON: String = "",
+    ghAuthJSON: String? = nil,
+    fileDiffJSON: String? = nil,
+    commitContextJSON: String? = nil,
+    revParseJSON: String? = nil,
+    pullRequestsJSON: String? = nil,
+    selectedFile: String? = nil,
+    diffJSON: String? = nil
+  ) {
+    self.cwd = cwd
+    self.root = root
+    self.branch = branch
+    self.statusJSON = statusJSON
+    self.branchesJSON = branchesJSON
+    self.baseBranchesJSON = baseBranchesJSON
+    self.worktreesJSON = worktreesJSON
+    self.reviewJSON = reviewJSON
+    self.shipInfoJSON = shipInfoJSON
+    self.ghAuthJSON = ghAuthJSON
+    self.fileDiffJSON = fileDiffJSON
+    self.commitContextJSON = commitContextJSON
+    self.revParseJSON = revParseJSON
+    self.pullRequestsJSON = pullRequestsJSON
+    self.selectedFile = selectedFile
+    self.diffJSON = diffJSON
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: HermesGitSnapshotField.self)
+    cwd = try container.decodeIfPresent(String.self, forKey: .cwd) ?? ""
+    root = try container.decodeIfPresent(String.self, forKey: .root) ?? ""
+    branch = try container.decodeIfPresent(String.self, forKey: .branch) ?? ""
+    statusJSON = try container.decodeIfPresent(String.self, forKey: .statusJSON) ?? ""
+    branchesJSON = try container.decodeIfPresent(String.self, forKey: .branchesJSON) ?? ""
+    baseBranchesJSON = try container.decodeIfPresent(String.self, forKey: .baseBranchesJSON) ?? ""
+    worktreesJSON = try container.decodeIfPresent(String.self, forKey: .worktreesJSON) ?? ""
+    reviewJSON = try container.decodeIfPresent(String.self, forKey: .reviewJSON) ?? ""
+    shipInfoJSON = try container.decodeIfPresent(String.self, forKey: .shipInfoJSON) ?? ""
+    ghAuthJSON = try container.decodeIfPresent(String.self, forKey: .ghAuthJSON)
+    fileDiffJSON = try container.decodeIfPresent(String.self, forKey: .fileDiffJSON)
+    commitContextJSON = try container.decodeIfPresent(String.self, forKey: .commitContextJSON)
+    revParseJSON = try container.decodeIfPresent(String.self, forKey: .revParseJSON)
+    pullRequestsJSON = try container.decodeIfPresent(String.self, forKey: .pullRequestsJSON)
+    selectedFile = try container.decodeIfPresent(String.self, forKey: .selectedFile)
+    diffJSON = try container.decodeIfPresent(String.self, forKey: .diffJSON)
+  }
+}
+
+private enum HermesGitSnapshotField: String, CodingKey {
+  case cwd
+  case root
+  case branch
+  case statusJSON
+  case branchesJSON
+  case baseBranchesJSON
+  case worktreesJSON
+  case reviewJSON
+  case shipInfoJSON
+  case ghAuthJSON
+  case fileDiffJSON
+  case commitContextJSON
+  case revParseJSON
+  case pullRequestsJSON
+  case selectedFile
+  case diffJSON
 }
 
 struct HermesSessionLineageSnapshot: Decodable, Equatable, Identifiable {

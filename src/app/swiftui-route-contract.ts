@@ -490,6 +490,31 @@ export interface HermesSwiftUISystemSnapshot {
   curatorPaused?: boolean;
 }
 
+/**
+ * Official Hermes Git/review surfaces.  Payloads stay JSON encoded because
+ * the upstream Git API deliberately evolves its status/branch/worktree
+ * records independently of the native route contract.  The iOS page still
+ * exposes the same read and confirmed mutation actions as desktop.
+ */
+export interface HermesSwiftUIGitSnapshot {
+  cwd: string;
+  root: string;
+  branch: string;
+  statusJSON: string;
+  branchesJSON: string;
+  baseBranchesJSON: string;
+  worktreesJSON: string;
+  reviewJSON: string;
+  shipInfoJSON: string;
+  ghAuthJSON?: string;
+  fileDiffJSON?: string;
+  commitContextJSON?: string;
+  revParseJSON?: string;
+  pullRequestsJSON?: string;
+  selectedFile?: string;
+  diffJSON?: string;
+}
+
 export interface HermesSwiftUISystemNodeSnapshot {
   id: string;
   label: string;
@@ -556,6 +581,7 @@ export interface HermesSwiftUIRouteSnapshot {
   sessionPullRequestsJSON?: string;
   sessionStatsJSON?: string;
   files?: readonly HermesSwiftUIFileSnapshot[];
+  git?: HermesSwiftUIGitSnapshot;
   workflows?: HermesSwiftUIWorkflowSnapshot;
   approvals?: HermesSwiftUIApprovalsSnapshot;
   runtime?: HermesSwiftUIRuntimeSnapshot;
@@ -630,6 +656,7 @@ const snapshotRecordArrays = [
 ] as const;
 const snapshotRecords = [
   'sessionContext',
+  'git',
   'workflows',
   'approvals',
   'runtime',

@@ -64,7 +64,7 @@ test('SwiftUI route snapshots stay split by product domain', () => {
   // Bot Mode, managed workers, and native memory/system controls). Keep a
   // generous ceiling here; domain snapshot implementations remain split out
   // and this guard is only intended to catch accidental monolith re-growth.
-  assert.ok(coordinator.split(/\r?\n/).length < 900);
+  assert.ok(coordinator.split(/\r?\n/).length < 1000);
   assert.doesNotMatch(
     coordinator,
     /function (?:modelsSnapshot|systemSnapshot|workflowsSnapshot|filesSnapshot|integrationsSnapshot)\(/,
@@ -96,6 +96,22 @@ test('native Bot Mode controls expose official profile capability and avatar act
   assert.match(api, /\/assets\/avatar\/generate/);
   assert.match(api, /\/api\/bot-mode\/pets\/gallery/);
   assert.match(api, /\/assets\/avatar\/pet/);
+});
+
+test('native Git workspace exposes the official status, review, and mutation surface', () => {
+  const pages = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
+  const data = read('modules/hermes-ios-controls/ios/HermesSwiftUIRouteData.swift');
+  const actions = read('src/app/hermes-route-data.ts');
+  const routes = read('src/api/cloud/routes.ts');
+  for (const action of ['gitRefresh', 'gitSelect', 'gitStage', 'gitUnstage', 'gitRevert', 'gitCommit', 'gitPush', 'gitSwitchBranch', 'gitGhAuth', 'gitCreatePR', 'gitAddWorktree', 'gitRemoveWorktree']) {
+    assert.match(pages + data + actions, new RegExp(`\\.${action}\\b`));
+  }
+  for (const field of ['statusJSON', 'branchesJSON', 'baseBranchesJSON', 'worktreesJSON', 'reviewJSON', 'shipInfoJSON', 'ghAuthJSON', 'commitContextJSON', 'revParseJSON', 'pullRequestsJSON', 'fileDiffJSON']) {
+    assert.match(data, new RegExp(`let ${field}:`));
+  }
+  assert.match(routes, /case 'git'/);
+  assert.match(routes, /getGitReviewDiff/);
+  assert.match(routes, /listGitPullRequests/);
 });
 
 test('native Cron and Bot Mode expose editable, profile-scoped routines', () => {

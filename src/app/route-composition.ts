@@ -120,7 +120,8 @@ export type NativeNavigationIconName =
   | 'Radio'
   | 'Webhook'
   | 'ShieldCheck'
-  | 'BookOpen';
+  | 'BookOpen'
+  | 'GitBranch';
 export type NativeRouteLocale = 'en' | 'zh';
 
 export interface RouteDashboardConfig {
@@ -210,6 +211,12 @@ const BUILTIN_NAV_REST = [
     path: '/models',
     labels: { en: 'Models', zh: '\u6a21\u578b' },
     icon: 'Cpu',
+  },
+  {
+    routeId: 'git',
+    path: '/git',
+    labels: { en: 'Git', zh: 'Git 工作区' },
+    icon: 'GitBranch',
   },
   {
     routeId: 'memory',

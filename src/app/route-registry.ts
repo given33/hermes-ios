@@ -3,6 +3,7 @@ export type NativeRouteId =
   | 'sessions'
   | 'memory'
   | 'files'
+  | 'git'
   | 'analytics'
   | 'smart-weather'
   | 'browser'
@@ -51,6 +52,7 @@ export const HERMES_NATIVE_ROUTES = [
   { id: 'sessions', path: '/sessions', visibleInSidebar: false },
   { id: 'memory', path: '/memory', visibleInSidebar: true },
   { id: 'files', path: '/files', visibleInSidebar: false },
+  { id: 'git', path: '/git', visibleInSidebar: true },
   { id: 'analytics', path: '/analytics', visibleInSidebar: true },
   { id: 'smart-weather', path: '/smart-weather', visibleInSidebar: true },
   { id: 'browser', path: '/browser', visibleInSidebar: true },

@@ -12,6 +12,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case sessionPullRequestsJSON
   case sessionStatsJSON
   case files
+  case git
   case workflows
   case approvals
   case runtime
@@ -237,4 +238,20 @@ enum HermesRouteAction: String, CaseIterable {
   case runtimeSelect = "runtime.select"
   case runtimeCancel = "runtime.cancel"
   case runtimeRetry = "runtime.retry"
+  case gitSelect = "git.select"
+  case gitStage = "git.stage"
+  case gitUnstage = "git.unstage"
+  case gitRevert = "git.revert"
+  case gitCommit = "git.commit"
+  case gitPush = "git.push"
+  case gitSwitchBranch = "git.branch.switch"
+  case gitRefresh = "git.refresh"
+  case gitGhAuth = "git.gh-auth"
+  case gitFileDiff = "git.file-diff"
+  case gitCommitContext = "git.commit-context"
+  case gitRevParse = "git.rev-parse"
+  case gitPullRequests = "git.pull-requests"
+  case gitCreatePR = "git.create-pr"
+  case gitAddWorktree = "git.worktree.add"
+  case gitRemoveWorktree = "git.worktree.remove"
 }

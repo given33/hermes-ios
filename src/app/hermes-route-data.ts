@@ -49,6 +49,7 @@ import { decodeModelSelection, encodeModelSelection } from './route-snapshots/mo
 import { customModelConfiguration, customModelOperationError, modelsSnapshot } from './route-snapshots/models';
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
+import { gitSnapshot } from './route-snapshots/git';
 import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport } from './route-actions/session-surfaces';
 import { configureBot, describeBot, generateBotAvatar, selectBotPet, sendBotRelay, uploadBotAvatar } from './route-actions/bot-mode';
@@ -90,6 +91,19 @@ export async function loadHermesSwiftUIRouteSnapshot(
     }
     case 'files':
       return { ...base, files: filesSnapshot(source, localizer) };
+    case 'git': {
+      const root = isRecord(source) ? source : {};
+      return {
+        ...base,
+        git: gitSnapshot(
+          root,
+          stringValue(root.cwd),
+          stringValue(root.root) || stringValue(root.cwd),
+          stringValue(root.branch),
+          selectedId,
+        ),
+      };
+    }
     case 'workflows':
       return { ...base, workflows: workflowsSnapshot(source, selectedId) };
     case 'approvals':
@@ -309,6 +323,77 @@ export async function performHermesSwiftUIRouteAction(
       return 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.fileSelect:
       return 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitRefresh:
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitSelect:
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitStage: {
+      if (!payload.id) return 'none';
+      await api.stageGitFile(await resolveGitPath(api, payload.fields?.path), payload.id);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitUnstage: {
+      if (!payload.id) return 'none';
+      await api.unstageGitFile(await resolveGitPath(api, payload.fields?.path), payload.id);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitRevert: {
+      if (!payload.id) return 'none';
+      await api.revertGitFile(await resolveGitPath(api, payload.fields?.path), payload.id);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitCommit: {
+      const message = payload.detail?.trim() || value;
+      if (!message) return 'none';
+      await api.commitGit(await resolveGitPath(api, payload.fields?.path), message, false);
+      return 'reload';
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitPush:
+      await api.pushGit(await resolveGitPath(api, payload.fields?.path));
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitSwitchBranch:
+      if (!value) return 'none';
+      await api.switchGitBranch(await resolveGitPath(api, payload.fields?.path), value);
+      return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitGhAuth: {
+      const result = await api.getGitGhAuth(true);
+      return { message: JSON.stringify(result) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitFileDiff: {
+      if (!payload.id) return 'none';
+      const result = await api.getGitFileDiff(await resolveGitPath(api, payload.fields?.path), payload.id);
+      return { message: JSON.stringify(result) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitCommitContext: {
+      const result = await api.getGitCommitContext(await resolveGitPath(api, payload.fields?.path));
+      return { message: JSON.stringify(result) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitRevParse: {
+      const result = await api.getGitRevParse(await resolveGitPath(api, payload.fields?.path), value);
+      return { message: JSON.stringify(result) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitPullRequests: {
+      const result = await api.listGitPullRequests(await resolveGitPath(api, payload.fields?.path));
+      return { message: JSON.stringify(result) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitCreatePR: {
+      const result = await api.createGitPullRequest(await resolveGitPath(api, payload.fields?.path));
+      return { message: JSON.stringify(result) };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitAddWorktree: {
+      const options = payload.detail ? parseJsonRecord(payload.detail) : payload.fields;
+      const result = await api.addGitWorktree(await resolveGitPath(api, payload.fields?.path), options || {});
+      return { message: JSON.stringify(result), reload: true };
+    }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.gitRemoveWorktree: {
+      if (!payload.id) return 'none';
+      const result = await api.removeGitWorktree(
+        await resolveGitPath(api, payload.fields?.path),
+        payload.id,
+        payload.enabled === true,
+      );
+      return { message: JSON.stringify(result), reload: true };
+    }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.folderCreate:
       if (!value) return 'none';
       await api.createDirectory(value);
@@ -886,7 +971,23 @@ export async function performHermesSwiftUIRouteAction(
     default:
       return 'none';
   }
-} function parseJsonRecord(value: string): Record<string, unknown> | null {
+}
+
+async function resolveGitPath(
+  api: HermesCloudApi,
+  requestedPath?: string,
+): Promise<string> {
+  const requested = requestedPath?.trim() || '';
+  if (requested) return requested;
+  const cwdResult = await api.getDefaultCwd().catch(() => ({}));
+  const cwd = isRecord(cwdResult) ? stringValue(cwdResult.cwd) : '';
+  const rootResult = await api.getGitRoot(cwd).catch(() => ({}));
+  return isRecord(rootResult)
+    ? stringValue(rootResult.root) || cwd
+    : cwd;
+}
+
+function parseJsonRecord(value: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(value) as unknown;
     return isRecord(parsed) ? parsed : null;

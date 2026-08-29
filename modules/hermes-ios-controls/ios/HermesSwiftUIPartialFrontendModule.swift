@@ -17,6 +17,7 @@ enum HermesRoute: String, Hashable {
   case sessions
   case memory
   case files
+  case git
   case analytics
   case smartWeather = "smart-weather"
   case browser
@@ -51,6 +52,7 @@ enum HermesRoute: String, Hashable {
     case .sessions: return "会话"
     case .memory: return "记忆"
     case .files: return "文件"
+    case .git: return "Git 工作区"
     case .analytics: return "分析"
     case .smartWeather: return "智能天气"
     case .browser: return "浏览器"
