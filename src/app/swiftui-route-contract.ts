@@ -610,6 +610,8 @@ export interface HermesSwiftUIRouteSnapshot {
   learningGraphJSON?: string;
   skillHubResultJSON?: string;
   integrations?: readonly HermesSwiftUIIntegrationSnapshot[];
+  /** Ephemeral official Telegram/WhatsApp QR onboarding state for native controls. */
+  channelOnboardingJSON?: string;
   installations?: readonly HermesSwiftUIManagedInstallationSnapshot[];
   pairing?: HermesSwiftUIPairingSnapshot;
   achievements?: HermesSwiftUIAchievementsSnapshot;

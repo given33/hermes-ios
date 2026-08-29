@@ -234,6 +234,7 @@ test('the cloud files page splits its generic view chain for Release compilation
 test('SwiftUI management pages expose the server write operations', () => {
   const routes = read('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift');
   const routeData = read('src/app/hermes-route-data.ts');
+  const channelOnboarding = read('src/app/route-actions/channel-onboarding.ts');
 
   assert.match(routes, /\.skillSelect/);
   assert.match(routes, /\.skillCreate/);
@@ -256,6 +257,14 @@ test('SwiftUI management pages expose the server write operations', () => {
     /configuration\?\.apiKeyConfigured == true \|\| !apiKey\.isEmpty/,
   );
   assert.match(routes, /\.integrationUpdate/);
+  assert.match(routes, /channelOnboardingSection/);
+  assert.match(routes, /\.channelOnboardingStart/);
+  assert.match(routes, /\.channelOnboardingRefresh/);
+  assert.match(routes, /\.channelOnboardingApply/);
+  assert.match(routes, /\.channelOnboardingCancel/);
+  assert.match(routes, /CIQRCodeGenerator/);
+  assert.match(channelOnboarding, /startTelegramOnboarding/);
+  assert.match(channelOnboarding, /startWhatsappOnboarding/);
   assert.match(routes, /\.pairingApprove/);
   assert.match(routes, /item\.requestId/);
   assert.match(routeData, /api\.approvePairing/);

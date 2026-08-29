@@ -37,6 +37,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let learningGraphJSON: String?
   let skillHubResultJSON: String?
   let integrations: [HermesIntegrationSnapshot]
+  let channelOnboardingJSON: String?
   let installations: [HermesManagedInstallationSnapshot]
   let pairing: HermesPairingSnapshot
   let achievements: HermesAchievementsSnapshot
@@ -88,6 +89,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     learningGraphJSON: String? = nil,
     skillHubResultJSON: String? = nil,
     integrations: [HermesIntegrationSnapshot] = [],
+    channelOnboardingJSON: String? = nil,
     installations: [HermesManagedInstallationSnapshot] = [],
     pairing: HermesPairingSnapshot = .empty,
     achievements: HermesAchievementsSnapshot = .empty,
@@ -138,6 +140,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.learningGraphJSON = learningGraphJSON
     self.skillHubResultJSON = skillHubResultJSON
     self.integrations = integrations
+    self.channelOnboardingJSON = channelOnboardingJSON
     self.installations = installations
     self.pairing = pairing
     self.achievements = achievements
@@ -231,6 +234,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [HermesIntegrationSnapshot].self,
       forKey: .integrations
     ) ?? []
+    channelOnboardingJSON = try container.decodeIfPresent(String.self, forKey: .channelOnboardingJSON)
     installations = try container.decodeIfPresent(
       [HermesManagedInstallationSnapshot].self,
       forKey: .installations

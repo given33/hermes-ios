@@ -53,6 +53,7 @@ import { gitSnapshot } from './route-snapshots/git';
 import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport } from './route-actions/session-surfaces';
 import { configureBot, describeBot, generateBotAvatar, selectBotPet, sendBotRelay, uploadBotAvatar } from './route-actions/bot-mode';
+import { performChannelOnboardingAction } from './route-actions/channel-onboarding';
 import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata'; // Account previews use temporaryPlaintextFile(name, 'account-file') and consumeAccountFile(... writeBoundedDownload) through presentation.ts.
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
 export {
@@ -224,6 +225,7 @@ export async function performHermesSwiftUIRouteAction(
   model?: string;
   provider?: string;
   reload?: boolean;
+  channelOnboardingJSON?: string;
   skillHubResultJSON?: string;
   url?: string;
   flowId?: string;
@@ -595,6 +597,11 @@ export async function performHermesSwiftUIRouteAction(
         await api.updateChannel(payload.id, update, profile);
       }
       return 'reload';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.channelOnboardingStart:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.channelOnboardingRefresh:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.channelOnboardingApply:
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.channelOnboardingCancel:
+      return performChannelOnboardingAction(api, action, payload, profile, chinese);
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationCreate:
     case HERMES_SWIFTUI_ROUTE_ACTIONS.mcpCatalogInstall:
       if (payload.route === 'mcp') {
@@ -972,19 +979,13 @@ export async function performHermesSwiftUIRouteAction(
       return 'none';
   }
 }
-
-async function resolveGitPath(
-  api: HermesCloudApi,
-  requestedPath?: string,
-): Promise<string> {
+async function resolveGitPath(api: HermesCloudApi, requestedPath?: string): Promise<string> {
   const requested = requestedPath?.trim() || '';
   if (requested) return requested;
   const cwdResult = await api.getDefaultCwd().catch(() => ({}));
   const cwd = isRecord(cwdResult) ? stringValue(cwdResult.cwd) : '';
   const rootResult = await api.getGitRoot(cwd).catch(() => ({}));
-  return isRecord(rootResult)
-    ? stringValue(rootResult.root) || cwd
-    : cwd;
+  return isRecord(rootResult) ? stringValue(rootResult.root) || cwd : cwd;
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | null {

@@ -671,6 +671,12 @@ export function useHermesSwiftUIRouteData({
       if (typeof skillHubResultJSON === 'string' && skillHubResultJSON) {
         setDataJson((current) => mergeRouteField(current, 'skillHubResultJSON', skillHubResultJSON));
       }
+      const channelOnboardingJSON = typeof result === 'object' && result !== null
+        ? result.channelOnboardingJSON
+        : undefined;
+      if (typeof channelOnboardingJSON === 'string') {
+        setDataJson((current) => mergeRouteField(current, 'channelOnboardingJSON', channelOnboardingJSON));
+      }
       if (typeof result === 'object' && result.confirmRequired) {
         setDataJson((current) => mergeModelConfirmation(current, {
           id: encodeModelSelection(result.provider || '', result.model || ''),

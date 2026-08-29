@@ -489,6 +489,92 @@ test('native plugin actions use the authenticated plugin management endpoints', 
   ]);
 });
 
+test('native channel onboarding uses the official Telegram and WhatsApp contracts', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    startTelegramOnboarding: async (...args: unknown[]) => {
+      calls.push(['telegram-start', ...args]);
+      return { pairing_id: 'tg-1', qr_payload: 'tg-qr', status: 'waiting' };
+    },
+    getTelegramOnboarding: async (...args: unknown[]) => {
+      calls.push(['telegram-status', ...args]);
+      return { status: 'ready', bot_username: 'hermes_bot' };
+    },
+    applyTelegramOnboarding: async (...args: unknown[]) => {
+      calls.push(['telegram-apply', ...args]);
+      return { restart_started: true, status: 'connected' };
+    },
+    cancelTelegramOnboarding: async (...args: unknown[]) => { calls.push(['telegram-cancel', ...args]); },
+    startWhatsappOnboarding: async (...args: unknown[]) => {
+      calls.push(['whatsapp-start', ...args]);
+      return { pairing_id: 'wa-1', qr_payload: 'wa-qr', status: 'starting' };
+    },
+    getWhatsappOnboarding: async (...args: unknown[]) => {
+      calls.push(['whatsapp-status', ...args]);
+      return { status: 'connected' };
+    },
+    applyWhatsappOnboarding: async (...args: unknown[]) => {
+      calls.push(['whatsapp-apply', ...args]);
+      return { restart_started: true };
+    },
+    cancelWhatsappOnboarding: async (...args: unknown[]) => { calls.push(['whatsapp-cancel', ...args]); },
+  } as unknown as HermesCloudApi;
+
+  const telegramStart = await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.start',
+    payload: { route: 'channels', id: 'telegram', value: 'Hermes iOS Bot' },
+  }, 'hk-worker');
+  const telegramRefresh = await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.refresh',
+    payload: { route: 'channels', id: 'telegram', value: 'tg-1' },
+  }, 'hk-worker');
+  const telegramApply = await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.apply',
+    payload: { route: 'channels', id: 'telegram', value: 'tg-1', detail: '{"allowed_user_ids":["42","43"]}' },
+  }, 'hk-worker');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.cancel',
+    payload: { route: 'channels', id: 'telegram', value: 'tg-1' },
+  }, 'hk-worker');
+  const whatsappStart = await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.start',
+    payload: { route: 'channels', id: 'whatsapp', fields: { mode: 'self-chat', allowedUsers: '15551234567' } },
+  }, 'default');
+  const whatsappRefresh = await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.refresh',
+    payload: { route: 'channels', id: 'whatsapp', value: 'wa-1' },
+  }, 'default');
+  const whatsappApply = await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.apply',
+    payload: { route: 'channels', id: 'whatsapp', value: 'wa-1', detail: '{"mode":"self-chat","allowed_users":"15551234567"}' },
+  }, 'default');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'channel.onboarding.cancel',
+    payload: { route: 'channels', id: 'whatsapp', value: 'wa-1' },
+  }, 'default');
+
+  assert.match(String((telegramStart as { channelOnboardingJSON?: string }).channelOnboardingJSON), /tg-1/);
+  assert.match(String((telegramRefresh as { channelOnboardingJSON?: string }).channelOnboardingJSON), /hermes_bot/);
+  assert.deepEqual(telegramApply, {
+    channelOnboardingJSON: '{"channel":"telegram","pairing_id":"tg-1","restart_started":true,"status":"connected"}',
+    message: 'Telegram 配置已保存',
+    reload: true,
+  });
+  assert.match(String((whatsappStart as { channelOnboardingJSON?: string }).channelOnboardingJSON), /wa-1/);
+  assert.match(String((whatsappRefresh as { channelOnboardingJSON?: string }).channelOnboardingJSON), /connected/);
+  assert.equal((whatsappApply as { reload?: boolean }).reload, true);
+  assert.deepEqual(calls, [
+    ['telegram-start', 'Hermes iOS Bot', 'hk-worker'],
+    ['telegram-status', 'tg-1'],
+    ['telegram-apply', 'tg-1', ['42', '43'], 'hk-worker'],
+    ['telegram-cancel', 'tg-1'],
+    ['whatsapp-start', 'self-chat', '15551234567', 'default'],
+    ['whatsapp-status', 'wa-1'],
+    ['whatsapp-apply', 'wa-1', { mode: 'self-chat', allowed_users: '15551234567' }, 'default'],
+    ['whatsapp-cancel', 'wa-1'],
+  ]);
+});
+
 test('native MCP actions test configured servers and install catalog entries', async () => {
   const calls: unknown[][] = [];
   const api = {

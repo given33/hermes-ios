@@ -1,4 +1,5 @@
 import Charts
+import CoreImage
 import Foundation
 import SwiftUI
 import UIKit
@@ -1036,6 +1037,10 @@ private struct HermesRemoteRoutePage: View {
   @State private var hookDeleteEvent = ""
   @State private var hookDeleteCommand = ""
   @State private var routineEditorProfile = ""
+  @State private var onboardingChannel = "telegram"
+  @State private var onboardingTelegramIDs = ""
+  @State private var onboardingWhatsappMode = "pairing"
+  @State private var onboardingWhatsappUsers = ""
 
   var body: some View {
     routeBody
@@ -1492,6 +1497,9 @@ private struct HermesRemoteRoutePage: View {
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "skills")) }
     case .plugins, .mcp, .channels, .webhooks:
       List {
+        if route == .channels {
+          channelOnboardingSection
+        }
         if route == .mcp { installationSection }
         ForEach(data.integrations) { item in
           HermesRemoteRow(icon: route == .plugins ? "puzzlepiece.extension" : route == .mcp ? "point.3.connected.trianglepath.dotted" : route == .channels ? "dot.radiowaves.left.and.right" : "arrow.triangle.branch", title: item.name, detail: item.detail, tint: item.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
@@ -1599,6 +1607,23 @@ private struct HermesRemoteRoutePage: View {
         }
       }
       .hermesListStyle()
+      .task(id: "\(activeOnboardingChannel):\(onboardingPairingID):\(onboardingStatus)") {
+        guard route == .channels,
+              !onboardingPairingID.isEmpty,
+              !onboardingStatusIsTerminal else { return }
+        while !Task.isCancelled {
+          try? await Task.sleep(nanoseconds: 2_000_000_000)
+          guard !Task.isCancelled else { return }
+          onAction(
+            .channelOnboardingRefresh,
+            HermesRouteActionPayload(
+              route: "channels",
+              id: activeOnboardingChannel,
+              value: onboardingPairingID
+            )
+          )
+        }
+      }
       .toolbar {
         if route == .plugins {
           ToolbarItem(placement: .navigationBarLeading) {
@@ -2349,6 +2374,196 @@ private struct HermesRemoteRoutePage: View {
     default:
       EmptyView()
     }
+  }
+
+  @ViewBuilder private var channelOnboardingSection: some View {
+    Section(chinese ? "官方渠道快速配对" : "Official channel onboarding") {
+      Picker(chinese ? "渠道" : "Channel", selection: $onboardingChannel) {
+        Text("Telegram").tag("telegram")
+        Text("WhatsApp").tag("whatsapp")
+      }
+      .pickerStyle(.segmented)
+
+      HStack {
+        Button {
+          onAction(
+            .channelOnboardingStart,
+            HermesRouteActionPayload(
+              route: "channels",
+              id: onboardingChannel,
+              fields: onboardingChannel == "whatsapp"
+                ? ["mode": onboardingWhatsappMode, "allowedUsers": onboardingWhatsappUsers]
+                : nil
+            )
+          )
+        } label: {
+          Label(chinese ? "启动 QR 配对" : "Start QR pairing", systemImage: "qrcode")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(!onboardingPairingID.isEmpty && !onboardingStatusIsTerminal)
+        if !onboardingPairingID.isEmpty {
+          Button {
+            onAction(
+              .channelOnboardingCancel,
+              HermesRouteActionPayload(
+                route: "channels",
+                id: activeOnboardingChannel,
+                value: onboardingPairingID
+              )
+            )
+          } label: {
+            Label(chinese ? "取消" : "Cancel", systemImage: "xmark.circle")
+          }
+          .buttonStyle(.bordered)
+        }
+      }
+
+      if onboardingChannel == "whatsapp" {
+        Picker(chinese ? "模式" : "Mode", selection: $onboardingWhatsappMode) {
+          Text("Bot").tag("bot")
+          Text("Self-chat").tag("self-chat")
+          Text(chinese ? "配对" : "Pairing").tag("pairing")
+        }
+        TextField(
+          chinese ? "允许的 WhatsApp 号码（逗号分隔）" : "Allowed WhatsApp numbers (comma separated)",
+          text: $onboardingWhatsappUsers
+        )
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .keyboardType(.phonePad)
+      } else if onboardingPairingID.isEmpty {
+        Text(chinese
+          ? "Telegram 配对完成后，在下方填写允许的数字用户 ID。"
+          : "After Telegram pairing is ready, enter the allowed numeric user IDs below.")
+          .font(HermesFonts.body(11))
+          .foregroundStyle(appearance.palette.secondary)
+      }
+
+      if !onboardingPairingID.isEmpty {
+        HStack(spacing: 8) {
+          HermesStatusPill(
+            text: onboardingStatus.isEmpty ? (chinese ? "等待状态" : "Waiting") : onboardingStatus,
+            color: onboardingStatusIsTerminal ? appearance.palette.success : appearance.palette.warning
+          )
+          if !onboardingExpiresAt.isEmpty {
+            Text(onboardingExpiresAt)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.secondary)
+          }
+        }
+        if let image = onboardingQRImage {
+          Image(uiImage: image)
+            .interpolation(.none)
+            .resizable()
+            .scaledToFit()
+            .frame(maxWidth: 240, maxHeight: 240)
+            .padding(8)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        if !onboardingQRPayload.isEmpty {
+          Text(onboardingQRPayload)
+            .font(HermesFonts.mono(9))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+            .lineLimit(4)
+        }
+        if activeOnboardingChannel == "telegram" {
+          TextField(
+            chinese ? "允许的 Telegram 用户 ID（逗号分隔）" : "Allowed Telegram user IDs (comma separated)",
+            text: $onboardingTelegramIDs
+          )
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .keyboardType(.numberPad)
+        }
+        Button {
+          let detail: String
+          if activeOnboardingChannel == "telegram" {
+            let ids = onboardingTelegramIDs
+              .split(separator: ",")
+              .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+              .filter { !$0.isEmpty }
+            guard let encoded = try? JSONSerialization.data(withJSONObject: ["allowed_user_ids": ids]),
+                  let json = String(data: encoded, encoding: .utf8) else { return }
+            detail = json
+          } else {
+            let values: [String: String] = [
+              "mode": onboardingWhatsappMode,
+              "allowed_users": onboardingWhatsappUsers,
+            ]
+            guard let encoded = try? JSONSerialization.data(withJSONObject: values),
+                  let json = String(data: encoded, encoding: .utf8) else { return }
+            detail = json
+          }
+          onAction(
+            .channelOnboardingApply,
+            HermesRouteActionPayload(
+              route: "channels",
+              id: activeOnboardingChannel,
+              value: onboardingPairingID,
+              detail: detail
+            )
+          )
+        } label: {
+          Label(chinese ? "保存并重启网关" : "Save and restart gateway", systemImage: "checkmark.circle")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(onboardingStatus == "waiting" || onboardingStatus == "starting" || onboardingStatus == "installing")
+      }
+    }
+  }
+
+  private var onboardingRecord: [String: Any] {
+    guard let text = data.channelOnboardingJSON,
+          let raw = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    else { return [:] }
+    return object
+  }
+
+  private var activeOnboardingChannel: String {
+    let value = onboardingRecord["channel"] as? String
+    return value == "whatsapp" ? "whatsapp" : value == "telegram" ? "telegram" : onboardingChannel
+  }
+
+  private var onboardingPairingID: String {
+    (onboardingRecord["pairing_id"] as? String)
+      ?? (onboardingRecord["pairingId"] as? String)
+      ?? ""
+  }
+
+  private var onboardingStatus: String {
+    (onboardingRecord["status"] as? String)?.lowercased() ?? ""
+  }
+
+  private var onboardingExpiresAt: String {
+    (onboardingRecord["expires_at"] as? String)
+      ?? (onboardingRecord["expiresAt"] as? String)
+      ?? ""
+  }
+
+  private var onboardingQRPayload: String {
+    (onboardingRecord["qr_payload"] as? String)
+      ?? (onboardingRecord["qrPayload"] as? String)
+      ?? ""
+  }
+
+  private var onboardingStatusIsTerminal: Bool {
+    ["connected", "ready", "error", "cancelled", "expired", "failed"].contains(onboardingStatus)
+  }
+
+  private var onboardingQRImage: UIImage? {
+    guard !onboardingQRPayload.isEmpty,
+          let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+    filter.setValue(Data(onboardingQRPayload.utf8), forKey: "inputMessage")
+    filter.setValue("M", forKey: "inputCorrectionLevel")
+    guard let output = filter.outputImage else { return nil }
+    let scale = max(1, floor(240 / max(output.extent.width, output.extent.height)))
+    let scaled = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    guard let cgImage = CIContext().createCGImage(scaled, from: scaled.extent) else { return nil }
+    return UIImage(cgImage: cgImage)
   }
 
   @ViewBuilder private var installationSection: some View {

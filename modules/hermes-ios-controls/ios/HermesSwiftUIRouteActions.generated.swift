@@ -38,6 +38,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case learningGraphJSON
   case skillHubResultJSON
   case integrations
+  case channelOnboardingJSON
   case installations
   case pairing
   case achievements
@@ -166,6 +167,10 @@ enum HermesRouteAction: String, CaseIterable {
   case integrationToggle = "integration.toggle"
   case integrationTest = "integration.test"
   case integrationDelete = "integration.delete"
+  case channelOnboardingStart = "channel.onboarding.start"
+  case channelOnboardingRefresh = "channel.onboarding.refresh"
+  case channelOnboardingApply = "channel.onboarding.apply"
+  case channelOnboardingCancel = "channel.onboarding.cancel"
   case webhooksEnable = "webhooks.enable"
   case mcpTest = "mcp.test"
   case mcpAuth = "mcp.auth"
