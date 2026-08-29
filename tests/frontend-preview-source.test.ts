@@ -887,6 +887,11 @@ test('narrow admin rows use mobile-safe action layouts instead of scattered icon
   assert.match(settings, /主服务器 Hermes/);
   assert.match(settings, /DBB3 Hermes/);
   assert.match(settings, /WSL Hermes/);
+  assert.match(settings, /id: 'hk'/);
+  assert.match(settings, /Hong Kong Hermes/);
+  assert.match(settings, /四台 Hermes/);
+  assert.match(settings, /four Hermes/);
+  assert.doesNotMatch(settings, /默认审阅节点|可迁移审阅节点|default review node|optional review node/);
   assert.match(settings, /gatewayStatuses/);
   assert.match(settings, /styles\.envValueRow/);
   assert.match(settings, /styles\.envValue/);

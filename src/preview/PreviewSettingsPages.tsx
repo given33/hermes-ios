@@ -245,25 +245,32 @@ export function ProfilesPreviewPage({
   ));
   const nodes = [
     {
-      description: chinese ? '托管、持久化、路由与最终汇报' : 'Hosting, persistence, routing, and final reporting',
+      description: chinese ? '调度、托管、持久化与路由' : 'Dispatching, hosting, persistence, and routing',
       id: 'server',
       label: chinese ? '主服务器 Hermes' : 'Main server Hermes',
       state: serverOnline ? 'online' as const : 'unknown' as const,
       version: null,
     },
     {
-      description: chinese ? 'Hermes 调度、执行与默认审阅节点' : 'Hermes planning, execution, and default review node',
+      description: chinese ? 'Hermes 调度与 DBB3 worker 执行' : 'Hermes dispatcher and DBB3 worker execution',
       id: 'dbb3',
       label: 'DBB3 Hermes',
       state: findNode('dbb3', 'dbb3')?.state ?? 'unknown' as const,
       version: findNode('dbb3', 'dbb3')?.version ?? null,
     },
     {
-      description: chinese ? '常驻 PC Worker 与可迁移审阅节点' : 'Persistent PC Worker and optional review node',
+      description: chinese ? '常驻 PC/WSL worker 执行节点' : 'Persistent PC/WSL worker execution node',
       id: 'wsl',
       label: 'WSL Hermes',
       state: findNode('wsl', 'wsl')?.state ?? 'unknown' as const,
       version: findNode('wsl', 'wsl')?.version ?? null,
+    },
+    {
+      description: chinese ? '香港 worker 执行节点' : 'Hong Kong worker execution node',
+      id: 'hk',
+      label: chinese ? 'HK Hermes' : 'Hong Kong Hermes',
+      state: findNode('hk', 'hk')?.state ?? 'unknown' as const,
+      version: findNode('hk', 'hk')?.version ?? null,
     },
   ];
   return (
@@ -272,8 +279,8 @@ export function ProfilesPreviewPage({
     >
       <PreviewText variant="muted">
         {chinese
-          ? '这里只显示三台 Hermes 节点的权威连接与版本状态；状态由主服务器每 15 秒刷新。'
-          : 'This view shows authoritative connection and version state for the three Hermes nodes and refreshes every 15 seconds.'}
+          ? '这里只显示四台 Hermes 节点（主服务器、DBB3、PC/WSL、HK）的权威连接与版本状态；状态由主服务器每 15 秒刷新。'
+          : 'This view shows authoritative connection and version state for the four Hermes nodes (main server, DBB3, PC/WSL, and HK) and refreshes every 15 seconds.'}
       </PreviewText>
       <PreviewGrid minItemWidth={300}>
         {nodes.map((node) => (
