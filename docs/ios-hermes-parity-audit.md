@@ -216,3 +216,26 @@ or reopen those sessions.
 The low-latency event reducer also keeps missing historical timestamps
 deterministic (`0` instead of wall-clock time), so replayed frames do not
 change ordering or fingerprints on every refresh.
+
+### 2026-08-30 continuation: hosted WebSocket first-frame and backend reliability
+
+- `consumeHostedConversationEventsWebSocket` installs `onmessage`, `onerror`,
+  `onclose`, and abort handling before sending `{type:"subscribe"}`. Native
+  WebSocket implementations that synchronously deliver the first snapshot can
+  therefore not lose the initial conversation frame; SSE remains the fallback
+  and both transports share the same cursor/account-generation parser.
+- The backend now persists Matrix sync watermarks, closes Discord recovery/live
+  dedup races, releases WeCom claims after failed processing, and authenticates
+  every WhatsApp bridge control endpoint with a profile-scoped token. These are
+  server-side reliability/security fixes; the iOS facade wire contract is
+  unchanged and continues to call official upstream routes.
+- Hosted/managed resource streams are bounded and back off while idle; worker
+  connector cursor gaps are explicit and replayable. The iOS app continues to
+  expose canonical Bot Chat, Bot Mode, routines, collaboration rooms, worker
+  topology (DBB3/PC/HK), files, Git, MCP, memory, voice, notifications and
+  native context surfaces through `HermesCloudApi`.
+- Verification: `pnpm test` `828 passed / 0 failed`, `pnpm exec tsc --noEmit`,
+  `pnpm run contract:check`, and `pnpm run doctor` (`18/18`) pass. Expo iOS
+  export resolves `3,831 modules`. Windows cannot prove Xcode archive,
+  TestFlight/App Store signing, true iPhone frame pacing, APNs delivery, or
+  live HK/DBB3/PC RTT; those remain release gates.
