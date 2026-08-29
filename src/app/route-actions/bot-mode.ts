@@ -46,6 +46,12 @@ export async function uploadBotAvatar(api: HermesCloudApi, id: string, raw: stri
   return 'reload';
 }
 
+export async function generateBotAvatar(api: HermesCloudApi, id: string, prompt: string, chinese: boolean): Promise<BotModeActionResult> {
+  if (!id || typeof api.generateBotAvatar !== 'function') return 'none';
+  await api.generateBotAvatar(id, prompt);
+  return { message: chinese ? '头像已生成并保存' : 'Avatar generated and saved' };
+}
+
 export async function sendBotRelay(
   api: HermesCloudApi,
   target: string,

@@ -829,6 +829,7 @@ test('Bot Mode profile capability and asset methods keep official REST paths', a
   await api.getBotAsset('bot one');
   await api.setBotAsset('bot one', 'data:image/png;base64,AA==');
   await api.clearBotAsset('bot one');
+  await api.generateBotAvatar('bot one', 'friendly robot');
   await api.getBotRelayRoster();
   await api.sendBotRelayMessage('hk-worker@hk-primary', 'hello', 'default');
   assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
@@ -837,10 +838,14 @@ test('Bot Mode profile capability and asset methods keep official REST paths', a
     ['/api/bots/bot%20one/assets/avatar', 'GET'],
     ['/api/bots/bot%20one/assets/avatar', 'PUT'],
     ['/api/bots/bot%20one/assets/avatar', 'DELETE'],
+    ['/api/bots/bot%20one/assets/avatar/generate', 'POST'],
     ['/api/bot-mode/relay/roster', 'GET'],
     ['/api/bot-mode/relay/send', 'POST'],
   ]);
-  assert.deepEqual(JSON.parse(String(calls[6].options.body)), {
+  assert.deepEqual(JSON.parse(String(calls[5].options.body)), {
+    prompt: 'friendly robot',
+  });
+  assert.deepEqual(JSON.parse(String(calls[7].options.body)), {
     target: 'hk-worker@hk-primary', message: 'hello', sender_profile: 'default',
   });
 });

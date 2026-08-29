@@ -51,7 +51,7 @@ import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport } from './route-actions/session-surfaces';
-import { configureBot, describeBot, sendBotRelay, uploadBotAvatar } from './route-actions/bot-mode';
+import { configureBot, describeBot, generateBotAvatar, sendBotRelay, uploadBotAvatar } from './route-actions/bot-mode';
 import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata'; // Account previews use temporaryPlaintextFile(name, 'account-file') and consumeAccountFile(... writeBoundedDownload) through presentation.ts.
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
 export {
@@ -558,6 +558,7 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botProfileDescribe: return payload.route === 'bots' && payload.id ? describeBot(api, payload.id, chinese) : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botProfileConfigure: return payload.route === 'bots' && payload.id ? configureBot(api, payload.id, payload.detail || payload.value || '{}', chinese) : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botAvatarUpload: return payload.route === 'bots' && payload.id ? uploadBotAvatar(api, payload.id, payload.detail || payload.value || '') : 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.botAvatarGenerate: return payload.route === 'bots' && payload.id ? generateBotAvatar(api, payload.id, payload.detail || payload.value || '', chinese) : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botRelaySend: return payload.route === 'bots' ? sendBotRelay(api, payload.targetId || payload.fields?.target || payload.id || '', payload.detail || payload.value || payload.fields?.message || '', payload.fields?.profile || profile, chinese) : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileUpdate:
       if (!payload.id) return 'none';

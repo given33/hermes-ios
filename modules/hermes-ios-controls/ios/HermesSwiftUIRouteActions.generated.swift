@@ -184,6 +184,7 @@ enum HermesRouteAction: String, CaseIterable {
   case botProfileDescribe = "bot.profile.describe"
   case botProfileConfigure = "bot.profile.configure"
   case botAvatarUpload = "bot.avatar.upload"
+  case botAvatarGenerate = "bot.avatar.generate"
   case botRelaySend = "bot.relay.send"
   case configUpdate = "config.update"
   case configImport = "config.import"

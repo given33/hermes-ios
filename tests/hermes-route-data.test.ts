@@ -1110,13 +1110,16 @@ test('Bot Mode capability actions call official configure and avatar contracts',
     describeBotProfile: async (name: string) => { calls.push(['describe', name, {}]); return { skills: [{ name: 'coding' }], toolsets: [], mcp_servers: [] }; },
     configureBotProfile: async (name: string, patch: Record<string, unknown>) => { calls.push(['configure', name, patch]); return { ok: true, applied: { soul: true } }; },
     setBotAsset: async (name: string, data: string) => { calls.push(['avatar', name, data]); return { ok: true }; },
+    generateBotAvatar: async (name: string, prompt: string) => { calls.push(['generate', name, prompt]); return { ok: true }; },
   } as unknown as HermesCloudApi;
   const described = await performHermesSwiftUIRouteAction(api, { action: 'bot.profile.describe', payload: { route: 'bots', id: 'coder' } }, 'default', 'en');
   const configured = await performHermesSwiftUIRouteAction(api, { action: 'bot.profile.configure', payload: { route: 'bots', id: 'coder', detail: '{"soul":"# coder"}' } }, 'default');
   const uploaded = await performHermesSwiftUIRouteAction(api, { action: 'bot.avatar.upload', payload: { route: 'bots', id: 'coder', detail: 'data:image/png;base64,AA==' } }, 'default');
+  const generated = await performHermesSwiftUIRouteAction(api, { action: 'bot.avatar.generate', payload: { route: 'bots', id: 'coder' } }, 'default');
   assert.match(typeof described === 'object' ? described.message : '', /1 skills/);
   assert.equal(configured, 'reload');
   assert.equal(uploaded, 'reload');
+  assert.match(typeof generated === 'object' ? generated.message : '', /生成|generated/);
   assert.deepEqual(calls[1], ['configure', 'coder', { soul: '# coder' }]);
   assert.equal(calls[2][0], 'avatar');
 });

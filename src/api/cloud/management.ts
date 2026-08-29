@@ -198,6 +198,14 @@ export class HermesManagementCloudApi {
     );
   }
 
+  generateBotAvatar(name: string, prompt = '') {
+    return this.transport.json<JsonRecord>(
+      `/api/bots/${encodeURIComponent(name)}/assets/avatar/generate`,
+      'POST',
+      prompt.trim() ? { prompt: prompt.trim() } : {},
+    );
+  }
+
   /** Read the official Bot Mode cross-connection roster maintained by the
    * desktop relay. The server never returns connection credentials. */
   getBotRelayRoster() {

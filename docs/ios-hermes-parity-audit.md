@@ -33,7 +33,7 @@ exist. “API only” is deliberately not treated as completion.
 | Channels/Webhooks | `/channels`, `/webhooks`; toggle/edit/test, webhook enable/create/delete | route action contract + API domain tests | verified |
 | Pairing | `/pairing`; approve/revoke/clear pending | route action contract | verified |
 | Profiles/Bots | `/profiles`, `/bots`; create, activate, rename, description, model, auto-describe, SOUL, setup command, export; Bot Chat opens canonical session | management API tests and route source tests | verified |
-| Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset` with a native iOS file importer and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
+| Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset`, and generation delegates to `image.generate` then `profiles.set_asset`, with native iOS controls and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
 | Bot Mode cross-connection relay | Bots route reads the upstream relay roster and exposes a native target/message sheet; send queues through the canonical `tools.bot_relay.enqueue_envelope` helper with ambiguity/liveness/TTL safeguards | backend relay route test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; native source/action assertions | verified (official bridge) |
 | Configuration | `/config`; raw config import/export, stream/compact toggles | config API tests | verified |
 | Environment | `/env`; set/reveal/delete with profile scope | environment route source test | verified |
@@ -92,7 +92,7 @@ CRUD, canonical Bot Chat, and server-persisted title/visibility/pin/group
 metadata. The upstream desktop plugin still owns several presentation and
 orchestration surfaces that are not yet represented by a mobile REST contract:
 the local group-chat round engine (including member holds and @mention
-handoffs), AI/pixel-pet/avatar generation and picker state, and the dedicated
+handoffs), pixel-pet gallery/selection and picker state, and the dedicated
 Routines pane. Those are deliberately
 not marked as mobile parity until each has a typed endpoint, native route/action,
 and contract test; the generic profile, cron, collaboration, and authenticated

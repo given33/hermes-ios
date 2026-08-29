@@ -1669,6 +1669,9 @@ private struct HermesRemoteRoutePage: View {
               importingBotAvatar = true
             } label: { Label(chinese ? "上传头像" : "Upload avatar", systemImage: "person.crop.circle.badge.plus") }
             Button {
+              onAction(.botAvatarGenerate, HermesRouteActionPayload(route: "bots", id: profile.id))
+            } label: { Label(chinese ? "生成头像" : "Generate avatar", systemImage: "wand.and.stars") }
+            Button {
               editorID = profile.id
               editorName = profile.name
               editorValue = ""

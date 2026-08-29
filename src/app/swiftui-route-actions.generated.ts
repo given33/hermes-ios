@@ -196,6 +196,7 @@ export const HERMES_SWIFTUI_ROUTE_ACTIONS = {
   botProfileDescribe: 'bot.profile.describe',
   botProfileConfigure: 'bot.profile.configure',
   botAvatarUpload: 'bot.avatar.upload',
+  botAvatarGenerate: 'bot.avatar.generate',
   botRelaySend: 'bot.relay.send',
   configUpdate: 'config.update',
   configImport: 'config.import',
