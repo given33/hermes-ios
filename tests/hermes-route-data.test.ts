@@ -645,7 +645,7 @@ test('all native management routes render the current cloud workspace response',
     channels: { platforms: [{ id: 'telegram', name: 'Telegram', description: 'Telegram messaging', enabled: true, env_vars: [{ key: 'TELEGRAM_BOT_TOKEN', is_set: true, redacted_value: '123•••456' }] }] },
     webhooks: { enabled: true, subscriptions: [{ name: 'deploy', description: '部署回调', enabled: true }] },
     pairing: {
-      pending: [{ platform: 'telegram', user_id: '42', user_name: 'Alice', age_minutes: 3 }],
+      pending: [{ platform: 'telegram', user_id: '42', user_name: 'Alice', request_id: 'pair-42', age_minutes: 3 }],
       approved: [{ platform: 'discord', user_id: '84', user_name: 'Bob' }],
     },
     achievements: { tasks_completed: 7, day_streak: 3, achievements: [{ id: 'first', title: '首次任务', progress: 1 }] },
@@ -713,6 +713,7 @@ test('all native management routes render the current cloud workspace response',
   assert.equal(webhooks.integrations?.[0].name, 'deploy');
   assert.equal(pairing.pairing?.pending[0].platform, 'telegram');
   assert.equal(pairing.pairing?.pending[0].detail, 'Alice · 3 分钟前');
+  assert.equal(pairing.pairing?.pending[0].requestId, 'pair-42');
   assert.equal(pairing.pairing?.approved[0].userId, '84');
   assert.equal(achievements.achievements?.items[0].title, '首次任务');
   assert.equal(collaboration.collaboration?.messages[0].text, '云端消息');
@@ -1063,7 +1064,7 @@ test('snapshot labels and action messages follow the caller locale', async () =>
       }],
     },
     pairing: {
-      pending: [{ platform: 'telegram', user_id: '42', user_name: 'Alice', age_minutes: 3 }],
+      pending: [{ platform: 'telegram', user_id: '42', user_name: 'Alice', request_id: 'pair-42', age_minutes: 3 }],
       approved: [],
     },
     system: {
@@ -1088,6 +1089,7 @@ test('snapshot labels and action messages follow the caller locale', async () =>
   assert.equal(sessions.sessions?.[0].detail, '8 messages · 3 tool calls');
   assert.equal(files.files?.[0].detail, 'Model output · 2 KB · Available');
   assert.equal(pairing.pairing?.pending[0].detail, 'Alice · 3 min ago');
+  assert.equal(pairing.pairing?.pending[0].requestId, 'pair-42');
   assert.equal(system.system?.uptimeLabel, '14d 1h');
 
   const fields = {

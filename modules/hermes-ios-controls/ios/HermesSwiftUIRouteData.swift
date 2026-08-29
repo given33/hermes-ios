@@ -959,6 +959,7 @@ struct HermesPairingEntrySnapshot: Decodable, Equatable, Identifiable {
   let userId: String
   let userName: String
   let detail: String
+  let requestId: String?
 }
 
 struct HermesPairingSnapshot: Decodable, Equatable {

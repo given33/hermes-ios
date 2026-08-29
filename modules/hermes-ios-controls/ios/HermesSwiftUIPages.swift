@@ -1577,7 +1577,22 @@ private struct HermesRemoteRoutePage: View {
               title: item.platform,
               detail: item.detail,
               tint: appearance.palette.warning
-            ) { EmptyView() }
+            ) {
+              if let requestId = item.requestId, !requestId.isEmpty {
+                Button {
+                  onAction(
+                    .pairingApprove,
+                    HermesRouteActionPayload(
+                      route: "pairing",
+                      id: item.platform,
+                      value: requestId
+                    )
+                  )
+                } label: {
+                  Label(chinese ? "批准" : "Approve", systemImage: "checkmark.circle")
+                }
+              }
+            }
           }
           if !data.pairing.pending.isEmpty {
             Button(role: .destructive) {

@@ -253,6 +253,9 @@ test('SwiftUI management pages expose the server write operations', () => {
     /configuration\?\.apiKeyConfigured == true \|\| !apiKey\.isEmpty/,
   );
   assert.match(routes, /\.integrationUpdate/);
+  assert.match(routes, /\.pairingApprove/);
+  assert.match(routes, /item\.requestId/);
+  assert.match(routeData, /api\.approvePairing/);
   assert.match(routes, /编辑渠道配置/);
   assert.match(routes, /updateConfigValue\("stream_output"/);
   assert.match(routes, /updateConfigValue\("auto_compact"/);

@@ -384,6 +384,8 @@ export interface HermesSwiftUIPairingEntrySnapshot {
   userId: string;
   userName: string;
   detail: string;
+  /** Official pairing request id used by POST /api/pairing/approve. */
+  requestId?: string;
 }
 
 export interface HermesSwiftUIAchievementItemSnapshot {

@@ -287,6 +287,9 @@ function pairingEntries(value: unknown, pending: boolean, localizer: HermesRoute
       platform,
       userId,
       userName,
+      ...(pending && stringValue(entry.request_id)
+        ? { requestId: stringValue(entry.request_id) }
+        : {}),
       detail: pending
         ? localizer.choose(
           `${userName || userId || '未知用户'} · ${age} 分钟前`,
