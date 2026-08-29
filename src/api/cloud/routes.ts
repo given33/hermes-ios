@@ -118,7 +118,13 @@ export async function loadCloudRoute(
           return entry;
         }
       }));
-      return { ...roster, profiles, ...(relay ? { bot_relay: relay } : {}), ...(petGallery ? { bot_pet_gallery: petGallery } : {}) };
+      // Petdex currently contains 4,500+ entries. Keep the native route
+      // snapshot bounded; the dedicated gallery API remains available when a
+      // future picker needs paging/search instead of loading the whole catalog.
+      const boundedPetGallery = isRecord(petGallery) && Array.isArray(petGallery.pets)
+        ? { ...petGallery, pets: petGallery.pets.slice(0, 96) }
+        : petGallery;
+      return { ...roster, profiles, ...(relay ? { bot_relay: relay } : {}), ...(boundedPetGallery ? { bot_pet_gallery: boundedPetGallery } : {}) };
     }
     case 'config': return api.getConfig(profile);
     // `/api/model/credentials` was retired upstream.  Environment secrets are

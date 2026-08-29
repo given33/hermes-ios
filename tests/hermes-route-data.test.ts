@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { HermesCloudApi } from '../src/api/HermesCloudApi';
+import { loadCloudRoute } from '../src/api/cloud/routes';
 import {
   decodeModelSelection,
   encodeModelSelection,
@@ -1084,6 +1085,17 @@ test('Bot Mode route projects the upstream profile roster', async () => {
   assert.match(snapshot.profiles?.[0]?.botSessionId || '', /^official:v3:/);
   assert.match(snapshot.botRelayJSON || '', /hk-primary/);
   assert.match(snapshot.botPetJSON || '', /otter/);
+});
+
+test('Bot Mode route bounds the large Petdex catalog in native snapshots', async () => {
+  const pets = Array.from({ length: 150 }, (_, index) => ({ slug: `pet-${index}`, displayName: `Pet ${index}` }));
+  const source = await loadCloudRoute({
+    getBots: async () => ({ bot_mode: true, profiles: [] }),
+    getBotRelayRoster: async () => ({}),
+    getBotPetGallery: async () => ({ pets }),
+  } as unknown as HermesCloudApi, 'bots', 'default');
+  const gallery = source as { bot_pet_gallery?: { pets?: unknown[] } };
+  assert.equal(gallery.bot_pet_gallery?.pets?.length, 96);
 });
 
 test('Bot Mode metadata action uses the dedicated REST endpoint', async () => {
