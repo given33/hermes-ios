@@ -15,6 +15,21 @@ export async function presentAccountFile(api: HermesCloudApi, id: string, name: 
   } finally { if (target.exists) target.delete(); }
 }
 
+/** Present a managed workspace file downloaded from the official `/api/files`
+ * endpoint. The response is streamed into the same bounded temporary-file
+ * path used by account files so large artifacts never accumulate in JS memory. */
+export async function presentManagedFile(api: HermesCloudApi, path: string, name: string) {
+  const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([
+    import('../../../modules/hermes-quick-look'), import('expo-sharing'), import('../../api/temporary-plaintext-files'),
+  ]);
+  const target = temporaryPlaintextFile(name || fileNameFromUri(path), 'managed-file');
+  try {
+    await api.consumeManagedFile(path, (response, signal) => writeBoundedDownload(response, target, { signal }));
+    const presented = await quickLook.presentQuickLook(target.uri, name || path);
+    if (!presented && await Sharing.isAvailableAsync()) await Sharing.shareAsync(target.uri, { dialogTitle: name || path });
+  } finally { if (target.exists) target.delete(); }
+}
+
 export async function presentSkillContent(api: HermesCloudApi, name: string, profile: string) {
   const response = await api.getSkillContent(name, profile);
   const content = structuredContent(response.content ?? response.text);

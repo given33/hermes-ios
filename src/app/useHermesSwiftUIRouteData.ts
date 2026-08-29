@@ -677,6 +677,12 @@ export function useHermesSwiftUIRouteData({
       if (typeof channelOnboardingJSON === 'string') {
         setDataJson((current) => mergeRouteField(current, 'channelOnboardingJSON', channelOnboardingJSON));
       }
+      const managedFilesJSON = typeof result === 'object' && result !== null
+        ? result.managedFilesJSON
+        : undefined;
+      if (typeof managedFilesJSON === 'string' && managedFilesJSON) {
+        setDataJson((current) => mergeRouteField(current, 'managedFilesJSON', managedFilesJSON));
+      }
       if (typeof result === 'object' && result.confirmRequired) {
         setDataJson((current) => mergeModelConfirmation(current, {
           id: encodeModelSelection(result.provider || '', result.model || ''),

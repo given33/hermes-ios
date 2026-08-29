@@ -11,6 +11,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let sessionPullRequestsJSON: String?
   let sessionStatsJSON: String?
   let files: [HermesFileSnapshot]
+  let managedFilesJSON: String?
   let git: HermesSwiftUIGitSnapshot?
   let workflows: HermesWorkflowSnapshot
   let approvals: HermesApprovalsSnapshot
@@ -63,6 +64,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     sessionPullRequestsJSON: String? = nil,
     sessionStatsJSON: String? = nil,
     files: [HermesFileSnapshot] = [],
+    managedFilesJSON: String? = nil,
     git: HermesSwiftUIGitSnapshot? = nil,
     workflows: HermesWorkflowSnapshot = .empty,
     approvals: HermesApprovalsSnapshot = .empty,
@@ -114,6 +116,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.sessionPullRequestsJSON = sessionPullRequestsJSON
     self.sessionStatsJSON = sessionStatsJSON
     self.files = files
+    self.managedFilesJSON = managedFilesJSON
     self.git = git
     self.workflows = workflows
     self.approvals = approvals

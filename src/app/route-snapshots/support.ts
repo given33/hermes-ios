@@ -168,6 +168,15 @@ export function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+export function parseJsonRecord(value: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 export function structuredContent(value: unknown): string {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value.map(structuredContent).filter(Boolean).join('');

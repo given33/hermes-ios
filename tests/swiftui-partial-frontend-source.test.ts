@@ -228,7 +228,10 @@ test('the cloud files page splits its generic view chain for Release compilation
   assert.match(pages, /private struct HermesFilesPage:[\s\S]*let content = List/);
   assert.match(pages, /let searchableContent = content[\s\S]*\.searchable/);
   assert.match(pages, /let toolbarContent = searchableContent[\s\S]*\.toolbar/);
-  assert.match(pages, /return toolbarContent[\s\S]*\.fileImporter/);
+  assert.match(pages, /return Group \{[\s\S]*\.fileImporter/);
+  assert.match(pages, /managedFilesJSON/);
+  assert.match(pages, /\.managedFilesOpen/);
+  assert.match(pages, /\.managedFileImport/);
 });
 
 test('SwiftUI management pages expose the server write operations', () => {

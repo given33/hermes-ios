@@ -13,6 +13,7 @@ import {
 import {
   isRecord,
   isStringRecord,
+  parseJsonRecord,
   positiveRevision,
   routeLocalizer,
   stringValue,
@@ -51,6 +52,8 @@ import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { gitSnapshot } from './route-snapshots/git';
 import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
+import { performManagedFilesAction } from './route-actions/managed-files';
+import { resolveGitPath } from './route-actions/git';
 import { loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport } from './route-actions/session-surfaces';
 import { configureBot, describeBot, generateBotAvatar, selectBotPet, sendBotRelay, uploadBotAvatar } from './route-actions/bot-mode';
 import { performChannelOnboardingAction } from './route-actions/channel-onboarding';
@@ -90,8 +93,16 @@ export async function loadHermesSwiftUIRouteSnapshot(
         sessionState,
       }, locale, metadata);
     }
-    case 'files':
-      return { ...base, files: filesSnapshot(source, localizer) };
+    case 'files': {
+      const managed = typeof api.listFiles === 'function'
+        ? await api.listFiles().catch(() => undefined)
+        : undefined;
+      return {
+        ...base,
+        files: filesSnapshot(source, localizer),
+        managedFilesJSON: managed ? JSON.stringify(managed) : undefined,
+      };
+    }
     case 'git': {
       const root = isRecord(source) ? source : {};
       return {
@@ -231,11 +242,14 @@ export async function performHermesSwiftUIRouteAction(
   flowId?: string;
   oauthProvider?: string;
   oauthSessionId?: string;
+  managedFilesJSON?: string;
 }> {
   const localizer = routeLocalizer(locale);
   const chinese = localizer.isChinese;
   const { action, payload } = event;
   const value = payload.value?.trim() || payload.name?.trim() || '';
+  const managedFilesResult = await performManagedFilesAction(api, event);
+  if (managedFilesResult !== undefined) return managedFilesResult;
   switch (action) {
     case HERMES_SWIFTUI_ROUTE_ACTIONS.refresh:
       return 'reload';
@@ -977,22 +991,5 @@ export async function performHermesSwiftUIRouteAction(
       return 'none';
     default:
       return 'none';
-  }
-}
-async function resolveGitPath(api: HermesCloudApi, requestedPath?: string): Promise<string> {
-  const requested = requestedPath?.trim() || '';
-  if (requested) return requested;
-  const cwdResult = await api.getDefaultCwd().catch(() => ({}));
-  const cwd = isRecord(cwdResult) ? stringValue(cwdResult.cwd) : '';
-  const rootResult = await api.getGitRoot(cwd).catch(() => ({}));
-  return isRecord(rootResult) ? stringValue(rootResult.root) || cwd : cwd;
-}
-
-function parseJsonRecord(value: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
   }
 }

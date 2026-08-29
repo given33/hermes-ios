@@ -149,6 +149,45 @@ test('system backup import and hook actions use official operations endpoints', 
   ]);
 });
 
+test('managed workspace files are hydrated and mutate through official file endpoints', async () => {
+  const calls: unknown[] = [];
+  const api = {
+    loadRoute: async () => ({ files: [] }),
+    listFiles: async (path = '') => {
+      calls.push(['list', path]);
+      return {
+        root: '/srv/hermes',
+        path: path || '/srv/hermes',
+        parent: null,
+        locked_root: '/srv/hermes',
+        can_change_path: true,
+        entries: [{ name: 'results', path: '/srv/hermes/results', is_directory: true, size: null, mtime: 1, mime_type: null }],
+      };
+    },
+    deleteFile: async (...args: unknown[]) => { calls.push(['delete', ...args]); return { ok: true }; },
+    uploadManagedFile: async (...args: unknown[]) => { calls.push(['upload', ...args]); return {}; },
+  } as unknown as HermesCloudApi;
+  const snapshot = await loadHermesSwiftUIRouteSnapshot(api, 'files', 'default');
+  assert.match(snapshot.managedFilesJSON || '', /results/);
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'files.managed.open',
+    payload: { route: 'files', value: '/srv/hermes/results' },
+  }, 'default');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'files.managed.delete',
+    payload: { route: 'files', id: '/srv/hermes/results/out.txt', value: '/srv/hermes/results/out.txt' },
+  }, 'default');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'files.managed.import',
+    payload: { route: 'files', value: '/srv/hermes/results', uris: ['file:///tmp/report.txt'] },
+  }, 'default');
+  assert.deepEqual(calls.slice(-3), [
+    ['list', '/srv/hermes/results'],
+    ['delete', '/srv/hermes/results/out.txt', false],
+    ['upload', '/srv/hermes/results/report.txt', { name: 'report.txt', uri: 'file:///tmp/report.txt' }, true],
+  ]);
+});
+
 test('Git route exposes every official review read surface and selected diffs', async () => {
   const calls: unknown[] = [];
   const api = {

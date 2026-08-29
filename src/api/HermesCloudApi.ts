@@ -325,6 +325,14 @@ export class HermesCloudApi {
     return this.files.downloadManagedFile(path);
   }
 
+  consumeManagedFile<T>(
+    path: string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ) {
+    return this.files.consumeManagedFile(path, consume, signal);
+  }
+
   async uploadManagedFile(path: string, upload: NativeUpload, overwrite = true) {
     return this.files.uploadManagedFile(path, upload, overwrite);
   }

@@ -12,6 +12,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case sessionPullRequestsJSON
   case sessionStatsJSON
   case files
+  case managedFilesJSON
   case git
   case workflows
   case approvals
@@ -118,6 +119,10 @@ enum HermesRouteAction: String, CaseIterable {
   case fileShare = "file.share"
   case fileImport = "file.import"
   case folderCreate = "folder.create"
+  case managedFilesOpen = "files.managed.open"
+  case managedFileDownload = "files.managed.download"
+  case managedFileDelete = "files.managed.delete"
+  case managedFileImport = "files.managed.import"
   case modelSelect = "model.select"
   case modelSelectCancel = "model.select.cancel"
   case modelDiscover = "model.discover"

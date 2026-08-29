@@ -77,6 +77,17 @@ export class HermesFilesCloudApi {
     return this.transport.download('/api/files/download', { query: { path } });
   }
 
+  consumeManagedFile<T>(
+    path: string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.consumeDownload('/api/files/download', consume, {
+      query: { path },
+      signal,
+    });
+  }
+
   async uploadManagedFile(path: string, upload: NativeUpload, overwrite = true) {
     const form = new FormData();
     form.append('path', path);

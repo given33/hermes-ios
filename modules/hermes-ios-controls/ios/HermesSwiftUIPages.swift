@@ -37,6 +37,7 @@ struct HermesRouteContent: View {
       HermesFilesPage(
         chinese: chinese,
         files: data.files,
+        managedFilesJSON: data.managedFilesJSON,
         onAction: onAction
       )
     case .git:
@@ -3815,18 +3816,69 @@ private enum HermesFileImportStaging {
   }
 }
 
+private struct HermesManagedFileEntry: Decodable, Identifiable {
+  let name: String
+  let path: String
+  let isDirectory: Bool
+  let size: Int?
+  let mtime: Double
+  let mimeType: String?
+
+  var id: String { path }
+
+  enum CodingKeys: String, CodingKey {
+    case name
+    case path
+    case isDirectory = "is_directory"
+    case size
+    case mtime
+    case mimeType = "mime_type"
+  }
+}
+
+private struct HermesManagedFilesResponse: Decodable {
+  let root: String?
+  let path: String
+  let parent: String?
+  let lockedRoot: String?
+  let canChangePath: Bool
+  let entries: [HermesManagedFileEntry]
+
+  enum CodingKeys: String, CodingKey {
+    case root
+    case path
+    case parent
+    case lockedRoot = "locked_root"
+    case canChangePath = "can_change_path"
+    case entries
+  }
+
+  static func decode(_ json: String?) -> HermesManagedFilesResponse? {
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(HermesManagedFilesResponse.self, from: data)
+  }
+}
+
 private struct HermesFilesPage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let chinese: Bool
   let files: [HermesFileSnapshot]
+  let managedFilesJSON: String?
   let onAction: HermesRouteActionSink
   @State private var search = ""
   @State private var importerOpen = false
+  @State private var managedImporterOpen = false
+  @State private var managedMode = false
+  @State private var managedPathInput = ""
   @State private var folderCreateOpen = false
   @State private var folderPath = ""
   @State private var filterByDate = false
   @State private var selectedDate = Date()
   @State private var sourceFilter = HermesFileSourceFilter.all
+
+  private var managedListing: HermesManagedFilesResponse? {
+    HermesManagedFilesResponse.decode(managedFilesJSON)
+  }
 
   private var filtered: [HermesFileSnapshot] {
     files.filter { file in
@@ -3861,6 +3913,121 @@ private struct HermesFilesPage: View {
         )
       }
       .sorted { $0.timestamp > $1.timestamp }
+  }
+
+  @ViewBuilder
+  private var managedContent: some View {
+    let listing = managedListing
+    List {
+      Section(chinese ? "托管工作区" : "Managed workspace") {
+        HStack(spacing: 8) {
+          TextField(
+            chinese ? "服务器路径" : "Server path",
+            text: $managedPathInput
+          )
+          .font(HermesFonts.mono(12))
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .keyboardType(.URL)
+          Button(chinese ? "打开" : "Open") {
+            let path = managedPathInput.trimmingCharacters(in: .whitespacesAndNewlines)
+            onAction(.managedFilesOpen, HermesRouteActionPayload(route: "files", value: path))
+          }
+          .buttonStyle(.borderedProminent)
+          .disabled(managedPathInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        if let lockedRoot = listing?.lockedRoot, !lockedRoot.isEmpty {
+          Text(chinese ? "锁定根目录：\(lockedRoot)" : "Locked root: \(lockedRoot)")
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+        }
+      }
+      if let listing {
+        if let parent = listing.parent {
+          Button {
+            managedPathInput = parent
+            onAction(.managedFilesOpen, HermesRouteActionPayload(route: "files", value: parent))
+          } label: {
+            Label(chinese ? "返回上级" : "Parent directory", systemImage: "arrow.up")
+          }
+        }
+        if listing.entries.isEmpty {
+          ContentUnavailableView(
+            chinese ? "目录为空" : "Directory is empty",
+            systemImage: "folder",
+            description: Text(listing.path)
+          )
+        } else {
+          Section(listing.path) {
+            ForEach(listing.entries) { entry in
+              HStack(spacing: 10) {
+                Image(systemName: entry.isDirectory ? "folder" : "doc")
+                  .foregroundStyle(entry.isDirectory ? appearance.palette.warning : appearance.palette.primary)
+                Button {
+                  if entry.isDirectory {
+                    managedPathInput = entry.path
+                    onAction(.managedFilesOpen, HermesRouteActionPayload(route: "files", value: entry.path))
+                  } else {
+                    onAction(.managedFileDownload, HermesRouteActionPayload(route: "files", id: entry.path, name: entry.name, value: entry.path))
+                  }
+                } label: {
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.name).font(HermesFonts.bodyBold(14))
+                    Text(entry.path).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary)
+                  }
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                if !entry.isDirectory {
+                  Button {
+                    onAction(.managedFileDownload, HermesRouteActionPayload(route: "files", id: entry.path, name: entry.name, value: entry.path))
+                  } label: {
+                    Image(systemName: "arrow.down.circle")
+                  }
+                  .buttonStyle(.borderless)
+                }
+                Button(role: .destructive) {
+                  onAction(.managedFileDelete, HermesRouteActionPayload(route: "files", id: entry.path, value: entry.path, enabled: entry.isDirectory))
+                } label: {
+                  Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+              }
+              .padding(.vertical, 5)
+            }
+          }
+        }
+      } else {
+        ContentUnavailableView(
+          chinese ? "托管工作区不可用" : "Managed workspace unavailable",
+          systemImage: "externaldrive.badge.questionmark",
+          description: Text(chinese ? "请检查服务器版本和权限。" : "Check the server version and permissions.")
+        )
+      }
+    }
+    .hermesListStyle()
+    .background(appearance.palette.background)
+    .refreshable {
+      let path = listing?.path ?? managedPathInput
+      onAction(.managedFilesOpen, HermesRouteActionPayload(route: "files", value: path))
+    }
+    .toolbar {
+      ToolbarItemGroup(placement: .navigationBarTrailing) {
+        Button {
+          managedImporterOpen = true
+        } label: {
+          Label(chinese ? "上传文件" : "Upload file", systemImage: "square.and.arrow.up")
+        }
+        .disabled((listing?.path ?? managedPathInput).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Button {
+          folderPath = listing?.path ?? managedPathInput
+          folderCreateOpen = true
+        } label: {
+          Label(chinese ? "新建文件夹" : "New folder", systemImage: "folder.badge.plus")
+        }
+        .disabled((listing?.path ?? managedPathInput).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
+    }
   }
 
   var body: some View {
@@ -3976,14 +4143,33 @@ private struct HermesFilesPage: View {
           Label(chinese ? "导入文件" : "Import file", systemImage: "square.and.arrow.down")
         }
         Button {
-          folderPath = ""
+          folderPath = managedMode ? (managedListing?.path ?? managedPathInput) : ""
           folderCreateOpen = true
         } label: {
           Label(chinese ? "新建文件夹" : "New folder", systemImage: "folder.badge.plus")
         }
       }
     }
-    return toolbarContent
+    return Group {
+      if managedMode {
+        managedContent
+      } else {
+        toolbarContent
+      }
+    }
+      .safeAreaInset(edge: .top, spacing: 0) {
+        Picker(chinese ? "文件范围" : "File scope", selection: $managedMode) {
+          Text(chinese ? "云端文件" : "Cloud files").tag(false)
+          Text(chinese ? "托管工作区" : "Managed workspace").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(appearance.palette.background)
+      }
+      .onAppear {
+        if managedPathInput.isEmpty { managedPathInput = managedListing?.path ?? "" }
+      }
       .fileImporter(isPresented: $importerOpen, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
       if case let .success(urls) = result {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -4002,6 +4188,27 @@ private struct HermesFilesPage: View {
           }
         }
       }
+      }
+      .fileImporter(isPresented: $managedImporterOpen, allowedContentTypes: [.data], allowsMultipleSelection: true) { result in
+        guard case let .success(urls) = result else { return }
+        let path = (managedListing?.path ?? managedPathInput).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !path.isEmpty else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+          let stagedURLs = HermesFileImportStaging.stage(urls)
+          guard !stagedURLs.isEmpty else { return }
+          DispatchQueue.main.async {
+            onAction(
+              .managedFileImport,
+              HermesRouteActionPayload(
+                route: "files",
+                value: path,
+                requestId: "managed-file-import-\(UUID().uuidString.lowercased())",
+                fields: ["stagedImport": "true"],
+                uris: stagedURLs.map(\.absoluteString)
+              )
+            )
+          }
+        }
       }
       .sheet(isPresented: $folderCreateOpen) {
         NavigationStack {

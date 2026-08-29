@@ -583,6 +583,8 @@ export interface HermesSwiftUIRouteSnapshot {
   sessionPullRequestsJSON?: string;
   sessionStatsJSON?: string;
   files?: readonly HermesSwiftUIFileSnapshot[];
+  /** JSON encoded `/api/files` managed-workspace listing. */
+  managedFilesJSON?: string;
   git?: HermesSwiftUIGitSnapshot;
   workflows?: HermesSwiftUIWorkflowSnapshot;
   approvals?: HermesSwiftUIApprovalsSnapshot;

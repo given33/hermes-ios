@@ -21,7 +21,7 @@ exist. “API only” is deliberately not treated as completion.
 | Desktop capability | iOS route/action surface | Test/evidence | Status |
 | --- | --- | --- | --- |
 | Sessions: open, rename, delete, context/lineage, compact, fork, archive/pin/unread, project tree, PR scan, bulk import/delete | `/sessions`; native list/search/context/lineage/compaction/fork/export, official sidebar/project-tree/PR/statistics catalogs, bulk selection/delete and JSON import | `tests/swiftui-partial-frontend-source.test.ts`, `tests/hermes-route-data.test.ts`, route-data/API domain tests | verified |
-| Files: browse, import, download/share, delete, folders | `/files`; bounded staged importer and protected temp files; native “New folder” form submits an explicit server path through the official `folder.create` → `/api/files/mkdir` contract | file/import/folder source tests and contract tests | verified |
+| Files: account library plus managed-workspace browse/import/download/delete/folders | `/files`; account cloud files keep bounded staged import/share/delete, while a native scope switch hydrates `/api/files`, opens parent/child directories, uploads staged files, downloads through bounded temporary storage, deletes files/folders, and creates folders through the official `folder.create` → `/api/files/mkdir` contract | managed-files route/action tests, file/import/folder source tests and contract tests | verified |
 | Models: select, expensive-model confirmation, discover, provider OAuth, custom endpoint | `/models`; model picker, confirmation, discovery, official provider OAuth start/submit/poll and custom endpoint validate/save/activate/delete | model route tests, provider API domain tests, contract tests | verified |
 | Analytics | `/analytics`; deferred chart rendering and metrics | analytics snapshot/source tests | verified |
 | Logs | `/logs`; filter and refresh | route contract/source tests | verified |
@@ -49,6 +49,14 @@ exist. “API only” is deliberately not treated as completion.
   returned payload with Core Image, polls the official pairing status, and
   submits/cancels through the same profile-scoped management APIs. No channel
   credentials or QR state are persisted locally.
+
+- 2026-08-29: closed the managed-workspace Files gap. The native Files page
+  now switches between the account cloud library and the desktop-equivalent
+  `/api/files` workspace, with parent/child navigation, staged upload,
+  bounded download/share, recursive delete, and server-relative folder
+  creation. The new route snapshot field and four actions are generated from
+  the cross-language contract; no local filesystem model or credentials are
+  introduced.
 
 - 2026-08-29: exposed the previously action-only managed workspace folder
   operation on the native Files page. Users can enter a server-relative or
