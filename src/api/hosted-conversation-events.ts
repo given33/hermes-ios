@@ -188,12 +188,11 @@ export async function consumeHostedConversationEventsWebSocket(
     };
     const abort = () => finish(new Error('Hermes hosted event WebSocket aborted'));
     signal.addEventListener('abort', abort, { once: true });
-    try {
-      socket.send(JSON.stringify({ type: 'subscribe' }));
-    } catch (error) {
-      finish(error instanceof Error ? error : new Error(String(error)));
-      return;
-    }
+    // Install all handlers before sending the subscription.  A local/native
+    // WebSocket implementation may deliver the first server frame in the
+    // same turn as `send()` (the server sends the initial snapshot immediately
+    // after receiving the subscription).  Sending first creates a small but
+    // real race where that snapshot can be dropped before `onmessage` exists.
     socket.onmessage = (message) => {
       eventChain = eventChain.then(async () => {
         if (settled) return;
@@ -226,6 +225,11 @@ export async function consumeHostedConversationEventsWebSocket(
         ));
       }
     };
+    try {
+      socket.send(JSON.stringify({ type: 'subscribe' }));
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
   });
 }
 

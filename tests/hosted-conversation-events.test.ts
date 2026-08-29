@@ -60,6 +60,38 @@ class FakeHostedEventSocket {
   }
 }
 
+class ImmediateHostedEventSocket extends FakeHostedEventSocket {
+  override send(value: string) {
+    this.sent.push(value);
+    // Model native implementations that synchronously surface a buffered
+    // first frame when the subscription is sent.  The consumer must have
+    // installed onmessage before calling send().
+    this.onmessage?.({
+      data: JSON.stringify({
+        type: 'conversation',
+        cursor: 12,
+        min_cursor: 1,
+        has_gap: false,
+        account_generation: 'generation-ws',
+        events: [{
+          event_id: 'evt-ws-immediate',
+          cursor: 12,
+          account_generation: 'generation-ws',
+          conversation_id: 'chat-ws',
+          turn_id: 'turn-ws',
+          role_stage: 'worker',
+          event_type: 'message.delta',
+          sequence: 1,
+          occurred_at: 1,
+          idempotency_key: 'ws-immediate-1',
+          payload: { delta: 'hello immediately' },
+          schema_version: 'hermes.hosted-event.v1',
+        }],
+      }),
+    });
+  }
+}
+
 test('hosted conversation WebSocket uses the shared envelope parser and cursor contract', async () => {
   const socket = new FakeHostedEventSocket();
   const source: HostedConversationEventWebSocketSource = {
@@ -83,6 +115,29 @@ test('hosted conversation WebSocket uses the shared envelope parser and cursor c
   controller.abort();
   await assert.rejects(consuming, /aborted/);
   assert.equal(socket.closed, true);
+});
+
+test('hosted conversation WebSocket installs handlers before a synchronous native frame', async () => {
+  const socket = new ImmediateHostedEventSocket();
+  const source: HostedConversationEventWebSocketSource = {
+    openHostedConversationEventsWebSocket() {
+      return Promise.resolve(socket as unknown as WebSocket);
+    },
+  };
+  const controller = new AbortController();
+  const cursors: number[] = [];
+  const consuming = consumeHostedConversationEventsWebSocket(
+    source,
+    'chat-ws',
+    11,
+    'generation-ws',
+    controller.signal,
+    (frame) => { cursors.push(frame.cursor); },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(cursors, [12]);
+  controller.abort();
+  await assert.rejects(consuming, /aborted/);
 });
 
 test('hosted conversation SSE survives fragmented frames and advances its cursor', async () => {
