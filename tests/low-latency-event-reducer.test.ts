@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   OrderedLowLatencyReducer,
+  lowLatencyEventToAgentGroupEvent,
   removeThinkingPlaceholders,
   thinkingPlaceholderId,
 } from '../src/studio/agent-group/low-latency-event-reducer';
@@ -13,6 +14,21 @@ const room = {
   id: 'room-1', name: 'Room', ownerId: 'owner', createdAt: 1, updatedAt: 1,
   profiles: [], hostedTurns: {}, members: [], agents: [],
 } as any;
+
+test('low-latency message normalization keeps missing timestamps deterministic', () => {
+  const event = {
+    event_id: 'missing-timestamp',
+    type: 'assistant.message',
+    payload: {
+      message: { id: 'message-1', role: 'assistant', content: 'hello', sender_name: 'Hermes' },
+    },
+  };
+  const first = lowLatencyEventToAgentGroupEvent(event, room.id) as any;
+  const second = lowLatencyEventToAgentGroupEvent(event, room.id) as any;
+  assert.equal(first.type, 'message');
+  assert.deepEqual(second.message, first.message);
+  assert.equal(first.message.timestamp, 0);
+});
 
 test('ordered reducer applies manager/assistant deltas once and fences duplicates', () => {
   const reducer = new OrderedLowLatencyReducer();

@@ -82,7 +82,10 @@ function messageFromPayload(payload: Record<string, unknown>, roomId: string): H
 
 function finiteTimestamp(value: unknown): number {
   const timestamp = Number(value);
-  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : Date.now();
+  // Historical low-latency frames may omit timestamps. Do not inject the
+  // wall-clock time: repeated replay of the same frame must produce the same
+  // revision/fingerprint and must not reorder a room on every refresh.
+  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : 0;
 }
 
 export function lowLatencyEventToAgentGroupEvent(
