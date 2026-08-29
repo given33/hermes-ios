@@ -576,6 +576,8 @@ test('Studio secondary surfaces keep the device, account, and compact-header con
   assert.match(account, /本地明文缓存/);
   assert.match(account, /设备会话/);
   assert.match(account, /new HermesMobileNotificationApi\(client\)\.listDevices/);
+  assert.match(account, /const nextDevices = await new HermesMobileNotificationApi\(client\)\.listDevices\(\);/);
+  assert.match(account, /if \(mounted\.current\) setDevices\(nextDevices\);/);
   assert.match(account, /revokeDevice\(device\)/);
   assert.match(primitives, /!compact \? <View style=\{styles\.pageHeadingCopy\}>/);
   assert.match(primitives, /pageHeaderCompact/);

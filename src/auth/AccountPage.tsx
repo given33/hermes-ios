@@ -128,7 +128,8 @@ export function AccountPage({
     devicesBusyRef.current = true;
     setDevicesBusy(true);
     try {
-      setDevices(await new HermesMobileNotificationApi(client).listDevices());
+      const nextDevices = await new HermesMobileNotificationApi(client).listDevices();
+      if (mounted.current) setDevices(nextDevices);
     } catch (error) {
       if (mounted.current) {
         notify(error instanceof Error
