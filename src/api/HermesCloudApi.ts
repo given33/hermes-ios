@@ -1,4 +1,4 @@
-import type { HermesApiClient, HermesRequestOptions } from './HermesApiClient';
+import { type HermesApiClient, type HermesRequestOptions } from './HermesApiClient';
 import {
   HermesAudioCloudApi,
   type AudioTranscriptionResult,
@@ -48,6 +48,7 @@ import { HermesSessionsCloudApi } from './cloud/sessions';
 import { HermesOperationsCloudApi } from './cloud/operations';
 import { loadCloudRoute } from './cloud/routes';
 import { installHermesCloudApiSurface } from './HermesCloudApiSurface';
+import { loadUnifiedConversations } from './unified-conversations';
 import type {
   AccountFileEntry,
   AccountFilesQuery,
@@ -281,12 +282,12 @@ export class HermesCloudApi {
     return this.sessions.getAllSessions(profile, pageSize);
   }
 
-  getProfileSessions(limit = 100, offset = 0) {
-    return this.sessions.getProfileSessions(limit, offset);
+  getProfileSessions(limit = 100, offset = 0, signal?: AbortSignal) {
+    return this.sessions.getProfileSessions(limit, offset, signal);
   }
 
-  async getAllProfileSessions(pageSize = 100) {
-    return this.sessions.getAllProfileSessions(pageSize);
+  async getAllProfileSessions(pageSize = 100, signal?: AbortSignal) {
+    return this.sessions.getAllProfileSessions(pageSize, signal);
   }
 
   getSession(id: string, profile = 'default') {
@@ -818,9 +819,8 @@ export class HermesCloudApi {
   getConversations(signal?: AbortSignal) {
     return this.conversations.getConversations(signal);
   }
-
   getUnifiedConversations(profile = 'default', signal?: AbortSignal) {
-    return this.conversations.getUnifiedConversations(profile, signal);
+    return loadUnifiedConversations(this.conversations, this.sessions, profile, signal);
   }
 
   getConversation(id: string, signal?: AbortSignal) {

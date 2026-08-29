@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import type { HermesApiClient, HermesRequestOptions } from '../src/api/HermesApiClient';
+import {
+  HermesApiError,
+  type HermesApiClient,
+  type HermesRequestOptions,
+} from '../src/api/HermesApiClient';
 import {
   conversationSessionSummary,
   customApiMode,
@@ -133,6 +137,7 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
     calls.map(({ path }) => path),
     [
       '/api/plugins/collaboration/single/conversations',
+      '/api/profiles/sessions',
       '/api/analytics/usage',
       '/api/analytics/models',
       '/api/dashboard/plugins',
@@ -141,8 +146,9 @@ test('route snapshots read canonical server APIs instead of local fixtures', asy
     ],
   );
   assert.equal(calls[0].options.profile, undefined);
-  assert.equal(calls[1].options.profile, 'reviewer');
+  assert.equal(calls[1].options.query?.profile, 'all');
   assert.equal(calls[2].options.profile, 'reviewer');
+  assert.equal(calls[3].options.profile, 'reviewer');
 });
 
 test('account files and contextual routing use the collaboration cloud contract', async () => {
@@ -835,6 +841,9 @@ test('conversation history reads, renames, and deletes the same server records a
           },
         } as T);
       }
+      if (path === '/api/profiles/sessions') {
+        return Promise.resolve({ sessions: [], total: 0, limit: 100, offset: 0 } as T);
+      }
       return Promise.resolve({ ok: true } as T);
     },
   } as HermesApiClient;
@@ -852,12 +861,90 @@ test('conversation history reads, renames, and deletes the same server records a
   assert.equal(opened.conversation.messages[0].content, '继续');
   assert.deepEqual(calls.map(({ path }) => path), [
     '/api/plugins/collaboration/single/conversations',
+    '/api/profiles/sessions',
     '/api/plugins/collaboration/single/conversations/chat-1',
     '/api/plugins/collaboration/single/conversations/chat-1',
     '/api/plugins/collaboration/single/conversations/chat-1',
   ]);
-  assert.equal(calls[2].options.method, 'PATCH');
-  assert.equal(calls[3].options.method, 'DELETE');
+  assert.equal(calls[3].options.method, 'PATCH');
+  assert.equal(calls[4].options.method, 'DELETE');
+});
+
+test('unified history exposes official all-profile sessions alongside account conversations', async () => {
+  const calls: Call[] = [];
+  const client = {
+    request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
+      calls.push({ path, options });
+      if (path === '/api/plugins/collaboration/single/conversations') {
+        return Promise.resolve({
+          conversations: [{
+            id: 'ios-chat',
+            profile: 'default',
+            title: 'iOS 对话',
+            messages: [],
+            message_count: 0,
+            updated_at: 1_000,
+          }],
+          deleted: ['gone-chat'],
+        } as T);
+      }
+      assert.equal(path, '/api/profiles/sessions');
+      assert.equal(options.query?.profile, 'all');
+      assert.equal(options.query?.archived, 'exclude');
+      return Promise.resolve({
+        sessions: [{
+          id: 'worker-session',
+          profile: 'hk-worker',
+          source: 'cli',
+          model: 'model-a',
+          title: '香港 Worker 会话',
+          started_at: 1,
+          ended_at: 2,
+          last_active: 3,
+          is_active: false,
+          message_count: 2,
+          tool_call_count: 1,
+          input_tokens: 0,
+          output_tokens: 0,
+          preview: '你好',
+        }],
+        total: 1,
+        limit: 100,
+        offset: 0,
+      } as T);
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getUnifiedConversations('default');
+
+  assert.deepEqual(result.deleted, ['gone-chat']);
+  assert.deepEqual(result.conversations.map(({ id }) => id), [
+    officialConversationPlaceholderId('hk-worker', 'worker-session'),
+    'ios-chat',
+  ]);
+  assert.equal(result.conversations[0].official_session_id, 'worker-session');
+  assert.equal(result.conversations[0].official_profile, 'hk-worker');
+  assert.equal(calls.length, 2);
+});
+
+test('unified history keeps account conversations usable on legacy servers without profile-session history', async () => {
+  const client = {
+    request<T>(path: string): Promise<T> {
+      if (path === '/api/plugins/collaboration/single/conversations') {
+        return Promise.resolve({ conversations: [{
+          id: 'ios-only',
+          profile: 'default',
+          title: '离线兼容',
+          messages: [],
+          message_count: 0,
+        }] } as T);
+      }
+      return Promise.reject(new HermesApiError(404, 'missing route'));
+    },
+  } as HermesApiClient;
+
+  const result = await new HermesCloudApi(client).getUnifiedConversations();
+  assert.deepEqual(result.conversations.map(({ id }) => id), ['ios-only']);
 });
 
 test('unified history adds official task titles and suppresses mapped sessions', () => {
@@ -886,6 +973,8 @@ test('unified history adds official task titles and suppresses mapped sessions',
         input_tokens: 0,
         output_tokens: 0,
         preview: '摘要预览',
+        pinned: true,
+        unread: true,
       },
       {
         id: 'official-mapped',
@@ -914,6 +1003,8 @@ test('unified history adds official task titles and suppresses mapped sessions',
   assert.equal(merged[0].profile, 'reviewer');
   assert.equal(merged[0].official_profile, 'reviewer');
   assert.equal(merged[0].message_count, 4);
+  assert.equal(merged[0].pinned, true);
+  assert.equal(merged[0].unread, true);
 });
 
 test('official placeholders include Profile identity and legacy ids remain readable', () => {

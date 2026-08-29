@@ -23,7 +23,7 @@ export class HermesSessionsCloudApi {
     );
   }
 
-  getProfileSessions(limit = 100, offset = 0) {
+  getProfileSessions(limit = 100, offset = 0, signal?: AbortSignal) {
     return this.transport.request<PaginatedSessions>('/api/profiles/sessions', {
       query: {
         archived: 'exclude',
@@ -33,6 +33,7 @@ export class HermesSessionsCloudApi {
         order: 'recent',
         profile: 'all',
       },
+      signal,
     });
   }
 
@@ -52,9 +53,9 @@ export class HermesSessionsCloudApi {
     return this.transport.json<JsonRecord>('/api/profiles/sessions/pull-requests', 'POST', { ids });
   }
 
-  async getAllProfileSessions(pageSize = 100) {
+  async getAllProfileSessions(pageSize = 100, signal?: AbortSignal) {
     return this.drainSessions(
-      (offset) => this.getProfileSessions(pageSize, offset),
+      (offset) => this.getProfileSessions(pageSize, offset, signal),
       pageSize,
     );
   }

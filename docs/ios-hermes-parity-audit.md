@@ -201,3 +201,14 @@ envelopes, preserves profile ownership, groups mixed bulk deletion by profile,
 and selects the correct export endpoint for each store. `pnpm test` passes with
 `819 passed / 0 failed`; TypeScript, SwiftUI contract checks, and `expo-doctor`
 (`18/18` checks) pass.
+
+### 2026-08-30 continuation: official sessions are visible in the unified list
+
+`HermesCloudApi.getUnifiedConversations()` now fetches the official
+`/api/profiles/sessions` all-profile index in parallel with the account-scoped
+conversation index, drains pagination, and merges unmapped CLI/Telegram/worker
+sessions into signed `official:v3` placeholders. Profile ownership, pinned and
+unread flags, mapped-session de-duplication, tombstones, and 404-only fallback
+for older gateways are covered by the cloud API tests. This closes the gap where
+the official backend session endpoint existed but iOS Sessions could not display
+or reopen those sessions.

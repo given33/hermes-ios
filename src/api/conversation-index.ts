@@ -34,6 +34,9 @@ export function mergeUnifiedConversationIndex(
       official_profile: sessionProfile,
       official_model: session.model || undefined,
       preview: session.preview || undefined,
+      ...(session.archived !== undefined ? { archived: session.archived === true } : {}),
+      ...(session.pinned !== undefined ? { pinned: session.pinned === true } : {}),
+      ...(session.unread !== undefined ? { unread: session.unread === true } : {}),
     }];
   });
   return [...conversations, ...officialConversations].sort(

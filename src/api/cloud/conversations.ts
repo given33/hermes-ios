@@ -39,10 +39,10 @@ export class HermesConversationsCloudApi {
   }
 
   async getUnifiedConversations(_profile = 'default', signal?: AbortSignal) {
-    // Server profile history is process-wide on older deployments. Account
-    // conversations are the only source for this signed-in surface. The
-    // deleted tombstone set rides along so caches can drop remotely deleted
-    // conversations instead of preserving them forever.
+    // This domain owns the durable account index. HermesCloudApi composes it
+    // with the official all-profile session index before exposing the unified
+    // native Sessions surface. The deleted tombstone set rides along so caches
+    // can drop remotely deleted conversations instead of preserving them.
     const cloud = await this.getConversations(signal);
     return {
       conversations: cloud.conversations,
