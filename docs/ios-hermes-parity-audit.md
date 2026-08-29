@@ -58,6 +58,10 @@ exist. “API only” is deliberately not treated as completion.
   the cross-language contract; no local filesystem model or credentials are
   introduced.
 
+- 2026-08-29: managed-file downloads now use the authenticated streaming
+  consumer and bounded temporary-file writer (the same 64 MiB/hash-checked
+  path as account attachments), avoiding a second in-memory Blob copy on iOS.
+
 - 2026-08-29: exposed the previously action-only managed workspace folder
   operation on the native Files page. Users can enter a server-relative or
   absolute Hermes workspace path, submit `folder.create`, and receive the
