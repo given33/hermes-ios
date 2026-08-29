@@ -51,10 +51,10 @@ import { customModelConfiguration, customModelOperationError, modelsSnapshot } f
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { gitSnapshot } from './route-snapshots/git';
-import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
+import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentConversationExport, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { performManagedFilesAction } from './route-actions/managed-files';
 import { resolveGitPath } from './route-actions/git';
-import { loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport } from './route-actions/session-surfaces';
+import { deleteUnifiedSessionSelection, loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport, resolveSessionActionTarget, updateUnifiedSessionFlag } from './route-actions/session-surfaces';
 import { configureBot, describeBot, generateBotAvatar, selectBotPet, sendBotRelay, uploadBotAvatar } from './route-actions/bot-mode';
 import { performChannelOnboardingAction } from './route-actions/channel-onboarding';
 import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata'; // Account previews use temporaryPlaintextFile(name, 'account-file') and consumeAccountFile(... writeBoundedDownload) through presentation.ts.
@@ -493,12 +493,13 @@ export async function performHermesSwiftUIRouteAction(
       await api.triggerCronJob(payload.id, payload.fields?.profile || profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionArchive:
-      if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionArchived(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
+      if (!payload.id || payload.enabled === undefined) return 'none'; await updateUnifiedSessionFlag(api, payload.id, 'archived', payload.enabled, payload.fields?.profile || profile); return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionPin:
-      if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionPinned(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
+      if (!payload.id || payload.enabled === undefined) return 'none'; await updateUnifiedSessionFlag(api, payload.id, 'pinned', payload.enabled, payload.fields?.profile || profile); return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionUnread:
-      if (!payload.id || payload.enabled === undefined) return 'none'; await api.setSessionUnread(payload.id, payload.enabled, payload.fields?.profile || profile); return 'reload';
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionBulkDelete: { const ids = parseSessionIDs(payload.fields?.ids || payload.detail || payload.value || ''); if (!ids.length) return 'none'; await api.bulkDeleteSessions(ids, payload.fields?.profile || profile); return 'reload'; }
+      if (!payload.id || payload.enabled === undefined) return 'none'; await updateUnifiedSessionFlag(api, payload.id, 'unread', payload.enabled, payload.fields?.profile || profile); return 'reload';
+    // The helper dispatches to api.bulkDeleteSessions/api.deleteConversation by store.
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionBulkDelete: { const ids = parseSessionIDs(payload.fields?.ids || payload.detail || payload.value || ''); if (!ids.length) return 'none'; await deleteUnifiedSessionSelection(api, ids, payload.fields?.profile || profile); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionImport: { const parsed = payload.detail || payload.value || payload.fields?.sessions || ''; if (!parsed) return 'none'; const records = parseSessionImport(parsed); if (!records.length) return 'none'; await api.importSessions(records, payload.fields?.profile || profile); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionProjects:
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionPullRequests:
@@ -812,7 +813,7 @@ export async function performHermesSwiftUIRouteAction(
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionExport:
       if (!payload.id) return 'none';
-      await presentSessionExport(api, payload.id, payload.fields?.profile || profile, locale);
+      { const target = resolveSessionActionTarget(payload.id, payload.fields?.profile || profile); if (target.official) await presentSessionExport(api, target.id, target.profile, locale); else await presentConversationExport(api, payload.id, locale); }
       return 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.sessionDeleteEmpty: {
       const result = await api.deleteEmptySessions(profile);

@@ -258,6 +258,30 @@ export class HermesConversationsCloudApi {
     );
   }
 
+  setConversationArchived(id: string, archived: boolean) {
+    return this.transport.json<{ conversation: SingleConversation }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
+      'PATCH',
+      { archived },
+    );
+  }
+
+  setConversationPinned(id: string, pinned: boolean) {
+    return this.transport.json<{ conversation: SingleConversation }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
+      'PATCH',
+      { pinned },
+    );
+  }
+
+  setConversationUnread(id: string, unread: boolean) {
+    return this.transport.json<{ conversation: SingleConversation }>(
+      `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}`,
+      'PATCH',
+      { unread },
+    );
+  }
+
   recordConversationMessage(id: string, message: CollaborationMessage) {
     return this.transport.json<{ message: CollaborationMessage }>(
       `${COLLABORATION}/single/conversations/${encodeURIComponent(id)}/record`,

@@ -87,6 +87,33 @@ export async function presentSessionExport(
   }
 }
 
+/** Present an account-scoped unified conversation export. Unlike an official
+ * runtime session, this id belongs to the collaboration store and must be
+ * loaded through `/single/conversations/:id` rather than `/api/sessions`.
+ */
+export async function presentConversationExport(
+  api: HermesCloudApi,
+  id: string,
+  locale: HermesRouteLocaleInput,
+) {
+  const result = await api.getConversation(id);
+  const exported = result?.conversation || result;
+  const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([
+    import('../../../modules/hermes-quick-look'),
+    import('expo-sharing'),
+    import('../../api/temporary-plaintext-files'),
+  ]);
+  const target = temporaryPlaintextFile(`${id}-conversation.json`, 'conversation-export');
+  try {
+    target.write(JSON.stringify(exported, null, 2));
+    const title = locale === 'zh' ? '导出会话' : 'Exported conversation';
+    const presented = await quickLook.presentQuickLook(target.uri, title);
+    if (!presented && await Sharing.isAvailableAsync()) await Sharing.shareAsync(target.uri);
+  } finally {
+    if (target.exists) target.delete();
+  }
+}
+
 export async function presentProfileExport(
   api: HermesCloudApi,
   name: string,

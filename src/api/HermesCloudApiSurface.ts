@@ -96,6 +96,7 @@ export interface HermesCloudApi {
   enableWebhooks(): Promise<JsonRecord>;
   searchSessions(query: string, limit?: number, profile?: string, filters?: JsonRecord): Promise<JsonRecord>; getLatestDescendant(id: string, profile?: string): Promise<JsonRecord>; exportSession(id: string, profile?: string): Promise<JsonRecord>; setSessionArchived(id: string, archived: boolean, profile?: string): Promise<JsonRecord>; setSessionPinned(id: string, pinned: boolean, profile?: string): Promise<JsonRecord>; setSessionUnread(id: string, unread: boolean, profile?: string): Promise<JsonRecord>; bulkDeleteSessions(ids: string[], profile?: string): Promise<JsonRecord>; importSessions(sessions: JsonRecord[], profile?: string): Promise<JsonRecord>; countEmptySessions(profile?: string): Promise<JsonRecord>; deleteEmptySessions(profile?: string): Promise<JsonRecord>; getSessionStats(profile?: string): Promise<JsonRecord>; pruneSessions(payload?: JsonRecord, profile?: string): Promise<JsonRecord>;
   getProfileSessionsSidebar(options?: JsonRecord): Promise<JsonRecord>; getProfileProjectsTree(previewLimit?: number, sessionLimit?: number): Promise<JsonRecord>; scanProfileSessionPullRequests(ids: string[]): Promise<JsonRecord>;
+  setConversationArchived(id: string, archived: boolean): Promise<JsonRecord>; setConversationPinned(id: string, pinned: boolean): Promise<JsonRecord>; setConversationUnread(id: string, unread: boolean): Promise<JsonRecord>;
   executeMobileHostedCommand(conversationId: string, command: MobileHostedCommand, text?: string, value?: string): Promise<MobileHostedCommandResult>;
 }
 }
@@ -185,5 +186,8 @@ Object.assign(CloudApi.prototype, {
   getProfileSessionsSidebar(this: any, o: JsonRecord = {}) { return this.sessions.getProfileSessionsSidebar(o); },
   getProfileProjectsTree(this: any, l = 3, s = 2000) { return this.sessions.getProfileProjectsTree(l, s); },
   scanProfileSessionPullRequests(this: any, ids: string[]) { return this.sessions.scanProfileSessionPullRequests(ids); },
+  setConversationArchived(this: any, i: string, a: boolean) { return this.conversations.setConversationArchived(i, a); },
+  setConversationPinned(this: any, i: string, p: boolean) { return this.conversations.setConversationPinned(i, p); },
+  setConversationUnread(this: any, i: string, u: boolean) { return this.conversations.setConversationUnread(i, u); },
 });
 }

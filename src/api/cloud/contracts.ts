@@ -153,6 +153,10 @@ export interface SingleConversation {
   id: string;
   profile: string;
   title: string;
+  /** Account-scoped Sessions-page state for unified conversations. */
+  archived?: boolean;
+  pinned?: boolean;
+  unread?: boolean;
   messages: CollaborationMessage[];
   /** Origin metadata used to avoid showing Agent-room transcripts twice. */
   source?: string;

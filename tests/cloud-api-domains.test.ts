@@ -569,6 +569,21 @@ test('conversation and hosted-turn methods keep their wire contract through clou
   });
 });
 
+test('unified conversation session flags use the collaboration PATCH contract', async () => {
+  const { api, calls } = recordingApi();
+  await api.setConversationArchived('chat one', true);
+  await api.setConversationPinned('chat one', true);
+  await api.setConversationUnread('chat one', false);
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/plugins/collaboration/single/conversations/chat%20one', 'PATCH'],
+    ['/api/plugins/collaboration/single/conversations/chat%20one', 'PATCH'],
+    ['/api/plugins/collaboration/single/conversations/chat%20one', 'PATCH'],
+  ]);
+  assert.deepEqual(parsedBody(calls[0]), { archived: true });
+  assert.deepEqual(parsedBody(calls[1]), { pinned: true });
+  assert.deepEqual(parsedBody(calls[2]), { unread: false });
+});
+
 test('managed and account files keep their wire contract through cloud/files', async () => {
   const { api, calls } = recordingApi();
 

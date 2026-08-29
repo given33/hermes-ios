@@ -67,6 +67,9 @@ export function conversationSessionSummary(
       || [provider, model].filter(Boolean).join('/')
       || null,
     title: conversation.title || null,
+    archived: conversation.archived === true,
+    pinned: conversation.pinned === true,
+    unread: conversation.unread === true,
     started_at: createdAt,
     ended_at: running ? null : updatedAt,
     last_active: updatedAt,

@@ -127,7 +127,7 @@ test('official session sidebars/projects/PRs/stats are bridged and bulk actions 
   assert.match(snapshot.sessionProjectsJSON || '', /projects/);
   assert.match(snapshot.sessionPullRequestsJSON || '', /s1/);
   assert.match(snapshot.sessionStatsJSON || '', /total/);
-  await performHermesSwiftUIRouteAction(api, { action: 'session.bulk-delete', payload: { route: 'sessions', detail: '["s1"]', fields: { profile: 'hk-worker' } } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'session.bulk-delete', payload: { route: 'sessions', detail: '["official:s1"]', fields: { profile: 'hk-worker' } } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'session.import', payload: { route: 'sessions', detail: '[{"id":"s2"}]' } }, 'default');
   assert.deepEqual(calls.slice(-2), [['bulk', ['s1'], 'hk-worker'], ['import', [{ id: 's2' }], 'default']]);
 });
@@ -476,9 +476,9 @@ test('native session, SkillHub, and provider controls complete official action f
     validateCustomProviderEndpoint: async (...args: unknown[]) => { calls.push(['endpoint-validate', ...args]); return { ok: true }; },
     saveCustomProviderEndpoint: async (...args: unknown[]) => { calls.push(['endpoint-save', ...args]); },
   } as unknown as HermesCloudApi;
-  await performHermesSwiftUIRouteAction(api, { action: 'session.archive', payload: { route: 'sessions', id: 's1', enabled: true, fields: { profile: 'hk-worker' } } }, 'default');
-  await performHermesSwiftUIRouteAction(api, { action: 'session.pin', payload: { route: 'sessions', id: 's1', enabled: true } }, 'default');
-  await performHermesSwiftUIRouteAction(api, { action: 'session.unread', payload: { route: 'sessions', id: 's1', enabled: false } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'session.archive', payload: { route: 'sessions', id: 'official:s1', enabled: true, fields: { profile: 'hk-worker' } } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'session.pin', payload: { route: 'sessions', id: 'official:s1', enabled: true } }, 'default');
+  await performHermesSwiftUIRouteAction(api, { action: 'session.unread', payload: { route: 'sessions', id: 'official:s1', enabled: false } }, 'default');
   const search = await performHermesSwiftUIRouteAction(api, { action: 'skillhub.search', payload: { route: 'skills', value: 'browser' } }, 'default');
   assert.equal(typeof search, 'object');
   await performHermesSwiftUIRouteAction(api, { action: 'skillhub.preview', payload: { route: 'skills', value: 'owner/skill' } }, 'default');
@@ -496,6 +496,44 @@ test('native session, SkillHub, and provider controls complete official action f
     ['install', 'owner/skill', 'default'], ['uninstall', 'browser', 'default'],
     ['oauth-start', 'openai', {}], ['oauth-submit', 'openai', { code: '1234' }],
     ['endpoint-validate', { id: 'edge' }], ['endpoint-save', { id: 'edge' }, 'hk-worker'],
+  ]);
+});
+
+test('unified Sessions actions resolve official envelopes and account conversations', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    setSessionArchived: async (...args: unknown[]) => { calls.push(['session-archive', ...args]); },
+    setSessionPinned: async (...args: unknown[]) => { calls.push(['session-pin', ...args]); },
+    setSessionUnread: async (...args: unknown[]) => { calls.push(['session-unread', ...args]); },
+    setConversationArchived: async (...args: unknown[]) => { calls.push(['conversation-archive', ...args]); },
+    setConversationPinned: async (...args: unknown[]) => { calls.push(['conversation-pin', ...args]); },
+    setConversationUnread: async (...args: unknown[]) => { calls.push(['conversation-unread', ...args]); },
+    bulkDeleteSessions: async (...args: unknown[]) => { calls.push(['bulk-sessions', ...args]); },
+    deleteConversation: async (...args: unknown[]) => { calls.push(['delete-conversation', ...args]); },
+  } as unknown as HermesCloudApi;
+  const official = 'official:runtime-42';
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'session.archive',
+    payload: { route: 'sessions', id: official, enabled: true },
+  }, 'default');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'session.pin',
+    payload: { route: 'sessions', id: 'chat_account-1', enabled: true },
+  }, 'default');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'session.unread',
+    payload: { route: 'sessions', id: 'chat_account-1', enabled: false },
+  }, 'default');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'session.bulk-delete',
+    payload: { route: 'sessions', detail: JSON.stringify([official, 'chat_account-1']) },
+  }, 'default');
+  assert.deepEqual(calls, [
+    ['session-archive', 'runtime-42', true, 'default'],
+    ['conversation-pin', 'chat_account-1', true],
+    ['conversation-unread', 'chat_account-1', false],
+    ['bulk-sessions', ['runtime-42'], 'default'],
+    ['delete-conversation', 'chat_account-1'],
   ]);
 });
 
