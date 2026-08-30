@@ -3,7 +3,11 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { fileURLToPath, URL as NodeURL } from 'node:url';
 
-import { HermesApiClient } from '../src/api/HermesApiClient';
+import {
+  HermesApiClient,
+  type HermesRequestOptions,
+  type HermesWebSocketOptions,
+} from '../src/api/HermesApiClient';
 import { HermesStudioGroupChatApi } from '../src/api/hermes-studio/group-chat';
 import { HermesStudioWorkflowsApi } from '../src/api/hermes-studio/workflows';
 import {
@@ -135,7 +139,7 @@ test('Hermes Studio room detail forwards bounded pagination parameters', async (
   );
 });
 
-test('Agent group controller polls room detail and sends without a socket transport', () => {
+test('Agent group controller keeps snapshot polling as the realtime safety net', () => {
   const source = readFileSync(
     fileURLToPath(new NodeURL('../src/studio/agent-group/useAgentGroupChatController.ts', import.meta.url)),
     'utf8',
@@ -190,7 +194,10 @@ test('Hermes Studio group and workflow clients include upstream membership and s
     'utf8',
   );
   assert.match(groupSource, /api\/plugins\/collaboration/);
-  assert.match(groupSource, /RestPollingSocket/);
+  assert.match(groupSource, /HostedRoomRealtimeSocket/);
+  assert.match(groupSource, /consumeHostedConversationEventsWebSocket/);
+  assert.match(groupSource, /hosted-events-ws/);
+  assert.match(groupSource, /consumeHostedConversationEvents/);
   assert.match(groupSource, /hasHealthyRoomStream/);
   assert.doesNotMatch(groupSource, /socket\.io-client|\/api\/hermes\/group-chat/);
 
@@ -497,6 +504,49 @@ function testClient(
   );
 }
 
+class AgentRoomTestWebSocket {
+  onclose: ((event: CloseEvent) => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  sent: string[] = [];
+  closed = false;
+
+  send(value: string) {
+    this.sent.push(value);
+  }
+
+  emit(payload: unknown) {
+    this.onmessage?.({ data: JSON.stringify(payload) } as MessageEvent);
+  }
+
+  fail(reason = 'upgrade dropped') {
+    this.onclose?.({ code: 1006, reason } as CloseEvent);
+  }
+
+  close() {
+    this.closed = true;
+  }
+}
+
+async function waitForAgentRoomTest(
+  condition: () => boolean,
+  message: string,
+  timeoutMs = 500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.ok(condition(), message);
+}
+
+function unavailableWebSocketTicketResponse(): Response {
+  return new Response(JSON.stringify({ detail: 'WebSocket unavailable in SSE fixture' }), {
+    headers: { 'Content-Type': 'application/json' },
+    status: 404,
+  });
+}
+
 test('Agent group send routes structured mentions and omits the broadcast roster', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
   const client = testClient(calls, () => ({ request_id: 'm-1', message: { id: 'm-1' } }));
@@ -549,6 +599,136 @@ test('Agent group retraction, typing, join, and roster calls hit the completed r
   assert.deepEqual(JSON.parse(String(codeCall?.init?.body)), { invite_code: 'NEWCODE1' });
 });
 
+test('Agent group prefers hosted-event WebSocket and resumes SSE from its last cursor', async () => {
+  const webSocket = new AgentRoomTestWebSocket();
+  const calls: Array<{
+    kind: 'sse' | 'ws';
+    options: HermesRequestOptions | HermesWebSocketOptions;
+    path: string;
+  }> = [];
+  const sseEnvelope = {
+    account_generation: 'gen-1',
+    conversation: {
+      id: 'chat_room_1',
+      profile: 'default',
+      title: 'Room',
+      account_generation: 'gen-1',
+      messages: [
+        { id: 'm-sse', role: 'assistant', name: 'pc-worker', content: 'SSE fallback', created_at: 2 },
+      ],
+    },
+    cursor: 6,
+    events: [],
+    has_gap: false,
+    min_cursor: 1,
+    reset_cursor: false,
+    snapshot_cursor: 6,
+  };
+  const client = {
+    openWebSocket(path: string, options: HermesWebSocketOptions = {}) {
+      calls.push({ kind: 'ws', options, path });
+      return Promise.resolve(webSocket as unknown as WebSocket);
+    },
+    openEventStream(path: string, options: HermesRequestOptions = {}) {
+      calls.push({ kind: 'sse', options, path });
+      return Promise.resolve(new Response(
+        `id: 6\nevent: conversation\ndata: ${JSON.stringify(sseEnvelope)}\n\n`,
+        { headers: { 'Content-Type': 'text/event-stream' }, status: 200 },
+      ));
+    },
+  } as unknown as HermesApiClient;
+  const api = new HermesStudioGroupChatApi(client);
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+  const delivered: Array<Record<string, unknown>> = [];
+  socket.on('message', (message: Record<string, unknown>) => delivered.push(message));
+  socket.attachRoomStream?.({
+    id: 'room-1',
+    conversationId: 'chat_room_1',
+    accountGeneration: 'gen-1',
+  });
+
+  await waitForAgentRoomTest(() => webSocket.sent.length === 1, 'room WebSocket did not subscribe');
+  webSocket.emit({
+    type: 'conversation',
+    account_generation: 'gen-1',
+    conversation: {
+      id: 'chat_room_1',
+      profile: 'default',
+      title: 'Room',
+      account_generation: 'gen-1',
+      messages: [
+        { id: 'm-ws', role: 'assistant', name: 'hk-worker', content: 'WS first', created_at: 1 },
+      ],
+    },
+    cursor: 5,
+    events: [],
+    has_gap: false,
+    min_cursor: 1,
+    reset_cursor: false,
+    snapshot_cursor: 5,
+  });
+  await waitForAgentRoomTest(
+    () => delivered.some((message) => message.id === 'm-ws'),
+    'room WebSocket frame was not delivered',
+  );
+  webSocket.fail();
+  await waitForAgentRoomTest(
+    () => delivered.some((message) => message.id === 'm-sse'),
+    'room SSE fallback frame was not delivered',
+  );
+  socket.disconnect();
+
+  assert.deepEqual(webSocket.sent, ['{"type":"subscribe"}']);
+  assert.deepEqual(calls.map((call) => call.kind), ['ws', 'sse']);
+  assert.equal(
+    calls[0]?.path,
+    '/api/plugins/collaboration/single/conversations/chat_room_1/hosted-events-ws',
+  );
+  assert.deepEqual(calls[0]?.options.query, {
+    cursor: 0,
+    expected_account_generation: 'gen-1',
+  });
+  assert.equal((calls[0]?.options as HermesWebSocketOptions).connectTimeoutMs, 5_000);
+  assert.equal(
+    calls[1]?.path,
+    '/api/plugins/collaboration/single/conversations/chat_room_1/hosted-events',
+  );
+  assert.deepEqual(calls[1]?.options.query, {
+    cursor: 5,
+    expected_account_generation: 'gen-1',
+  });
+  assert.deepEqual(delivered.map((message) => message.id), ['m-ws', 'm-sse']);
+  assert.ok(delivered.every((message) => message.roomId === 'room-1'));
+});
+
+test('Agent group disconnect does not open SSE after aborting its WebSocket', async () => {
+  const webSocket = new AgentRoomTestWebSocket();
+  let sseOpenCount = 0;
+  const client = {
+    openWebSocket() {
+      return Promise.resolve(webSocket as unknown as WebSocket);
+    },
+    openEventStream() {
+      sseOpenCount += 1;
+      return Promise.reject(new Error('SSE must not open after disconnect'));
+    },
+  } as unknown as HermesApiClient;
+  const api = new HermesStudioGroupChatApi(client);
+  const socket = await api.connectRealtime({ userId: 'u1', userName: 'Given' });
+  socket.attachRoomStream?.({
+    id: 'room-abort',
+    conversationId: 'chat-abort',
+    accountGeneration: 'gen-abort',
+  });
+
+  await waitForAgentRoomTest(() => webSocket.sent.length === 1, 'room WebSocket did not subscribe');
+  socket.disconnect();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(webSocket.closed, true);
+  assert.equal(sseOpenCount, 0);
+});
+
 test('Agent group socket streams hosted-event frames as message events', async () => {
   const envelope = {
     account_generation: 'gen-1',
@@ -577,7 +757,7 @@ test('Agent group socket streams hosted-event frames as message events', async (
   const sseClient = new HermesApiClient(
     'https://hermes.test',
     'test-token',
-    async () => sseResponse(),
+    async () => unavailableWebSocketTicketResponse(),
     sseResponse as unknown as typeof fetch,
   );
   const api = new HermesStudioGroupChatApi(sseClient);
@@ -610,7 +790,7 @@ test('Agent group socket does not mark an immediate head EOF as healthy', async 
   const client = new HermesApiClient(
     'https://hermes.test',
     'test-token',
-    async () => emptySseResponse(),
+    async () => unavailableWebSocketTicketResponse(),
     emptySseResponse as unknown as typeof fetch,
   );
   const api = new HermesStudioGroupChatApi(client);
@@ -643,7 +823,7 @@ test('Agent group socket marks an open keepalive stream healthy and falls back a
   const client = new HermesApiClient(
     'https://hermes.test',
     'test-token',
-    async () => liveSseResponse(),
+    async () => unavailableWebSocketTicketResponse(),
     liveSseResponse as unknown as typeof fetch,
   );
   const api = new HermesStudioGroupChatApi(client);
@@ -694,7 +874,7 @@ test('Agent group health fallback is scoped to the active room', async () => {
   const client = new HermesApiClient(
     'https://hermes.test',
     'test-token',
-    streamFetch as unknown as typeof fetch,
+    async () => unavailableWebSocketTicketResponse(),
     streamFetch as unknown as typeof fetch,
   );
   const api = new HermesStudioGroupChatApi(client);
@@ -768,7 +948,7 @@ test('Agent group low-latency projection orders events by the conversation curso
   const client = new HermesApiClient(
     'https://hermes.test',
     'test-token',
-    async () => sseResponse(),
+    async () => unavailableWebSocketTicketResponse(),
     sseResponse as unknown as typeof fetch,
   );
   const api = new HermesStudioGroupChatApi(client);

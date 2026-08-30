@@ -78,10 +78,10 @@ function createApi() {
       if (path.endsWith('/single/conversations')) {
         return Promise.resolve({ conversations: [] } as T);
       }
-      if (path === '/api/model/custom') {
-        return Promise.resolve({} as T);
+      if (path === '/api/providers/custom-endpoints') {
+        return Promise.resolve({ endpoints: [] } as T);
       }
-      if (path === '/api/model/custom/discover') {
+      if (path === '/api/providers/custom-endpoints/validate') {
         return Promise.resolve({
           latency_ms: 240,
           message: 'Model catalog loaded.',
@@ -1124,17 +1124,20 @@ test('custom model configuration carries the full runtime contract', async () =>
   await api.testCustomModel(configuration, 'reviewer');
 
   assert.deepEqual(calls.map(({ path }) => path), [
-    '/api/model/custom',
-    '/api/model/custom/test',
+    '/api/providers/custom-endpoints',
+    '/api/providers/custom-endpoints/validate',
   ]);
   assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
     api_key: 'secret',
-    api_key_action: 'replace',
     api_mode: 'codex_responses',
     base_url: 'https://model.example/v1',
     context_length: 200000,
+    discover_models: true,
+    id: 'custom',
+    make_default: true,
     model: 'model-a',
-    profile: 'reviewer',
+    models: ['model-a'],
+    name: 'Custom',
     reasoning_effort: 'high',
   });
 });
@@ -1156,11 +1159,17 @@ test('custom model discovery runs through Hermes server with normalized input', 
     reachable: true,
     status: 200,
   });
-  assert.equal(calls[0].path, '/api/model/custom/discover');
+  assert.equal(calls[0].path, '/api/providers/custom-endpoints/validate');
+  assert.equal(calls[0].options.profile, 'reviewer');
   assert.deepEqual(JSON.parse(String(calls[0].options.body)), {
     api_key: 'private-key',
     base_url: 'https://models.example/v1',
-    profile: 'reviewer',
+    discover_models: true,
+    id: 'custom',
+    make_default: false,
+    model: '',
+    name: 'Custom',
+    validation_mode: 'catalog',
   });
 });
 

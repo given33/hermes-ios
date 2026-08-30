@@ -1251,8 +1251,9 @@ export function useAgentGroupChatController({
     detailFingerprintRef.current.delete(roomId);
     if (fixtureMode) return;
     void refreshRoom(roomId);
-    // Connect the REST+SSE wake bus on first room entry: typing presence,
-    // instant message delivery, and room_updated refresh signals ride it.
+    // Connect the WebSocket-first hosted-event bus on first room entry: typing
+    // presence, instant message delivery, and room_updated refresh signals ride
+    // it, with SSE and snapshot polling retained as fallbacks.
     void connectSocket()
       .then((socket) => {
         if (!socket) return undefined;
@@ -2109,17 +2110,16 @@ export function useAgentGroupChatController({
     }).stop;
   }, [conversationDeleteReplayService, fixtureMode]);
 
-  // The collaboration plugin exposes REST snapshots and hosted-turn state,
-  // not a Socket.IO namespace. Poll the active room while Studio is visible so
-  // assistant replies become visible as soon as the backend workflow appends
-  // them to the linked conversation.
+  // The collaboration plugin exposes a hosted-event WebSocket/SSE pair rather
+  // than Socket.IO. Keep polling the active room while Studio is visible as the
+  // final safety net for failed upgrades, older servers, and suspended streams.
   useEffect(() => {
     if (!enabled || fixtureMode || !studioApi) return;
     let pollCount = 0;
     const timer = setInterval(() => {
       pollCount += 1;
       void (async () => {
-        // SSE is authoritative when healthy; REST becomes a slow safety net
+        // WS/SSE is authoritative when healthy; REST becomes a slow safety net
         // instead of competing with every live frame for radio and locks.
         const socket = socketRef.current;
         const activeStreamRoomId = activeRoomIdRef.current;

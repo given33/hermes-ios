@@ -1,5 +1,9 @@
 import type { HermesApiClient } from '../HermesApiClient';
-import { consumeHostedConversationEvents } from '../hosted-conversation-events';
+import {
+  consumeHostedConversationEvents,
+  consumeHostedConversationEventsWebSocket,
+  type HostedConversationEventFrame,
+} from '../hosted-conversation-events';
 import {
   isRecord,
   numberValue,
@@ -33,9 +37,9 @@ export interface HermesStudioRealtimeOptions {
 }
 
 /**
- * Compatibility handle for the old controller API.  The collaboration plugin
- * is REST+SSE; this bus never opens a Socket.IO connection and exists to keep
- * existing callers from having to coordinate a second state machine.
+ * Compatibility handle for the old controller API. The collaboration plugin
+ * exposes hosted-event WebSocket and SSE transports rather than Socket.IO;
+ * this bus keeps existing callers on one state machine.
  */
 export interface HermesStudioGroupChatSocket {
   connected: boolean;
@@ -44,18 +48,16 @@ export interface HermesStudioGroupChatSocket {
   off(event: string, listener?: (...args: any[]) => void): this;
   removeAllListeners(event?: string): this;
   disconnect(): void;
-  /** REST+SSE transport only: subscribe this bus to a room's event stream. */
+  /** Subscribe this bus to a room's WebSocket-first hosted-event stream. */
   attachRoomStream?(room: {
     id: string;
     conversationId?: string;
     accountGeneration?: string;
   }): void;
-  /** True when the requested room has an attached live SSE cycle. */
+  /** True when the requested room has an attached live WS or SSE cycle. */
   hasHealthyRoomStream?(roomId?: string): boolean;
-  /** REST+SSE transport only: stop every attached room stream (abort in-flight
-   *  SSE cycles, clear retry timers) without tearing down the event bus. The
-   *  sole implementer (RestPollingSocket) always provides this; exposing it on
-   *  the interface lets callers release the iOS HTTP pool on room exit. */
+  /** Stop every attached room stream (abort in-flight WS/SSE cycles and clear
+   *  retry timers) without tearing down the event bus. */
   detachRoomStreams(): void;
 }
 
@@ -79,7 +81,7 @@ interface RoomStreamRecord {
 
 const ROOM_STREAM_RETRY_BASE_MS = 1_000;
 const ROOM_STREAM_RETRY_MAX_MS = 30_000;
-// Upper bound of simultaneously open room SSE streams (LRU-evicted above).
+// Upper bound of simultaneously open room realtime streams (LRU-evicted above).
 const MAX_ROOM_STREAMS = 5;
 
 function streamFingerprint(value: string): string {
@@ -93,16 +95,15 @@ function streamFingerprint(value: string): string {
 }
 
 /**
- * Event-bus socket backed by REST polling plus the hosted-event SSE stream.
+ * Event bus backed by hosted-event WebSocket, SSE, and REST polling.
  *
- * The collaboration plugin has no Socket.IO endpoint: room freshness comes
- * from the controller's REST polling while an attached per-room SSE
- * subscription wakes the bus the moment the server commits a change.  SSE
- * frames deliver new/updated transcript messages as `message` events and
- * surface any other conversation revision as `room_updated`, so snapshot
- * merges happen immediately instead of waiting for the next poll tick.
+ * The collaboration plugin has no Socket.IO endpoint. Each attached room uses
+ * the ticket-authenticated hosted-event WebSocket first, falls back to the
+ * bearer-authenticated SSE mirror when the upgrade is unavailable, and leaves
+ * controller polling as the final freshness safety net. Both live transports
+ * share the same envelope parser and cursor.
  */
-class RestPollingSocket implements HermesStudioGroupChatSocket {
+class HostedRoomRealtimeSocket implements HermesStudioGroupChatSocket {
   connected = true;
   private readonly listeners = new Map<string, Set<SocketListener>>();
   private readonly streams = new Map<string, RoomStreamRecord>();
@@ -164,8 +165,8 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
       retryWake: null,
     };
     this.streams.set(streamKey, record);
-    // Bound concurrent room streams: one SSE per joined room forever would
-    // exhaust the iOS HTTP pool and battery. Evict the least-recently-used
+    // Bound concurrent room streams: one realtime connection per joined room
+    // forever would exhaust radio and battery. Evict the least-recently-used
     // stream; selectRoom re-attaches a room on demand.
     while (this.streams.size > MAX_ROOM_STREAMS) {
       const oldestKey = this.streams.keys().next().value as string | undefined;
@@ -225,28 +226,70 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
             signal,
           },
         ),
+        openHostedConversationEventsWebSocket: (
+          conversationId: string,
+          cursor: number,
+          expectedAccountGeneration: string,
+          deadlineMs?: number,
+          signal?: AbortSignal,
+        ) => client.openWebSocket(
+          `${COLLABORATION}/single/conversations/${encodeURIComponent(conversationId)}/hosted-events-ws`,
+          {
+            query: {
+              cursor: Math.max(0, Math.floor(cursor)),
+              expected_account_generation: expectedAccountGeneration,
+            },
+            connectTimeoutMs: deadlineMs,
+            signal,
+          },
+        ),
       };
       const cursorBefore = record.cursor;
-      // A stream is healthy only while its reader is still attached.  Set the
+      // A stream is healthy only while its reader is still attached. Set the
       // flag from the activity hook instead of waiting for the async generator
-      // to return (which a healthy SSE connection normally never does).
+      // to return (which a healthy WS/SSE connection normally never does).
       record.healthy = false;
+      const applyFrame = (frame: HostedConversationEventFrame) => {
+        // Persist progress per frame so SSE can resume after a mid-stream WS
+        // failure without replaying the whole connection cycle.
+        record.cursor = frame.cursor;
+        this.consumeRoomFrame(record, frame, frame.resetCursor);
+      };
+      const markHealthy = () => {
+        if (!record.stopped && !record.controller.signal.aborted) {
+          record.healthy = true;
+        }
+      };
+      const consumeSse = () => consumeHostedConversationEvents(
+        source,
+        record.conversationId,
+        record.cursor,
+        record.accountGeneration,
+        record.controller.signal,
+        applyFrame,
+        undefined,
+        5_000,
+        markHealthy,
+      );
       try {
-        record.cursor = await consumeHostedConversationEvents(
+        record.cursor = await consumeHostedConversationEventsWebSocket(
           source,
           record.conversationId,
           record.cursor,
           record.accountGeneration,
           record.controller.signal,
-          (frame) => this.consumeRoomFrame(record, frame, frame.resetCursor),
-          undefined,
+          applyFrame,
+          markHealthy,
           5_000,
-          () => {
-            if (!record.stopped && !record.controller.signal.aborted) {
-              record.healthy = true;
-            }
-          },
-        );
+        ).catch((error: unknown) => {
+          if (
+            record.stopped
+            || record.controller.signal.aborted
+            || !this.connected
+          ) throw error;
+          record.healthy = false;
+          return consumeSse();
+        });
         // Only real progress justifies resetting the backoff: a stream that
         // closes without advancing (server EOF at HEAD) keeps the capped
         // schedule instead of reconnecting every second.
@@ -268,8 +311,8 @@ class RestPollingSocket implements HermesStudioGroupChatSocket {
           this.emit('room_updated', { roomId: record.roomId });
           break;
         }
-        // Other failures fall through to the reconnect backoff; polling
-        // stays authoritative.
+        // Other failures fall through to the reconnect backoff; REST polling
+        // remains the final fallback.
       }
       if (record.stopped || !this.connected) break;
       // EOF means the live reader is gone, even if this cycle received a
@@ -792,9 +835,9 @@ export class HermesStudioGroupChatApi {
     };
   }
 
-  /** Opens the REST+SSE wake bus; the controller's polling owns freshness. */
+  /** Opens the hosted-event realtime bus; controller polling remains fallback. */
   async connectRealtime(_options: HermesStudioRealtimeOptions): Promise<HermesStudioGroupChatSocket> {
-    const socket = new RestPollingSocket();
+    const socket = new HostedRoomRealtimeSocket();
     socket.bind(this.client);
     return socket;
   }
@@ -902,7 +945,7 @@ export class HermesStudioGroupChatApi {
   }
 
   async interruptAgentByName(roomId: string, agentName: string): Promise<void> {
-    await this.interruptAgent(new RestPollingSocket(), roomId, agentName);
+    await this.interruptAgent(new HostedRoomRealtimeSocket(), roomId, agentName);
   }
 
   async listApprovals(roomId: string): Promise<HermesStudioPendingApproval[]> {

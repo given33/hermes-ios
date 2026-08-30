@@ -292,7 +292,7 @@ test('model methods keep their exact wire contract through cloud/models', async 
           scope: 'main',
         } as T);
       }
-      if (path === '/api/model/custom/discover') {
+      if (path === '/api/providers/custom-endpoints/validate') {
         return Promise.resolve({
           latency_ms: 5,
           message: 'ok',
@@ -321,7 +321,7 @@ test('model methods keep their exact wire contract through cloud/models', async 
     [
       ['/api/model/info', 'GET', 'reviewer'],
       ['/api/model/options', 'GET', 'reviewer'],
-      ['/api/model/custom', 'GET', 'reviewer'],
+      ['/api/providers/custom-endpoints', 'GET', 'reviewer'],
     ],
   );
   assert.deepEqual(calls[1].options.query, { include_unconfigured: 1 });
@@ -339,33 +339,46 @@ test('model methods keep their exact wire contract through cloud/models', async 
   assert.deepEqual(
     calls.map(({ path, options }) => [path, options.method ?? 'GET', options.profile]),
     [
-      ['/api/model/custom', 'PUT', undefined],
-      ['/api/model/custom/test', 'POST', undefined],
-      ['/api/model/custom/discover', 'POST', undefined],
+      ['/api/providers/custom-endpoints', 'POST', 'reviewer'],
+      ['/api/providers/custom-endpoints/validate', 'POST', 'reviewer'],
+      ['/api/providers/custom-endpoints/validate', 'POST', 'reviewer'],
       ['/api/model/set', 'POST', 'reviewer'],
     ],
   );
   assert.deepEqual(parsedBody(calls[0]), {
     api_key: 'secret',
-    api_key_action: 'replace',
     api_mode: 'chat_completions',
     base_url: 'https://models.example/v1',
     context_length: 131072,
+    discover_models: true,
+    id: 'custom',
+    make_default: true,
     model: 'gpt-test',
+    models: ['gpt-test'],
+    name: 'Custom',
     reasoning_effort: 'high',
-    profile: 'reviewer',
   });
   assert.deepEqual(parsedBody(calls[1]), {
     api_key: 'secret',
     api_mode: 'chat_completions',
     base_url: 'https://models.example/v1',
+    context_length: 131072,
+    discover_models: true,
+    id: 'custom',
+    make_default: false,
     model: 'gpt-test',
-    profile: 'reviewer',
+    name: 'Custom',
+    validation_mode: 'inference',
   });
   assert.deepEqual(parsedBody(calls[2]), {
     api_key: 'secret',
     base_url: 'https://models.example/v1',
-    profile: 'reviewer',
+    discover_models: true,
+    id: 'custom',
+    make_default: false,
+    model: '',
+    name: 'Custom',
+    validation_mode: 'catalog',
   });
   assert.deepEqual(parsedBody(calls[3]), {
     confirm_expensive_model: true,
@@ -1072,7 +1085,7 @@ test('the facade keeps no drifting second copy of migrated endpoint bodies', () 
     ['/api/hermes/memory', memory],
     ['/api/model/info', models],
     ['/api/model/options', models],
-    ['/api/model/custom', models],
+    ['/api/providers/custom-endpoints', models],
     ['/api/model/set', models],
     ['/api/sessions', sessions],
     ['/api/analytics/usage', sessions],

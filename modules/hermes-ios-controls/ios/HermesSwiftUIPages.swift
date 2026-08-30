@@ -2062,6 +2062,16 @@ private struct HermesRemoteRoutePage: View {
           }
         }
         ForEach(data.profiles) { profile in
+          profileRow(profile)
+        }
+      }
+      .hermesListStyle()
+      .refreshable {
+        onAction(.refresh, HermesRouteActionPayload(route: route.rawValue))
+      }
+  }
+
+  private func profileRow(_ profile: HermesProfileSnapshot) -> some View {
         HermesRemoteRow(icon: profile.botHasAvatar == true ? "person.crop.circle.fill" : (profile.active ? "person.crop.circle.fill" : "person.crop.circle"), iconData: profile.botAvatarData, title: profile.name, detail: "\(profile.model) · \(profile.detail)", tint: profile.active ? appearance.palette.success : appearance.palette.secondary) {
           if !profile.active {
             Button { onAction(.profileActivate, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Image(systemName: "checkmark") }.buttonStyle(.borderless)
@@ -2223,8 +2233,6 @@ private struct HermesRemoteRoutePage: View {
           } label: { Label(chinese ? "编辑 SOUL.md" : "Edit SOUL.md", systemImage: "doc.text") }
           if !profile.active { Button(role: .destructive) { onAction(.profileDelete, HermesRouteActionPayload(route: route.rawValue, id: profile.id)) } label: { Label(chinese ? "删除机器人" : "Delete bot", systemImage: "trash") } }
         }
-        }
-      }.hermesListStyle().refreshable { onAction(.refresh, HermesRouteActionPayload(route: route.rawValue)) }
   }
 
   private var configRouteBody: some View {
@@ -4816,7 +4824,7 @@ private struct HermesSessionsPage: View {
         }
 
         if !context.branchableMessages.isEmpty {
-          Section(chinese ? "可分叉消息" : "Branchable messages") {
+          Section {
             ForEach(context.branchableMessages) { message in
               Button {
                 onAction(
@@ -5982,6 +5990,8 @@ private struct HermesModelsPage: View {
                 Divider()
               }
             }
+          } header: {
+            Text(chinese ? "可分叉消息" : "Branchable messages")
           }
         }
       }

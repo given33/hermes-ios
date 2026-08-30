@@ -206,8 +206,8 @@ export function ModelsManagementPage({
     });
     try {
       const saved = await api.saveCustomModel(configuration(), profile);
-      const preview = typeof saved.api_key_preview === 'string' ? saved.api_key_preview : '';
-      const configured = saved.api_key_configured === true;
+      const preview = saved.apiKeyPreview || '';
+      const configured = saved.apiKeyConfigured === true;
       setApiKeyConfigured(configured);
       setApiKeyPreview(configured ? preview || '********' : '');
       setApiKeyDeleteRequested(false);

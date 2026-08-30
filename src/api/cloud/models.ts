@@ -45,6 +45,18 @@ export interface CustomModelConnectionResult {
   status: number;
 }
 
+interface CustomEndpointRecord extends JsonRecord {
+  api_key_preview?: unknown;
+  api_mode?: unknown;
+  base_url?: unknown;
+  context_length?: unknown;
+  has_api_key?: unknown;
+  id?: unknown;
+  is_current?: unknown;
+  model?: unknown;
+  reasoning_effort?: unknown;
+}
+
 export interface ModelOptionCapabilities {
   fast?: boolean;
   reasoning?: boolean;
@@ -218,17 +230,11 @@ export class HermesModelsCloudApi {
   }
 
   async getCustomModel(profile = 'default'): Promise<CustomModelConfiguration> {
-    const value = await this.transport.request<JsonRecord>('/api/model/custom', { profile });
-    return {
-      apiKeyAction: 'preserve',
-      apiKeyConfigured: value.api_key_configured === true,
-      apiKeyPreview: stringValue(value.api_key_preview),
-      apiMode: customApiMode(value.api_mode),
-      baseUrl: stringValue(value.base_url),
-      contextLength: numberValue(value.context_length),
-      model: stringValue(value.model),
-      reasoningEffort: customReasoningEffort(value.reasoning_effort),
-    };
+    const value = await this.transport.request<JsonRecord>(
+      '/api/providers/custom-endpoints',
+      { profile },
+    );
+    return customModelFromEndpointResponse(value);
   }
 
   saveCustomModel(configuration: CustomModelConfiguration, profile = 'default') {
@@ -239,27 +245,43 @@ export class HermesModelsCloudApi {
     if (apiKeyAction === 'replace' && !apiKey) {
       throw new Error('A new API key is required to replace the saved key');
     }
-    return this.transport.json<JsonRecord>('/api/model/custom', 'PUT', {
-      api_key: apiKey,
-      api_key_action: apiKeyAction,
+    return this.transport.json<JsonRecord>(
+      '/api/providers/custom-endpoints',
+      'POST',
+      {
+      api_key: apiKeyAction === 'preserve' ? undefined : apiKey,
       api_mode: configuration.apiMode,
       base_url: baseUrl,
       context_length: configuration.contextLength,
+      discover_models: true,
+      id: 'custom',
+      make_default: true,
       model: configuration.model,
+      models: [configuration.model],
+      name: 'Custom',
       reasoning_effort: configuration.reasoningEffort,
-      profile,
-    });
+      },
+      { profile },
+    ).then(customModelFromEndpointResponse);
   }
 
-  testCustomModel(configuration: CustomModelConfiguration, profile = 'default') {
+  testCustomModel(
+    configuration: CustomModelConfiguration,
+    profile = 'default',
+  ): Promise<CustomModelConnectionResult> {
     const baseUrl = normalizeModelCatalogBaseUrl(configuration.baseUrl);
-    return this.transport.json<CustomModelConnectionResult>('/api/model/custom/test', 'POST', {
-      api_key: configuration.apiKey || '',
+    return this.validateCustomEndpoint({
+      api_key: stringValue(configuration.apiKey) || undefined,
       api_mode: configuration.apiMode,
       base_url: baseUrl,
+      context_length: configuration.contextLength,
+      discover_models: true,
+      id: 'custom',
+      make_default: false,
       model: configuration.model,
-      profile,
-    });
+      name: 'Custom',
+      validation_mode: 'inference',
+    }, profile);
   }
 
   async discoverCustomModels(
@@ -269,17 +291,40 @@ export class HermesModelsCloudApi {
     apiMode?: CustomModelConfiguration['apiMode'],
   ): Promise<CustomModelDiscoveryResult> {
     const normalizedBaseUrl = normalizeModelCatalogBaseUrl(baseUrl);
-    const result = await this.transport.json<Omit<CustomModelDiscoveryResult, 'baseUrl'>>(
-      '/api/model/custom/discover',
-      'POST',
-      {
-        api_key: apiKey.trim(),
-        api_mode: apiMode,
-        base_url: normalizedBaseUrl,
-        profile,
-      },
-    );
+    const result = await this.validateCustomEndpoint({
+      api_key: apiKey.trim() || undefined,
+      api_mode: apiMode,
+      base_url: normalizedBaseUrl,
+      discover_models: true,
+      id: 'custom',
+      make_default: false,
+      model: '',
+      name: 'Custom',
+      validation_mode: 'catalog',
+    }, profile);
     return { ...result, baseUrl: normalizedBaseUrl };
+  }
+
+  private async validateCustomEndpoint(
+    payload: JsonRecord,
+    profile: string,
+  ): Promise<CustomModelConnectionResult & { models: string[] }> {
+    const startedAt = Date.now();
+    const value = await this.transport.json<JsonRecord>(
+      '/api/providers/custom-endpoints/validate',
+      'POST',
+      payload,
+      { profile },
+    );
+    const ok = value.ok === true;
+    return {
+      latency_ms: numberValue(value.latency_ms) || Math.max(0, Date.now() - startedAt),
+      message: stringValue(value.message),
+      models: stringArray(value.models),
+      ok,
+      reachable: value.reachable === true,
+      status: numberValue(value.status) || (ok ? 200 : 0),
+    };
   }
 
   async setModel(
@@ -307,6 +352,27 @@ export class HermesModelsCloudApi {
     }
     return result;
   }
+}
+
+function customModelFromEndpointResponse(value: JsonRecord): CustomModelConfiguration {
+  const endpoints = Array.isArray(value.endpoints)
+    ? value.endpoints.filter(isCustomEndpointRecord)
+    : [];
+  const endpoint = endpoints.find((candidate) => stringValue(candidate.id) === 'custom');
+  return {
+    apiKeyAction: 'preserve',
+    apiKeyConfigured: endpoint?.has_api_key === true,
+    apiKeyPreview: stringValue(endpoint?.api_key_preview),
+    apiMode: customApiMode(endpoint?.api_mode),
+    baseUrl: stringValue(endpoint?.base_url),
+    contextLength: numberValue(endpoint?.context_length),
+    model: stringValue(endpoint?.model),
+    reasoningEffort: customReasoningEffort(endpoint?.reasoning_effort),
+  };
+}
+
+function isCustomEndpointRecord(value: unknown): value is CustomEndpointRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeModelCatalogBaseUrl(value: string): string {
@@ -347,4 +413,10 @@ function stringValue(value: unknown): string {
 
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map(stringValue).filter(Boolean)
+    : [];
 }

@@ -67,6 +67,8 @@ test('iOS release-critical API surface remains connected to official backend rou
     '/api/model/info',
     '/api/model/options',
     '/api/model/set',
+    '/api/providers/custom-endpoints',
+    '/api/providers/custom-endpoints/validate',
     '/api/memory',
     '/api/skills',
     '/api/mcp/servers',
@@ -87,6 +89,12 @@ test('iOS release-critical API surface remains connected to official backend rou
       `iOS facade lost release-critical backend route fragment: ${fragment}`,
     );
   }
+
+  assert.doesNotMatch(
+    apiSources,
+    /\/api\/model\/custom(?:\/|['"`])/,
+    'iOS must use the canonical custom-provider endpoints exposed by Hermes',
+  );
 });
 
 test('iOS chat transport keeps WebSocket first with an SSE fallback', () => {
@@ -96,4 +104,15 @@ test('iOS chat transport keeps WebSocket first with an SSE fallback', () => {
   assert.match(stream, /fall back to the existing SSE implementation/);
   const events = read('src/api/hosted-conversation-events.ts');
   assert.match(events, /Install all handlers before sending the subscription/);
+});
+
+test('iOS Agent Rooms keep WebSocket first with SSE and polling fallbacks', () => {
+  const groupTransport = read('src/api/hermes-studio/group-chat.ts');
+  assert.match(groupTransport, /consumeHostedConversationEventsWebSocket/);
+  assert.match(groupTransport, /hosted-events-ws/);
+  assert.match(groupTransport, /consumeHostedConversationEvents/);
+  const controller = read('src/studio/agent-group/useAgentGroupChatController.ts');
+  assert.match(controller, /hasHealthyRoomStream/);
+  assert.match(controller, /setInterval\(\(\) =>/);
+  assert.match(controller, /2_500/);
 });
