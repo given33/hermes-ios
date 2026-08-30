@@ -1325,6 +1325,33 @@ private struct HermesRemoteRoutePage: View {
   @ViewBuilder private var routeBody: some View {
     switch route {
     case .cron:
+      cronRouteBody
+    case .skills:
+      skillsRouteBody
+    case .plugins, .mcp, .channels, .webhooks:
+      integrationsRouteBody
+    case .pairing:
+      pairingRouteBody
+    case .achievements:
+      achievementsRouteBody
+    case .collaboration:
+      collaborationRouteBody
+    case .kanban:
+      kanbanRoutePage
+    case .profiles, .bots:
+      profilesRouteBody
+    case .config:
+      configRouteBody
+    case .env:
+      environmentRouteBody
+    case .system:
+      systemRouteBody
+    default:
+      EmptyView()
+    }
+  }
+
+  private var cronRouteBody: some View {
       List {
         if let catalog = data.cronBlueprintsJSON, !catalog.isEmpty {
           Section(chinese ? "官方自动化蓝图" : "Official automation blueprints") {
@@ -1404,7 +1431,9 @@ private struct HermesRemoteRoutePage: View {
       }
       .hermesListStyle()
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "cron")) }
-    case .skills:
+  }
+
+  private var skillsRouteBody: some View {
       List {
         installationSection
         if let sources = data.skillHubSourcesJSON, !sources.isEmpty {
@@ -1580,7 +1609,9 @@ private struct HermesRemoteRoutePage: View {
       }
       .hermesListStyle()
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "skills")) }
-    case .plugins, .mcp, .channels, .webhooks:
+  }
+
+  private var integrationsRouteBody: some View {
       List {
         if route == .channels {
           channelOnboardingSection
@@ -1744,7 +1775,9 @@ private struct HermesRemoteRoutePage: View {
         }
       }
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: route.rawValue)) }
-    case .pairing:
+  }
+
+  private var pairingRouteBody: some View {
       List {
         Section(chinese ? "待批准" : "Pending") {
           if data.pairing.pending.isEmpty {
@@ -1811,7 +1844,9 @@ private struct HermesRemoteRoutePage: View {
       }
       .hermesListStyle()
       .refreshable { onAction(.refresh, HermesRouteActionPayload(route: "pairing")) }
-    case .achievements:
+  }
+
+  private var achievementsRouteBody: some View {
       HermesPage(subtitle: chinese ? "Hermes 使用进度与里程碑" : "Hermes usage progress and milestones") {
         Grid(horizontalSpacing: 12, verticalSpacing: 12) {
           GridRow {
@@ -1840,7 +1875,9 @@ private struct HermesRemoteRoutePage: View {
         }
         .buttonStyle(.bordered)
       }
-    case .collaboration:
+  }
+
+  private var collaborationRouteBody: some View {
       VStack(spacing: 0) {
         if data.collaboration.rooms.isEmpty {
           ContentUnavailableView(
@@ -1928,9 +1965,9 @@ private struct HermesRemoteRoutePage: View {
         collaborationPendingRoomId = ""
         collaborationPendingText = ""
       }
-    case .kanban:
-      kanbanRoutePage
-    case .profiles, .bots:
+  }
+
+  private var profilesRouteBody: some View {
       List {
         if route == .bots {
           Section {
@@ -2188,7 +2225,9 @@ private struct HermesRemoteRoutePage: View {
         }
         }
       }.hermesListStyle().refreshable { onAction(.refresh, HermesRouteActionPayload(route: route.rawValue)) }
-    case .config:
+  }
+
+  private var configRouteBody: some View {
       Form {
         Section(chinese ? "通用" : "General") {
           LabeledContent(chinese ? "默认模型" : "Default model", value: data.config.defaultModel)
@@ -2237,7 +2276,9 @@ private struct HermesRemoteRoutePage: View {
             }
           }
         }
-    case .env:
+  }
+
+  private var environmentRouteBody: some View {
       List(data.environment) { secret in
         HermesRemoteRow(icon: "key.fill", title: secret.key, detail: secret.maskedValue, tint: appearance.palette.accent) {
           HStack(spacing: 8) {
@@ -2259,7 +2300,9 @@ private struct HermesRemoteRoutePage: View {
           }
         }
       }.hermesListStyle().refreshable { onAction(.refresh, HermesRouteActionPayload(route: "env")) }
-    case .system:
+  }
+
+  private var systemRouteBody: some View {
       HermesPage(subtitle: chinese ? "Hermes 网关、任务和资源状态" : "Hermes gateway, task, and resource status") {
         Grid(horizontalSpacing: 12, verticalSpacing: 12) {
           GridRow {
@@ -2430,9 +2473,6 @@ private struct HermesRemoteRoutePage: View {
           }
         }
       }.refreshable { onAction(.refresh, HermesRouteActionPayload(route: "system")) }
-    default:
-      EmptyView()
-    }
   }
 
   @ViewBuilder private var channelOnboardingSection: some View {
@@ -4665,7 +4705,7 @@ private struct HermesSessionsPage: View {
     return sessions.filter { $0.title.localizedCaseInsensitiveContains(search) }
   }
 
-  var body: some View {
+  private var sessionsList: some View {
     List {
       if let context = sessionContext {
         Section {
@@ -5011,6 +5051,10 @@ private struct HermesSessionsPage: View {
     }
     .hermesListStyle()
     .background(appearance.palette.background)
+  }
+
+  var body: some View {
+    sessionsList
     .searchable(text: $search, prompt: chinese ? "搜索会话" : "Search sessions")
     .toolbar {
       ToolbarItem(placement: .navigationBarTrailing) {
