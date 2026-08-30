@@ -184,6 +184,13 @@ test('native context singleton callbacks are fenced across module replacement', 
   );
 });
 
+test('SwiftUI Bot metadata JSON uses valid interpolation expressions', () => {
+  const pages = readControls('HermesSwiftUIPages.swift');
+  assert.match(pages, /detail: #"\{"hidden":\\#\(profile\.botHidden != true\)\}"#/);
+  assert.match(pages, /detail: #"\{"pinned":\\#\(profile\.botPinned != true\)\}"#/);
+  assert.doesNotMatch(pages, /\\\(profile\.bot(?:Hidden|Pinned) == true \? \\"false\\"/);
+});
+
 // 10. HermesAppIntents must register HermesSendPromptIntent and
 //     HermesQuickTaskIntent via HermesTaskShortcuts.
 test('HermesTaskShortcuts surfaces every UI-touching shortcut', () => {

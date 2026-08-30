@@ -680,6 +680,7 @@ private struct HermesMemoryPage: View {
                 .accessibilityLabel(chinese ? "配置记忆 Provider" : "Configure memory provider")
               }
             }
+          }
         }
       }
       HStack {
@@ -2126,8 +2127,8 @@ private struct HermesRemoteRoutePage: View {
                       HermesRouteActionPayload(
                         route: "bots",
                         id: profile.id,
-                        targetId: item.element.slug,
-                        detail: item.element.url
+                        detail: item.element.url,
+                        targetId: item.element.slug
                       )
                     )
                   }
@@ -2159,7 +2160,7 @@ private struct HermesRemoteRoutePage: View {
                 HermesRouteActionPayload(
                   route: "bots",
                   id: profile.id,
-                  detail: "{\"hidden\":\(profile.botHidden == true ? \"false\" : \"true\")}"
+                  detail: #"{"hidden":\#(profile.botHidden != true)}"#
                 )
               )
             } label: {
@@ -2171,7 +2172,7 @@ private struct HermesRemoteRoutePage: View {
                 HermesRouteActionPayload(
                   route: "bots",
                   id: profile.id,
-                  detail: "{\"pinned\":\(profile.botPinned == true ? \"false\" : \"true\")}"
+                  detail: #"{"pinned":\#(profile.botPinned != true)}"#
                 )
               )
             } label: {
@@ -2933,7 +2934,7 @@ private struct HermesRemoteRoutePage: View {
     if agents.isEmpty {
       return chinese ? "当前没有可达的其他连接机器人。" : "No reachable bots on other connections."
     }
-    let labels = agents.prefix(8).compactMap { row in
+    let labels: [String] = agents.prefix(8).compactMap { row -> String? in
       let handle = row["handle"] as? String
       let connection = row["connection_id"] as? String
       guard let handle, !handle.isEmpty else { return nil }
@@ -3251,7 +3252,7 @@ private struct HermesRemoteRoutePage: View {
       onAction(.botProfileConfigure, HermesRouteActionPayload(route: "bots", id: editorID, detail: detail))
     case .botRelay:
       guard !value.isEmpty, !detail.isEmpty else { return }
-      onAction(.botRelaySend, HermesRouteActionPayload(route: "bots", targetId: value, detail: detail, fields: ["profile": editorID.isEmpty ? "default" : editorID]))
+      onAction(.botRelaySend, HermesRouteActionPayload(route: "bots", detail: detail, targetId: value, fields: ["profile": editorID.isEmpty ? "default" : editorID]))
     case .profileDescription:
       guard !editorID.isEmpty else { return }
       onAction(.profileDescription, HermesRouteActionPayload(route: route.rawValue, id: editorID, detail: detail))
@@ -3692,8 +3693,8 @@ private struct HermesKanbanTaskDetailSheet: View {
                 route: "kanban",
                 id: card.id,
                 name: attachment.filename,
-                position: attachment.size,
                 targetId: attachment.id,
+                position: attachment.size,
                 fields: actionFields()
               )
             )
@@ -3777,8 +3778,8 @@ private struct HermesKanbanTaskDetailSheet: View {
             HermesRouteActionPayload(
               route: "kanban",
               id: card.id,
-              targetId: normalizedAssignee,
               detail: normalizedReason,
+              targetId: normalizedAssignee,
               fields: actionFields()
             )
           )
@@ -4192,28 +4193,33 @@ private struct HermesKanbanTimelineEntry: Identifiable {
   let date: String
 
   static func rows(from value: Any?, nestedKeys: [String], kind: String) -> [HermesKanbanTimelineEntry] {
-    hermesKanbanRows(value, nestedKeys: nestedKeys).enumerated().map { index, row in
+    let sourceRows = hermesKanbanRows(value, nestedKeys: nestedKeys)
+    return sourceRows.enumerated().map { index, row in
       let fallbackTitle = kind == "comment" ? "Comment" : "Event"
+      let id = hermesKanbanString(row["id"]) ?? "\(kind)-\(index)"
+      let title = hermesKanbanString(row["author"])
+        ?? hermesKanbanString(row["actor"])
+        ?? hermesKanbanString(row["kind"])
+        ?? hermesKanbanString(row["type"])
+        ?? hermesKanbanString(row["event"])
+        ?? hermesKanbanString(row["action"])
+        ?? fallbackTitle
+      let detail = hermesKanbanText(row["body"])
+        ?? hermesKanbanText(row["text"])
+        ?? hermesKanbanText(row["comment"])
+        ?? hermesKanbanText(row["message"])
+        ?? hermesKanbanText(row["detail"])
+        ?? hermesKanbanText(row["payload"])
+        ?? ""
+      let date = hermesKanbanString(row["created_at"])
+        ?? hermesKanbanString(row["timestamp"])
+        ?? hermesKanbanString(row["date"])
+        ?? ""
       return HermesKanbanTimelineEntry(
-        id: hermesKanbanString(row["id"]) ?? "\(kind)-\(index)",
-        title: hermesKanbanString(row["author"])
-          ?? hermesKanbanString(row["actor"])
-          ?? hermesKanbanString(row["kind"])
-          ?? hermesKanbanString(row["type"])
-          ?? hermesKanbanString(row["event"])
-          ?? hermesKanbanString(row["action"])
-          ?? fallbackTitle,
-        detail: hermesKanbanText(row["body"])
-          ?? hermesKanbanText(row["text"])
-          ?? hermesKanbanText(row["comment"])
-          ?? hermesKanbanText(row["message"])
-          ?? hermesKanbanText(row["detail"])
-          ?? hermesKanbanText(row["payload"])
-          ?? "",
-        date: hermesKanbanString(row["created_at"])
-          ?? hermesKanbanString(row["timestamp"])
-          ?? hermesKanbanString(row["date"])
-          ?? ""
+        id: id,
+        title: title,
+        detail: detail,
+        date: date
       )
     }
   }
@@ -4466,6 +4472,7 @@ private struct HermesRemoteEditorSheet: View {
       if kind == .profileDescription { return isCreating ? "Add Profile description" : "Edit Profile description" }
       if kind == .profileModel { return isCreating ? "Add Profile model" : "Edit Profile model" }
       if kind == .botMeta { return isCreating ? "Bot Mode metadata" : "Edit Bot Mode metadata" }
+      if kind == .botProfileConfigure { return "Configure Bot Mode profile" }
       if kind == .botRelay { return "Send Bot Mode message" }
       if kind == .skill { return isCreating ? "New Skill" : "Edit SKILL.md" }
       if kind == .kanban { return name.isEmpty ? "New Task" : "Edit Task" }
@@ -4488,6 +4495,7 @@ private struct HermesRemoteEditorSheet: View {
     case .profileDescription: return "编辑 Profile 描述"
     case .profileModel: return "编辑 Profile 模型"
     case .botMeta: return "编辑 Bot Mode 信息"
+    case .botProfileConfigure: return "配置 Bot Mode Profile"
     case .botRelay: return "发送跨连接 Bot 消息"
     case .soul: return "编辑 SOUL.md"
     case .skill: return isCreating ? "新建 Skill" : "编辑 SKILL.md"
