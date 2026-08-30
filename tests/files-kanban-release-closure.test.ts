@@ -217,6 +217,128 @@ test('Kanban relationship actions preserve parent-child direction and refresh de
   ]);
 });
 
+test('Kanban board management actions use the canonical board and orchestration APIs', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    createKanbanBoard: async (...args: unknown[]) => {
+      calls.push(['create-board', ...args]);
+      return { board: { slug: 'hong-kong' }, current: 'hong-kong' };
+    },
+    updateKanbanBoard: async (...args: unknown[]) => {
+      calls.push(['update-board', ...args]);
+      return { board: { slug: args[0] } };
+    },
+    deleteKanbanBoard: async (...args: unknown[]) => {
+      calls.push(['delete-board', ...args]);
+      return { result: 'archived' };
+    },
+    exportKanbanBoard: async (...args: unknown[]) => {
+      calls.push(['export-board', ...args]);
+      return { archive: '/srv/hermes/exports/hk.tar.gz' };
+    },
+    importKanbanBoard: async (...args: unknown[]) => {
+      calls.push(['import-board', ...args]);
+      return { board: 'hong-kong-copy' };
+    },
+    setKanbanOrchestration: async (...args: unknown[]) => {
+      calls.push(['orchestration', ...args]);
+      return { ok: true };
+    },
+  } as unknown as HermesCloudApi;
+
+  const created = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.board.create',
+    payload: {
+      route: 'kanban',
+      name: 'Hong Kong',
+      value: 'hong-kong',
+      detail: 'HK worker board',
+      enabled: true,
+      fields: {
+        icon: 'network',
+        color: '#22c55e',
+        defaultWorkdir: '/srv/hermes/hk',
+        projectId: 'project-hk',
+      },
+    },
+  }, 'dispatcher', 'en');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.board.update',
+    payload: {
+      route: 'kanban', id: 'hong-kong', name: 'HK Workers', detail: '',
+    },
+  }, 'dispatcher', 'en');
+  const archived = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.board.delete',
+    payload: { route: 'kanban', id: 'hong-kong', enabled: false },
+  }, 'dispatcher', 'en');
+  const deleted = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.board.delete',
+    payload: { route: 'kanban', id: 'old-board', enabled: true },
+  }, 'dispatcher', 'en');
+  const exported = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.board.export',
+    payload: {
+      route: 'kanban',
+      id: 'hong-kong',
+      value: '/srv/hermes/exports/hk.tar.gz',
+      fields: { attachments: 'true', logs: 'false' },
+    },
+  }, 'dispatcher', 'en');
+  const imported = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.board.import',
+    payload: {
+      route: 'kanban',
+      name: 'hong-kong-copy',
+      value: '/srv/hermes/exports/hk.tar.gz',
+      enabled: true,
+    },
+  }, 'dispatcher', 'en');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.orchestration.update',
+    payload: {
+      route: 'kanban',
+      fields: {
+        orchestratorProfile: 'dispatcher',
+        defaultAssignee: 'hk-worker',
+        autoDecompose: 'true',
+        autoPromoteChildren: 'false',
+      },
+    },
+  }, 'dispatcher', 'en');
+
+  assert.deepEqual(calls, [
+    ['create-board', {
+      slug: 'hong-kong',
+      name: 'Hong Kong',
+      description: 'HK worker board',
+      icon: 'network',
+      color: '#22c55e',
+      default_workdir: '/srv/hermes/hk',
+      project_id: 'project-hk',
+      switch: true,
+    }],
+    ['update-board', 'hong-kong', { name: 'HK Workers', description: '' }],
+    ['delete-board', 'hong-kong', false],
+    ['delete-board', 'old-board', true],
+    ['export-board', 'hong-kong', {
+      output: '/srv/hermes/exports/hk.tar.gz', attachments: true, logs: false,
+    }],
+    ['import-board', '/srv/hermes/exports/hk.tar.gz', 'hong-kong-copy', true],
+    ['orchestration', {
+      orchestrator_profile: 'dispatcher',
+      default_assignee: 'hk-worker',
+      auto_decompose: true,
+      auto_promote_children: false,
+    }],
+  ]);
+  assert.equal(typeof created === 'object' ? created.kanbanDetailJSON : undefined, '');
+  assert.equal(typeof archived === 'object' ? archived.kanbanDetailJSON : undefined, '');
+  assert.match(typeof deleted === 'object' ? deleted.message : '', /deleted/);
+  assert.match(typeof exported === 'object' ? exported.message : '', /\/srv\/hermes\/exports\/hk\.tar\.gz/);
+  assert.match(typeof imported === 'object' ? imported.message : '', /hong-kong-copy/);
+});
+
 test('Kanban detail fence rejects late task and same-task responses', () => {
   let state = { generation: 0, taskId: '' };
   const taskA = beginKanbanDetailRequest(state, 'kanban.task.open', 'task-a');
@@ -261,6 +383,12 @@ test('Kanban detail fence rejects late task and same-task responses', () => {
   const openedAfterSwitch = beginKanbanDetailRequest(state, 'kanban.task.open', 'task-c');
   state = openedAfterSwitch.state;
   assert.equal(shouldClearKanbanDetail(state, boardSwitch.token), false);
+
+  for (const action of ['kanban.board.create', 'kanban.board.delete', 'kanban.board.import']) {
+    const management = beginKanbanDetailRequest(state, action, '');
+    state = management.state;
+    assert.equal(shouldClearKanbanDetail(state, management.token), true);
+  }
 });
 
 test('native release surfaces expose server Files paging and complete Kanban detail controls', () => {
@@ -281,6 +409,16 @@ test('native release surfaces expose server Files paging and complete Kanban det
   assert.match(pages, /\.kanbanAttachmentDownload/);
   assert.match(pages, /\.kanbanRelationLink/);
   assert.match(pages, /\.kanbanRelationUnlink/);
+  assert.match(pages, /\.kanbanBoardCreate/);
+  assert.match(pages, /\.kanbanBoardUpdate/);
+  assert.match(pages, /\.kanbanBoardDelete/);
+  assert.match(pages, /\.kanbanBoardExport/);
+  assert.match(pages, /\.kanbanBoardImport/);
+  assert.match(pages, /\.kanbanOrchestrationUpdate/);
+  assert.match(pages, /Delete Permanently/);
+  assert.match(pages, /Server archive path/);
+  assert.match(pages, /Dispatcher profile/);
+  assert.match(pages, /Default worker/);
   assert.match(pages, /relationshipsSection\(detail\)/);
   assert.match(pages, /parent_results/);
   assert.match(pages, /child_results/);

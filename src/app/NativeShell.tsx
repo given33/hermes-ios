@@ -183,6 +183,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     items: [
       { path: '/pairing', labels: { en: 'Devices', zh: '设备' }, symbol: 'desktopcomputer', fallback: 'ShieldCheck' },
       { path: '/files', labels: { en: 'Files', zh: '文件' }, symbol: 'folder', fallback: 'FolderOpen' },
+      { path: '/git', labels: { en: 'Git', zh: 'Git 工作区' }, symbol: 'arrow.triangle.branch', fallback: 'GitBranch' },
       { path: '/browser', labels: { en: 'Browser', zh: '浏览器' }, symbol: 'safari', fallback: 'Globe' },
       { path: '/smart-weather', labels: { en: 'Smart Weather', zh: '智能天气' }, symbol: 'cloud.rain', fallback: 'Globe' },
     ],
@@ -193,6 +194,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     items: [
       { path: '/profiles', labels: { en: 'Profiles', zh: '配置' }, symbol: 'person.2', fallback: 'Users' },
       { path: '/bots', labels: { en: 'Bots', zh: '机器人' }, symbol: 'cpu', fallback: 'Cpu' },
+      { path: '/webhooks', labels: { en: 'Webhooks', zh: 'Webhooks' }, symbol: 'arrow.triangle.branch', fallback: 'Webhook' },
       { path: '/config', labels: { en: 'Settings', zh: '设置' }, symbol: 'slider.horizontal.3', fallback: 'Settings' },
       { path: '/account', labels: { en: 'Account', zh: '账户' }, symbol: 'person.crop.circle', fallback: 'Users' },
       { path: '/env', labels: { en: 'Keys', zh: '密钥' }, symbol: 'key', fallback: 'KeyRound' },

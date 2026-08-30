@@ -1364,6 +1364,7 @@ test('provider OAuth and custom endpoint controls keep official wire paths', asy
   await api.submitProviderOauth('openai', { session_id: 'oauth-1', code: '1234' }, 'hk-worker');
   await api.pollProviderOauth('openai', 'oauth-1', 'hk-worker');
   await api.cancelProviderOauth('oauth-1', 'hk-worker');
+  await api.deleteModelCredential('anthropic', 'hk-worker');
   await api.getCustomProviderEndpoints('hk-worker');
   await api.validateCustomProviderEndpoint({ id: 'edge', base_url: 'https://edge.example/v1' });
   await api.saveCustomProviderEndpoint({ id: 'edge', base_url: 'https://edge.example/v1' }, 'hk-worker');
@@ -1375,6 +1376,7 @@ test('provider OAuth and custom endpoint controls keep official wire paths', asy
     ['/api/providers/oauth/openai/submit', 'POST'],
     ['/api/providers/oauth/openai/poll/oauth-1', 'GET'],
     ['/api/providers/oauth/sessions/oauth-1', 'DELETE'],
+    ['/api/providers/oauth/anthropic', 'DELETE'],
     ['/api/providers/custom-endpoints', 'GET'],
     ['/api/providers/custom-endpoints/validate', 'POST'],
     ['/api/providers/custom-endpoints', 'POST'],
@@ -1384,7 +1386,8 @@ test('provider OAuth and custom endpoint controls keep official wire paths', asy
   assert.deepEqual(calls.slice(0, 5).map(({ options }) => options.profile), [
     'hk-worker', 'hk-worker', 'hk-worker', 'hk-worker', 'hk-worker',
   ]);
-  assert.equal(calls[5].options.profile, 'hk-worker');
+  assert.equal(calls[5].options.query?.profile, 'hk-worker');
+  assert.equal(calls[6].options.profile, 'hk-worker');
   assert.deepEqual(parsedBody(calls[2]), { code: '1234', session_id: 'oauth-1' });
 });
 

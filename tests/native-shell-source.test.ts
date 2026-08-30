@@ -178,6 +178,17 @@ test('sidebar uses one opaque safe-area surface, full-width hit targets, and no 
   assert.match(routes, /id: 'plugins', path: '\/plugins', visibleInSidebar: false/);
 });
 
+test('reference sidebar exposes the major backend work surfaces without reviewer workflow', () => {
+  const source = read('src/app/NativeShell.tsx');
+  const sidebar = source.slice(
+    source.indexOf('const REFERENCE_SIDEBAR_GROUPS'),
+    source.indexOf('const REFERENCE_SIDEBAR_ROUTES'),
+  );
+  assert.match(sidebar, /path: '\/git'/);
+  assert.match(sidebar, /path: '\/webhooks'/);
+  assert.doesNotMatch(sidebar, /path: '\/approvals'/);
+});
+
 test('compact reference sidebar preserves usable width, readable branding, and touch targets', () => {
   const source = read('src/app/NativeShell.tsx');
   const referenceSidebar = source.slice(

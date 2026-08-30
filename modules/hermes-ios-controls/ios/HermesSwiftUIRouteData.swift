@@ -1001,6 +1001,40 @@ struct HermesProviderOauthPendingSnapshot: Decodable, Equatable {
   }
 }
 
+struct HermesProviderOauthStatusSnapshot: Decodable, Equatable {
+  let loggedIn: Bool
+  let source: String?
+  let sourceLabel: String?
+
+  private enum CodingKeys: String, CodingKey {
+    case loggedIn = "logged_in"
+    case source
+    case sourceLabel = "source_label"
+  }
+}
+
+struct HermesProviderOauthSnapshot: Decodable, Equatable, Identifiable {
+  let id: String
+  let name: String
+  let disconnectHint: String?
+  let disconnectable: Bool?
+  let status: HermesProviderOauthStatusSnapshot
+
+  private enum CodingKeys: String, CodingKey {
+    case id, name, disconnectable, status
+    case disconnectHint = "disconnect_hint"
+  }
+}
+
+struct HermesProviderOauthCatalogSnapshot: Decodable, Equatable {
+  let providers: [HermesProviderOauthSnapshot]
+
+  static func decode(_ json: String?) -> Self? {
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(Self.self, from: data)
+  }
+}
+
 struct HermesCredentialPoolEntrySnapshot: Decodable, Equatable {
   let index: Int
   let id: String?

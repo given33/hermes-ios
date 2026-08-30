@@ -14,6 +14,7 @@ import {
 import {
   MAX_BACKUP_DOWNLOAD_BYTES,
   presentBackup,
+  waitForActionCompletion,
   writeValidatedBackup,
 } from '../src/app/route-actions/presentation';
 
@@ -155,6 +156,7 @@ test('native management actions call the official bot, MoA, MCP, OAuth, and cred
     addCredentialPoolEntry: async (...args: unknown[]) => { calls.push(['credential-add', ...args]); return {}; },
     cancelProviderOauth: async (...args: unknown[]) => { calls.push(['oauth-cancel', ...args]); return {}; },
     clearBotAsset: async (...args: unknown[]) => { calls.push(['bot-clear', ...args]); return {}; },
+    deleteModelCredential: async (...args: unknown[]) => { calls.push(['oauth-disconnect', ...args]); return { ok: true }; },
     removeCredentialPoolEntry: async (...args: unknown[]) => { calls.push(['credential-delete', ...args]); return {}; },
     replaceMcpServers: async (...args: unknown[]) => { calls.push(['mcp-replace', ...args]); return { ok: true }; },
     saveMoaModels: async (...args: unknown[]) => { calls.push(['moa-save', ...args]); return {}; },
@@ -173,6 +175,9 @@ test('native management actions call the official bot, MoA, MCP, OAuth, and cred
   await performHermesSwiftUIRouteAction(api, {
     action: 'provider.oauth.cancel', payload: { route: 'models', value: 'oauth-session-1' },
   }, 'hk-worker');
+  const disconnected = await performHermesSwiftUIRouteAction(api, {
+    action: 'provider.oauth.disconnect', payload: { route: 'models', id: 'anthropic' },
+  }, 'hk-worker', 'en');
   await performHermesSwiftUIRouteAction(api, {
     action: 'credential.pool.add',
     payload: { route: 'models', id: 'anthropic', name: 'Primary', detail: 'one-time-secret' },
@@ -187,9 +192,11 @@ test('native management actions call the official bot, MoA, MCP, OAuth, and cred
     ['moa-save', { enabled: true }, 'hk-worker'],
     ['mcp-replace', { docs: { transport: 'stdio', command: 'npx' } }, 'hk-worker'],
     ['oauth-cancel', 'oauth-session-1', 'hk-worker'],
+    ['oauth-disconnect', 'anthropic', 'hk-worker'],
     ['credential-add', 'anthropic', 'one-time-secret', 'Primary', 'hk-worker'],
     ['credential-delete', 'anthropic', 2, 'hk-worker'],
   ]);
+  assert.deepEqual(disconnected, { message: 'anthropic disconnected', reload: true });
   await assert.rejects(() => performHermesSwiftUIRouteAction(api, {
     action: 'mcp.replace', payload: { route: 'mcp', detail: '{"mcpServers":{"bad":42}}' },
   }, 'default'), /Every MCP server/);
@@ -252,13 +259,47 @@ test('backup presentation never downloads a status belonging to another process'
   }
 });
 
-test('native source exposes visible OAuth cancellation and cleanup-safe backup sharing', () => {
+test('background operation presentation waits for the requested process result', async () => {
+  const statuses = [
+    { exit_code: null, lines: ['starting'], pid: 101, running: true },
+    { exit_code: 0, lines: ['starting', 'all checks passed'], pid: 101, running: false },
+  ];
+  const api = {
+    getActionStatus: async () => statuses.shift() || {},
+  } as unknown as HermesCloudApi;
+  assert.equal(await waitForActionCompletion(api, 'doctor', 101, {
+    attempts: 2,
+    pollIntervalMs: 0,
+  }), 'starting\nall checks passed');
+
+  const stale = {
+    getActionStatus: async () => ({ exit_code: 0, lines: ['old result'], pid: 99, running: false }),
+  } as unknown as HermesCloudApi;
+  await assert.rejects(
+    () => waitForActionCompletion(stale, 'doctor', 101, { attempts: 1, pollIntervalMs: 0 }),
+    /different doctor process/,
+  );
+
+  const failed = {
+    getActionStatus: async () => ({ exit_code: 2, lines: ['failed'], pid: 101, running: false }),
+  } as unknown as HermesCloudApi;
+  await assert.rejects(
+    () => waitForActionCompletion(failed, 'security-audit', 101, { attempts: 1, pollIntervalMs: 0 }),
+    /failed \(exit 2\)/,
+  );
+});
+
+test('native source exposes visible OAuth lifecycle controls and cleanup-safe backup sharing', () => {
   const pages = readFileSync('modules/hermes-ios-controls/ios/HermesSwiftUIPages.swift', 'utf8');
   const hook = readFileSync('src/app/useHermesSwiftUIRouteData.ts', 'utf8');
   const actions = readFileSync('src/app/hermes-route-data.ts', 'utf8');
+  const providerOauthActions = readFileSync('src/app/route-actions/provider-oauth.ts', 'utf8');
   const presentation = readFileSync('src/app/route-actions/presentation.ts', 'utf8');
   assert.match(pages, /pendingProviderOauth/);
   assert.match(pages, /\.providerOauthCancel/);
+  assert.match(pages, /\.providerOauthDisconnect/);
+  assert.match(pages, /hermes-provider-oauth-disconnect-/);
+  assert.match(pages, /provider\.status\.loggedIn && provider\.disconnectable == true/);
   assert.match(pages, /\.botAvatarClear/);
   assert.match(pages, /\.mcpReplace/);
   assert.match(pages, /\.modelMoaSave/);
@@ -270,7 +311,9 @@ test('native source exposes visible OAuth cancellation and cleanup-safe backup s
   assert.match(hook, /providerOauthPollRef\.current\.cancelled = true;[\s\S]*\}, \[api, profile, routeId\]\);/);
   assert.match(hook, /const oauthLifecycle = lifecycleEpoch\.current;[\s\S]*if \(!oauthIsCurrent\(\)\) return;[\s\S]*await reload\(\);/);
   assert.match(hook, /lifecycleEpoch\.current \+= 1;[\s\S]*\[api, cacheOwner, localStore, profile, reload, routeId\]/);
-  assert.match(actions, /api\.cancelProviderOauth/);
+  assert.match(actions, /performProviderOauthAction/);
+  assert.match(providerOauthActions, /api\.cancelProviderOauth/);
+  assert.match(providerOauthActions, /api\.deleteModelCredential\(provider, profile\)/);
   assert.match(actions, /await presentBackup\(api, archive, locale, pid\)/);
   assert.match(presentation, /api\.consumeBackup\([\s\S]*writeValidatedBackup/);
   assert.doesNotMatch(presentation, /api\.downloadBackup\(archive\)/);

@@ -47,7 +47,7 @@ import { customModelConfiguration, customModelOperationError, modelsSnapshot } f
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { gitSnapshot } from './route-snapshots/git';
-import { fileImportUploadId, fileNameFromUri, operationShareUrls, presentAccountFile, presentBackup, presentConversationExport, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
+import { completedActionMessage, fileImportUploadId, fileNameFromUri, operationShareUrls, presentAccountFile, presentBackup, presentConversationExport, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { performManagedFilesAction } from './route-actions/managed-files';
 import { loadAccountFilesPage, loadAccountFilesRouteFields } from './route-actions/account-files-page';
 import { resolveGitPath } from './route-actions/git';
@@ -57,6 +57,7 @@ import { performChannelOnboardingAction } from './route-actions/channel-onboardi
 import { performKanbanAction } from './route-actions/kanban';
 import { mcpServersDocument, replaceMcpServers } from './route-actions/mcp-editor';
 import { performModelAdminAction } from './route-actions/model-admin';
+import { performProviderOauthAction } from './route-actions/provider-oauth';
 import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata'; // Account previews use temporaryPlaintextFile(name, 'account-file') and consumeAccountFile(... writeBoundedDownload) through presentation.ts.
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
 export {
@@ -249,6 +250,8 @@ export async function performHermesSwiftUIRouteAction(
   const value = payload.value?.trim() || payload.name?.trim() || '';
   const modelAdminResult = await performModelAdminAction(api, action, payload, profile, chinese);
   if (modelAdminResult !== undefined) return modelAdminResult;
+  const providerOauthResult = await performProviderOauthAction(api, action, payload, profile, chinese);
+  if (providerOauthResult !== undefined) return providerOauthResult;
   if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.fileQuery) {
     if (payload.route !== 'files') return 'none';
     const page = await loadAccountFilesPage(api, payload, locale);
@@ -747,17 +750,6 @@ export async function performHermesSwiftUIRouteAction(
           || (chinese ? '当前变量没有可显示的值' : 'No value is available for this variable.'),
       };
     }
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthStart: {
-      if (!payload.id) return 'none';
-      const result = await api.startProviderOauth(payload.id, payload.fields ? { ...payload.fields } : {}, profile);
-      const url = stringValue(result.authorization_url) || stringValue(result.url);
-      const sessionId = stringValue(result.session_id) || stringValue(result.sessionId);
-      return { message: url ? (chinese ? 'Provider OAuth 页面已打开' : 'Provider OAuth page opened') : (chinese ? 'Provider OAuth 已启动' : 'Provider OAuth started'), url, oauthProvider: payload.id, oauthSessionId: sessionId };
-    }
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthSubmit:
-      if (!payload.id) return 'none'; await api.submitProviderOauth(payload.id, payload.fields || {}, profile); return 'reload';
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthCancel:
-      if (!value) return 'none'; await api.cancelProviderOauth(value, profile); return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.customEndpointValidate: {
       const config = parseJsonRecord(value); if (!config) return 'none'; const result = await api.validateCustomProviderEndpoint(config); return { message: stringValue(result.message) || (result.ok === false ? (chinese ? '自定义端点验证失败' : 'Custom endpoint validation failed') : (chinese ? '自定义端点验证通过' : 'Custom endpoint validated')) };
     }
@@ -858,11 +850,11 @@ export async function performHermesSwiftUIRouteAction(
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDoctor: {
       const result = await api.runDoctor({});
-      return { message: stringValue(result.message) || (chinese ? 'Doctor 已启动' : 'Doctor started') };
+      return { message: await completedActionMessage(api, 'doctor', result, chinese ? 'Doctor 已完成' : 'Doctor completed') };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemSecurityAudit: {
       const result = await api.runSecurityAudit({});
-      return { message: stringValue(result.message) || (chinese ? '安全审计已启动' : 'Security audit started') };
+      return { message: await completedActionMessage(api, 'security-audit', result, chinese ? '安全审计已完成' : 'Security audit completed') };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemBackup: {
       const result = await api.createBackup({});
@@ -882,7 +874,7 @@ export async function performHermesSwiftUIRouteAction(
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDiagnostics: {
       const result = await api.dumpDiagnostics({});
-      return { message: stringValue(result.url) || stringValue(result.message) || (chinese ? '诊断报告已生成' : 'Diagnostics report created') };
+      return { message: await completedActionMessage(api, 'dump', result, chinese ? '诊断报告已生成' : 'Diagnostics report created') };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemCheckpoints: {
       const result = await api.getCheckpoints();

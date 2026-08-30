@@ -32,7 +32,7 @@ export function beginKanbanDetailRequest(
   action: string,
   taskId: string,
 ): KanbanDetailFenceRequest {
-  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardSwitch) {
+  if (kanbanActionClearsDetail(action)) {
     const generation = state.generation + 1;
     return {
       state: { generation, taskId: '' },
@@ -237,6 +237,120 @@ export async function performKanbanAction(
     };
   }
 
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardCreate) {
+    const slug = payload.value?.trim() || payload.id?.trim() || '';
+    if (!slug) return 'none';
+    const result = await api.createKanbanBoard({
+      slug,
+      ...(payload.name !== undefined ? { name: payload.name.trim() } : {}),
+      ...(payload.detail !== undefined ? { description: payload.detail.trim() } : {}),
+      ...(payload.fields?.icon !== undefined ? { icon: payload.fields.icon.trim() } : {}),
+      ...(payload.fields?.color !== undefined ? { color: payload.fields.color.trim() } : {}),
+      ...(payload.fields?.defaultWorkdir !== undefined
+        ? { default_workdir: payload.fields.defaultWorkdir.trim() }
+        : {}),
+      ...(payload.fields?.projectId !== undefined
+        ? { project_id: payload.fields.projectId.trim() }
+        : {}),
+      switch: payload.enabled === true,
+    });
+    const createdBoard = isRecord(result.board)
+      ? stringValue(result.board.slug) || slug
+      : slug;
+    return {
+      kanbanDetailJSON: '',
+      message: chinese ? `已创建看板 ${createdBoard}` : `Board ${createdBoard} created`,
+      reload: true,
+    };
+  }
+
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardUpdate) {
+    const slug = payload.id?.trim() || payload.value?.trim() || '';
+    if (!slug) return 'none';
+    await api.updateKanbanBoard(slug, {
+      ...(payload.name !== undefined ? { name: payload.name.trim() } : {}),
+      ...(payload.detail !== undefined ? { description: payload.detail.trim() } : {}),
+      ...(payload.fields?.icon !== undefined ? { icon: payload.fields.icon.trim() } : {}),
+      ...(payload.fields?.color !== undefined ? { color: payload.fields.color.trim() } : {}),
+      ...(payload.fields?.defaultWorkdir !== undefined
+        ? { default_workdir: payload.fields.defaultWorkdir.trim() }
+        : {}),
+      ...(payload.fields?.projectId !== undefined
+        ? { project_id: payload.fields.projectId.trim() }
+        : {}),
+    });
+    return {
+      message: chinese ? `已更新看板 ${slug}` : `Board ${slug} updated`,
+      reload: true,
+    };
+  }
+
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardDelete) {
+    const slug = payload.id?.trim() || payload.value?.trim() || '';
+    if (!slug) return 'none';
+    const hardDelete = payload.enabled === true;
+    await api.deleteKanbanBoard(slug, hardDelete);
+    return {
+      kanbanDetailJSON: '',
+      message: hardDelete
+        ? (chinese ? `已删除看板 ${slug}` : `Board ${slug} deleted`)
+        : (chinese ? `已归档看板 ${slug}` : `Board ${slug} archived`),
+      reload: true,
+    };
+  }
+
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardExport) {
+    const slug = payload.id?.trim() || payload.targetId?.trim() || '';
+    if (!slug) return 'none';
+    const result = await api.exportKanbanBoard(slug, {
+      output: payload.value?.trim() || undefined,
+      attachments: payload.fields?.attachments !== 'false',
+      logs: payload.fields?.logs === 'true',
+    });
+    const archive = stringValue(result.archive) || stringValue(result.path);
+    return {
+      message: archive
+        ? (chinese ? `看板已导出到 ${archive}` : `Board exported to ${archive}`)
+        : (chinese ? `看板 ${slug} 已导出` : `Board ${slug} exported`),
+    };
+  }
+
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardImport) {
+    const archive = payload.value?.trim() || payload.detail?.trim() || '';
+    if (!archive) return 'none';
+    const requestedSlug = payload.name?.trim() || undefined;
+    const result = await api.importKanbanBoard(archive, requestedSlug, payload.enabled === true);
+    const importedSlug = stringValue(result.board) || requestedSlug || '';
+    return {
+      kanbanDetailJSON: '',
+      message: importedSlug
+        ? (chinese ? `已导入看板 ${importedSlug}` : `Board ${importedSlug} imported`)
+        : (chinese ? '看板已导入' : 'Board imported'),
+      reload: true,
+    };
+  }
+
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanOrchestrationUpdate) {
+    await api.setKanbanOrchestration({
+      ...(payload.fields?.orchestratorProfile !== undefined
+        ? { orchestrator_profile: payload.fields.orchestratorProfile.trim() }
+        : {}),
+      ...(payload.fields?.defaultAssignee !== undefined
+        ? { default_assignee: payload.fields.defaultAssignee.trim() }
+        : {}),
+      ...(payload.fields?.autoDecompose !== undefined
+        ? { auto_decompose: payload.fields.autoDecompose === 'true' }
+        : {}),
+      ...(payload.fields?.autoPromoteChildren !== undefined
+        ? { auto_promote_children: payload.fields.autoPromoteChildren === 'true' }
+        : {}),
+    });
+    return {
+      message: chinese ? '调度设置已更新' : 'Dispatch settings updated',
+      reload: true,
+    };
+  }
+
   if (!taskId) return 'none';
 
   if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanReassign) {
@@ -431,7 +545,20 @@ function isKanbanAction(action: HermesSwiftUIRouteAction): boolean {
     || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanRunInspect
     || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanRunTerminate
     || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanTaskLog
-    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardSwitch;
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardSwitch
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardCreate
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardUpdate
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardDelete
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardExport
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardImport
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanOrchestrationUpdate;
+}
+
+function kanbanActionClearsDetail(action: string): boolean {
+  return action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardSwitch
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardCreate
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardDelete
+    || action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardImport;
 }
 
 function kanbanActionReturnsDetail(action: string): boolean {

@@ -1004,6 +1004,30 @@ private struct HermesGitFileSnapshot: Identifiable {
 private struct HermesKanbanBoardChoice: Identifiable, Hashable {
   let id: String
   let name: String
+  let detail: String
+
+  init(id: String, name: String, detail: String = "") {
+    self.id = id
+    self.name = name
+    self.detail = detail
+  }
+}
+
+private enum HermesKanbanManagementDestination: String, Identifiable {
+  case createBoard
+  case updateBoard
+  case exportBoard
+  case importBoard
+  case orchestration
+
+  var id: String { rawValue }
+}
+
+private struct HermesKanbanOrchestrationSettings {
+  let dispatcherProfile: String
+  let defaultWorker: String
+  let autoDecompose: Bool
+  let autoPromoteChildren: Bool
 }
 
 private struct HermesRemoteRoutePage: View {
@@ -1056,6 +1080,8 @@ private struct HermesRemoteRoutePage: View {
   @State private var onboardingWhatsappMode = "pairing"
   @State private var onboardingWhatsappUsers = ""
   @State private var selectedKanbanCard: HermesKanbanCardSnapshot?
+  @State private var kanbanManagementDestination: HermesKanbanManagementDestination?
+  @State private var kanbanPendingRemoval: HermesKanbanBoardChoice?
 
   var body: some View {
     routeBody
@@ -1215,6 +1241,18 @@ private struct HermesRemoteRoutePage: View {
         )
         .environmentObject(appearance)
       }
+      .sheet(item: $kanbanManagementDestination) { destination in
+        HermesKanbanManagementSheet(
+          destination: destination,
+          currentBoard: kanbanCurrentBoardChoice,
+          profileChoices: kanbanProfileChoices,
+          orchestration: kanbanOrchestrationSettings,
+          chinese: chinese,
+          onAction: onAction,
+          onDismiss: { kanbanManagementDestination = nil }
+        )
+        .environmentObject(appearance)
+      }
       .sheet(isPresented: $editingHook) {
         NavigationStack {
           Form {
@@ -1318,6 +1356,28 @@ private struct HermesRemoteRoutePage: View {
         }
         Button(chinese ? "取消" : "Cancel", role: .cancel) {
           clearingBotAvatarID = ""
+        }
+      }
+      .confirmationDialog(
+        chinese ? "移除当前看板？" : "Remove the current board?",
+        isPresented: Binding(
+          get: { kanbanPendingRemoval != nil },
+          set: { if !$0 { kanbanPendingRemoval = nil } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button(chinese ? "归档看板" : "Archive Board") {
+          removePendingKanbanBoard(hardDelete: false)
+        }
+        Button(chinese ? "永久删除" : "Delete Permanently", role: .destructive) {
+          removePendingKanbanBoard(hardDelete: true)
+        }
+        Button(chinese ? "取消" : "Cancel", role: .cancel) {
+          kanbanPendingRemoval = nil
+        }
+      } message: {
+        if let board = kanbanPendingRemoval {
+          Text(board.name)
         }
       }
   }
@@ -2740,6 +2800,46 @@ private struct HermesRemoteRoutePage: View {
             if let board = kanbanCurrentBoard, !board.isEmpty {
               HermesStatusPill(text: board, color: appearance.palette.accent)
             }
+            Menu {
+              Button {
+                kanbanManagementDestination = .createBoard
+              } label: {
+                Label(chinese ? "新建看板" : "New Board", systemImage: "plus")
+              }
+              Button {
+                kanbanManagementDestination = .updateBoard
+              } label: {
+                Label(chinese ? "重命名当前看板" : "Rename Current Board", systemImage: "pencil")
+              }
+              .disabled(kanbanCurrentBoardChoice == nil)
+              Button(role: .destructive) {
+                kanbanPendingRemoval = kanbanCurrentBoardChoice
+              } label: {
+                Label(chinese ? "移除当前看板" : "Remove Current Board", systemImage: "trash")
+              }
+              .disabled(kanbanCurrentBoardChoice == nil)
+              Divider()
+              Button {
+                kanbanManagementDestination = .exportBoard
+              } label: {
+                Label(chinese ? "导出当前看板" : "Export Current Board", systemImage: "square.and.arrow.up")
+              }
+              .disabled(kanbanCurrentBoardChoice == nil)
+              Button {
+                kanbanManagementDestination = .importBoard
+              } label: {
+                Label(chinese ? "导入看板" : "Import Board", systemImage: "square.and.arrow.down")
+              }
+              Divider()
+              Button {
+                kanbanManagementDestination = .orchestration
+              } label: {
+                Label(chinese ? "调度设置" : "Dispatch Settings", systemImage: "slider.horizontal.3")
+              }
+            } label: {
+              Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel(chinese ? "管理看板" : "Manage boards")
           }
           if let metadata = kanbanMetadataSummary {
             Text(metadata)
@@ -3045,7 +3145,11 @@ private struct HermesRemoteRoutePage: View {
           ?? hermesKanbanString(row["display_name"])
           ?? hermesKanbanString(row["name"])
           ?? id
-        choices.append(HermesKanbanBoardChoice(id: id, name: name))
+        choices.append(HermesKanbanBoardChoice(
+          id: id,
+          name: name,
+          detail: hermesKanbanString(row["description"]) ?? ""
+        ))
       }
     }
 
@@ -3067,7 +3171,11 @@ private struct HermesRemoteRoutePage: View {
           let name = hermesKanbanString(row["title"])
             ?? hermesKanbanString(row["name"])
             ?? id
-          choices.append(HermesKanbanBoardChoice(id: id, name: name))
+          choices.append(HermesKanbanBoardChoice(
+            id: id,
+            name: name,
+            detail: hermesKanbanString(row["description"]) ?? ""
+          ))
         }
       }
     }
@@ -3110,6 +3218,23 @@ private struct HermesRemoteRoutePage: View {
     }
   }
 
+  private var kanbanCurrentBoardChoice: HermesKanbanBoardChoice? {
+    guard let current = kanbanCurrentBoard, !current.isEmpty else { return nil }
+    return kanbanBoardChoices.first(where: { $0.id == current })
+      ?? HermesKanbanBoardChoice(id: current, name: current)
+  }
+
+  private var kanbanOrchestrationSettings: HermesKanbanOrchestrationSettings {
+    let response = kanbanMetadataObject?["orchestration"] as? [String: Any]
+    let settings = (response?["settings"] as? [String: Any]) ?? response ?? [:]
+    return HermesKanbanOrchestrationSettings(
+      dispatcherProfile: hermesKanbanString(settings["orchestrator_profile"]) ?? "",
+      defaultWorker: hermesKanbanString(settings["default_assignee"]) ?? "",
+      autoDecompose: (settings["auto_decompose"] as? Bool) ?? true,
+      autoPromoteChildren: (settings["auto_promote_children"] as? Bool) ?? true
+    )
+  }
+
   private var kanbanProfileChoices: [String] {
     guard let object = kanbanMetadataObject else {
       return data.profiles.map(\.id).filter { !$0.isEmpty }.sorted()
@@ -3150,6 +3275,16 @@ private struct HermesRemoteRoutePage: View {
   private var kanbanActionFields: [String: String]? {
     guard let board = kanbanCurrentBoard, !board.isEmpty else { return nil }
     return ["board": board]
+  }
+
+  private func removePendingKanbanBoard(hardDelete: Bool) {
+    guard let board = kanbanPendingRemoval else { return }
+    kanbanPendingRemoval = nil
+    selectedKanbanCard = nil
+    onAction(
+      .kanbanBoardDelete,
+      HermesRouteActionPayload(route: "kanban", id: board.id, enabled: hardDelete)
+    )
   }
 
   private var recentAchievementCount: Int? {
@@ -4392,6 +4527,248 @@ private func hermesKanbanText(_ value: Any?) -> String? {
   return text
 }
 
+private struct HermesKanbanManagementSheet: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let destination: HermesKanbanManagementDestination
+  let currentBoard: HermesKanbanBoardChoice?
+  let profileChoices: [String]
+  let chinese: Bool
+  let onAction: HermesRouteActionSink
+  let onDismiss: () -> Void
+  @State private var boardSlug: String
+  @State private var boardName: String
+  @State private var boardDescription: String
+  @State private var serverPath: String
+  @State private var overrideSlug: String
+  @State private var switchBoard: Bool
+  @State private var includeAttachments = true
+  @State private var includeLogs = false
+  @State private var dispatcherProfile: String
+  @State private var defaultWorker: String
+  @State private var autoDecompose: Bool
+  @State private var autoPromoteChildren: Bool
+
+  init(
+    destination: HermesKanbanManagementDestination,
+    currentBoard: HermesKanbanBoardChoice?,
+    profileChoices: [String],
+    orchestration: HermesKanbanOrchestrationSettings,
+    chinese: Bool,
+    onAction: @escaping HermesRouteActionSink,
+    onDismiss: @escaping () -> Void
+  ) {
+    self.destination = destination
+    self.currentBoard = currentBoard
+    self.profileChoices = profileChoices
+    self.chinese = chinese
+    self.onAction = onAction
+    self.onDismiss = onDismiss
+    _boardSlug = State(initialValue: destination == .updateBoard ? (currentBoard?.id ?? "") : "")
+    _boardName = State(initialValue: destination == .updateBoard ? (currentBoard?.name ?? "") : "")
+    _boardDescription = State(initialValue: destination == .updateBoard ? (currentBoard?.detail ?? "") : "")
+    _serverPath = State(initialValue: "")
+    _overrideSlug = State(initialValue: "")
+    _switchBoard = State(initialValue: destination == .createBoard || destination == .importBoard)
+    _dispatcherProfile = State(initialValue: orchestration.dispatcherProfile)
+    _defaultWorker = State(initialValue: orchestration.defaultWorker)
+    _autoDecompose = State(initialValue: orchestration.autoDecompose)
+    _autoPromoteChildren = State(initialValue: orchestration.autoPromoteChildren)
+  }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        formContent
+      }
+      .scrollContentBackground(.hidden)
+      .background(appearance.palette.background)
+      .navigationTitle(title)
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button(chinese ? "取消" : "Cancel", action: onDismiss)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(saveLabel, action: save)
+            .disabled(saveDisabled)
+        }
+      }
+    }
+    .presentationDetents([.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  @ViewBuilder private var formContent: some View {
+    switch destination {
+    case .createBoard:
+      Section(chinese ? "看板" : "Board") {
+        TextField(chinese ? "Slug" : "Slug", text: $boardSlug)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+        TextField(chinese ? "显示名称（可选）" : "Display name (optional)", text: $boardName)
+        TextField(chinese ? "描述（可选）" : "Description (optional)", text: $boardDescription, axis: .vertical)
+          .lineLimit(2...5)
+        Toggle(chinese ? "创建后切换" : "Switch after creating", isOn: $switchBoard)
+      }
+    case .updateBoard:
+      Section(chinese ? "看板" : "Board") {
+        LabeledContent("Slug", value: currentBoard?.id ?? boardSlug)
+        TextField(chinese ? "显示名称" : "Display name", text: $boardName)
+        TextField(chinese ? "描述（可选）" : "Description (optional)", text: $boardDescription, axis: .vertical)
+          .lineLimit(2...5)
+      }
+    case .exportBoard:
+      Section(chinese ? "导出" : "Export") {
+        LabeledContent(chinese ? "看板" : "Board", value: currentBoard?.name ?? "")
+        TextField(chinese ? "服务器输出路径（可选）" : "Server output path (optional)", text: $serverPath)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+        Toggle(chinese ? "包含附件" : "Include attachments", isOn: $includeAttachments)
+        Toggle(chinese ? "包含日志" : "Include logs", isOn: $includeLogs)
+      }
+    case .importBoard:
+      Section(chinese ? "导入" : "Import") {
+        TextField(chinese ? "服务器归档路径" : "Server archive path", text: $serverPath)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+        TextField(chinese ? "新 Slug（可选）" : "New slug (optional)", text: $overrideSlug)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+        Toggle(chinese ? "导入后切换" : "Switch after importing", isOn: $switchBoard)
+      }
+    case .orchestration:
+      Section(chinese ? "角色" : "Roles") {
+        Picker(chinese ? "调度员 Profile" : "Dispatcher profile", selection: $dispatcherProfile) {
+          Text(chinese ? "当前活动 Profile" : "Active profile").tag("")
+          ForEach(orchestrationProfileChoices, id: \.self) { profile in
+            Text(profile).tag(profile)
+          }
+        }
+        Picker(chinese ? "默认 Worker" : "Default worker", selection: $defaultWorker) {
+          Text(chinese ? "当前活动 Profile" : "Active profile").tag("")
+          ForEach(orchestrationProfileChoices, id: \.self) { profile in
+            Text(profile).tag(profile)
+          }
+        }
+      }
+      Section(chinese ? "自动化" : "Automation") {
+        Toggle(chinese ? "自动拆分任务" : "Automatically split tasks", isOn: $autoDecompose)
+        Toggle(chinese ? "自动推进子任务" : "Automatically promote child tasks", isOn: $autoPromoteChildren)
+      }
+    }
+  }
+
+  private var orchestrationProfileChoices: [String] {
+    var values = profileChoices
+    if !dispatcherProfile.isEmpty { values.append(dispatcherProfile) }
+    if !defaultWorker.isEmpty { values.append(defaultWorker) }
+    var seen = Set<String>()
+    return values.filter { !$0.isEmpty && seen.insert($0).inserted }
+  }
+
+  private var title: String {
+    switch destination {
+    case .createBoard: return chinese ? "新建看板" : "New Board"
+    case .updateBoard: return chinese ? "重命名看板" : "Rename Board"
+    case .exportBoard: return chinese ? "导出看板" : "Export Board"
+    case .importBoard: return chinese ? "导入看板" : "Import Board"
+    case .orchestration: return chinese ? "调度设置" : "Dispatch Settings"
+    }
+  }
+
+  private var saveLabel: String {
+    switch destination {
+    case .exportBoard: return chinese ? "导出" : "Export"
+    case .importBoard: return chinese ? "导入" : "Import"
+    default: return chinese ? "保存" : "Save"
+    }
+  }
+
+  private var saveDisabled: Bool {
+    switch destination {
+    case .createBoard:
+      return boardSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    case .updateBoard:
+      return currentBoard == nil || boardName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    case .exportBoard:
+      return currentBoard == nil
+    case .importBoard:
+      return serverPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    case .orchestration:
+      return false
+    }
+  }
+
+  private func save() {
+    let trimmedName = boardName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedDescription = boardDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch destination {
+    case .createBoard:
+      onAction(
+        .kanbanBoardCreate,
+        HermesRouteActionPayload(
+          route: "kanban",
+          name: trimmedName.isEmpty ? nil : trimmedName,
+          value: boardSlug.trimmingCharacters(in: .whitespacesAndNewlines),
+          detail: trimmedDescription,
+          enabled: switchBoard
+        )
+      )
+    case .updateBoard:
+      guard let currentBoard else { return }
+      onAction(
+        .kanbanBoardUpdate,
+        HermesRouteActionPayload(
+          route: "kanban",
+          id: currentBoard.id,
+          name: trimmedName,
+          detail: trimmedDescription
+        )
+      )
+    case .exportBoard:
+      guard let currentBoard else { return }
+      let path = serverPath.trimmingCharacters(in: .whitespacesAndNewlines)
+      onAction(
+        .kanbanBoardExport,
+        HermesRouteActionPayload(
+          route: "kanban",
+          id: currentBoard.id,
+          value: path.isEmpty ? nil : path,
+          fields: [
+            "attachments": String(includeAttachments),
+            "logs": String(includeLogs),
+          ]
+        )
+      )
+    case .importBoard:
+      let slug = overrideSlug.trimmingCharacters(in: .whitespacesAndNewlines)
+      onAction(
+        .kanbanBoardImport,
+        HermesRouteActionPayload(
+          route: "kanban",
+          name: slug.isEmpty ? nil : slug,
+          value: serverPath.trimmingCharacters(in: .whitespacesAndNewlines),
+          enabled: switchBoard
+        )
+      )
+    case .orchestration:
+      onAction(
+        .kanbanOrchestrationUpdate,
+        HermesRouteActionPayload(
+          route: "kanban",
+          fields: [
+            "orchestratorProfile": dispatcherProfile,
+            "defaultAssignee": defaultWorker,
+            "autoDecompose": String(autoDecompose),
+            "autoPromoteChildren": String(autoPromoteChildren),
+          ]
+        )
+      )
+    }
+    onDismiss()
+  }
+}
+
 private struct HermesRemoteEditorSheet: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let kind: HermesRemoteEditor
@@ -4657,11 +5034,27 @@ private struct HermesToolsetSchemaSheet: View {
 private struct HermesRemoteRow<Trailing: View>: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let icon: String
-  let iconData: String? = nil
+  let iconData: String?
   let title: String
   let detail: String
   let tint: Color
   @ViewBuilder let trailing: () -> Trailing
+
+  init(
+    icon: String,
+    iconData: String? = nil,
+    title: String,
+    detail: String,
+    tint: Color,
+    @ViewBuilder trailing: @escaping () -> Trailing
+  ) {
+    self.icon = icon
+    self.iconData = iconData
+    self.title = title
+    self.detail = detail
+    self.tint = tint
+    self.trailing = trailing
+  }
 
   var body: some View {
     HStack(spacing: 12) {
@@ -5867,6 +6260,8 @@ private struct HermesModelsPage: View {
   @State private var presentedConfirmation: HermesModelConfirmationSnapshot?
   @State private var providerOauthID = ""
   @State private var providerOauthCode = ""
+  @State private var providerOauthDisconnectID = ""
+  @State private var providerOauthDisconnectName = ""
   @State private var moaEditorJSON = ""
   @FocusState private var moaEditorFocused: Bool
   @State private var credentialProvider = ""
@@ -5970,6 +6365,32 @@ private struct HermesModelsPage: View {
     } message: { pending in
       Text(pending.message)
     }
+    .confirmationDialog(
+      chinese
+        ? "断开 \(providerOauthDisconnectName)？"
+        : "Disconnect \(providerOauthDisconnectName)?",
+      isPresented: Binding(
+        get: { !providerOauthDisconnectID.isEmpty },
+        set: { if !$0 { clearProviderOauthDisconnectConfirmation() } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button(chinese ? "断开连接" : "Disconnect", role: .destructive) {
+        let providerID = providerOauthDisconnectID
+        clearProviderOauthDisconnectConfirmation()
+        onAction(
+          .providerOauthDisconnect,
+          HermesRouteActionPayload(route: "models", id: providerID)
+        )
+      }
+      Button(chinese ? "取消" : "Cancel", role: .cancel) {
+        clearProviderOauthDisconnectConfirmation()
+      }
+    } message: {
+      Text(chinese
+        ? "这会删除 Hermes 管理的 OAuth 凭据。"
+        : "This removes the OAuth credential managed by Hermes.")
+    }
   }
 
   @ViewBuilder private var availableModelsPanel: some View {
@@ -5983,6 +6404,9 @@ private struct HermesModelsPage: View {
             .font(HermesFonts.body(13))
             .foregroundStyle(appearance.palette.secondary)
         } else {
+          Text(chinese ? "可分叉消息" : "Branchable messages")
+            .font(HermesFonts.bodyBold(12))
+            .foregroundStyle(appearance.palette.secondary)
           LazyVStack(spacing: 0) {
             ForEach(models) { model in
               modelRow(model)
@@ -5990,8 +6414,6 @@ private struct HermesModelsPage: View {
                 Divider()
               }
             }
-          } header: {
-            Text(chinese ? "可分叉消息" : "Branchable messages")
           }
         }
       }
@@ -6156,17 +6578,35 @@ private struct HermesModelsPage: View {
   private var pendingProviderOauth: HermesProviderOauthPendingSnapshot? {
     HermesProviderOauthPendingSnapshot.decode(providerOauthPendingJSON)
   }
+  private var providerOauthCatalog: HermesProviderOauthCatalogSnapshot? {
+    HermesProviderOauthCatalogSnapshot.decode(providerOauthJSON)
+  }
   private var credentialPool: HermesCredentialPoolSnapshot? {
     HermesCredentialPoolSnapshot.decode(credentialPoolJSON)
   }
 
   @ViewBuilder private var providerConnectionsPanel: some View {
-    if let metadata = providerOauthJSON, !metadata.isEmpty {
+    if let providerOauthJSON, !providerOauthJSON.isEmpty {
       HermesPanel {
         VStack(alignment: .leading, spacing: 10) {
           Label(chinese ? "官方 Provider OAuth" : "Official provider OAuth", systemImage: "person.badge.key")
             .font(HermesFonts.display(15))
-          Text(metadata).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary).textSelection(.enabled).lineLimit(8)
+          if let catalog = providerOauthCatalog {
+            if catalog.providers.isEmpty {
+              Text(chinese ? "当前没有 OAuth Provider" : "No OAuth providers are available")
+                .font(HermesFonts.body(12))
+                .foregroundStyle(appearance.palette.secondary)
+            } else {
+              ForEach(catalog.providers) { provider in
+                providerOauthRow(provider)
+                if provider.id != catalog.providers.last?.id { Divider() }
+              }
+            }
+          } else {
+            Text(chinese ? "Provider 状态暂时不可用" : "Provider status is unavailable")
+              .font(HermesFonts.body(12))
+              .foregroundStyle(appearance.palette.secondary)
+          }
           if let pending = pendingProviderOauth, !pending.cancelled {
             HStack(spacing: 10) {
               ProgressView().controlSize(.small)
@@ -6215,6 +6655,53 @@ private struct HermesModelsPage: View {
         }
       }
     }
+  }
+
+  @ViewBuilder private func providerOauthRow(_ provider: HermesProviderOauthSnapshot) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text(provider.name).font(HermesFonts.bodyBold(13))
+          Text(provider.id).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary)
+        }
+        Spacer(minLength: 8)
+        HermesStatusPill(
+          text: provider.status.loggedIn
+            ? (chinese ? "已连接" : "Connected")
+            : (chinese ? "未连接" : "Not connected"),
+          color: provider.status.loggedIn ? appearance.palette.success : appearance.palette.secondary
+        )
+        if provider.status.loggedIn && provider.disconnectable == true {
+          Button(role: .destructive) {
+            providerOauthDisconnectID = provider.id
+            providerOauthDisconnectName = provider.name
+          } label: {
+            Label(chinese ? "断开" : "Disconnect", systemImage: "xmark.circle")
+          }
+          .buttonStyle(.bordered)
+          .tint(appearance.palette.destructive)
+          .accessibilityIdentifier("hermes-provider-oauth-disconnect-\(provider.id)")
+        }
+      }
+      if provider.status.loggedIn,
+         let sourceLabel = provider.status.sourceLabel,
+         !sourceLabel.isEmpty {
+        Text(sourceLabel)
+          .font(HermesFonts.body(10))
+          .foregroundStyle(appearance.palette.secondary)
+          .lineLimit(2)
+      }
+      if provider.status.loggedIn,
+         provider.disconnectable != true,
+         let disconnectHint = provider.disconnectHint,
+         !disconnectHint.isEmpty {
+        Text(disconnectHint)
+          .font(HermesFonts.body(10))
+          .foregroundStyle(appearance.palette.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.vertical, 4)
   }
 
   @ViewBuilder private var credentialPoolPanel: some View {
@@ -6523,6 +7010,11 @@ private struct HermesModelsPage: View {
   private func invalidateDetectedModels() {
     displayedDetectedModels = []
     detectedModelsExpanded = false
+  }
+
+  private func clearProviderOauthDisconnectConfirmation() {
+    providerOauthDisconnectID = ""
+    providerOauthDisconnectName = ""
   }
 
   private var isValid: Bool {

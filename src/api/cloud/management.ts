@@ -365,7 +365,7 @@ export class HermesManagementCloudApi {
   }
 
   deleteModelCredential(id: string, profile = 'default') {
-    return this.transport.request<{ ok: boolean; removed: boolean }>(
+    return this.transport.request<{ ok: boolean; provider?: string; removed?: boolean }>(
       `/api/providers/oauth/${encodeURIComponent(id)}`,
       { method: 'DELETE', query: { profile } },
     );

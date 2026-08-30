@@ -157,6 +157,63 @@ async function waitForBackupCompletion(api: HermesCloudApi, expectedPid?: number
   throw new Error('Hermes backup did not finish within two minutes');
 }
 
+export interface ActionCompletionOptions {
+  attempts?: number;
+  pollIntervalMs?: number;
+}
+
+/** Wait for a dashboard background action and return its actual log output.
+ * The PID check prevents a stale status response from presenting another
+ * invocation's result as the one the user just started. */
+export async function waitForActionCompletion(
+  api: HermesCloudApi,
+  name: string,
+  expectedPid: number | undefined,
+  options: ActionCompletionOptions = {},
+): Promise<string> {
+  const attempts = Math.max(1, Math.min(600, Math.floor(options.attempts ?? 240)));
+  const pollIntervalMs = Math.max(0, Math.min(5_000, Math.floor(options.pollIntervalMs ?? 500)));
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const status = await api.getActionStatus(name, 200);
+    const statusPid = typeof status.pid === 'number' && Number.isSafeInteger(status.pid)
+      ? status.pid
+      : undefined;
+    if (expectedPid !== undefined && statusPid !== expectedPid) {
+      throw new Error(statusPid === undefined
+        ? `Hermes ${name} status did not identify the requested process`
+        : `Hermes reported a different ${name} process`);
+    }
+    if (status.running === false) {
+      const exitCode = typeof status.exit_code === 'number' ? status.exit_code : undefined;
+      if (exitCode !== 0) {
+        throw new Error(exitCode === undefined
+          ? `Hermes ${name} finished without a verifiable result`
+          : `Hermes ${name} failed (exit ${exitCode})`);
+      }
+      const lines = Array.isArray(status.lines)
+        ? status.lines.filter((line): line is string => typeof line === 'string' && line.trim().length > 0)
+        : [];
+      return lines.slice(-40).join('\n').slice(-8_000);
+    }
+    if (pollIntervalMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+  throw new Error(`Hermes ${name} did not finish within two minutes`);
+}
+
+export async function completedActionMessage(
+  api: HermesCloudApi,
+  name: string,
+  launch: Record<string, unknown>,
+  fallback: string,
+): Promise<string> {
+  const pid = typeof launch.pid === 'number' && Number.isSafeInteger(launch.pid)
+    ? launch.pid
+    : undefined;
+  return (await waitForActionCompletion(api, name, pid)) || fallback;
+}
+
 function hasZipSignature(bytes: Uint8Array): boolean {
   return bytes.byteLength >= 4
     && bytes[0] === 0x50
