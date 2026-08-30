@@ -1186,17 +1186,20 @@ test('distributable builds keep MapKit available when the optional AMap key is a
   assert.match(mapView, /HermesLocationService\.shared\.mapLocationStatus\(\)/);
   assert.match(mapView, /phase: "degraded"/);
   assert.match(mapView, /var providerResetRequest = 0/);
-  assert.match(mapView, /onProviderStatus\(HermesNativeMapRuntimeState\.shared\.snapshot\(\)\)/);
+  assert.match(mapView, /onProviderStatus\(HermesNativeMapRuntimeState\.shared\.snapshotWithLocationStatus\(\)\)/);
 
   const module = read('ios/HermesStandardMapModule.swift');
   const location = read('ios/HermesLocationService.swift');
   const bridge = read('index.ts');
   const page = readFileSync(resolve(root, 'src/context/SmartWeatherPage.tsx'), 'utf8');
   assert.match(module, /Events\("onLocationPress", "onProviderStatus"\)/);
+  assert.match(module, /AsyncFunction\("getProviderStatus"\)[\s\S]{0,200}snapshotWithLocationStatus\(\)/);
   assert.match(module, /Prop\("providerResetRequest"\)/);
   assert.match(location, /func mapLocationStatus\(\)/);
   assert.match(location, /"lastLocationStatus"/);
   assert.match(bridge, /phase: 'unconfigured' \| 'requestingPermission' \| 'initializing' \| 'ready' \| 'degraded' \| 'failed'/);
+  assert.match(bridge, /getProviderStatus\?\(\): Promise<HermesNativeMapProviderStatus>/);
+  assert.match(page, /void getNativeMapProviderStatus\(\)/);
   assert.match(page, /providerResetRequest=\{mapAttempt\}/);
   assert.match(page, /onProviderStatus=\{\(event\) => setNativeMapProvider\(event\.nativeEvent\)\}/);
   assert.match(page, /smart-weather-provider-warning/);

@@ -4,6 +4,7 @@ enum HermesAccountLifecycle {
   private static let lifecycleLock = NSLock()
 
   @discardableResult
+  @MainActor
   static func activateOwnerScope(
     _ ownerScope: String,
     accountGeneration: String
@@ -64,6 +65,7 @@ enum HermesAccountLifecycle {
   }
 
   @discardableResult
+  @MainActor
   static func deleteOwnerScope(
     _ ownerScope: String,
     accountGeneration: String,

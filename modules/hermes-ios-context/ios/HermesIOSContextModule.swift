@@ -14,6 +14,31 @@ private let hermesFileProviderGroup = "group.app.sunstone1029.fig1171.hermes"
 private let hermesFileProviderOwnerKey = "hermes-file-provider-owner-v1"
 private let hermesVoiceNarrationEnabledKey = "app.hermes.voice-narration-enabled"
 
+private final class HermesContextEventBindingGate: @unchecked Sendable {
+  private let lock = NSLock()
+  private var activeToken: UUID?
+
+  func activate(_ token: UUID) {
+    lock.lock()
+    activeToken = token
+    lock.unlock()
+  }
+
+  func isActive(_ token: UUID) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return activeToken == token
+  }
+
+  func retire(_ token: UUID) -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard activeToken == token else { return false }
+    activeToken = nil
+    return true
+  }
+}
+
 struct HermesCalendarEventInput: Record {
   @Field var title: String = ""
   @Field var start: Double = 0
@@ -29,6 +54,7 @@ struct HermesReminderInput: Record {
 }
 
 public final class HermesIOSContextModule: Module {
+  private static let eventBindingGate = HermesContextEventBindingGate()
   #if canImport(CoreBluetooth)
   private static let nativeBluetoothAvailable = true
   #else
@@ -58,19 +84,21 @@ public final class HermesIOSContextModule: Module {
     ["capability": "ios-browser", "actions": ["navigate", "screenshot", "click", "type", "get_text", "scroll", "get_page_info", "execute_js", "find_elements", "hover", "get_readable", "set_user_agent", "set_viewport", "get_backbone", "fetch", "new_tab", "close_tab", "list_tabs", "get_cookies", "set_cookies", "scroll_and_collect", "wait_for_dom_stable"], "permission": "network/web", "confirmation": "execute_js/write/cookies"],
     ["capability": "ios-device", "actions": ["open-url", "settings"], "permission": "device", "confirmation": "open-url"],
   ]
-  private lazy var location = HermesLocationService.shared
-  private lazy var motion = HermesMotionService.shared
+  @MainActor private lazy var location = HermesLocationService.shared
+  @MainActor private lazy var motion = HermesMotionService.shared
   private lazy var health = HermesHealthService.shared
   private lazy var events = HermesEventStore.shared
   private lazy var eventQueue = HermesContextEventQueue.shared
   private lazy var watch = HermesWatchService.shared
-  private lazy var device = HermesDeviceService.shared
+  @MainActor private lazy var device = HermesDeviceService.shared
   private lazy var screenTime = HermesScreenTimeService.shared
   private lazy var liveActivity = HermesLiveActivityService.shared
   private lazy var attachmentVault = HermesAttachmentVault.shared
   private lazy var voice = HermesVoiceService.shared
   private lazy var protectedExport = HermesProtectedExportFile.shared
   private var relayWakeObserver: NSObjectProtocol?
+  private var lifecycleMainActorTask: Task<Void, Never>?
+  private var eventBindingToken: UUID?
 
   private static func requireCommandID(_ rawValue: String) throws -> String {
     let value = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -84,7 +112,7 @@ public final class HermesIOSContextModule: Module {
   private static func setFileProviderOwnerScope(_ scope: String) {
     let defaults = UserDefaults(suiteName: hermesFileProviderGroup)
     let normalized = scope.trimmingCharacters(in: .whitespacesAndNewlines)
-    let previous = defaults?.string(forKey: hermesFileProviderOwnerKey)
+    let previous = defaults?.string(forKey: hermesFileProviderOwnerKey)?
       .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     if normalized.isEmpty {
       defaults?.removeObject(forKey: hermesFileProviderOwnerKey)
@@ -206,23 +234,32 @@ public final class HermesIOSContextModule: Module {
           "wakeId": notification.userInfo?["wakeId"] as? String ?? "",
         ])
       }
-      self.location.onLocation = { [weak self] payload in
-        self?.sendEvent("onLocation", payload)
-      }
-      self.motion.onMotion = { [weak self] payload in
-        self?.sendEvent("onMotion", payload)
-      }
-      self.location.onVisit = { [weak self] payload in
-        self?.sendEvent("onVisit", payload)
-      }
-      self.watch.onMessage = { [weak self] payload in
-        self?.sendEvent("onWatchMessage", payload)
-      }
-      self.voice.onTranscript = { [weak self] payload in
-        self?.sendEvent("onVoiceTranscript", payload)
-      }
-      self.voice.onState = { [weak self] payload in
-        self?.sendEvent("onVoiceState", payload)
+      let eventBindingToken = UUID()
+      self.eventBindingToken = eventBindingToken
+      Self.eventBindingGate.activate(eventBindingToken)
+      self.lifecycleMainActorTask?.cancel()
+      self.lifecycleMainActorTask = Task { @MainActor [weak self] in
+        guard !Task.isCancelled,
+              let self,
+              Self.eventBindingGate.isActive(eventBindingToken) else { return }
+        self.location.onLocation = { [weak self] payload in
+          self?.sendEvent("onLocation", payload)
+        }
+        self.motion.onMotion = { [weak self] payload in
+          self?.sendEvent("onMotion", payload)
+        }
+        self.location.onVisit = { [weak self] payload in
+          self?.sendEvent("onVisit", payload)
+        }
+        self.watch.onMessage = { [weak self] payload in
+          self?.sendEvent("onWatchMessage", payload)
+        }
+        self.voice.onTranscript = { [weak self] payload in
+          self?.sendEvent("onVoiceTranscript", payload)
+        }
+        self.voice.onState = { [weak self] payload in
+          self?.sendEvent("onVoiceState", payload)
+        }
       }
     }
 
@@ -231,13 +268,19 @@ public final class HermesIOSContextModule: Module {
         NotificationCenter.default.removeObserver(relayWakeObserver)
         self.relayWakeObserver = nil
       }
-      self.location.onLocation = nil
-      self.motion.onMotion = nil
-      self.location.onVisit = nil
-      self.watch.onMessage = nil
-      self.voice.onTranscript = nil
-      self.voice.onState = nil
+      let eventBindingToken = self.eventBindingToken
+      self.eventBindingToken = nil
+      self.lifecycleMainActorTask?.cancel()
+      self.lifecycleMainActorTask = nil
       Task { @MainActor in
+        guard let eventBindingToken,
+              Self.eventBindingGate.retire(eventBindingToken) else { return }
+        self.location.onLocation = nil
+        self.motion.onMotion = nil
+        self.location.onVisit = nil
+        self.watch.onMessage = nil
+        self.voice.onTranscript = nil
+        self.voice.onState = nil
         _ = self.voice.stopRecognition()
         _ = self.voice.stopSpeaking()
       }
@@ -290,30 +333,30 @@ public final class HermesIOSContextModule: Module {
       self.resolveAsync(promise) { await self.location.requestPreciseAuthorization() }
     }.runOnQueue(.main)
 
-    AsyncFunction("getLocationAuthorizationDetails") { () -> [String: Any] in
-      self.location.authorizationSnapshot()
-    }.runOnQueue(.main)
+    AsyncFunction("getLocationAuthorizationDetails") { () async -> [String: Any] in
+      await self.location.authorizationSnapshot()
+    }
 
-    AsyncFunction("startAdaptiveLocation") { () -> Bool in
-      self.location.start()
-    }.runOnQueue(.main)
+    AsyncFunction("startAdaptiveLocation") { () async -> Bool in
+      await self.location.start()
+    }
 
-    AsyncFunction("stopAdaptiveLocation") {
-      self.location.stop()
-    }.runOnQueue(.main)
+    AsyncFunction("stopAdaptiveLocation") { () async in
+      await self.location.stop()
+    }
 
     AsyncFunction("requestCurrentLocation") { (promise: Promise) in
       self.resolveAsync(promise) { await self.location.requestCurrent() }
     }.runOnQueue(.main)
 
-    AsyncFunction("setPredictedDeparture") { (timestamp: Double?) -> Bool in
-      self.location.setPredictedDeparture(at: timestamp.map { Date(timeIntervalSince1970: $0 / 1000) })
+    AsyncFunction("setPredictedDeparture") { (timestamp: Double?) async -> Bool in
+      await self.location.setPredictedDeparture(at: timestamp.map { Date(timeIntervalSince1970: $0 / 1000) })
       return true
-    }.runOnQueue(.main)
+    }
 
-    AsyncFunction("getLocationMode") { () -> String in
-      self.location.mode.rawValue
-    }.runOnQueue(.main)
+    AsyncFunction("getLocationMode") { () async -> String in
+      await self.location.mode.rawValue
+    }
   }
 
   @ModuleDefinitionBuilder
@@ -419,13 +462,13 @@ public final class HermesIOSContextModule: Module {
       UserDefaults.standard.bool(forKey: hermesVoiceNarrationEnabledKey)
     }.runOnQueue(.main)
 
-    AsyncFunction("setVoiceNarrationEnabled") { (enabled: Bool) -> Bool in
+    AsyncFunction("setVoiceNarrationEnabled") { (enabled: Bool) async -> Bool in
       UserDefaults.standard.set(enabled, forKey: hermesVoiceNarrationEnabledKey)
       if !enabled {
-        _ = self.voice.stopSpeaking()
+        _ = await self.voice.stopSpeaking()
       }
       return enabled
-    }.runOnQueue(.main)
+    }
   }
 
   @ModuleDefinitionBuilder
@@ -438,31 +481,31 @@ public final class HermesIOSContextModule: Module {
       self.resolveAsync(promise) { await self.motion.requestAuthorization() }
     }
 
-    AsyncFunction("startMotionUpdates") { () -> Bool in
-      self.motion.start()
+    AsyncFunction("startMotionUpdates") { () async -> Bool in
+      await self.motion.start()
     }
 
-    AsyncFunction("stopMotionUpdates") {
-      self.motion.stop()
+    AsyncFunction("stopMotionUpdates") { () async in
+      await self.motion.stop()
     }
 
-    AsyncFunction("getMotionSnapshot") { () -> [String: Any]? in
-      self.motion.snapshot
+    AsyncFunction("getMotionSnapshot") { () async -> [String: Any]? in
+      await self.motion.snapshot
     }
 
-    AsyncFunction("getPowerSnapshot") { () -> [String: Any] in
-      let payload = self.device.snapshot()
+    AsyncFunction("getPowerSnapshot") { () async -> [String: Any] in
+      let payload = await self.device.snapshot()
       self.eventQueue.enqueue(type: "power", payload: payload)
       return payload
-    }.runOnQueue(.main)
+    }
 
-    AsyncFunction("getDeviceSnapshot") { () -> [String: Any] in
-      self.device.recordSnapshot()
-    }.runOnQueue(.main)
+    AsyncFunction("getDeviceSnapshot") { () async -> [String: Any] in
+      await self.device.recordSnapshot()
+    }
 
-    AsyncFunction("openDeviceSettings") { () -> Bool in
-      self.device.openAppSettings()
-    }.runOnQueue(.main)
+    AsyncFunction("openDeviceSettings") { () async -> Bool in
+      await self.device.openAppSettings()
+    }
   }
 
   @ModuleDefinitionBuilder
@@ -520,8 +563,8 @@ public final class HermesIOSContextModule: Module {
       HermesPermissionCollectionGate.shared.setReady(ready, ownerScope: scope)
     }
 
-    AsyncFunction("activateOwnerScope") { (scope: String, accountGeneration: String) throws -> Int in
-      let generation = HermesAccountLifecycle.activateOwnerScope(
+    AsyncFunction("activateOwnerScope") { (scope: String, accountGeneration: String) async throws -> Int in
+      let generation = await HermesAccountLifecycle.activateOwnerScope(
         scope,
         accountGeneration: accountGeneration
       )
@@ -529,10 +572,10 @@ public final class HermesIOSContextModule: Module {
       if !scope.isEmpty { try self.attachmentVault.activate(owner: scope) }
       if !scope.isEmpty { HermesBackgroundService.shared.schedule() }
       return generation
-    }.runOnQueue(.main)
+    }
 
-    AsyncFunction("deleteOwnerScope") { (scope: String, accountGeneration: String) throws -> [String: Any] in
-      let deletion = HermesAccountLifecycle.deleteOwnerScope(
+    AsyncFunction("deleteOwnerScope") { (scope: String, accountGeneration: String) async throws -> [String: Any] in
+      let deletion = await HermesAccountLifecycle.deleteOwnerScope(
         scope,
         accountGeneration: accountGeneration
       )
@@ -550,7 +593,7 @@ public final class HermesIOSContextModule: Module {
         "deletedWasCurrent": deletion.deletedWasCurrent,
         "lifecycleEpoch": deletion.lifecycleEpoch,
       ]
-    }.runOnQueue(.main)
+    }
 
     AsyncFunction("readPendingEventsByKind") { (limit: Int, kinds: [String], scope: String) -> [[String: Any]] in
       self.eventQueue.read(limit: limit, kinds: Set(kinds), scope: scope)
@@ -937,8 +980,8 @@ public final class HermesIOSContextModule: Module {
     }
 
     AsyncFunction("ocrImage") {
-      (imageURL: String, ownerScope: String, recognitionLevel: String?, languages: [String]?) throws -> [String: Any] in
-      try HermesPhotosService.recognizeText(
+      (imageURL: String, ownerScope: String, recognitionLevel: String?, languages: [String]?) async throws -> [String: Any] in
+      try await HermesPhotosService.recognizeText(
         imageURL: imageURL,
         owner: ownerScope,
         recognitionLevel: recognitionLevel,
@@ -949,7 +992,7 @@ public final class HermesIOSContextModule: Module {
     AsyncFunction("analyzeVision") {
       (imageURL: String, ownerScope: String, mode: String?, promise: Promise) in
       self.resolveAsync(promise) {
-        let image = try HermesPhotosService.visionImage(imageURL: imageURL, owner: ownerScope)
+        let image = try await HermesPhotosService.visionImage(imageURL: imageURL, owner: ownerScope)
         return try HermesVisionService.analyze(image: image, mode: mode ?? "analyze")
       }
     }
@@ -1145,18 +1188,14 @@ public final class HermesIOSContextModule: Module {
       self.resolveAsync(promise) {
         let normalizedCommandID = try Self.requireCommandID(commandID)
         if let existing = self.eventQueue.commandExecutionResult(id: normalizedCommandID) { return existing }
-        // HermesBrowserService is @MainActor and owns WKWebView, which is
-        // documented as main-actor-isolated. Hop to main so the Swift
-        // concurrency check passes and the WKWebView is never touched
-        // off-thread.
-        let result = try await MainActor.run {
-          try HermesBrowserService.shared.execute(
-            ownerScope: ownerScope,
-            action: action,
-            payload: payload ?? [:],
-            includeBase64: includeBase64 ?? false
-          )
-        }
+        // Awaiting the actor-isolated method performs the main-actor hop and
+        // keeps the entire asynchronous WKWebView operation on that actor.
+        let result = try await HermesBrowserService.shared.execute(
+          ownerScope: ownerScope,
+          action: action,
+          payload: payload ?? [:],
+          includeBase64: includeBase64 ?? false
+        )
         self.eventQueue.recordCommandExecutionResult(id: normalizedCommandID, result: result)
         return result
       }

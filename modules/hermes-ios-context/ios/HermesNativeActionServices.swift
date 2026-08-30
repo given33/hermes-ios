@@ -280,6 +280,19 @@ enum HermesContactsService {
   }
 }
 
+private final class HermesPhotosRequestOnce: @unchecked Sendable {
+  private let lock = NSLock()
+  private var claimed = false
+
+  func tryClaim() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !claimed else { return false }
+    claimed = true
+    return true
+  }
+}
+
 enum HermesPhotosService {
   static func authorization() -> String {
     switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
@@ -550,26 +563,7 @@ enum HermesPhotosService {
     options.isSynchronous = false
     options.isNetworkAccessAllowed = false
     options.deliveryMode = original ? .highQualityFormat : .fastFormat
-    let data: Data = try await withCheckedThrowingContinuation { continuation in
-      var resumed = false
-      PHImageManager.default().requestImageDataAndOrientation(
-        for: asset,
-        options: options
-      ) { imageData, _, _, error in
-        // requestImageDataAndOrientation can deliver twice on degraded assets
-        // (fastFormat then highQualityFormat). Resume only on the first
-        // non-error result so the continuation cannot be resumed twice.
-        guard !resumed else { return }
-        if let error {
-          resumed = true
-          continuation.resume(throwing: error)
-          return
-        }
-        guard let imageData else { return }
-        resumed = true
-        continuation.resume(returning: imageData)
-      }
-    }
+    let data = try await requestImageData(for: asset, options: options)
     try data.write(to: target, options: .completeFileProtection)
     return [
       "uri": target.absoluteString,
@@ -595,7 +589,7 @@ enum HermesPhotosService {
     return true
   }
 
-  static func visionImage(imageURL: String, owner: String) throws -> CIImage {
+  static func visionImage(imageURL: String, owner: String) async throws -> CIImage {
     let normalizedURL = imageURL.trimmingCharacters(in: .whitespacesAndNewlines)
     if normalizedURL.lowercased().hasPrefix("ph://") {
       guard authorization() == "authorized" || authorization() == "limited" else {
@@ -614,23 +608,7 @@ enum HermesPhotosService {
       options.isSynchronous = false
       options.isNetworkAccessAllowed = false
       options.deliveryMode = .highQualityFormat
-      let imageData: Data = try await withCheckedThrowingContinuation { continuation in
-        var resumed = false
-        PHImageManager.default().requestImageDataAndOrientation(
-          for: asset,
-          options: options
-        ) { data, _, _, error in
-          guard !resumed else { return }
-          if let error {
-            resumed = true
-            continuation.resume(throwing: error)
-            return
-          }
-          guard let data else { return }
-          resumed = true
-          continuation.resume(returning: data)
-        }
-      }
+      let imageData = try await requestImageData(for: asset, options: options)
       guard let image = CIImage(data: imageData) else {
         throw HermesNativeActionError.unavailable("photo-asset-data")
       }
@@ -665,6 +643,44 @@ enum HermesPhotosService {
     )
   }
 
+  private static func requestImageData(
+    for asset: PHAsset,
+    options: PHImageRequestOptions
+  ) async throws -> Data {
+    try await withCheckedThrowingContinuation { continuation in
+      let once = HermesPhotosRequestOnce()
+      PHImageManager.default().requestImageDataAndOrientation(
+        for: asset,
+        options: options
+      ) { data, _, _, info in
+        if let error = info?[PHImageErrorKey] as? Error {
+          guard once.tryClaim() else { return }
+          continuation.resume(throwing: error)
+          return
+        }
+        if (info?[PHImageCancelledKey] as? NSNumber)?.boolValue == true {
+          guard once.tryClaim() else { return }
+          continuation.resume(
+            throwing: HermesNativeActionError.unavailable("photo-asset-request-cancelled")
+          )
+          return
+        }
+        if let data {
+          guard once.tryClaim() else { return }
+          continuation.resume(returning: data)
+          return
+        }
+        if (info?[PHImageResultIsDegradedKey] as? NSNumber)?.boolValue == true {
+          return
+        }
+        guard once.tryClaim() else { return }
+        continuation.resume(
+          throwing: HermesNativeActionError.unavailable("photo-asset-data")
+        )
+      }
+    }
+  }
+
   private static func performChanges(_ changes: @escaping () -> Void) async throws {
     try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
       PHPhotoLibrary.shared().performChanges(changes) { success, error in
@@ -680,7 +696,7 @@ enum HermesPhotosService {
     owner: String,
     recognitionLevel: String?,
     languages: [String]?
-  ) throws -> [String: Any] {
+  ) async throws -> [String: Any] {
     let normalizedURL = imageURL.trimmingCharacters(in: .whitespacesAndNewlines)
     let image: CIImage
     if normalizedURL.lowercased().hasPrefix("ph://") {
@@ -703,23 +719,7 @@ enum HermesPhotosService {
       options.isSynchronous = false
       options.isNetworkAccessAllowed = false
       options.deliveryMode = .highQualityFormat
-      let imageData: Data = try await withCheckedThrowingContinuation { continuation in
-        var resumed = false
-        PHImageManager.default().requestImageDataAndOrientation(
-          for: asset,
-          options: options
-        ) { data, _, _, error in
-          guard !resumed else { return }
-          if let error {
-            resumed = true
-            continuation.resume(throwing: error)
-            return
-          }
-          guard let data else { return }
-          resumed = true
-          continuation.resume(returning: data)
-        }
-      }
+      let imageData = try await requestImageData(for: asset, options: options)
       guard let loaded = CIImage(data: imageData) else {
         throw HermesNativeActionError.unavailable("photo-asset-data")
       }

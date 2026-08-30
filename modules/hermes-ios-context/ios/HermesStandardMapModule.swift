@@ -8,11 +8,11 @@ public final class HermesStandardMapModule: Module {
       ["version": 1, "view": "default"]
     }
 
-    Function("getProviderStatus") { () -> [String: Any] in
-      HermesNativeMapRuntimeState.shared.snapshot()
+    AsyncFunction("getProviderStatus") { () async -> [String: Any] in
+      await HermesNativeMapRuntimeState.shared.snapshotWithLocationStatus()
     }
 
-    AsyncFunction("setAmapPrivacyConsent") { (granted: Bool) -> [String: Any] in
+    AsyncFunction("setAmapPrivacyConsent") { (granted: Bool) async -> [String: Any] in
       HermesNativeMapConfiguration.persistedPrivacyConsent = granted
       HermesNativeMapRuntimeState.shared.update(
         phase: HermesNativeMapConfiguration.amapConfigured
@@ -20,7 +20,7 @@ public final class HermesStandardMapModule: Module {
           : "unconfigured",
         activeProvider: HermesNativeMapConfiguration.amapConfigured && granted ? "amap" : "mapkit"
       )
-      return HermesNativeMapRuntimeState.shared.snapshot()
+      return await HermesNativeMapRuntimeState.shared.snapshotWithLocationStatus()
     }
 
     View(HermesStandardMapView.self) {

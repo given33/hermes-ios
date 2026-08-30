@@ -82,14 +82,20 @@ test('PHImageManager calls use a checked continuation and never isSynchronous', 
     /options\.isSynchronous = true/,
     'HermesPhotosService must not request isSynchronous delivery',
   );
-  // All three call sites must wrap the request in a continuation.
+  // All callers share one continuation wrapper so callback semantics cannot
+  // drift between export, OCR, and Vision paths.
   const matched = (services.match(
-    /withCheckedThrowingContinuation \{ continuation in\s*var resumed = false\s*PHImageManager\.default\(\)\.requestImageDataAndOrientation/g,
+    /withCheckedThrowingContinuation \{ continuation in\s*let once = HermesPhotosRequestOnce\(\)\s*PHImageManager\.default\(\)\.requestImageDataAndOrientation/g,
   ) ?? []).length;
-  assert.ok(
-    matched >= 3,
-    'expected at least 3 sites to use continuation-wrapped PHImageManager calls, found ' + matched,
+  assert.equal(
+    matched,
+    1,
+    'expected one shared continuation-wrapped PHImageManager helper, found ' + matched,
   );
+  assert.match(services, /private final class HermesPhotosRequestOnce: @unchecked Sendable/);
+  assert.match(services, /info\?\[PHImageErrorKey\] as\? Error/);
+  assert.match(services, /info\?\[PHImageCancelledKey\]/);
+  assert.match(services, /info\?\[PHImageResultIsDegradedKey\]/);
 });
 
 // 6. HermesPressFeedbackView and HermesSelectionView animator retain cycles
@@ -147,17 +153,34 @@ test('HermesNFCService invalidates its reader session on deinit', () => {
   );
 });
 
-// 9. executeBrowserForCommand bridges to a HermesBrowserService method that
-//    is @MainActor. The hop is required for WKWebView correctness.
+// 9. executeBrowserForCommand bridges to an async HermesBrowserService method
+//    that is @MainActor. Awaiting it performs the actor hop while preserving
+//    the asynchronous WKWebView operation.
 test('executeBrowserForCommand hops to the main actor', () => {
   const module = readModule('ios/HermesIOSContextModule.swift');
-  // HermesIOSContextModule is large; widen the lookahead so the test
-  // does not couple to unrelated definitions between the AsyncFunction
-  // and the MainActor.run block.
   assert.match(
     module,
+    /AsyncFunction\("executeBrowserForCommand"[\s\S]{0,2500}try await HermesBrowserService\.shared\.execute/,
+    'executeBrowserForCommand must await the main-actor-isolated browser operation',
+  );
+  assert.doesNotMatch(
+    module,
     /AsyncFunction\("executeBrowserForCommand"[\s\S]{0,2500}MainActor\.run[\s\S]{0,400}HermesBrowserService\.shared\.execute/,
-    'executeBrowserForCommand must wrap HermesBrowserService.execute in MainActor.run',
+    'an async browser operation cannot be wrapped in synchronous MainActor.run',
+  );
+});
+
+test('native context singleton callbacks are fenced across module replacement', () => {
+  const module = readModule('ios/HermesIOSContextModule.swift');
+  assert.match(module, /private final class HermesContextEventBindingGate: @unchecked Sendable/);
+  assert.match(module, /Self\.eventBindingGate\.activate\(eventBindingToken\)/);
+  assert.match(
+    module,
+    /Task \{ @MainActor \[weak self\] in[\s\S]{0,200}Self\.eventBindingGate\.isActive\(eventBindingToken\)/,
+  );
+  assert.match(
+    module,
+    /Task \{ @MainActor in[\s\S]{0,200}Self\.eventBindingGate\.retire\(eventBindingToken\)[\s\S]{0,400}self\.voice\.onState = nil/,
   );
 });
 

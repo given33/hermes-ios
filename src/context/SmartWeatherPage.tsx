@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   HermesStandardMapView,
+  createDefaultNativeMapProviderStatus,
   getNativeMapProviderStatus,
   hasNativeStandardMapView,
   setNativeMapPrivacyConsent,
@@ -83,7 +84,7 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
   const [mapError, setMapError] = useState('');
   const [mapAttempt, setMapAttempt] = useState(0);
   const [nativeMapProvider, setNativeMapProvider] = useState(
-    getNativeMapProviderStatus,
+    createDefaultNativeMapProviderStatus,
   );
   const [centerRequest, setCenterRequest] = useState(0);
   const [previewLocation, setPreviewLocation] = useState<Location.LocationObject | null>(null);
@@ -154,6 +155,29 @@ export function SmartWeatherPage({ client, locale, onReady }: SmartWeatherPagePr
     nativePermissionRequestedRef.current = true;
     permissions.retry();
   }, [permissions]);
+
+  useEffect(() => {
+    if (!hasNativeStandardMapView) return;
+    let active = true;
+    void getNativeMapProviderStatus()
+      .then((status) => {
+        if (active) setNativeMapProvider(status);
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setNativeMapProvider({
+          ...createDefaultNativeMapProviderStatus(),
+          error: error instanceof Error ? error.message : String(error),
+          phase: 'failed',
+        });
+      });
+    return () => { active = false; };
+  }, [
+    mapAttempt,
+    permissions.snapshot.locationAlways,
+    permissions.snapshot.locationPrecise,
+    permissions.snapshot.permissions.location,
+  ]);
 
   const reload = useCallback(async (manual = false) => {
     if (reloadInFlightRef.current) return;

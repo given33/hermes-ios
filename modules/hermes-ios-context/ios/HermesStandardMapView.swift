@@ -90,6 +90,12 @@ final class HermesNativeMapRuntimeState: @unchecked Sendable {
       "privacyConsent": HermesNativeMapConfiguration.persistedPrivacyConsent,
     ]
     if !currentError.isEmpty { result["error"] = currentError }
+    return result
+  }
+
+  @MainActor
+  func snapshotWithLocationStatus() -> [String: Any] {
+    var result = snapshot()
     result.merge(
       HermesLocationService.shared.mapLocationStatus(),
       uniquingKeysWith: { _, locationValue in locationValue }
@@ -228,7 +234,7 @@ final class HermesStandardMapView: ExpoView {
       activeProvider: nextUsesAMap ? "amap" : "mapkit",
       error: amapFailedForSession ? "AMap failed to load; MapKit fallback is active" : ""
     )
-    onProviderStatus(HermesNativeMapRuntimeState.shared.snapshot())
+    onProviderStatus(HermesNativeMapRuntimeState.shared.snapshotWithLocationStatus())
   }
 }
 

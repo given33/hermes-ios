@@ -514,7 +514,7 @@ export interface HermesNativeMapProviderStatus {
 }
 
 interface HermesStandardMapNativeModule {
-  getProviderStatus?(): HermesNativeMapProviderStatus;
+  getProviderStatus?(): Promise<HermesNativeMapProviderStatus>;
   setAmapPrivacyConsent?(granted: boolean): Promise<HermesNativeMapProviderStatus>;
 }
 
@@ -962,8 +962,8 @@ export const nativeIOSContextViewContractVersion = nativeViewContract.version;
 export const hasNativeStandardMapView = !isExpoGoParityBuild && NativeMap !== null;
 export const hasNativeScreenTimeReportView = !isExpoGoParityBuild && NativeScreenTimeReport !== null;
 
-export function getNativeMapProviderStatus(): HermesNativeMapProviderStatus {
-  return nativeMapModule?.getProviderStatus?.() ?? {
+export function createDefaultNativeMapProviderStatus(): HermesNativeMapProviderStatus {
+  return {
     activeProvider: 'mapkit',
     amapConfigured: false,
     apiKeyConfigured: false,
@@ -979,23 +979,15 @@ export function getNativeMapProviderStatus(): HermesNativeMapProviderStatus {
   };
 }
 
+export async function getNativeMapProviderStatus(): Promise<HermesNativeMapProviderStatus> {
+  return nativeMapModule?.getProviderStatus?.() ?? createDefaultNativeMapProviderStatus();
+}
+
 export async function setNativeMapPrivacyConsent(
   granted: boolean,
 ): Promise<HermesNativeMapProviderStatus> {
-  return nativeMapModule?.setAmapPrivacyConsent?.(granted) ?? {
-    activeProvider: 'mapkit',
-    amapConfigured: false,
-    apiKeyConfigured: false,
-    backgroundLocation: false,
-    bundleIdentifier: '',
-    bundleIdentifierMatches: false,
-    configuredBundleIdentifier: '',
-    lastLocationStatus: 'unavailable',
-    locationAuthorization: 'notDetermined',
-    phase: 'unconfigured',
-    preciseLocation: false,
-    privacyConsent: false,
-  };
+  return nativeMapModule?.setAmapPrivacyConsent?.(granted)
+    ?? createDefaultNativeMapProviderStatus();
 }
 
 export const HermesStandardMapView = forwardRef<View, HermesStandardMapProps>(
