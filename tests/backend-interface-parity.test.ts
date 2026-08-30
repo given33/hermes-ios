@@ -75,6 +75,9 @@ test('iOS release-critical API surface remains connected to official backend rou
     '/api/cron/jobs',
     '/definitions',
     '/api/audio/transcribe',
+    '/api/audio/voice-config',
+    '/api/audio/elevenlabs/voices',
+    '/api/audio/speak',
     '/api/audio/speak-stream',
   ];
 

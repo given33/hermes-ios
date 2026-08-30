@@ -3,8 +3,35 @@ import type { HermesCloudTransport, JsonRecord } from './transport';
 /** Miscellaneous upstream Dashboard/Operations surfaces kept off the facade. */
 export class HermesOperationsCloudApi {
   constructor(private readonly transport: HermesCloudTransport) {}
-  getMedia(path = '') { return this.transport.request<JsonRecord>('/api/media', { query: { path: path || undefined } }); }
-  uploadChatImage(dataUrl: string, mimeType: string, filename = 'image') { return this.transport.json<JsonRecord>('/api/chat/image-upload', 'POST', { data_url: dataUrl, mime_type: mimeType, filename }); }
+  /**
+   * Fetch a gateway-local media file as a data URL.
+   *
+   * The upstream endpoint requires `path` (an omitted/empty value is a
+   * FastAPI 422), so keep that requirement in the native client instead of
+   * silently emitting an invalid request when a caller forgets it.
+   */
+  getMedia(path: string) {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) throw new Error('Media path is required');
+    return this.transport.request<JsonRecord>('/api/media', { query: { path: normalizedPath } });
+  }
+  uploadChatImage(
+    dataUrl: string,
+    mimeType: string,
+    filename = 'image',
+    profile?: string,
+  ) {
+    // `/api/chat/image-upload` scopes the destination image directory when a
+    // profile is supplied. Keep that optional selector on the wire so an iOS
+    // client targeting an independent worker cannot accidentally write into
+    // the dashboard's default profile.
+    return this.transport.json<JsonRecord>(
+      '/api/chat/image-upload',
+      'POST',
+      { data_url: dataUrl, mime_type: mimeType, filename },
+      { query: profile?.trim() ? { profile: profile.trim() } : undefined },
+    );
+  }
   getPortal() { return this.transport.request<JsonRecord>('/api/portal'); }
   getCurator() { return this.transport.request<JsonRecord>('/api/curator'); }
   setCuratorPaused(paused: boolean) { return this.transport.json<JsonRecord>('/api/curator/paused', 'PUT', { paused }); }

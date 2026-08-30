@@ -290,7 +290,6 @@ export function ChatPreviewPage({
     updateConversationCollaborationState,
     updatePendingPhase,
   });
-
   const {
     cancelPendingSend,
     deliverAndReconcilePendingCancellation,
@@ -529,6 +528,7 @@ export function ChatPreviewPage({
       () => voiceInterruptAgentRef.current?.(),
       [],
     ),
+    profile,
   });
   const checkApiRelay = useRelayCheckAction({ cloudApi, isChinese, notify });
   useEffect(() => {

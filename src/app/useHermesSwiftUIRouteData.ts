@@ -39,6 +39,7 @@ import {
   performHermesSwiftUIRouteAction,
   createHermesSwiftUISessionsSnapshotFromConversations,
 } from './hermes-route-data';
+import { operationShareUrls } from './route-actions/presentation';
 import { mergeRouteField } from './route-loaders/remote-metadata';
 import {
   initialRouteRefreshDelay,
@@ -693,9 +694,8 @@ export function useHermesSwiftUIRouteData({
         return;
       }
       const resultMessage = typeof result === 'object' ? result.message : '';
-      if (typeof result === 'object' && result.url && /^https?:\/\//i.test(result.url)) {
-        void Linking.openURL(result.url).catch(() => undefined);
-      }
+      const resultUrl = operationShareUrls(result)[0] || '';
+      if (resultUrl) void Linking.openURL(resultUrl).catch(() => undefined);
       if (typeof result === 'object' && result.flowId && event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.mcpAuth) {
         const flowId = String(result.flowId);
         let terminalMessage = '';

@@ -35,12 +35,21 @@ export class HermesAudioCloudApi {
     dataUrl: string,
     mimeType: string,
     signal?: AbortSignal,
+    profile?: string,
   ): Promise<AudioTranscriptionResult> {
     const value = await this.transport.json<JsonRecord>(
       '/api/audio/transcribe',
       'POST',
       { data_url: dataUrl, mime_type: mimeType },
-      { deadlineMs: 120_000, signal },
+      {
+        // The backend resolves STT through the requested profile's home and
+        // provider chain. Keep the profile optional for compatibility with
+        // callers that intentionally use the dashboard default, while
+        // allowing chat to target an independent worker profile.
+        query: profile ? { profile } : undefined,
+        deadlineMs: 120_000,
+        signal,
+      },
     );
     const transcript = typeof value.transcript === 'string'
       ? value.transcript.trim()

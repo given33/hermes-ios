@@ -10,6 +10,7 @@ import {
   loadHermesSwiftUIRouteSnapshot,
   performHermesSwiftUIRouteAction,
 } from '../src/app/hermes-route-data';
+import { operationShareUrls } from '../src/app/route-actions/presentation';
 
 test('cached session projection filters local tombstones and Studio room transcripts', () => {
   const conversation = (id: string, source?: 'collaboration_room') => ({
@@ -146,6 +147,40 @@ test('system backup import and hook actions use official operations endpoints', 
     ['import', { uri: 'file:///tmp/b.zip', name: 'b.zip', mimeType: 'application/zip' }, true],
     ['create', { name: 'h' }],
     ['delete', { event: 'on_session_end', command: 'echo hi' }],
+  ]);
+});
+
+test('debug-share returns the official urls map to native UI and exposes its first link', async () => {
+  const api = {
+    createDebugShare: async () => ({
+      urls: {
+        Report: 'https://paste.example/summary',
+        'agent.log': 'https://paste.example/full',
+        'unsafe.log': 'javascript:alert(1)',
+      },
+      // A URL-like value using another scheme must never be surfaced as an
+      // opener candidate by the native action bridge.
+      url: 'javascript:alert(1)',
+    }),
+  } as unknown as HermesCloudApi;
+
+  const result = await performHermesSwiftUIRouteAction(
+    api,
+    { action: 'system.debug-share', payload: { route: 'system' } },
+    'default',
+  );
+
+  assert.deepEqual(result, {
+    message: 'https://paste.example/summary\nhttps://paste.example/full',
+    url: 'https://paste.example/summary',
+  });
+  assert.deepEqual(operationShareUrls({ urls: {
+    Report: 'https://paste.example/summary',
+    Full: 'https://paste.example/full',
+    Unsafe: 'javascript:alert(1)',
+  } }), [
+    'https://paste.example/summary',
+    'https://paste.example/full',
   ]);
 });
 

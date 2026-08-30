@@ -51,7 +51,7 @@ import { customModelConfiguration, customModelOperationError, modelsSnapshot } f
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { gitSnapshot } from './route-snapshots/git';
-import { fileImportUploadId, fileNameFromUri, presentAccountFile, presentConversationExport, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
+import { fileImportUploadId, fileNameFromUri, operationShareUrls, presentAccountFile, presentConversationExport, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { performManagedFilesAction } from './route-actions/managed-files';
 import { resolveGitPath } from './route-actions/git';
 import { deleteUnifiedSessionSelection, loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport, resolveSessionActionTarget, updateUnifiedSessionFlag } from './route-actions/session-surfaces';
@@ -856,7 +856,8 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemHookDelete: { const values = payload.detail ? parseJsonRecord(payload.detail) : payload.fields; if (!values && !payload.id) return 'none'; await api.deleteHook(values || { id: payload.id }); return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDebugShare: {
       const result = await api.createDebugShare({});
-      return { message: stringValue(result.url) || stringValue(result.message) || (chinese ? '调试报告已生成' : 'Debug report created') };
+      const urls = operationShareUrls(result);
+      return { message: urls.join('\n') || stringValue(result.message) || (chinese ? '调试报告已生成' : 'Debug report created'), ...(urls[0] ? { url: urls[0] } : {}) };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemDiagnostics: {
       const result = await api.dumpDiagnostics({});

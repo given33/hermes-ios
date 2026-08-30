@@ -1,7 +1,22 @@
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
 import type { HermesRouteLocaleInput } from '../route-snapshots/support';
 import { writeBoundedDownload } from '../../api/bounded-download';
-import { structuredContent } from '../route-snapshots/support';
+import { isRecord, structuredContent } from '../route-snapshots/support';
+
+/** Extract safe, de-duplicated web links from current and legacy operation responses. */
+export function operationShareUrls(value: unknown): string[] {
+  if (!isRecord(value)) return [];
+  const rawUrls = value.urls;
+  const candidates = [
+    ...(Array.isArray(rawUrls) ? rawUrls : []),
+    ...(isRecord(rawUrls) ? Object.values(rawUrls) : []),
+    value.url,
+  ];
+  const urls = candidates.filter((candidate): candidate is string =>
+    typeof candidate === 'string' && /^https?:\/\//i.test(candidate.trim()),
+  ).map((candidate) => candidate.trim());
+  return [...new Set(urls)];
+}
 
 export async function presentAccountFile(api: HermesCloudApi, id: string, name: string, shareOnly: boolean) {
   const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([

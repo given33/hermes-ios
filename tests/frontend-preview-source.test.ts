@@ -371,6 +371,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.doesNotMatch(chat, /语音输入需要在 iPhone 原生版本中使用/);
   assert.match(chat, /useAudioRecorder\(RecordingPresets\.HIGH_QUALITY\)/);
   assert.match(chat, /cloudApi\.transcribeAudio\(/);
+  assert.match(chat, /mimeType,\s*abortController\.signal,\s*profile/);
   assert.match(chat, /subscribeVoiceTranscript/);
   assert.match(chat, /applyTranscript\(`\$\{voiceDraftPrefixRef\.current\}\$\{event\.text\}`\)/);
   assert.match(chat, /ImagePicker\.launchCameraAsync/);

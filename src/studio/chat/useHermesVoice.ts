@@ -37,6 +37,8 @@ interface UseHermesVoiceOptions {
   messages: readonly VoiceMessage[];
   notify(message: string): void;
   onInterruptAgent?(): Promise<void> | void;
+  /** Profile whose STT provider should receive Expo recordings. */
+  profile?: string;
 }
 
 function recordingMimeType(uri: string): string {
@@ -75,6 +77,7 @@ export function useHermesVoice({
   messages,
   notify,
   onInterruptAgent,
+  profile = 'default',
 }: UseHermesVoiceOptions) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 250);
@@ -177,6 +180,7 @@ export function useHermesVoice({
         `data:${mimeType};base64,${base64}`,
         mimeType,
         abortController.signal,
+        profile,
       );
       if (operation !== voiceOperationRef.current) return;
       applyFinalTranscript(result.transcript);
@@ -204,6 +208,7 @@ export function useHermesVoice({
     describeError,
     focusComposer,
     notify,
+    profile,
     recorder,
     recorderState.url,
     restoreVoiceDraft,

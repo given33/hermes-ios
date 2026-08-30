@@ -366,6 +366,21 @@ export class HermesExtensionsCloudApi {
     });
   }
 
+  /**
+   * Replace the complete MCP server map through Hermes' canonical editor
+   * endpoint.  A sequence of add/delete calls cannot faithfully represent
+   * the desktop MCP editor: nested fields and removed keys would be left
+   * behind on the server.  Keep the profile in both the JSON envelope and
+   * query string so servers at either side of the profile-routing migration
+   * select the same isolated worker configuration.
+   */
+  replaceMcpServers(servers: Record<string, JsonRecord>, profile = 'default') {
+    return this.transport.json<{ ok: boolean }>('/api/mcp/servers', 'PUT', {
+      servers,
+      profile,
+    }, { query: { profile } });
+  }
+
   setMcpServerEnabled(name: string, enabled: boolean, profile = 'default') {
     return this.transport.json<JsonRecord>(
       `/api/mcp/servers/${encodeURIComponent(name)}/enabled`,

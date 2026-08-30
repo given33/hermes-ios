@@ -56,6 +56,10 @@ function recordingApi() {
       calls.push({ options, path });
       return Promise.resolve({} as T);
     },
+    download(path: string, options: HermesRequestOptions = {}): Promise<Blob> {
+      calls.push({ options, path });
+      return Promise.resolve(new Blob(['download-test']));
+    },
     openWebSocket(path: string, options: HermesWebSocketOptions = {}): Promise<WebSocket> {
       calls.push({ options: options as RecordedCall['options'], path });
       return Promise.resolve({} as WebSocket);
@@ -212,6 +216,35 @@ test('voice transcription stays authenticated on the Hermes origin', async () =>
   });
 });
 
+test('voice transcription targets the selected worker profile when provided', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.transcribeAudio(
+    'data:audio/webm;base64,AAAA',
+    'audio/webm',
+    undefined,
+    'hk-worker',
+  );
+
+  assert.equal(calls[0].path, '/api/audio/transcribe');
+  assert.deepEqual(calls[0].options.query, { profile: 'hk-worker' });
+});
+
+test('voice transcription keeps the legacy abort-signal argument shape', async () => {
+  const { api, calls } = recordingApi();
+  const controller = new AbortController();
+
+  await api.transcribeAudio(
+    'data:audio/webm;base64,AAAA',
+    'audio/webm',
+    controller.signal,
+    'hk-worker',
+  );
+
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.deepEqual(calls[0].options.query, { profile: 'hk-worker' });
+});
+
 test('voice configuration and synthesis stay profile-scoped on the Hermes origin', async () => {
   const { api, calls } = recordingApi();
 
@@ -229,6 +262,21 @@ test('voice configuration and synthesis stay profile-scoped on the Hermes origin
   );
   assert.deepEqual(parsedBody(calls[2]), { text: 'Hello from Hermes' });
   assert.equal(calls[2].options.deadlineMs, 120_000);
+});
+
+test('streaming speech opens the authenticated WebSocket for the selected profile', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.openSpeechStream('hk-worker');
+
+  assert.deepEqual(calls[0], {
+    path: '/api/audio/speak-stream',
+    options: {
+      profile: 'hk-worker',
+      signal: undefined,
+      connectTimeoutMs: 10_000,
+    },
+  });
 });
 
 test('model methods keep their exact wire contract through cloud/models', async () => {
@@ -435,6 +483,9 @@ test('plugin and MCP methods keep their wire contract through cloud/extensions',
 
   calls.length = 0;
   await api.addMcpServer({ name: 'files' }, 'ops');
+  await api.replaceMcpServers({
+    files: { command: 'mcp-files', args: ['--readonly'], enabled: true },
+  }, 'ops');
   await api.setMcpServerEnabled('files db', true, 'ops');
   await api.removeMcpServer('files db', 'ops');
   await api.testMcpServer('files db', 'ops');
@@ -443,14 +494,21 @@ test('plugin and MCP methods keep their wire contract through cloud/extensions',
     calls.map(({ path, options }) => [path, options.method ?? 'GET', options.query?.profile]),
     [
       ['/api/mcp/servers', 'POST', 'ops'],
+      ['/api/mcp/servers', 'PUT', 'ops'],
       ['/api/mcp/servers/files%20db/enabled', 'PUT', 'ops'],
       ['/api/mcp/servers/files%20db', 'DELETE', 'ops'],
       ['/api/mcp/servers/files%20db/test', 'POST', 'ops'],
       ['/api/mcp/catalog/install', 'POST', undefined],
     ],
   );
-  assert.deepEqual(parsedBody(calls[1]), { enabled: true });
-  assert.deepEqual(parsedBody(calls[4]), {
+  assert.deepEqual(parsedBody(calls[2]), { enabled: true });
+  assert.deepEqual(parsedBody(calls[1]), {
+    profile: 'ops',
+    servers: {
+      files: { args: ['--readonly'], command: 'mcp-files', enabled: true },
+    },
+  });
+  assert.deepEqual(parsedBody(calls[5]), {
     enable: true,
     env: { GITHUB_TOKEN: 'secret' },
     name: 'github',
@@ -1100,6 +1158,52 @@ test('the extended iOS surface reaches upstream system, memory, model, MCP, Git,
   assert.deepEqual(parsedBody(calls[10]), {
     profile: 'hk-worker',
     yaml_text: 'model:\n  default: test',
+  });
+});
+
+test('operations honor required media paths and expose binary downloads as Blobs', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.promptSize();
+  await api.getMedia('/images/answer.png');
+  const backup = await api.downloadBackup('/backups/hermes.zip');
+  const filesystem = await api.downloadFilesystem('/workspace/report.pdf');
+  const streamed = await api.streamFile('/workspace/report.pdf');
+
+  assert.ok(backup instanceof Blob);
+  assert.ok(filesystem instanceof Blob);
+  assert.ok(streamed instanceof Blob);
+  assert.deepEqual(
+    calls.slice(-4).map(({ path, options }) => [path, options.method ?? 'GET', options.query]),
+    [
+      ['/api/media', 'GET', { path: '/images/answer.png' }],
+      ['/api/ops/backup/download', 'GET', { archive: '/backups/hermes.zip' }],
+      ['/api/fs/download', 'GET', { path: '/workspace/report.pdf' }],
+      ['/api/files/stream', 'GET', { path: '/workspace/report.pdf' }],
+    ],
+  );
+  assert.equal(calls[0].path, '/api/ops/prompt-size');
+  assert.equal(calls[0].options.body, undefined);
+
+  assert.throws(() => api.getMedia('   '), /Media path is required/);
+});
+
+test('chat image uploads preserve the selected worker profile', async () => {
+  const { api, calls } = recordingApi();
+
+  await api.uploadChatImage(
+    'data:image/png;base64,AAAA',
+    'image/png',
+    'answer.png',
+    'hk-worker',
+  );
+
+  assert.equal(calls[0].path, '/api/chat/image-upload');
+  assert.equal(calls[0].options.query?.profile, 'hk-worker');
+  assert.deepEqual(parsedBody(calls[0]), {
+    data_url: 'data:image/png;base64,AAAA',
+    mime_type: 'image/png',
+    filename: 'answer.png',
   });
 });
 

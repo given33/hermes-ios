@@ -247,12 +247,14 @@ export class HermesCloudApi {
     return this.sessions.getStatus();
   }
 
+  /** Transcribe through the selected profile; profile stays after signal for API compatibility. */
   transcribeAudio(
     dataUrl: string,
     mimeType: string,
     signal?: AbortSignal,
+    profile?: string,
   ): Promise<AudioTranscriptionResult> {
-    return this.audio.transcribe(dataUrl, mimeType, signal);
+    return this.audio.transcribe(dataUrl, mimeType, signal, profile);
   }
 
   getMobileConsoleCommands(profile = 'default', signal?: AbortSignal): Promise<MobileConsoleCatalog> {
@@ -456,6 +458,11 @@ export class HermesCloudApi {
 
   addMcpServer(server: JsonRecord, profile = 'default') {
     return this.extensions.addMcpServer(server, profile);
+  }
+
+  /** Replace the complete profile-scoped MCP server map via the official API. */
+  replaceMcpServers(servers: Record<string, JsonRecord>, profile = 'default') {
+    return this.extensions.replaceMcpServers(servers, profile);
   }
 
   setMcpServerEnabled(name: string, enabled: boolean, profile = 'default') {
