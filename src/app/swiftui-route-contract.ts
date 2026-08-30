@@ -585,6 +585,8 @@ export interface HermesSwiftUIRouteSnapshot {
   sessionPullRequestsJSON?: string;
   sessionStatsJSON?: string;
   files?: readonly HermesSwiftUIFileSnapshot[];
+  /** JSON encoded server-filtered account-file page and continuation cursor. */
+  accountFilesJSON?: string;
   /** JSON encoded `/api/files` managed-workspace listing. */
   managedFilesJSON?: string;
   git?: HermesSwiftUIGitSnapshot;
@@ -596,7 +598,13 @@ export interface HermesSwiftUIRouteSnapshot {
   modelConfirmation?: HermesSwiftUIModelConfirmationSnapshot;
   modelAuxiliary?: HermesSwiftUIModelAuxiliarySnapshot;
   modelMoa?: HermesSwiftUIModelMoaSnapshot;
+  /** JSON encoded raw upstream MoA configuration for lossless editing. */
+  modelMoaJSON?: string;
   providerOauthJSON?: string;
+  /** Ephemeral local OAuth polling state, never a credential. */
+  providerOauthPendingJSON?: string;
+  /** JSON encoded allowlisted credential-pool metadata; secret values are excluded. */
+  credentialPoolJSON?: string;
   customProviderEndpointsJSON?: string;
   detectedModels?: readonly string[];
   operation?: HermesSwiftUIRouteOperationSnapshot;
@@ -614,6 +622,8 @@ export interface HermesSwiftUIRouteSnapshot {
   learningGraphJSON?: string;
   skillHubResultJSON?: string;
   integrations?: readonly HermesSwiftUIIntegrationSnapshot[];
+  /** JSON encoded complete upstream MCP server map for atomic replacement. */
+  mcpServersJSON?: string;
   /** Ephemeral official Telegram/WhatsApp QR onboarding state for native controls. */
   channelOnboardingJSON?: string;
   installations?: readonly HermesSwiftUIManagedInstallationSnapshot[];
@@ -624,6 +634,8 @@ export interface HermesSwiftUIRouteSnapshot {
   /** JSON-encoded official Kanban board metadata/projections (boards, stats,
    * diagnostics, active workers, model options, profiles, orchestration). */
   kanbanMetaJSON?: string;
+  /** Ephemeral official task/run/log detail requested by the native Kanban sheet. */
+  kanbanDetailJSON?: string;
   profiles?: readonly HermesSwiftUIProfileSnapshot[];
   /** JSON-encoded upstream Bot Mode cross-connection roster. */
   botRelayJSON?: string;
@@ -712,6 +724,12 @@ export function isHermesSwiftUIRouteSnapshot(
   for (const field of snapshotRecords) {
     const candidate = value[field];
     if (candidate !== undefined && !isRecord(candidate)) return false;
+  }
+  for (const field of HERMES_SWIFTUI_ROUTE_SNAPSHOT_FIELDS) {
+    const candidate = value[field];
+    if (field.endsWith('JSON') && candidate !== undefined && typeof candidate !== 'string') {
+      return false;
+    }
   }
   if (
     value.detectedModels !== undefined

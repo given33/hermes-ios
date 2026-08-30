@@ -1,7 +1,8 @@
 import { SymbolView } from 'expo-symbols';
-import { Camera, Mic, Plus, Square, X } from 'lucide-react-native';
+import { AudioLines, Camera, ChevronDown, Mic, Plus, Square, X } from 'lucide-react-native';
 import type { RefObject } from 'react';
 import {
+  ActionSheetIOS,
   ScrollView,
   Text,
   TextInput,
@@ -30,7 +31,7 @@ import {
 import { styles } from './chat-presentation-styles';
 import type { ChatAttachment, PendingPhase } from './chat-types';
 import type { SlashCommandDescriptor } from './useChatComposerNavigationController';
-import type { HermesVoiceState } from './useHermesVoice';
+import type { HermesVoiceChoice, HermesVoiceState } from './useHermesVoice';
 
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
@@ -52,6 +53,10 @@ interface ChatComposerModel {
   reconnectAttempt: number;
   sending: boolean;
   slashMenuOpen: boolean;
+  selectedVoiceId: string;
+  voiceAvailable: boolean;
+  voiceChoiceBusy: boolean;
+  voiceChoices: readonly HermesVoiceChoice[];
   voiceError: string;
   voiceDurationMs: number;
   voicePreview: string;
@@ -73,6 +78,7 @@ interface ChatComposerActions {
   onStartVoiceInput(): void;
   onStopVoiceInput(): void;
   onToggleReadRepliesAloud(): void;
+  onSelectVoice(voiceId: string): void;
 }
 
 export interface ChatComposerProps {
@@ -91,6 +97,18 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
   const readRepliesAccessibilityValue = model.readRepliesAloud
     ? model.isChinese ? '自动朗读回复已开启' : 'Spoken replies on'
     : model.isChinese ? '自动朗读回复已关闭' : 'Spoken replies off';
+  const selectedVoice = model.voiceChoices.find((voice) => voice.voice_id === model.selectedVoiceId);
+  const openVoiceChoices = () => {
+    const labels = model.voiceChoices.map((voice) => voice.label || voice.name);
+    ActionSheetIOS.showActionSheetWithOptions({
+      cancelButtonIndex: labels.length,
+      options: [...labels, model.isChinese ? '取消' : 'Cancel'],
+      title: model.isChinese ? 'ElevenLabs 声音' : 'ElevenLabs voice',
+    }, (index) => {
+      const choice = model.voiceChoices[index];
+      if (choice) actions.onSelectVoice(choice.voice_id);
+    });
+  };
 
   return (
     <>
@@ -292,6 +310,34 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
               weight="medium"
             />
           </IOSPressable>
+
+          {model.voiceChoices.length ? (
+            <IOSPressable
+              accessibilityLabel={model.isChinese ? '选择 ElevenLabs 声音' : 'Choose ElevenLabs voice'}
+              accessibilityRole="button"
+              disabled={model.voiceChoiceBusy || voiceInputActive}
+              haptic="selection"
+              onPress={openVoiceChoices}
+              opacityTo={0.72}
+              scaleTo={0.96}
+              style={[
+                styles.openMinisVoiceChoice,
+                {
+                  borderColor: tokens.colors.border,
+                  opacity: model.voiceChoiceBusy || voiceInputActive ? 0.45 : 1,
+                },
+              ]}
+            >
+              <AudioLines color={tokens.colors.textSecondary} size={15} />
+              <Text
+                numberOfLines={1}
+                style={[styles.openMinisVoiceChoiceText, { color: tokens.colors.textSecondary }]}
+              >
+                {selectedVoice?.name || (model.isChinese ? '声音' : 'Voice')}
+              </Text>
+              <ChevronDown color={tokens.colors.textSecondary} size={13} />
+            </IOSPressable>
+          ) : null}
 
           <View style={styles.openMinisToolbarSpacer} />
 

@@ -7,6 +7,12 @@ import { withAbortableDeadline } from '../api/async-deadline';
 import { expireSystemRouteData } from '../api/managed-node-status';
 import { consumeManagedResourceEvents } from '../api/managed-resource-events';
 import {
+  consumeKanbanEventsWebSocket,
+  kanbanEventBoardFromRouteData,
+  kanbanEventCursorFromBoard,
+} from '../api/kanban-events';
+import { reconnectDelay } from '../api/reconnect-backoff';
+import {
   createCollaborationRoomRequestId,
   createWorkflowStartRequestId,
   parseOfficialConversationPlaceholderId,
@@ -40,6 +46,13 @@ import {
   createHermesSwiftUISessionsSnapshotFromConversations,
 } from './hermes-route-data';
 import { operationShareUrls } from './route-actions/presentation';
+import {
+  beginKanbanDetailRequest,
+  resetKanbanDetailFence,
+  shouldApplyKanbanDetail,
+  shouldClearKanbanDetail,
+  type KanbanDetailFenceState,
+} from './route-actions/kanban';
 import { mergeRouteField } from './route-loaders/remote-metadata';
 import {
   initialRouteRefreshDelay,
@@ -61,10 +74,18 @@ interface HermesSwiftUIRouteDataController {
   reload(): Promise<void>;
 }
 
+interface ProviderOauthPollState {
+  cancelled: boolean;
+  provider: string;
+  sessionId: string;
+  status: string;
+}
+
 const FOREGROUND_REFRESH_MS = 15_000;
 const INSTALLATION_REFRESH_MS = 2_000;
 const COLLABORATION_SEND_TIMEOUT_MS = 20_000;
 const EVENT_FAILURE_LOG_INTERVAL_MS = 60_000;
+const KANBAN_EVENT_CONNECT_TIMEOUT_MS = 5_000;
 
 function sendCollaborationRoomMessageWithDeadline(
   api: HermesCloudApi,
@@ -153,6 +174,8 @@ export function useHermesSwiftUIRouteData({
   const collaborationReplay = useRef<Promise<string> | null>(null);
   const lifecycleEpoch = useRef(0);
   const operationRef = useRef<HermesSwiftUIRouteOperationSnapshot | undefined>(undefined);
+  const providerOauthPollRef = useRef<ProviderOauthPollState | null>(null);
+  const kanbanDetailFence = useRef<KanbanDetailFenceState>({ generation: 0, taskId: '' });
   const resetRefreshCadence = useRef<() => void>(() => undefined);
   const lastEventFailureLogAt = useRef(0);
   const [dataJson, setDataJson] = useState(() => encodeHermesSwiftUIRouteSnapshot({
@@ -160,10 +183,18 @@ export function useHermesSwiftUIRouteData({
     route: routeId,
   }));
   const dataJsonRef = useRef(dataJson);
+  const activeKanbanBoard = useMemo(
+    () => kanbanEventBoardFromRouteData(dataJson),
+    [dataJson],
+  );
 
   useEffect(() => {
     dataJsonRef.current = dataJson;
   }, [dataJson]);
+  useEffect(() => () => {
+    if (providerOauthPollRef.current) providerOauthPollRef.current.cancelled = true;
+    providerOauthPollRef.current = null;
+  }, [api, profile, routeId]);
   const updateOperation = useCallback((
     operation: HermesSwiftUIRouteOperationSnapshot | undefined,
   ) => {
@@ -296,13 +327,26 @@ export function useHermesSwiftUIRouteData({
       if (routeId === 'models' && operationRef.current) {
         snapshot = { ...snapshot, operation: operationRef.current };
       }
+      if (routeId === 'models' && providerOauthPollRef.current?.cancelled === false) {
+        snapshot = {
+          ...snapshot,
+          providerOauthPendingJSON: JSON.stringify(providerOauthPollRef.current),
+        };
+      }
       if (
         routeId === 'workflows'
         && operationRef.current?.action === 'workflow.start'
       ) {
         snapshot = { ...snapshot, operation: operationRef.current };
       }
-      setDataJson(encodeHermesSwiftUIRouteSnapshot(snapshot));
+      const encodedSnapshot = encodeHermesSwiftUIRouteSnapshot(snapshot);
+      setDataJson((current) => {
+        if (routeId !== 'kanban') return encodedSnapshot;
+        const currentDetail = routeStringField(current, 'kanbanDetailJSON');
+        return currentDetail === undefined
+          ? encodedSnapshot
+          : mergeRouteField(encodedSnapshot, 'kanbanDetailJSON', currentDetail);
+      });
     } catch (error) {
       if (version !== requestVersion.current) return;
       if (routeId === 'system') {
@@ -382,11 +426,102 @@ export function useHermesSwiftUIRouteData({
   }, [api, reload, routeId]);
 
   useEffect(() => {
+    if (!api || routeId !== 'kanban') return undefined;
+    let disposed = false;
+    let cursor = 0;
+    let cursorInitialized = false;
+    let reconnectAttempt = 0;
+    let controller: AbortController | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const clearReconnectTimer = () => {
+      if (reconnectTimer === undefined) return;
+      clearTimeout(reconnectTimer);
+      reconnectTimer = undefined;
+    };
+    const scheduleReconnect = () => {
+      if (
+        disposed
+        || controller
+        || reconnectTimer !== undefined
+        || AppState.currentState !== 'active'
+      ) return;
+      const delay = reconnectDelay(reconnectAttempt);
+      reconnectAttempt += 1;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = undefined;
+        connect();
+      }, delay);
+    };
+    const connect = () => {
+      if (disposed || controller || AppState.currentState !== 'active') return;
+      clearReconnectTimer();
+      controller = new AbortController();
+      const activeController = controller;
+      void (async () => {
+        if (!cursorInitialized) {
+          const board = await api.getKanbanBoard(
+            activeKanbanBoard ? { board: activeKanbanBoard } : undefined,
+          );
+          if (disposed || activeController.signal.aborted) return cursor;
+          cursor = kanbanEventCursorFromBoard(board, cursor);
+          cursorInitialized = true;
+        }
+        return consumeKanbanEventsWebSocket(
+          api,
+          cursor,
+          activeKanbanBoard,
+          activeController.signal,
+          async (frame) => {
+            cursor = Math.max(cursor, frame.cursor);
+            reconnectAttempt = 0;
+            if (!disposed && AppState.currentState === 'active') await reload();
+          },
+          KANBAN_EVENT_CONNECT_TIMEOUT_MS,
+        );
+      })().then((nextCursor) => {
+        cursor = Math.max(cursor, nextCursor);
+      }).catch((error: unknown) => {
+        if (activeController.signal.aborted) return;
+        const now = Date.now();
+        if (now - lastEventFailureLogAt.current < EVENT_FAILURE_LOG_INTERVAL_MS) return;
+        lastEventFailureLogAt.current = now;
+        console.warn(
+          'Hermes Kanban event refresh failed',
+          error instanceof Error ? error.name : 'Error',
+        );
+      }).finally(() => {
+        if (controller === activeController) controller = null;
+        scheduleReconnect();
+      });
+    };
+
+    connect();
+    const appState = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        connect();
+      } else {
+        controller?.abort();
+        controller = null;
+        clearReconnectTimer();
+      }
+    });
+    return () => {
+      disposed = true;
+      controller?.abort();
+      controller = null;
+      clearReconnectTimer();
+      appState.remove();
+    };
+  }, [activeKanbanBoard, api, reload, routeId]);
+
+  useEffect(() => {
     lifecycleEpoch.current += 1;
     const lifecycleVersion = ++requestVersion.current;
     lastSuccessfulReloadAt.current = 0;
     selectedItemId.current = '';
     operationRef.current = undefined;
+    kanbanDetailFence.current = resetKanbanDetailFence(kanbanDetailFence.current);
     acknowledgedRoomRequestId.current = '';
     setDataJson(encodeHermesSwiftUIRouteSnapshot({
       version: HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
@@ -478,12 +613,13 @@ export function useHermesSwiftUIRouteData({
     });
     return () => {
       disposed = true;
+      lifecycleEpoch.current += 1;
       requestVersion.current += 1;
       if (timer !== undefined) clearTimeout(timer);
       resetRefreshCadence.current = () => undefined;
       appState.remove();
     };
-  }, [api, cacheOwner, localStore, reload, routeId]);
+  }, [api, cacheOwner, localStore, profile, reload, routeId]);
 
   const onAction = useCallback(async (action: string, payloadJson: string) => {
     if (!api) {
@@ -499,6 +635,12 @@ export function useHermesSwiftUIRouteData({
         : 'Unrecognized page action. Refresh and try again.');
       return;
     }
+    const kanbanDetailRequest = beginKanbanDetailRequest(
+      kanbanDetailFence.current,
+      event.action,
+      event.payload.id || '',
+    );
+    kanbanDetailFence.current = kanbanDetailRequest.state;
     // A user action is an activity signal: resume the base polling cadence so
     // follow-up server state (a just-started installation, a fresh run) is
     // observed at the tight latency instead of a backed-off idle timer.
@@ -516,6 +658,20 @@ export function useHermesSwiftUIRouteData({
         message: modelOperationRunningMessage(modelOperation, locale),
         state: 'running',
       });
+    }
+    if (event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthCancel) {
+      const sessionId = event.payload.value?.trim() || event.payload.name?.trim() || '';
+      const pending = providerOauthPollRef.current;
+      if (pending && (!sessionId || pending.sessionId === sessionId)) {
+        pending.cancelled = true;
+        pending.status = 'cancelled';
+        providerOauthPollRef.current = null;
+        setDataJson((current) => mergeRouteField(
+          current,
+          'providerOauthPendingJSON',
+          JSON.stringify(pending),
+        ));
+      }
     }
     if (
       (
@@ -681,9 +837,18 @@ export function useHermesSwiftUIRouteData({
       const managedFilesJSON = typeof result === 'object' && result !== null
         ? result.managedFilesJSON
         : undefined;
+      const accountFilesJSON = typeof result === 'object' && result !== null
+        ? result.accountFilesJSON
+        : undefined;
+      if (typeof accountFilesJSON === 'string' && accountFilesJSON) {
+        setDataJson((current) => mergeRouteField(current, 'accountFilesJSON', accountFilesJSON));
+      }
       if (typeof managedFilesJSON === 'string' && managedFilesJSON) {
         setDataJson((current) => mergeRouteField(current, 'managedFilesJSON', managedFilesJSON));
       }
+      const kanbanDetailJSON = typeof result === 'object' && result !== null
+        ? result.kanbanDetailJSON
+        : undefined;
       if (typeof result === 'object' && result.confirmRequired) {
         setDataJson((current) => mergeModelConfirmation(current, {
           id: encodeModelSelection(result.provider || '', result.model || ''),
@@ -698,30 +863,61 @@ export function useHermesSwiftUIRouteData({
       if (resultUrl) void Linking.openURL(resultUrl).catch(() => undefined);
       if (typeof result === 'object' && result.flowId && event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.mcpAuth) {
         const flowId = String(result.flowId);
+        const oauthLifecycle = lifecycleEpoch.current;
+        const oauthIsCurrent = () => oauthLifecycle === lifecycleEpoch.current;
         let terminalMessage = '';
         for (let attempt = 0; attempt < 90; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 2_000));
+          if (!oauthIsCurrent()) return;
           if (AppState.currentState !== 'active') break;
           const flow = await api.getMcpOauthFlow(flowId).catch(() => undefined);
+          if (!oauthIsCurrent()) return;
           const status = typeof flow === 'object' ? String(flow?.status || '') : '';
           if (status === 'approved') { terminalMessage = locale === 'zh' ? 'MCP OAuth 已完成' : 'MCP OAuth completed'; break; }
           if (status === 'error') { terminalMessage = String(flow?.error || (locale === 'zh' ? 'MCP OAuth 失败' : 'MCP OAuth failed')); break; }
         }
+        if (!oauthIsCurrent()) return;
         if (terminalMessage) notify(terminalMessage);
         await reload();
       }
       if (typeof result === 'object' && result.oauthProvider && result.oauthSessionId && event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthStart) {
         const provider = String(result.oauthProvider); const sessionId = String(result.oauthSessionId);
+        if (providerOauthPollRef.current) providerOauthPollRef.current.cancelled = true;
+        const pending: ProviderOauthPollState = {
+          cancelled: false,
+          provider,
+          sessionId,
+          status: 'waiting',
+        };
+        providerOauthPollRef.current = pending;
+        setDataJson((current) => mergeRouteField(
+          current,
+          'providerOauthPendingJSON',
+          JSON.stringify(pending),
+        ));
         let terminalMessage = '';
         for (let attempt = 0; attempt < 90; attempt += 1) {
           await new Promise((resolve) => setTimeout(resolve, 2_000));
-          if (AppState.currentState !== 'active') break;
-          const flow = await api.pollProviderOauth(provider, sessionId).catch(() => undefined);
+          if (pending.cancelled || providerOauthPollRef.current !== pending) break;
+          if (AppState.currentState !== 'active') continue;
+          const flow = await api.pollProviderOauth(provider, sessionId, profile).catch(() => undefined);
+          if (pending.cancelled || providerOauthPollRef.current !== pending) break;
           const status = typeof flow === 'object' ? String(flow?.status || '') : '';
+          if (status) {
+            pending.status = status;
+            setDataJson((current) => mergeRouteField(
+              current,
+              'providerOauthPendingJSON',
+              JSON.stringify(pending),
+            ));
+          }
           if (status === 'complete' || status === 'approved' || status === 'connected') { terminalMessage = locale === 'zh' ? 'Provider OAuth 已完成' : 'Provider OAuth completed'; break; }
           if (status === 'error' || status === 'failed') { terminalMessage = String(flow?.error || (locale === 'zh' ? 'Provider OAuth 失败' : 'Provider OAuth failed')); break; }
         }
+        if (providerOauthPollRef.current === pending) providerOauthPollRef.current = null;
+        if (pending.cancelled) return;
         if (terminalMessage) notify(terminalMessage);
+        else notify(locale === 'zh' ? 'Provider OAuth 等待已超时' : 'Provider OAuth timed out');
         await reload();
       }
       if (modelOperation) {
@@ -733,6 +929,26 @@ export function useHermesSwiftUIRouteData({
       }
       if (result === 'reload' || (typeof result === 'object' && result.reload)) {
         await reload();
+      }
+      // Kanban mutations often refresh the board. Merge the task envelope
+      // afterwards so the reload cannot erase the open native detail sheet.
+      if (typeof kanbanDetailJSON === 'string') {
+        const clearDetail = event.action === HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanBoardSwitch
+          && kanbanDetailJSON === ''
+          && shouldClearKanbanDetail(
+            kanbanDetailFence.current,
+            kanbanDetailRequest.token,
+          );
+        if (
+          clearDetail
+          || shouldApplyKanbanDetail(
+            kanbanDetailFence.current,
+            kanbanDetailRequest.token,
+            kanbanDetailJSON,
+          )
+        ) {
+          setDataJson((current) => mergeRouteField(current, 'kanbanDetailJSON', kanbanDetailJSON));
+        }
       }
       if (resultMessage) notify(resultMessage);
     } catch (error) {
@@ -811,6 +1027,17 @@ function mergeDetectedModels(dataJson: string, models: readonly string[]): strin
     return JSON.stringify({ ...source, detectedModels });
   } catch {
     return dataJson;
+  }
+}
+
+function routeStringField(dataJson: string, key: string): string | undefined {
+  try {
+    const source: unknown = JSON.parse(dataJson);
+    if (typeof source !== 'object' || source === null || Array.isArray(source)) return undefined;
+    const value = (source as Record<string, unknown>)[key];
+    return typeof value === 'string' ? value : undefined;
+  } catch {
+    return undefined;
   }
 }
 

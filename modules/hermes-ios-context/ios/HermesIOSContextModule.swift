@@ -368,6 +368,30 @@ public final class HermesIOSContextModule: Module {
       }
     }.runOnQueue(.main)
 
+    AsyncFunction("startPCMPlayback") { (sampleRate: Double, channels: Int) throws -> Bool in
+      try MainActor.assumeIsolated {
+        try self.voice.startPCMPlayback(sampleRate: sampleRate, channels: channels)
+      }
+    }.runOnQueue(.main)
+
+    AsyncFunction("appendPCMPlayback") { (base64PCM: String) throws -> Bool in
+      try MainActor.assumeIsolated {
+        try self.voice.appendPCMPlayback(base64PCM)
+      }
+    }.runOnQueue(.main)
+
+    AsyncFunction("finishPCMPlayback") { () -> Bool in
+      MainActor.assumeIsolated {
+        self.voice.finishPCMPlayback()
+      }
+    }.runOnQueue(.main)
+
+    AsyncFunction("stopPCMPlayback") { (interrupted: Bool?) -> Bool in
+      MainActor.assumeIsolated {
+        self.voice.stopPCMPlayback(interrupted: interrupted ?? false)
+      }
+    }.runOnQueue(.main)
+
     AsyncFunction("interruptSpeaking") { () -> Bool in
       MainActor.assumeIsolated {
         self.voice.stopSpeaking(interrupted: true)

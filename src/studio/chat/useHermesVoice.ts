@@ -1,9 +1,11 @@
 import {
+  createAudioPlayer,
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioRecorder,
   useAudioRecorderState,
+  type AudioPlayer,
 } from 'expo-audio';
 import { File as ExpoFile } from 'expo-file-system';
 import * as Speech from 'expo-speech';
@@ -15,7 +17,15 @@ import {
   hasNativeIOSContext,
   type IOSVoiceState,
 } from '../../../modules/hermes-ios-context';
+import type { ElevenLabsVoice } from '../../api/cloud/audio';
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
+import { ServerSpeechSession, type PCMPlaybackSink } from './server-speech-session';
+import {
+  LOADING_VOICE_RUNTIME,
+  resolveVoiceRuntime,
+  shouldLoadElevenLabsVoices,
+  type VoiceRuntimePolicy,
+} from './voice-runtime-policy';
 
 interface VoiceMessage {
   content: string;
@@ -24,7 +34,25 @@ interface VoiceMessage {
   status?: string;
 }
 
+interface StreamingSpeechCursor {
+  finishing: boolean;
+  messageId: string;
+  sourceLength: number;
+}
+
+interface ServerSpeechCursor extends StreamingSpeechCursor {
+  session: ServerSpeechSession | null;
+}
+
+interface FallbackPlayback {
+  listener: { remove(): void };
+  player: AudioPlayer;
+  resolve(): void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export type HermesVoiceState = IOSVoiceState['state'] | 'transcribing';
+export type HermesVoiceChoice = Pick<ElevenLabsVoice, 'label' | 'name' | 'voice_id'>;
 
 interface UseHermesVoiceOptions {
   agentTurnActive: boolean;
@@ -37,9 +65,14 @@ interface UseHermesVoiceOptions {
   messages: readonly VoiceMessage[];
   notify(message: string): void;
   onInterruptAgent?(): Promise<void> | void;
-  /** Profile whose STT provider should receive Expo recordings. */
   profile?: string;
 }
+
+const EMPTY_STREAMING_CURSOR: StreamingSpeechCursor = {
+  finishing: false,
+  messageId: '',
+  sourceLength: 0,
+};
 
 function recordingMimeType(uri: string): string {
   const normalized = uri.toLowerCase();
@@ -66,6 +99,16 @@ function deleteTemporaryRecording(uri: string): void {
   }
 }
 
+function pcmPlaybackSink(): PCMPlaybackSink | null {
+  if (!hasNativeIOSContext) return null;
+  return {
+    append: (base64PCM) => HermesIOSContext.appendPCMPlayback(base64PCM),
+    finish: () => HermesIOSContext.finishPCMPlayback(),
+    start: (sampleRate, channels) => HermesIOSContext.startPCMPlayback(sampleRate, channels),
+    stop: (interrupted) => HermesIOSContext.stopPCMPlayback(interrupted),
+  };
+}
+
 export function useHermesVoice({
   agentTurnActive,
   applyTranscript,
@@ -81,6 +124,9 @@ export function useHermesVoice({
 }: UseHermesVoiceOptions) {
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 250);
+  const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimePolicy>(LOADING_VOICE_RUNTIME);
+  const [voiceChoices, setVoiceChoices] = useState<HermesVoiceChoice[]>([]);
+  const [voiceChoiceBusy, setVoiceChoiceBusy] = useState(false);
   const [voiceState, setVoiceState] = useState<HermesVoiceState>('idle');
   const [voiceError, setVoiceError] = useState('');
   const [voicePreview, setVoicePreview] = useState('');
@@ -91,17 +137,22 @@ export function useHermesVoice({
   const voiceDraftPrefixRef = useRef('');
   const autoSpokenMessageIdRef = useRef('');
   const expoRecordingRef = useRef(false);
+  const nativeRecognitionRef = useRef(false);
   const nativeVoiceStartedAtRef = useRef(0);
   const acceptNativeTranscriptRef = useRef(false);
   const voiceOperationRef = useRef(0);
+  const voiceConfigGenerationRef = useRef(0);
   const transcriptionAbortRef = useRef<AbortController | null>(null);
-  const streamingSpeechCursorRef = useRef({
-    finishing: false,
-    messageId: '',
-    sourceLength: 0,
+  const nativeSpeechCursorRef = useRef<StreamingSpeechCursor>({ ...EMPTY_STREAMING_CURSOR });
+  const serverSpeechCursorRef = useRef<ServerSpeechCursor>({
+    ...EMPTY_STREAMING_CURSOR,
+    session: null,
   });
   const streamingSpeechGenerationRef = useRef(0);
   const streamingSpeechQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeServerSpeechRef = useRef<{ messageId: string; session: ServerSpeechSession } | null>(null);
+  const fallbackPlayerRef = useRef<AudioPlayer | null>(null);
+  const fallbackPlaybackRef = useRef<FallbackPlayback | null>(null);
 
   const restoreVoiceDraft = useCallback(() => {
     applyTranscript(voiceDraftBeforeRef.current);
@@ -117,24 +168,114 @@ export function useHermesVoice({
     setVoicePreview(normalized);
   }, [applyTranscript, isChinese]);
 
+  const stopEncodedAudio = useCallback(() => {
+    const playback = fallbackPlaybackRef.current;
+    fallbackPlaybackRef.current = null;
+    if (!playback) return;
+    clearTimeout(playback.timer);
+    playback.listener.remove();
+    playback.player.pause();
+    playback.resolve();
+  }, []);
+
+  const playEncodedAudio = useCallback(async (dataUrl: string) => {
+    stopEncodedAudio();
+    await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+    const player = fallbackPlayerRef.current || createAudioPlayer(null, { updateInterval: 100 });
+    fallbackPlayerRef.current = player;
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
+        const active = fallbackPlaybackRef.current;
+        if (!active || active.player !== player) return;
+        fallbackPlaybackRef.current = null;
+        clearTimeout(active.timer);
+        active.listener.remove();
+        if (error) reject(error);
+        else resolve();
+      };
+      const listener = player.addListener('playbackStatusUpdate', (status) => {
+        if (status.didJustFinish) finish();
+        else if (status.playbackState === 'failed') {
+          finish(new Error('Hermes fallback speech audio could not be played'));
+        }
+      });
+      const timer = setTimeout(
+        () => finish(new Error('Hermes fallback speech playback timed out')),
+        180_000,
+      );
+      fallbackPlaybackRef.current = { listener, player, resolve, timer };
+      try {
+        player.replace(dataUrl);
+        player.play();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }, [stopEncodedAudio]);
+
+  const beginServerSpeech = useCallback((messageId: string): ServerSpeechSession => {
+    if (!cloudApi) throw new Error('Hermes server connection is unavailable');
+    const previous = activeServerSpeechRef.current;
+    if (previous) void previous.session.stop(false);
+    let session: ServerSpeechSession;
+    session = new ServerSpeechSession({
+      api: cloudApi,
+      onError: (error) => {
+        if (activeServerSpeechRef.current?.session !== session) return;
+        activeServerSpeechRef.current = null;
+        setSpeakingMessageId('');
+        setVoiceState('idle');
+        notify(describeError(error));
+      },
+      onFinished: () => {
+        if (activeServerSpeechRef.current?.session !== session) return;
+        activeServerSpeechRef.current = null;
+        setSpeakingMessageId('');
+        setVoiceState('idle');
+      },
+      onStarted: () => {
+        if (activeServerSpeechRef.current?.session !== session) return;
+        setSpeakingMessageId(messageId);
+        setVoiceState('speaking');
+      },
+      pcmSink: pcmPlaybackSink(),
+      playEncodedAudio,
+      profile,
+      stopEncodedAudio,
+    });
+    activeServerSpeechRef.current = { messageId, session };
+    setSpeakingMessageId(messageId);
+    return session;
+  }, [cloudApi, describeError, notify, playEncodedAudio, profile, stopEncodedAudio]);
+
   const stopCurrentSpeech = useCallback(async (interrupted = false) => {
     streamingSpeechGenerationRef.current += 1;
-    streamingSpeechCursorRef.current = {
-      finishing: false,
-      messageId: '',
-      sourceLength: 0,
-    };
+    nativeSpeechCursorRef.current = { ...EMPTY_STREAMING_CURSOR };
+    serverSpeechCursorRef.current = { ...EMPTY_STREAMING_CURSOR, session: null };
+    const serverSpeech = activeServerSpeechRef.current;
+    activeServerSpeechRef.current = null;
+    await serverSpeech?.session.stop(interrupted);
+    stopEncodedAudio();
     if (hasNativeIOSContext) {
       if (interrupted) await HermesIOSContext.interruptSpeaking();
       else await HermesIOSContext.stopSpeaking();
-    } else {
-      await Speech.stop();
     }
+    await Speech.stop();
     setSpeakingMessageId('');
-  }, []);
+    setVoiceState((current) => current === 'speaking' ? 'idle' : current);
+  }, [stopEncodedAudio]);
 
   const speakText = useCallback(async (text: string, messageId: string) => {
     await stopCurrentSpeech();
+    if (voiceRuntime.ttsMode === 'server') {
+      const session = beginServerSpeech(messageId);
+      session.append(text);
+      session.finish();
+      return;
+    }
+    if (voiceRuntime.ttsMode !== 'native') {
+      throw new Error(isChinese ? '当前 Profile 未配置语音输出。' : 'Voice output is not configured for this profile.');
+    }
     if (hasNativeIOSContext) {
       const started = await HermesIOSContext.speakText(
         text,
@@ -153,11 +294,9 @@ export function useHermesVoice({
         notify(describeError(error));
       },
       onStopped: () => setSpeakingMessageId((current) => current === messageId ? '' : current),
-      // expo-speech scale: 1.0 is normal pace (unlike AVSpeechUtterance
-      // where 0.5 is normal — the native path above is already correct).
       rate: 1.0,
     });
-  }, [describeError, isChinese, notify, stopCurrentSpeech]);
+  }, [beginServerSpeech, describeError, isChinese, notify, stopCurrentSpeech, voiceRuntime.ttsMode]);
 
   const stopExpoVoiceInput = useCallback(async (operation: number) => {
     setVoiceState('transcribing');
@@ -219,7 +358,8 @@ export function useHermesVoice({
     const operation = ++voiceOperationRef.current;
     try {
       setVoiceError('');
-      if (hasNativeIOSContext) {
+      if (nativeRecognitionRef.current) {
+        nativeRecognitionRef.current = false;
         acceptNativeTranscriptRef.current = false;
         setVoiceState('transcribing');
         const transcript = await HermesIOSContext.stopVoiceRecognition();
@@ -229,9 +369,7 @@ export function useHermesVoice({
         focusComposer();
         return;
       }
-      if (expoRecordingRef.current) {
-        await stopExpoVoiceInput(operation);
-      }
+      if (expoRecordingRef.current) await stopExpoVoiceInput(operation);
     } catch (error) {
       if (operation !== voiceOperationRef.current) return;
       restoreVoiceDraft();
@@ -240,15 +378,7 @@ export function useHermesVoice({
       setVoiceError(message);
       notify(message);
     }
-  }, [
-    applyFinalTranscript,
-    describeError,
-    focusComposer,
-    notify,
-    restoreVoiceDraft,
-    stopExpoVoiceInput,
-    voiceState,
-  ]);
+  }, [applyFinalTranscript, describeError, focusComposer, notify, restoreVoiceDraft, stopExpoVoiceInput, voiceState]);
 
   const cancelVoiceInput = useCallback(async () => {
     ++voiceOperationRef.current;
@@ -256,7 +386,8 @@ export function useHermesVoice({
     transcriptionAbortRef.current?.abort();
     transcriptionAbortRef.current = null;
     try {
-      if (hasNativeIOSContext) {
+      if (nativeRecognitionRef.current) {
+        nativeRecognitionRef.current = false;
         await HermesIOSContext.stopVoiceRecognition();
       } else if (expoRecordingRef.current || recorderState.isRecording) {
         await recorder.stop();
@@ -280,11 +411,8 @@ export function useHermesVoice({
     const operation = ++voiceOperationRef.current;
     try {
       if (agentTurnActive) {
-        void Promise.resolve()
-          .then(() => onInterruptAgent?.())
-          .catch((error) => {
-            notify(describeError(error));
-          });
+        void Promise.resolve().then(() => onInterruptAgent?.())
+          .catch((error) => notify(describeError(error)));
       }
       await stopCurrentSpeech(agentTurnActive || voiceState === 'speaking');
       setVoiceError('');
@@ -293,7 +421,12 @@ export function useHermesVoice({
       voiceDraftBeforeRef.current = currentDraft;
       const current = currentDraft.trimEnd();
       voiceDraftPrefixRef.current = current ? `${current} ` : '';
-      if (hasNativeIOSContext) {
+
+      if (!voiceRuntime.loaded || voiceRuntime.sttMode === 'unavailable') {
+        throw new Error(isChinese ? '当前 Profile 未配置语音输入。' : 'Voice input is not configured for this profile.');
+      }
+      if (voiceRuntime.sttMode === 'native') {
+        if (!hasNativeIOSContext) throw new Error('Native Apple Speech is unavailable in this build');
         const authorization = await HermesIOSContext.requestVoiceAuthorization();
         if (authorization.microphone !== 'authorized' || authorization.speech !== 'authorized') {
           const message = isChinese
@@ -306,6 +439,7 @@ export function useHermesVoice({
         if (operation !== voiceOperationRef.current) return;
         Keyboard.dismiss();
         acceptNativeTranscriptRef.current = true;
+        nativeRecognitionRef.current = true;
         nativeVoiceStartedAtRef.current = Date.now();
         setNativeVoiceDurationMs(0);
         await HermesIOSContext.startVoiceRecognition(isChinese ? 'zh-CN' : 'en-US');
@@ -313,9 +447,7 @@ export function useHermesVoice({
         return;
       }
 
-      if (!cloudApi) {
-        throw new Error(isChinese ? '请先连接 Hermes 服务。' : 'Connect to Hermes first.');
-      }
+      if (!cloudApi) throw new Error(isChinese ? '请先连接 Hermes 服务。' : 'Connect to Hermes first.');
       const permission = await requestRecordingPermissionsAsync();
       if (!permission.granted) {
         const message = isChinese
@@ -336,6 +468,7 @@ export function useHermesVoice({
     } catch (error) {
       if (operation !== voiceOperationRef.current) return;
       expoRecordingRef.current = false;
+      nativeRecognitionRef.current = false;
       acceptNativeTranscriptRef.current = false;
       restoreVoiceDraft();
       setVoiceState('idle');
@@ -344,18 +477,8 @@ export function useHermesVoice({
       notify(message);
     }
   }, [
-    agentTurnActive,
-    cloudApi,
-    describeError,
-    focusComposer,
-    getDraft,
-    isChinese,
-    notify,
-    onInterruptAgent,
-    recorder,
-    restoreVoiceDraft,
-    stopCurrentSpeech,
-    voiceState,
+    agentTurnActive, cloudApi, describeError, getDraft, isChinese, notify, onInterruptAgent,
+    recorder, restoreVoiceDraft, stopCurrentSpeech, voiceRuntime.loaded, voiceRuntime.sttMode, voiceState,
   ]);
 
   const toggleMessageSpeech = useCallback(async (message: VoiceMessage) => {
@@ -373,53 +496,122 @@ export function useHermesVoice({
   const toggleReadRepliesAloud = useCallback(() => {
     if (readRepliesAloud) {
       setReadRepliesAloud(false);
-      void HermesIOSContext.setVoiceNarrationEnabled(false).catch(() => undefined);
+      if (hasNativeIOSContext) {
+        void HermesIOSContext.setVoiceNarrationEnabled(false).catch(() => undefined);
+      }
       void stopCurrentSpeech().catch(() => undefined);
+      return;
+    }
+    if (!voiceRuntime.loaded || voiceRuntime.ttsMode === 'unavailable') {
+      const message = isChinese ? '当前 Profile 未配置语音输出。' : 'Voice output is not configured for this profile.';
+      setVoiceError(message);
+      notify(message);
       return;
     }
     autoSpokenMessageIdRef.current = [...messages]
       .reverse()
       .find((message) => message.role === 'assistant' && message.status === 'completed')
       ?.id || '';
-    void HermesIOSContext.setVoiceNarrationEnabled(true).catch(() => undefined);
+    if (hasNativeIOSContext) {
+      void HermesIOSContext.setVoiceNarrationEnabled(true).catch(() => undefined);
+    }
     setReadRepliesAloud(true);
-  }, [messages, readRepliesAloud, stopCurrentSpeech]);
+  }, [isChinese, messages, notify, readRepliesAloud, stopCurrentSpeech, voiceRuntime]);
 
-  // The Live Activity Speak/Mute control flips the persisted narration switch
-  // outside React; adopt whatever value is stored when the hook mounts.
+  const selectVoice = useCallback(async (voiceId: string) => {
+    const choice = voiceChoices.find((voice) => voice.voice_id === voiceId);
+    if (!choice || !cloudApi || voiceChoiceBusy) return;
+    const generation = voiceConfigGenerationRef.current;
+    setVoiceChoiceBusy(true);
+    try {
+      await stopCurrentSpeech();
+      await cloudApi.saveConfig({ tts: { elevenlabs: { voice_id: choice.voice_id } } }, profile);
+      if (generation !== voiceConfigGenerationRef.current) return;
+      setVoiceRuntime((current) => ({ ...current, selectedVoiceId: choice.voice_id }));
+    } catch (error) {
+      if (generation === voiceConfigGenerationRef.current) notify(describeError(error));
+    } finally {
+      if (generation === voiceConfigGenerationRef.current) setVoiceChoiceBusy(false);
+    }
+  }, [cloudApi, describeError, notify, profile, stopCurrentSpeech, voiceChoiceBusy, voiceChoices]);
+
+  useEffect(() => {
+    const generation = ++voiceConfigGenerationRef.current;
+    const abort = new AbortController();
+    ++voiceOperationRef.current;
+    ++streamingSpeechGenerationRef.current;
+    transcriptionAbortRef.current?.abort();
+    transcriptionAbortRef.current = null;
+    const wasExpoRecording = expoRecordingRef.current;
+    acceptNativeTranscriptRef.current = false;
+    nativeRecognitionRef.current = false;
+    expoRecordingRef.current = false;
+    void activeServerSpeechRef.current?.session.stop(false);
+    activeServerSpeechRef.current = null;
+    nativeSpeechCursorRef.current = { ...EMPTY_STREAMING_CURSOR };
+    serverSpeechCursorRef.current = { ...EMPTY_STREAMING_CURSOR, session: null };
+    stopEncodedAudio();
+    if (wasExpoRecording) void recorder.stop().catch(() => undefined);
+    if (hasNativeIOSContext) {
+      void HermesIOSContext.stopVoiceRecognition().catch(() => undefined);
+      void HermesIOSContext.stopSpeaking().catch(() => undefined);
+    }
+    void Speech.stop().catch(() => undefined);
+    setSpeakingMessageId('');
+    setVoiceState('idle');
+    setVoiceRuntime(LOADING_VOICE_RUNTIME);
+    setVoiceChoices([]);
+    setVoiceChoiceBusy(false);
+    if (!cloudApi) {
+      setVoiceRuntime({ ...LOADING_VOICE_RUNTIME, loaded: true });
+      return () => abort.abort();
+    }
+    void cloudApi.getVoiceConfig(profile, abort.signal)
+      .then(async (config) => {
+        if (generation !== voiceConfigGenerationRef.current) return;
+        const runtime = resolveVoiceRuntime(config);
+        setVoiceRuntime(runtime);
+        if (!shouldLoadElevenLabsVoices(runtime)) return;
+        const result = await cloudApi.listElevenLabsVoices(profile, abort.signal);
+        if (generation !== voiceConfigGenerationRef.current || !result.available) return;
+        setVoiceChoices(result.voices);
+      })
+      .catch((error) => {
+        if (generation === voiceConfigGenerationRef.current && !isAbortError(error)) {
+          setVoiceRuntime({ ...LOADING_VOICE_RUNTIME, loaded: true });
+        }
+      });
+    return () => abort.abort();
+  }, [cloudApi, profile, recorder, stopEncodedAudio]);
+
   useEffect(() => {
     if (!hasNativeIOSContext) return undefined;
     let cancelled = false;
     void HermesIOSContext.getVoiceNarrationEnabled()
-      .then((enabled) => {
-        if (!cancelled) setReadRepliesAloud(enabled);
-      })
+      .then((enabled) => { if (!cancelled) setReadRepliesAloud(enabled); })
       .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (
-      !readRepliesAloud
-      || voiceState === 'listening'
-      || voiceState === 'transcribing'
-    ) return;
+    if (!readRepliesAloud || !voiceRuntime.loaded || voiceRuntime.ttsMode === 'unavailable'
+      || voiceState === 'listening' || voiceState === 'transcribing') return;
     const latest = [...messages]
       .reverse()
       .find((message) => message.role === 'assistant' && Boolean(message.content.trim()));
     if (!latest) return;
 
-    if (!hasNativeIOSContext) {
+    if (voiceRuntime.ttsMode === 'native' && !hasNativeIOSContext) {
       if (latest.status !== 'completed' || autoSpokenMessageIdRef.current === latest.id) return;
       autoSpokenMessageIdRef.current = latest.id;
       void speakText(latest.content, latest.id).catch((error) => notify(describeError(error)));
       return;
     }
 
-    if (
-      autoSpokenMessageIdRef.current === latest.id
-      && streamingSpeechCursorRef.current.messageId !== latest.id
-    ) return;
+    const serverCursor = serverSpeechCursorRef.current;
+    const nativeCursor = nativeSpeechCursorRef.current;
+    if (autoSpokenMessageIdRef.current === latest.id
+      && serverCursor.messageId !== latest.id && nativeCursor.messageId !== latest.id) return;
 
     const generation = streamingSpeechGenerationRef.current;
     streamingSpeechQueueRef.current = streamingSpeechQueueRef.current
@@ -429,47 +621,58 @@ export function useHermesVoice({
         const status = (latest.status || '').toLowerCase();
         const failed = status === 'failed' || status === 'cancelled' || status === 'canceled';
         const pending = status === 'queued' || status === 'running';
-        const cursor = streamingSpeechCursorRef.current;
 
-        if (failed) {
-          if (cursor.messageId === latest.id) await HermesIOSContext.interruptSpeaking();
-          streamingSpeechCursorRef.current = {
-            finishing: false,
-            messageId: '',
-            sourceLength: 0,
-          };
-          setSpeakingMessageId('');
+        if (voiceRuntime.ttsMode === 'server') {
+          let cursor = serverSpeechCursorRef.current;
+          if (failed) {
+            if (cursor.messageId === latest.id) await cursor.session?.stop(true);
+            serverSpeechCursorRef.current = { ...EMPTY_STREAMING_CURSOR, session: null };
+            setSpeakingMessageId('');
+            return;
+          }
+          if (cursor.messageId !== latest.id || latest.content.length < cursor.sourceLength) {
+            await cursor.session?.stop(false);
+            if (generation !== streamingSpeechGenerationRef.current) return;
+            const session = beginServerSpeech(latest.id);
+            cursor = { finishing: false, messageId: latest.id, session, sourceLength: 0 };
+            serverSpeechCursorRef.current = cursor;
+          }
+          const delta = latest.content.slice(cursor.sourceLength);
+          if (delta) {
+            cursor.session?.append(delta);
+            cursor.sourceLength = latest.content.length;
+          }
+          if (!pending && !cursor.finishing) {
+            cursor.finishing = true;
+            cursor.session?.finish();
+            autoSpokenMessageIdRef.current = latest.id;
+          }
           return;
         }
 
-        if (
-          cursor.messageId !== latest.id
-          || latest.content.length < cursor.sourceLength
-        ) {
+        let cursor = nativeSpeechCursorRef.current;
+        if (failed) {
+          if (cursor.messageId === latest.id) await HermesIOSContext.interruptSpeaking();
+          nativeSpeechCursorRef.current = { ...EMPTY_STREAMING_CURSOR };
+          setSpeakingMessageId('');
+          return;
+        }
+        if (cursor.messageId !== latest.id || latest.content.length < cursor.sourceLength) {
           await HermesIOSContext.stopSpeaking();
           if (generation !== streamingSpeechGenerationRef.current) return;
-          const started = await HermesIOSContext.startStreamingSpeech(
-            isChinese ? 'zh-CN' : 'en-US',
-            0.5,
-          );
+          const started = await HermesIOSContext.startStreamingSpeech(isChinese ? 'zh-CN' : 'en-US', 0.5);
           if (!started || generation !== streamingSpeechGenerationRef.current) return;
-          streamingSpeechCursorRef.current = {
-            finishing: false,
-            messageId: latest.id,
-            sourceLength: 0,
-          };
+          cursor = { finishing: false, messageId: latest.id, sourceLength: 0 };
+          nativeSpeechCursorRef.current = cursor;
           setSpeakingMessageId(latest.id);
         }
-
-        const active = streamingSpeechCursorRef.current;
-        if (active.messageId !== latest.id) return;
-        const delta = latest.content.slice(active.sourceLength);
+        const delta = latest.content.slice(cursor.sourceLength);
         if (delta) {
           await HermesIOSContext.appendStreamingSpeech(delta);
-          active.sourceLength = latest.content.length;
+          cursor.sourceLength = latest.content.length;
         }
-        if (!pending && !active.finishing) {
-          active.finishing = true;
+        if (!pending && !cursor.finishing) {
+          cursor.finishing = true;
           await HermesIOSContext.finishStreamingSpeech();
           autoSpokenMessageIdRef.current = latest.id;
         }
@@ -479,10 +682,13 @@ export function useHermesVoice({
         setSpeakingMessageId('');
         notify(describeError(error));
       });
-  }, [describeError, isChinese, messages, notify, readRepliesAloud, speakText, voiceState]);
+  }, [
+    beginServerSpeech, describeError, isChinese, messages, notify, readRepliesAloud,
+    speakText, voiceRuntime.loaded, voiceRuntime.ttsMode, voiceState,
+  ]);
 
   useEffect(() => {
-    if (voiceState !== 'listening' || !hasNativeIOSContext) {
+    if (voiceState !== 'listening') {
       if (voiceState !== 'transcribing') setNativeVoiceDurationMs(0);
       return undefined;
     }
@@ -502,18 +708,22 @@ export function useHermesVoice({
       applyTranscript(`${voiceDraftPrefixRef.current}${event.text}`);
       if (event.isFinal) {
         acceptNativeTranscriptRef.current = false;
+        nativeRecognitionRef.current = false;
         setVoiceError('');
         focusComposer();
       }
     });
     const state = HermesIOSContext.subscribeVoiceState((event) => {
       setVoiceState(event.state);
-      if (event.state !== 'speaking') setSpeakingMessageId('');
+      if (event.state !== 'speaking') {
+        setSpeakingMessageId('');
+      }
       if (event.state === 'listening' && nativeVoiceStartedAtRef.current <= 0) {
         nativeVoiceStartedAtRef.current = Date.now();
       }
       if (event.error) {
         acceptNativeTranscriptRef.current = false;
+        nativeRecognitionRef.current = false;
         restoreVoiceDraft();
         setVoiceError(event.error);
         notify(event.error);
@@ -529,23 +739,34 @@ export function useHermesVoice({
 
   useEffect(() => () => {
     ++voiceOperationRef.current;
+    ++voiceConfigGenerationRef.current;
     transcriptionAbortRef.current?.abort();
     acceptNativeTranscriptRef.current = false;
-    if (expoRecordingRef.current) {
-      void recorder.stop().catch(() => undefined);
-    }
-    if (!hasNativeIOSContext) void Speech.stop().catch(() => undefined);
-  }, [recorder]);
+    nativeRecognitionRef.current = false;
+    void activeServerSpeechRef.current?.session.stop(false);
+    activeServerSpeechRef.current = null;
+    stopEncodedAudio();
+    fallbackPlayerRef.current?.remove();
+    fallbackPlayerRef.current = null;
+    if (expoRecordingRef.current) void recorder.stop().catch(() => undefined);
+    void Speech.stop().catch(() => undefined);
+  }, [recorder, stopEncodedAudio]);
 
   return {
     cancelVoiceInput,
     readRepliesAloud,
+    selectVoice,
+    selectedVoiceId: voiceRuntime.selectedVoiceId,
     speakingMessageId,
     startVoiceInput,
     stopVoiceInput,
     toggleMessageSpeech,
     toggleReadRepliesAloud,
-    voiceDurationMs: hasNativeIOSContext
+    voiceAvailable: voiceRuntime.loaded
+      && (voiceRuntime.sttMode !== 'unavailable' || voiceRuntime.ttsMode !== 'unavailable'),
+    voiceChoiceBusy,
+    voiceChoices,
+    voiceDurationMs: nativeRecognitionRef.current
       ? nativeVoiceDurationMs
       : voiceState === 'listening' ? recorderState.durationMillis : 0,
     voiceError,

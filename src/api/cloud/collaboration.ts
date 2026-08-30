@@ -3,6 +3,7 @@ import type {
   CollaborationProfile,
   RouteDecision,
 } from '../HermesCloudApi';
+import { downloadDeadlineMs, uploadDeadlineMs } from '../upload-body';
 import type { HermesCloudTransport, JsonRecord } from './transport';
 
 const COLLABORATION = '/api/plugins/collaboration';
@@ -104,6 +105,7 @@ export class HermesCollaborationCloudApi {
     return this.transport.request<JsonRecord>(`${KANBAN}/tasks/${encodeURIComponent(taskId)}/attachments`, {
       method: 'POST',
       body: form,
+      deadlineMs: uploadDeadlineMs(file.size),
       query: this.kanbanQuery(board),
     });
   }
@@ -112,6 +114,22 @@ export class HermesCollaborationCloudApi {
     return this.transport.download(`${KANBAN}/attachments/${encodeURIComponent(String(id))}`, {
       query: this.kanbanQuery(board),
     });
+  }
+
+  consumeKanbanAttachment<T>(
+    id: number | string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    options: { board?: string; expectedBytes?: number; signal?: AbortSignal } = {},
+  ) {
+    return this.transport.consumeDownload(
+      `${KANBAN}/attachments/${encodeURIComponent(String(id))}`,
+      consume,
+      {
+        deadlineMs: downloadDeadlineMs(options.expectedBytes ?? 0),
+        query: this.kanbanQuery(options.board),
+        signal: options.signal,
+      },
+    );
   }
 
   deleteKanbanAttachment(id: number | string, board?: string) {

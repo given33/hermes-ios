@@ -6,13 +6,11 @@ export interface AudioTranscriptionResult {
 }
 
 export interface ClientVoiceProvider {
-  mode: 'client' | 'relay' | string;
+  mode: string;
   provider?: string;
   model?: string;
-  api_key?: string;
-  base_url?: string;
+  voice?: string;
   reason?: string;
-  [key: string]: unknown;
 }
 
 export interface ClientVoiceConfig {
@@ -25,6 +23,53 @@ export interface ElevenLabsVoice {
   voice_id: string;
   name: string;
   label: string;
+}
+
+function compactString(value: unknown, maxLength = 256): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const compact = value.trim().slice(0, maxLength);
+  return compact || undefined;
+}
+
+function publicVoiceProvider(value: unknown): ClientVoiceProvider {
+  const source = value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    mode: compactString(source.mode, 32) || 'unavailable',
+    ...(compactString(source.provider, 64) ? { provider: compactString(source.provider, 64) } : {}),
+    ...(compactString(source.model, 160) ? { model: compactString(source.model, 160) } : {}),
+    ...(compactString(source.voice ?? source.voice_id, 256)
+      ? { voice: compactString(source.voice ?? source.voice_id, 256) }
+      : {}),
+    ...(compactString(source.reason, 256) ? { reason: compactString(source.reason, 256) } : {}),
+  };
+}
+
+/** Keep provider credentials and transport details outside the app surface. */
+export function sanitizeClientVoiceConfig(value: unknown): ClientVoiceConfig {
+  const source = value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    ok: source.ok === true,
+    stt: publicVoiceProvider(source.stt),
+    tts: publicVoiceProvider(source.tts),
+  };
+}
+
+function sanitizeElevenLabsVoice(value: unknown): ElevenLabsVoice | null {
+  const source = value && typeof value === 'object'
+    ? value as Record<string, unknown>
+    : {};
+  const voiceId = compactString(source.voice_id, 256);
+  if (!voiceId) return null;
+  const name = compactString(source.name, 120) || voiceId;
+  return {
+    voice_id: voiceId,
+    name,
+    label: compactString(source.label, 160) || name,
+  };
 }
 
 /** Authenticated speech-to-text through the same Hermes origin as chat. */
@@ -61,22 +106,30 @@ export class HermesAudioCloudApi {
     };
   }
 
-  getVoiceConfig(profile = 'default', signal?: AbortSignal) {
-    return this.transport.request<ClientVoiceConfig>('/api/audio/voice-config', {
+  async getVoiceConfig(profile = 'default', signal?: AbortSignal) {
+    const value = await this.transport.request<unknown>('/api/audio/voice-config', {
       query: { profile },
       signal,
     });
+    return sanitizeClientVoiceConfig(value);
   }
 
-  listElevenLabsVoices(profile = 'default', signal?: AbortSignal) {
-    return this.transport.request<{
+  async listElevenLabsVoices(profile = 'default', signal?: AbortSignal) {
+    const value = await this.transport.request<{
       available: boolean;
-      voices: ElevenLabsVoice[];
+      voices?: unknown[];
       error?: string;
     }>('/api/audio/elevenlabs/voices', {
       query: { profile },
       signal,
     });
+    return {
+      available: value.available === true,
+      voices: Array.isArray(value.voices)
+        ? value.voices.map(sanitizeElevenLabsVoice).filter((voice): voice is ElevenLabsVoice => voice !== null)
+        : [],
+      ...(compactString(value.error, 256) ? { error: compactString(value.error, 256) } : {}),
+    };
   }
 
   speak(text: string, profile = 'default', signal?: AbortSignal) {

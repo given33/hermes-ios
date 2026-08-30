@@ -11,6 +11,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let sessionPullRequestsJSON: String?
   let sessionStatsJSON: String?
   let files: [HermesFileSnapshot]
+  let accountFilesJSON: String?
   let managedFilesJSON: String?
   let git: HermesSwiftUIGitSnapshot?
   let workflows: HermesWorkflowSnapshot
@@ -21,7 +22,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let modelConfirmation: HermesModelConfirmationSnapshot?
   let modelAuxiliary: HermesModelAuxiliarySnapshot
   let modelMoa: HermesModelMoaSnapshot
+  let modelMoaJSON: String?
   let providerOauthJSON: String?
+  let providerOauthPendingJSON: String?
+  let credentialPoolJSON: String?
   let customProviderEndpointsJSON: String?
   let detectedModels: [String]
   let operation: HermesRouteOperationSnapshot?
@@ -38,6 +42,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let learningGraphJSON: String?
   let skillHubResultJSON: String?
   let integrations: [HermesIntegrationSnapshot]
+  let mcpServersJSON: String?
   let channelOnboardingJSON: String?
   let installations: [HermesManagedInstallationSnapshot]
   let pairing: HermesPairingSnapshot
@@ -45,6 +50,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
   let collaboration: HermesCollaborationSnapshot
   let kanban: [HermesKanbanColumnSnapshot]
   let kanbanMetaJSON: String?
+  let kanbanDetailJSON: String?
   let profiles: [HermesProfileSnapshot]
   let botRelayJSON: String?
   let botPetJSON: String?
@@ -65,6 +71,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     sessionPullRequestsJSON: String? = nil,
     sessionStatsJSON: String? = nil,
     files: [HermesFileSnapshot] = [],
+    accountFilesJSON: String? = nil,
     managedFilesJSON: String? = nil,
     git: HermesSwiftUIGitSnapshot? = nil,
     workflows: HermesWorkflowSnapshot = .empty,
@@ -75,7 +82,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     modelConfirmation: HermesModelConfirmationSnapshot? = nil,
     modelAuxiliary: HermesModelAuxiliarySnapshot = .empty,
     modelMoa: HermesModelMoaSnapshot = .empty,
+    modelMoaJSON: String? = nil,
     providerOauthJSON: String? = nil,
+    providerOauthPendingJSON: String? = nil,
+    credentialPoolJSON: String? = nil,
     customProviderEndpointsJSON: String? = nil,
     detectedModels: [String] = [],
     operation: HermesRouteOperationSnapshot? = nil,
@@ -92,6 +102,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     learningGraphJSON: String? = nil,
     skillHubResultJSON: String? = nil,
     integrations: [HermesIntegrationSnapshot] = [],
+    mcpServersJSON: String? = nil,
     channelOnboardingJSON: String? = nil,
     installations: [HermesManagedInstallationSnapshot] = [],
     pairing: HermesPairingSnapshot = .empty,
@@ -99,6 +110,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     collaboration: HermesCollaborationSnapshot = .empty,
     kanban: [HermesKanbanColumnSnapshot] = [],
     kanbanMetaJSON: String? = nil,
+    kanbanDetailJSON: String? = nil,
     profiles: [HermesProfileSnapshot] = [],
     botRelayJSON: String? = nil,
     botPetJSON: String? = nil,
@@ -118,6 +130,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.sessionPullRequestsJSON = sessionPullRequestsJSON
     self.sessionStatsJSON = sessionStatsJSON
     self.files = files
+    self.accountFilesJSON = accountFilesJSON
     self.managedFilesJSON = managedFilesJSON
     self.git = git
     self.workflows = workflows
@@ -128,7 +141,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.modelConfirmation = modelConfirmation
     self.modelAuxiliary = modelAuxiliary
     self.modelMoa = modelMoa
+    self.modelMoaJSON = modelMoaJSON
     self.providerOauthJSON = providerOauthJSON
+    self.providerOauthPendingJSON = providerOauthPendingJSON
+    self.credentialPoolJSON = credentialPoolJSON
     self.customProviderEndpointsJSON = customProviderEndpointsJSON
     self.detectedModels = detectedModels
     self.operation = operation
@@ -145,6 +161,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.learningGraphJSON = learningGraphJSON
     self.skillHubResultJSON = skillHubResultJSON
     self.integrations = integrations
+    self.mcpServersJSON = mcpServersJSON
     self.channelOnboardingJSON = channelOnboardingJSON
     self.installations = installations
     self.pairing = pairing
@@ -152,6 +169,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     self.collaboration = collaboration
     self.kanban = kanban
     self.kanbanMetaJSON = kanbanMetaJSON
+    self.kanbanDetailJSON = kanbanDetailJSON
     self.profiles = profiles
     self.botRelayJSON = botRelayJSON
     self.botPetJSON = botPetJSON
@@ -184,6 +202,8 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [HermesFileSnapshot].self,
       forKey: .files
     ) ?? []
+    accountFilesJSON = try container.decodeIfPresent(String.self, forKey: .accountFilesJSON)
+    managedFilesJSON = try container.decodeIfPresent(String.self, forKey: .managedFilesJSON)
     git = try container.decodeIfPresent(HermesSwiftUIGitSnapshot.self, forKey: .git)
     workflows = try container.decodeIfPresent(
       HermesWorkflowSnapshot.self,
@@ -211,7 +231,10 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     )
     modelAuxiliary = try container.decodeIfPresent(HermesModelAuxiliarySnapshot.self, forKey: .modelAuxiliary) ?? .empty
     modelMoa = try container.decodeIfPresent(HermesModelMoaSnapshot.self, forKey: .modelMoa) ?? .empty
+    modelMoaJSON = try container.decodeIfPresent(String.self, forKey: .modelMoaJSON)
     providerOauthJSON = try container.decodeIfPresent(String.self, forKey: .providerOauthJSON)
+    providerOauthPendingJSON = try container.decodeIfPresent(String.self, forKey: .providerOauthPendingJSON)
+    credentialPoolJSON = try container.decodeIfPresent(String.self, forKey: .credentialPoolJSON)
     customProviderEndpointsJSON = try container.decodeIfPresent(String.self, forKey: .customProviderEndpointsJSON)
     detectedModels = try container.decodeIfPresent(
       [String].self,
@@ -240,6 +263,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
       [HermesIntegrationSnapshot].self,
       forKey: .integrations
     ) ?? []
+    mcpServersJSON = try container.decodeIfPresent(String.self, forKey: .mcpServersJSON)
     channelOnboardingJSON = try container.decodeIfPresent(String.self, forKey: .channelOnboardingJSON)
     installations = try container.decodeIfPresent(
       [HermesManagedInstallationSnapshot].self,
@@ -256,6 +280,7 @@ struct HermesRouteSnapshot: Decodable, Equatable {
     ) ?? .empty
     kanban = try container.decodeIfPresent([HermesKanbanColumnSnapshot].self, forKey: .kanban) ?? []
     kanbanMetaJSON = try container.decodeIfPresent(String.self, forKey: .kanbanMetaJSON)
+    kanbanDetailJSON = try container.decodeIfPresent(String.self, forKey: .kanbanDetailJSON)
     profiles = try container.decodeIfPresent([HermesProfileSnapshot].self, forKey: .profiles) ?? []
     botRelayJSON = try container.decodeIfPresent(String.self, forKey: .botRelayJSON)
     botPetJSON = try container.decodeIfPresent(String.self, forKey: .botPetJSON)
@@ -962,6 +987,55 @@ struct HermesModelMoaSnapshot: Decodable, Equatable {
   let activePreset: String
   let presetCount: Int
   static let empty = HermesModelMoaSnapshot(enabled: false, activePreset: "", presetCount: 0)
+}
+
+struct HermesProviderOauthPendingSnapshot: Decodable, Equatable {
+  let cancelled: Bool
+  let provider: String
+  let sessionId: String
+  let status: String
+
+  static func decode(_ json: String?) -> Self? {
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(Self.self, from: data)
+  }
+}
+
+struct HermesCredentialPoolEntrySnapshot: Decodable, Equatable {
+  let index: Int
+  let id: String?
+  let label: String?
+  let authType: String?
+  let source: String?
+  let priority: Double?
+  let lastStatus: String?
+  let requestCount: Double?
+  let tokenPreview: String?
+  let hasRefresh: Bool?
+
+  private enum CodingKeys: String, CodingKey {
+    case index, id, label, source, priority
+    case authType = "auth_type"
+    case lastStatus = "last_status"
+    case requestCount = "request_count"
+    case tokenPreview = "token_preview"
+    case hasRefresh = "has_refresh"
+  }
+}
+
+struct HermesCredentialPoolProviderSnapshot: Decodable, Equatable, Identifiable {
+  let provider: String
+  let entries: [HermesCredentialPoolEntrySnapshot]
+  var id: String { provider }
+}
+
+struct HermesCredentialPoolSnapshot: Decodable, Equatable {
+  let providers: [HermesCredentialPoolProviderSnapshot]
+
+  static func decode(_ json: String?) -> Self? {
+    guard let json, let data = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(Self.self, from: data)
+  }
 }
 
 struct HermesPairingEntrySnapshot: Decodable, Equatable, Identifiable {

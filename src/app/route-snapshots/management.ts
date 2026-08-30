@@ -368,7 +368,9 @@ export function kanbanSnapshot(source: unknown, localizer: HermesRouteLocalizer)
     cards: cards.map((entry, index) => ({
       id: stringValue(entry.id) || `${id}-${index}`,
       title: localizer.serverText(stringValue(entry.title) || stringValue(entry.name) || ''),
-      detail: localizer.serverText(stringValue(entry.description) || stringValue(entry.detail) || ''),
+      detail: localizer.serverText(
+        stringValue(entry.body) || stringValue(entry.description) || stringValue(entry.detail) || '',
+      ),
     })),
   }));
 }
@@ -383,7 +385,9 @@ function kanbanColumn(entry: unknown, index: number, localizer: HermesRouteLocal
     cards: cards.flatMap((card, cardIndex) => isRecord(card) ? [{
       id: stringValue(card.id) || `${id}-${cardIndex}`,
       title: localizer.serverText(stringValue(card.title) || stringValue(card.name) || ''),
-      detail: localizer.serverText(stringValue(card.description) || stringValue(card.detail) || ''),
+      detail: localizer.serverText(
+        stringValue(card.body) || stringValue(card.description) || stringValue(card.detail) || '',
+      ),
     }] : []),
   }];
 }

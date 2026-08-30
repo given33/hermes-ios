@@ -453,22 +453,22 @@ export class HermesManagementCloudApi {
     return this.transport.request<JsonRecord>('/api/egress/status');
   }
 
-  getCredentialPool() {
-    return this.transport.request<JsonRecord>('/api/credentials/pool');
+  getCredentialPool(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/credentials/pool', { profile });
   }
 
-  addCredentialPoolEntry(provider: string, apiKey: string, label = '') {
+  addCredentialPoolEntry(provider: string, apiKey: string, label = '', profile = 'default') {
     return this.transport.json<JsonRecord>('/api/credentials/pool', 'POST', {
       provider,
       api_key: apiKey,
       label: label || undefined,
-    });
+    }, { profile });
   }
 
-  removeCredentialPoolEntry(provider: string, index: number) {
+  removeCredentialPoolEntry(provider: string, index: number, profile = 'default') {
     return this.transport.request<JsonRecord>(
       `/api/credentials/pool/${encodeURIComponent(provider)}/${Math.max(1, Math.trunc(index))}`,
-      { method: 'DELETE' },
+      { method: 'DELETE', profile },
     );
   }
 

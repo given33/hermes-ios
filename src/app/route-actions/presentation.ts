@@ -1,6 +1,6 @@
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
 import type { HermesRouteLocaleInput } from '../route-snapshots/support';
-import { writeBoundedDownload } from '../../api/bounded-download';
+import { writeBoundedDownload, type WritableDownloadFile } from '../../api/bounded-download';
 import { isRecord, structuredContent } from '../route-snapshots/support';
 
 /** Extract safe, de-duplicated web links from current and legacy operation responses. */
@@ -43,6 +43,127 @@ export async function presentManagedFile(api: HermesCloudApi, path: string, name
     const presented = await quickLook.presentQuickLook(target.uri, name || path);
     if (!presented && await Sharing.isAvailableAsync()) await Sharing.shareAsync(target.uri, { dialogTitle: name || path });
   } finally { if (target.exists) target.delete(); }
+}
+
+export const MAX_BACKUP_DOWNLOAD_BYTES = 64 * 1024 * 1024;
+
+const BACKUP_CONTENT_TYPES = new Set([
+  '',
+  'application/octet-stream',
+  'application/x-zip-compressed',
+  'application/zip',
+]);
+
+interface BackupDownloadFile extends WritableDownloadFile {
+  readonly size: number;
+  open(): {
+    close(): void;
+    readBytes(length: number): Uint8Array;
+  };
+}
+
+/** Stream a backup into a bounded file and validate the stored bytes without
+ * ever materializing the archive as a JS Blob/ArrayBuffer. */
+export async function writeValidatedBackup(
+  response: Response,
+  target: BackupDownloadFile,
+  signal?: AbortSignal,
+): Promise<number> {
+  try {
+    const contentType = (response.headers.get('Content-Type') || '')
+      .trim().toLowerCase().split(';', 1)[0];
+    if (!BACKUP_CONTENT_TYPES.has(contentType)) {
+      throw new Error('Hermes returned an unsupported backup content type');
+    }
+    const result = await writeBoundedDownload(response, target, {
+      maximumBytes: MAX_BACKUP_DOWNLOAD_BYTES,
+      signal,
+    });
+    if (!target.exists || result.bytes <= 0) {
+      throw new Error('Hermes returned an empty backup archive');
+    }
+    if (target.size !== result.bytes) {
+      throw new Error('Hermes backup file size does not match the downloaded bytes');
+    }
+    const handle = target.open();
+    let signature: Uint8Array;
+    try {
+      signature = handle.readBytes(4);
+    } finally {
+      handle.close();
+    }
+    if (!hasZipSignature(signature)) {
+      throw new Error('Hermes returned an invalid ZIP backup');
+    }
+    return result.bytes;
+  } catch (error) {
+    if (target.exists) target.delete();
+    throw error;
+  }
+}
+
+export async function presentBackup(
+  api: HermesCloudApi,
+  archive: string,
+  locale: HermesRouteLocaleInput,
+  expectedPid?: number,
+) {
+  await waitForBackupCompletion(api, expectedPid);
+  const [quickLook, Sharing, { temporaryPlaintextFile }] = await Promise.all([
+    import('../../../modules/hermes-quick-look'),
+    import('expo-sharing'),
+    import('../../api/temporary-plaintext-files'),
+  ]);
+  const sourceName = fileNameFromUri(archive);
+  const name = sourceName.toLowerCase().endsWith('.zip')
+    ? sourceName
+    : `${sourceName || 'hermes-backup'}.zip`;
+  const target = temporaryPlaintextFile(name, 'system-backup');
+  try {
+    await api.consumeBackup(
+      archive,
+      (response, signal) => writeValidatedBackup(response, target, signal),
+    );
+    const title = locale === 'zh' ? 'Hermes 备份' : 'Hermes backup';
+    const presented = await quickLook.presentQuickLook(target.uri, title);
+    if (!presented && await Sharing.isAvailableAsync()) {
+      await Sharing.shareAsync(target.uri, {
+        dialogTitle: title,
+        mimeType: 'application/zip',
+      });
+    }
+  } finally {
+    if (target.exists) target.delete();
+  }
+}
+
+async function waitForBackupCompletion(api: HermesCloudApi, expectedPid?: number): Promise<void> {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const status = await api.getActionStatus('backup', 20);
+    const statusPid = typeof status.pid === 'number' ? status.pid : undefined;
+    if (expectedPid !== undefined && statusPid !== expectedPid) {
+      throw new Error(statusPid === undefined
+        ? 'Hermes backup status did not identify the requested process'
+        : 'Hermes reported a different backup process');
+    }
+    if (status.running === false) {
+      if (status.exit_code === 0) return;
+      if (typeof status.exit_code === 'number') {
+        throw new Error(`Hermes backup failed (exit ${status.exit_code})`);
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error('Hermes backup did not finish within two minutes');
+}
+
+function hasZipSignature(bytes: Uint8Array): boolean {
+  return bytes.byteLength >= 4
+    && bytes[0] === 0x50
+    && bytes[1] === 0x4b
+    && ((bytes[2] === 0x03 && bytes[3] === 0x04)
+      || (bytes[2] === 0x05 && bytes[3] === 0x06)
+      || (bytes[2] === 0x07 && bytes[3] === 0x08));
 }
 
 export async function presentSkillContent(api: HermesCloudApi, name: string, profile: string) {

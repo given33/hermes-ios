@@ -1161,23 +1161,22 @@ test('the extended iOS surface reaches upstream system, memory, model, MCP, Git,
   });
 });
 
-test('operations honor required media paths and expose binary downloads as Blobs', async () => {
+test('operations honor required media paths and expose bounded backup consumption', async () => {
   const { api, calls } = recordingApi();
 
   await api.promptSize();
   await api.getMedia('/images/answer.png');
-  const backup = await api.downloadBackup('/backups/hermes.zip');
+  await api.consumeBackup('/backups/hermes-streamed.zip', async () => 'consumed');
   const filesystem = await api.downloadFilesystem('/workspace/report.pdf');
   const streamed = await api.streamFile('/workspace/report.pdf');
 
-  assert.ok(backup instanceof Blob);
   assert.ok(filesystem instanceof Blob);
   assert.ok(streamed instanceof Blob);
   assert.deepEqual(
     calls.slice(-4).map(({ path, options }) => [path, options.method ?? 'GET', options.query]),
     [
       ['/api/media', 'GET', { path: '/images/answer.png' }],
-      ['/api/ops/backup/download', 'GET', { archive: '/backups/hermes.zip' }],
+      ['/api/ops/backup/download', 'GET', { archive: '/backups/hermes-streamed.zip' }],
       ['/api/fs/download', 'GET', { path: '/workspace/report.pdf' }],
       ['/api/files/stream', 'GET', { path: '/workspace/report.pdf' }],
     ],
@@ -1269,6 +1268,38 @@ test('the iOS Kanban facade exposes the complete official dashboard surface', as
   assert.equal(calls.length, 37);
 });
 
+test('Kanban attachments upload with a mobile deadline and download through the bounded consumer', async () => {
+  const { api, calls } = recordingApi();
+  const body = new Blob(['attachment-body'], { type: 'text/plain' });
+
+  await api.listKanbanTaskAttachments('task one', 'hk');
+  await api.uploadKanbanTaskAttachment('task one', body, 'notes final.txt', 'ios', 'hk');
+  await api.consumeKanbanAttachment('attachment 7', async () => 'consumed', {
+    board: 'hk',
+    expectedBytes: 25 * 1024 * 1024,
+  });
+  await api.downloadKanbanAttachment('attachment 7', 'hk');
+  await api.deleteKanbanAttachment('attachment 7', 'hk');
+
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET']), [
+    ['/api/plugins/kanban/tasks/task%20one/attachments', 'GET'],
+    ['/api/plugins/kanban/tasks/task%20one/attachments', 'POST'],
+    ['/api/plugins/kanban/attachments/attachment%207', 'GET'],
+    ['/api/plugins/kanban/attachments/attachment%207', 'GET'],
+    ['/api/plugins/kanban/attachments/attachment%207', 'DELETE'],
+  ]);
+  assert.deepEqual(calls.map(({ options }) => options.query), [
+    { board: 'hk' },
+    { board: 'hk' },
+    { board: 'hk' },
+    { board: 'hk' },
+    { board: 'hk' },
+  ]);
+  assert.ok(calls[1]?.options.body instanceof FormData);
+  assert.equal(calls[1]?.options.deadlineMs, 120_000);
+  assert.ok(Number(calls[2]?.options.deadlineMs) > 120_000);
+});
+
 test('room mailbox and dependency graph APIs stay reachable from iOS', async () => {
   const { api, calls } = recordingApi();
   await api.getCollaborationRoomMailbox('room one', 'hk-worker', 'm-1', 20);
@@ -1315,11 +1346,11 @@ test('toolset, SkillHub, Learning, and session export calls keep official wire p
 
 test('provider OAuth and custom endpoint controls keep official wire paths', async () => {
   const { api, calls } = recordingApi();
-  await api.getProviderOauth();
-  await api.startProviderOauth('openai', { device: 'ios' });
-  await api.submitProviderOauth('openai', { session_id: 'oauth-1', code: '1234' });
-  await api.pollProviderOauth('openai', 'oauth-1');
-  await api.cancelProviderOauth('oauth-1');
+  await api.getProviderOauth('hk-worker');
+  await api.startProviderOauth('openai', { device: 'ios' }, 'hk-worker');
+  await api.submitProviderOauth('openai', { session_id: 'oauth-1', code: '1234' }, 'hk-worker');
+  await api.pollProviderOauth('openai', 'oauth-1', 'hk-worker');
+  await api.cancelProviderOauth('oauth-1', 'hk-worker');
   await api.getCustomProviderEndpoints('hk-worker');
   await api.validateCustomProviderEndpoint({ id: 'edge', base_url: 'https://edge.example/v1' });
   await api.saveCustomProviderEndpoint({ id: 'edge', base_url: 'https://edge.example/v1' }, 'hk-worker');
@@ -1337,6 +1368,26 @@ test('provider OAuth and custom endpoint controls keep official wire paths', asy
     ['/api/providers/custom-endpoints/edge/activate', 'POST'],
     ['/api/providers/custom-endpoints/edge', 'DELETE'],
   ]);
+  assert.deepEqual(calls.slice(0, 5).map(({ options }) => options.profile), [
+    'hk-worker', 'hk-worker', 'hk-worker', 'hk-worker', 'hk-worker',
+  ]);
   assert.equal(calls[5].options.profile, 'hk-worker');
   assert.deepEqual(parsedBody(calls[2]), { code: '1234', session_id: 'oauth-1' });
+});
+
+test('credential pool reads and mutations stay isolated to the selected worker profile', async () => {
+  const { api, calls } = recordingApi();
+  await api.getCredentialPool('hk-worker');
+  await api.addCredentialPoolEntry('anthropic', 'one-time-secret', 'HK key', 'hk-worker');
+  await api.removeCredentialPoolEntry('anthropic', 2, 'hk-worker');
+  assert.deepEqual(calls.map(({ path, options }) => [path, options.method ?? 'GET', options.profile]), [
+    ['/api/credentials/pool', 'GET', 'hk-worker'],
+    ['/api/credentials/pool', 'POST', 'hk-worker'],
+    ['/api/credentials/pool/anthropic/2', 'DELETE', 'hk-worker'],
+  ]);
+  assert.deepEqual(parsedBody(calls[1]), {
+    api_key: 'one-time-secret',
+    label: 'HK key',
+    provider: 'anthropic',
+  });
 });

@@ -496,19 +496,7 @@ export function ChatPreviewPage({
     setSending,
   });
 
-  const {
-    cancelVoiceInput,
-    readRepliesAloud,
-    speakingMessageId,
-    startVoiceInput,
-    stopVoiceInput,
-    toggleMessageSpeech,
-    toggleReadRepliesAloud,
-    voiceDurationMs,
-    voiceError,
-    voicePreview,
-    voiceState,
-  } = useHermesVoice({
+  const voice = useHermesVoice({
     agentTurnActive: hostedRunning || sending,
     applyTranscript: useCallback((next: string) => {
       contentRef.current = next;
@@ -765,7 +753,7 @@ export function ChatPreviewPage({
         pendingPhase,
         pickPhoto,
         previewAttachment,
-        readRepliesAloud,
+        ...voice,
         reconnectAttempt,
         removeAttachment,
         requestSend,
@@ -776,14 +764,6 @@ export function ChatPreviewPage({
         shareAttachment,
         slashMenuOpen,
         updateAttachments,
-        voiceDurationMs,
-        voiceError,
-        voicePreview,
-        voiceState,
-        cancelVoiceInput,
-        startVoiceInput,
-        stopVoiceInput,
-        toggleReadRepliesAloud,
       })}
       headerProps={{
         chatMode,
@@ -873,7 +853,7 @@ export function ChatPreviewPage({
         },
         ...hostedSubagentControls,
         onScroll: handleStreamScroll,
-        onToggleSpeech: toggleMessageSpeech,
+        onToggleSpeech: voice.toggleMessageSpeech,
         pendingPhase,
         pendingStartedAt,
         reconnectAttempt,
@@ -882,7 +862,7 @@ export function ChatPreviewPage({
         sending,
         showScrollToBottom,
         slashMenuOpen,
-        speakingMessageId,
+        speakingMessageId: voice.speakingMessageId,
         streamRef,
       }}
       />

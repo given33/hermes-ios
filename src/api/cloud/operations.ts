@@ -47,7 +47,17 @@ export class HermesOperationsCloudApi {
   runDoctor(payload: JsonRecord = {}) { return this.transport.json<JsonRecord>('/api/ops/doctor', 'POST', payload); }
   runSecurityAudit(payload: JsonRecord = {}) { return this.transport.json<JsonRecord>('/api/ops/security-audit', 'POST', payload); }
   createBackup(payload: JsonRecord = {}) { return this.transport.json<JsonRecord>('/api/ops/backup', 'POST', payload); }
-  downloadBackup(archive: string) { return this.transport.download('/api/ops/backup/download', { query: { archive } }); }
+  consumeBackup<T>(
+    archive: string,
+    consume: (response: Response, signal: AbortSignal) => Promise<T>,
+    signal?: AbortSignal,
+  ) {
+    return this.transport.consumeDownload('/api/ops/backup/download', consume, {
+      deadlineMs: 120_000,
+      query: { archive },
+      signal,
+    });
+  }
   importBackup(payload: JsonRecord) { return this.transport.json<JsonRecord>('/api/ops/import', 'POST', payload); }
   uploadImport(upload: { uri: string; name: string; mimeType?: string }, force = false) {
     const form = new FormData();

@@ -182,6 +182,8 @@ export const styles = StyleSheet.create({
   openMinisWaveBar: { borderRadius: 2, minHeight: 6, width: 3 },
   openMinisTranscript: { fontFamily: BODY_REGULAR, fontSize: 13, lineHeight: 18, maxHeight: 72, textAlign: 'center' },
   openMinisToolbar: { alignItems: 'center', flexDirection: 'row', gap: 4, minHeight: 46, paddingBottom: 7, paddingHorizontal: 8 },
+  openMinisVoiceChoice: { alignItems: 'center', borderRadius: 7, borderWidth: StyleSheet.hairlineWidth, flexDirection: 'row', gap: 4, height: 32, maxWidth: 142, paddingHorizontal: 8 },
+  openMinisVoiceChoiceText: { flexShrink: 1, fontFamily: BODY_MEDIUM, fontSize: 11, lineHeight: 15, minWidth: 28 },
   openMinisToolbarSpacer: { flex: 1, minWidth: 0 },
   openMinisRoundControl: { alignItems: 'center', borderRadius: 19, borderWidth: 0, height: 38, justifyContent: 'center', width: 38 },
   openMinisSendControl: { alignItems: 'center', borderRadius: 19, height: 38, justifyContent: 'center', marginLeft: 6, width: 38 },

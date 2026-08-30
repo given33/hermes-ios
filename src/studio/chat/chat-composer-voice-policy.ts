@@ -1,6 +1,7 @@
 export interface ComposerVoiceControlState {
   readRepliesAloud: boolean;
   sending: boolean;
+  voiceAvailable?: boolean;
   voiceState: string;
 }
 
@@ -13,6 +14,9 @@ export type ComposerVoicePrimaryAction =
 export function canActivateComposerVoiceInput(
   state: ComposerVoiceControlState,
 ): boolean {
+  if (state.voiceAvailable === false
+    && state.voiceState !== 'listening'
+    && state.voiceState !== 'speaking') return false;
   if (state.voiceState === 'transcribing') return false;
   return !state.sending
     || state.readRepliesAloud

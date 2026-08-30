@@ -167,7 +167,7 @@ test('account files and contextual routing use the collaboration cloud contract'
     date_from: undefined,
     date_to: undefined,
     filter_contract: 'account-files-v1',
-    limit: 200,
+    limit: 50,
     offset: 0,
     q: undefined,
     source: undefined,
@@ -177,7 +177,7 @@ test('account files and contextual routing use the collaboration cloud contract'
   assert.equal(calls[1].path, '/api/plugins/collaboration/tool-output-artifacts');
   assert.deepEqual(calls[1].options.query, {
     filter_contract: 'account-files-v1',
-    limit: 200,
+    limit: 50,
     offset: 0,
   });
   assert.equal(calls[2].path, '/api/plugins/collaboration/route');
@@ -278,11 +278,11 @@ test('account file route reads only the requested merged window prefix', async (
     total: number;
   };
 
-  assert.equal(result.files.length, 200);
+  assert.equal(result.files.length, 50);
   assert.equal(result.total, 450);
   assert.deepEqual(
     calls.filter(({ path }) => path.endsWith('/files')).map(({ options }) => options.query?.offset),
-    [0, 125],
+    [0],
   );
   assert.equal(
     calls.filter(({ path }) => path.endsWith('/tool-output-artifacts')).length,

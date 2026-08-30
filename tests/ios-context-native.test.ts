@@ -158,6 +158,7 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
     readFileSync(resolve(root, 'src/studio/chat/chat-attachments.ts'), 'utf8'),
     readFileSync(resolve(root, 'src/studio/chat/useChatAttachmentController.ts'), 'utf8'),
     readFileSync(resolve(root, 'src/studio/chat/useHermesVoice.ts'), 'utf8'),
+    readFileSync(resolve(root, 'src/studio/chat/server-speech-session.ts'), 'utf8'),
   ].join('\n');
 
   for (const operation of [
@@ -169,6 +170,10 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
     'startStreamingSpeech',
     'appendStreamingSpeech',
     'finishStreamingSpeech',
+    'startPCMPlayback',
+    'appendPCMPlayback',
+    'finishPCMPlayback',
+    'stopPCMPlayback',
     'interruptSpeaking',
     'stopSpeaking',
   ]) {
@@ -180,6 +185,10 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
   assert.match(bridge, /subscribeVoiceState/);
   assert.match(service, /SFSpeechAudioBufferRecognitionRequest/);
   assert.match(service, /AVSpeechSynthesizer/);
+  assert.match(service, /AVAudioPlayerNode/);
+  assert.match(service, /pcmFormatInt16/);
+  assert.match(service, /completionCallbackType: \.dataPlayedBack/);
+  assert.match(service, /base64PCM\.count <= 1_500_000/);
   assert.match(service, /AVAudioSession\.interruptionNotification/);
   assert.match(service, /requiresOnDeviceRecognition = true/);
   assert.match(service, /DispatchQueue\.main\.asyncAfter\(deadline: \.now\(\) \+ 55/);
@@ -200,7 +209,7 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
   assert.match(service, /scheduleStreamingSpeechIdleFlush[\s\S]*\.now\(\) \+ 0\.45/);
   assert.match(service, /stopSpeaking\(interrupted: true\)/);
   assert.match(service, /catch \{[\s\S]*deactivateAudioSession\(\)[\s\S]*throw error/);
-  assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 9);
+  assert.equal(module.match(/MainActor\.assumeIsolated/g)?.length, 13);
   assert.match(podspec, /'AVFoundation'/);
   assert.match(podspec, /'Speech'/);
   assert.match(chat, /requestVoiceAuthorization/);
@@ -210,6 +219,12 @@ test('native voice input and read-aloud stay behind explicit iOS permissions', (
   assert.match(chat, /startStreamingSpeech/);
   assert.match(chat, /appendStreamingSpeech/);
   assert.match(chat, /finishStreamingSpeech/);
+  assert.match(chat, /openSpeechStream/);
+  assert.match(chat, /speakAudio/);
+  assert.match(chat, /startPCMPlayback/);
+  assert.match(chat, /appendPCMPlayback/);
+  assert.match(chat, /finishPCMPlayback/);
+  assert.match(chat, /stopPCMPlayback/);
   assert.match(chat, /interruptSpeaking/);
   assert.match(chat, /requestMediaLibraryPermissionsAsync/);
   assert.match(chat, /requestCameraPermissionsAsync/);

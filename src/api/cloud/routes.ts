@@ -90,7 +90,7 @@ export async function loadCloudRoute(
       const sessions = result.conversations.map(conversationSessionSummary);
       return { sessions, total: sessions.length, limit: sessions.length, offset: 0 };
     }
-    case 'files': return api.getAllAccountFiles();
+    case 'files': return api.getAllAccountFiles({ limit: 50, offset: 0 });
     case 'git': {
       // The official Git API is path-based because a Hermes server may expose
       // more than one workspace.  Start at the server's canonical cwd and

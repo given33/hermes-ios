@@ -74,13 +74,63 @@ export async function loadLearningMetadata(api: HermesCloudApi, profile: string)
 }
 
 export async function loadModelProviderMetadata(api: HermesCloudApi, profile: string) {
-  const [oauth, custom] = await Promise.all([
-    typeof api.getProviderOauth === 'function' ? api.getProviderOauth().catch(() => undefined) : undefined,
+  const [oauth, custom, credentialPool] = await Promise.all([
+    typeof api.getProviderOauth === 'function' ? api.getProviderOauth(profile).catch(() => undefined) : undefined,
     typeof api.getCustomProviderEndpoints === 'function' ? api.getCustomProviderEndpoints(profile).catch(() => undefined) : undefined,
+    typeof api.getCredentialPool === 'function' ? api.getCredentialPool(profile).catch(() => undefined) : undefined,
   ]);
+  const safeCredentialPool = sanitizeCredentialPoolMetadata(credentialPool);
   return {
     ...(oauth !== undefined ? { providerOauthJSON: JSON.stringify(oauth) } : {}),
     ...(custom !== undefined ? { customProviderEndpointsJSON: JSON.stringify(custom) } : {}),
+    ...(safeCredentialPool !== undefined
+      ? { credentialPoolJSON: JSON.stringify(safeCredentialPool) }
+      : {}),
+  };
+}
+
+/** The credential-pool endpoint is metadata-only today, but keep an explicit
+ * allowlist at the native bridge so a future/legacy backend cannot accidentally
+ * serialize an API key or refresh token into route state. */
+export function sanitizeCredentialPoolMetadata(value: unknown): { providers: unknown[] } | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const providers = (value as { providers?: unknown }).providers;
+  if (!Array.isArray(providers)) return { providers: [] };
+  return {
+    providers: providers.flatMap((provider) => {
+      if (!provider || typeof provider !== 'object' || Array.isArray(provider)) return [];
+      const row = provider as Record<string, unknown>;
+      if (typeof row.provider !== 'string' || !row.provider.trim()) return [];
+      const entries = Array.isArray(row.entries) ? row.entries : [];
+      return [{
+        provider: row.provider,
+        entries: entries.flatMap((entry) => {
+          if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+          const item = entry as Record<string, unknown>;
+          const index = typeof item.index === 'number' && Number.isSafeInteger(item.index)
+            && item.index > 0 ? item.index : undefined;
+          if (index === undefined) return [];
+          return [{
+            index,
+            ...(typeof item.id === 'string' ? { id: item.id } : {}),
+            ...(typeof item.label === 'string' ? { label: item.label } : {}),
+            ...(typeof item.auth_type === 'string' ? { auth_type: item.auth_type } : {}),
+            ...(typeof item.source === 'string' ? { source: item.source } : {}),
+            ...(typeof item.priority === 'number' && Number.isFinite(item.priority)
+              ? { priority: item.priority }
+              : {}),
+            ...(typeof item.last_status === 'string' ? { last_status: item.last_status } : {}),
+            ...(typeof item.request_count === 'number' && Number.isFinite(item.request_count)
+              ? { request_count: item.request_count }
+              : {}),
+            ...(typeof item.token_preview === 'string'
+              ? { token_preview: item.token_preview.slice(0, 64) }
+              : {}),
+            ...(typeof item.has_refresh === 'boolean' ? { has_refresh: item.has_refresh } : {}),
+          }];
+        }),
+      }];
+    }),
   };
 }
 

@@ -9,7 +9,7 @@ import { serverFailure } from './chat-domain';
 import { isLargePaste } from './composer-draft-policy';
 import type { ChatAttachment, PendingPhase } from './chat-types';
 import type { SlashCommandDescriptor } from './slash-command-model';
-import type { HermesVoiceState } from './useHermesVoice';
+import type { HermesVoiceChoice, HermesVoiceState } from './useHermesVoice';
 
 export interface PreviewComposerOptions {
   activeConversationIdRef: MutableRefObject<string>;
@@ -48,11 +48,16 @@ export interface PreviewComposerOptions {
   setSlashMenuOpen: Dispatch<SetStateAction<boolean>>;
   shareAttachment(attachment: ChatAttachment): Promise<void>;
   slashMenuOpen: boolean;
+  selectVoice(voiceId: string): void;
+  selectedVoiceId: string;
   updateAttachments(
     update: ChatAttachment[] | ((current: ChatAttachment[]) => ChatAttachment[]),
   ): void;
   voiceDurationMs: number;
   voiceError: string;
+  voiceAvailable: boolean;
+  voiceChoiceBusy: boolean;
+  voiceChoices: readonly HermesVoiceChoice[];
   voicePreview: string;
   voiceState: HermesVoiceState;
   cancelVoiceInput(): void;
@@ -142,6 +147,7 @@ export function buildPreviewComposerProps(
       onStartVoiceInput: () => { void startVoiceInput(); },
       onStopVoiceInput: () => { void stopVoiceInput(); },
       onToggleReadRepliesAloud: toggleReadRepliesAloud,
+      onSelectVoice: options.selectVoice,
     },
     inputRef: options.composerInputRef,
     model: {
@@ -160,8 +166,12 @@ export function buildPreviewComposerProps(
       reconnectAttempt: options.reconnectAttempt,
       sending: options.sending,
       slashMenuOpen: options.slashMenuOpen,
+      selectedVoiceId: options.selectedVoiceId,
       voiceDurationMs: options.voiceDurationMs,
       voiceError: options.voiceError,
+      voiceAvailable: options.voiceAvailable,
+      voiceChoiceBusy: options.voiceChoiceBusy,
+      voiceChoices: options.voiceChoices,
       voicePreview: options.voicePreview,
       voiceState: options.voiceState,
     },

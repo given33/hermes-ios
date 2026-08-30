@@ -10,6 +10,8 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
 
   private let audioEngine = AVAudioEngine()
   private let synthesizer = AVSpeechSynthesizer()
+  private let pcmAudioEngine = AVAudioEngine()
+  private let pcmPlayer = AVAudioPlayerNode()
   private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
   private var recognitionTask: SFSpeechRecognitionTask?
   private var recognitionTimeout: DispatchWorkItem?
@@ -28,6 +30,14 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   private var streamingSpeechRate: Float?
   private var streamingSpeechIdleFlush: DispatchWorkItem?
   private var streamingUtterances: [ObjectIdentifier: Int] = [:]
+  private var pcmFormat: AVAudioFormat?
+  private var pcmPlaybackActive = false
+  private var pcmPlaybackFinishRequested = false
+  private var pcmPlaybackGeneration = 0
+  private var pcmQueuedBuffers = 0
+  private var pcmRemainder = Data()
+  private var pcmPlayerAttached = false
+  private var pcmInterruptionObserver: NSObjectProtocol?
 
   private override init() {
     super.init()
@@ -36,6 +46,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
 
   deinit {
     if let interruptionObserver { NotificationCenter.default.removeObserver(interruptionObserver) }
+    if let pcmInterruptionObserver { NotificationCenter.default.removeObserver(pcmInterruptionObserver) }
   }
 
   func authorizationSnapshot() -> [String: String] {
@@ -73,7 +84,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   @MainActor
   func startRecognition(localeIdentifier: String?) throws -> Bool {
     guard !recording else { return true }
-    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive {
+    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive || pcmPlaybackActive {
       _ = stopSpeaking(interrupted: true)
     }
     guard Self.microphoneAuthorization() == "authorized" else {
@@ -249,7 +260,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return false }
     if recording { _ = stopRecognition() }
-    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive {
+    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive || pcmPlaybackActive {
       _ = stopSpeaking()
     }
     let session = AVAudioSession.sharedInstance()
@@ -273,7 +284,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   @MainActor
   func startStreamingSpeech(localeIdentifier: String?, rate: Double?) throws -> Bool {
     if recording { _ = stopRecognition() }
-    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive {
+    if synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive || pcmPlaybackActive {
       _ = stopSpeaking()
     }
     let session = AVAudioSession.sharedInstance()
@@ -319,8 +330,131 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   }
 
   @MainActor
+  func startPCMPlayback(sampleRate: Double, channels: Int) throws -> Bool {
+    guard sampleRate >= 8_000, sampleRate <= 96_000, channels >= 1, channels <= 2,
+          let format = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: sampleRate,
+            channels: AVAudioChannelCount(channels),
+            interleaved: true
+          ) else {
+      throw NSError(
+        domain: "HermesVoice",
+        code: 6,
+        userInfo: [NSLocalizedDescriptionKey: "Unsupported PCM playback format"]
+      )
+    }
+    if recording { _ = stopRecognition() }
+    _ = stopSpeaking()
+
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
+      try session.setActive(true)
+      if !pcmPlayerAttached {
+        pcmAudioEngine.attach(pcmPlayer)
+        pcmPlayerAttached = true
+      }
+      pcmAudioEngine.connect(pcmPlayer, to: pcmAudioEngine.mainMixerNode, format: format)
+      pcmAudioEngine.prepare()
+      try pcmAudioEngine.start()
+      pcmPlayer.play()
+    } catch {
+      resetPCMPlayback()
+      deactivateAudioSession()
+      throw error
+    }
+
+    pcmPlaybackGeneration += 1
+    pcmFormat = format
+    pcmPlaybackActive = true
+    pcmPlaybackFinishRequested = false
+    pcmQueuedBuffers = 0
+    pcmRemainder.removeAll(keepingCapacity: true)
+    observePCMInterruptions()
+    emitState("speaking")
+    return true
+  }
+
+  @MainActor
+  func appendPCMPlayback(_ base64PCM: String) throws -> Bool {
+    guard pcmPlaybackActive, !pcmPlaybackFinishRequested, let format = pcmFormat else {
+      return false
+    }
+    guard base64PCM.count <= 1_500_000,
+          let incoming = Data(base64Encoded: base64PCM),
+          !incoming.isEmpty else {
+      throw NSError(
+        domain: "HermesVoice",
+        code: 7,
+        userInfo: [NSLocalizedDescriptionKey: "Invalid PCM playback chunk"]
+      )
+    }
+
+    var payload = pcmRemainder
+    payload.append(incoming)
+    let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+    guard bytesPerFrame > 0 else { return false }
+    let remainderCount = payload.count % bytesPerFrame
+    if remainderCount > 0 {
+      pcmRemainder = Data(payload.suffix(remainderCount))
+      payload.removeLast(remainderCount)
+    } else {
+      pcmRemainder.removeAll(keepingCapacity: true)
+    }
+    guard !payload.isEmpty else { return true }
+
+    let frameCount = payload.count / bytesPerFrame
+    guard frameCount <= Int(AVAudioFrameCount.max),
+          let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            frameCapacity: AVAudioFrameCount(frameCount)
+          ),
+          let destination = buffer.mutableAudioBufferList.pointee.mBuffers.mData else {
+      throw NSError(
+        domain: "HermesVoice",
+        code: 8,
+        userInfo: [NSLocalizedDescriptionKey: "Could not allocate PCM playback buffer"]
+      )
+    }
+    buffer.frameLength = AVAudioFrameCount(frameCount)
+    payload.copyBytes(
+      to: destination.assumingMemoryBound(to: UInt8.self),
+      count: payload.count
+    )
+
+    let generation = pcmPlaybackGeneration
+    pcmQueuedBuffers += 1
+    pcmPlayer.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+      DispatchQueue.main.async {
+        self?.completePCMBuffer(generation: generation)
+      }
+    }
+    return true
+  }
+
+  @MainActor
+  func finishPCMPlayback() -> Bool {
+    guard pcmPlaybackActive else { return false }
+    pcmPlaybackFinishRequested = true
+    pcmRemainder.removeAll(keepingCapacity: true)
+    finishPCMPlaybackIfDrained()
+    return true
+  }
+
+  @MainActor
+  func stopPCMPlayback(interrupted: Bool = false) -> Bool {
+    guard pcmPlaybackActive else { return false }
+    resetPCMPlayback()
+    deactivateAudioSession()
+    emitState(interrupted ? "interrupted" : "idle")
+    return true
+  }
+
+  @MainActor
   func stopSpeaking(interrupted: Bool = false) -> Bool {
-    let wasSpeaking = synthesizer.isSpeaking || synthesizer.isPaused || streamingSpeechActive
+    let wasSpeaking = synthesizer.isSpeaking || synthesizer.isPaused
+      || streamingSpeechActive || pcmPlaybackActive
     streamingSpeechGeneration += 1
     streamingSpeechActive = false
     streamingSpeechBuffer = ""
@@ -333,6 +467,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     if wasSpeaking {
       activeUtterance = nil
       synthesizer.stopSpeaking(at: .immediate)
+      resetPCMPlayback()
       deactivateAudioSession()
       emitState(interrupted ? "interrupted" : "idle")
     }
@@ -340,7 +475,7 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
   }
 
   var isRecording: Bool { recording }
-  var isSpeaking: Bool { synthesizer.isSpeaking }
+  var isSpeaking: Bool { synthesizer.isSpeaking || streamingSpeechActive || pcmPlaybackActive }
 
   func speechSynthesizer(
     _ synthesizer: AVSpeechSynthesizer,
@@ -477,6 +612,59 @@ final class HermesVoiceService: NSObject, AVSpeechSynthesizerDelegate {
     streamingSpeechIdleFlush = nil
     deactivateAudioSession()
     emitState("idle")
+  }
+
+  @MainActor
+  private func completePCMBuffer(generation: Int) {
+    guard pcmPlaybackActive, generation == pcmPlaybackGeneration else { return }
+    pcmQueuedBuffers = max(0, pcmQueuedBuffers - 1)
+    finishPCMPlaybackIfDrained()
+  }
+
+  @MainActor
+  private func finishPCMPlaybackIfDrained() {
+    guard pcmPlaybackActive, pcmPlaybackFinishRequested, pcmQueuedBuffers == 0 else { return }
+    resetPCMPlayback()
+    deactivateAudioSession()
+    emitState("idle")
+  }
+
+  @MainActor
+  private func resetPCMPlayback() {
+    pcmPlaybackGeneration += 1
+    pcmPlaybackActive = false
+    pcmPlaybackFinishRequested = false
+    pcmQueuedBuffers = 0
+    pcmRemainder.removeAll(keepingCapacity: false)
+    pcmFormat = nil
+    pcmPlayer.stop()
+    if pcmAudioEngine.isRunning { pcmAudioEngine.stop() }
+    if pcmPlayerAttached { pcmAudioEngine.disconnectNodeOutput(pcmPlayer) }
+    if let pcmInterruptionObserver {
+      NotificationCenter.default.removeObserver(pcmInterruptionObserver)
+      self.pcmInterruptionObserver = nil
+    }
+  }
+
+  @MainActor
+  private func observePCMInterruptions() {
+    if let pcmInterruptionObserver {
+      NotificationCenter.default.removeObserver(pcmInterruptionObserver)
+    }
+    let generation = pcmPlaybackGeneration
+    pcmInterruptionObserver = NotificationCenter.default.addObserver(
+      forName: AVAudioSession.interruptionNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] notification in
+      guard let self,
+            self.pcmPlaybackActive,
+            self.pcmPlaybackGeneration == generation,
+            let rawValue = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+            let type = AVAudioSession.InterruptionType(rawValue: rawValue),
+            type == .began else { return }
+      _ = self.stopPCMPlayback(interrupted: true)
+    }
   }
 
   private static func takeSpeakableClauses(from buffer: inout String, force: Bool) -> [String] {

@@ -12,6 +12,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case sessionPullRequestsJSON
   case sessionStatsJSON
   case files
+  case accountFilesJSON
   case managedFilesJSON
   case git
   case workflows
@@ -21,7 +22,10 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case models
   case modelAuxiliary
   case modelMoa
+  case modelMoaJSON
   case providerOauthJSON
+  case providerOauthPendingJSON
+  case credentialPoolJSON
   case customProviderEndpointsJSON
   case modelConfirmation
   case detectedModels
@@ -39,6 +43,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case learningGraphJSON
   case skillHubResultJSON
   case integrations
+  case mcpServersJSON
   case channelOnboardingJSON
   case installations
   case pairing
@@ -46,6 +51,7 @@ enum HermesRouteSnapshotField: String, CodingKey, CaseIterable {
   case collaboration
   case kanban
   case kanbanMetaJSON
+  case kanbanDetailJSON
   case profiles
   case botRelayJSON
   case botPetJSON
@@ -119,6 +125,7 @@ enum HermesRouteAction: String, CaseIterable {
   case fileDownload = "file.download"
   case fileShare = "file.share"
   case fileImport = "file.import"
+  case fileQuery = "files.query"
   case folderCreate = "folder.create"
   case managedFilesOpen = "files.managed.open"
   case managedFileDownload = "files.managed.download"
@@ -129,9 +136,12 @@ enum HermesRouteAction: String, CaseIterable {
   case modelDiscover = "model.discover"
   case modelSave = "model.save"
   case modelTest = "model.test"
+  case modelMoaSave = "model.moa.save"
   case providerOauthStart = "provider.oauth.start"
   case providerOauthSubmit = "provider.oauth.submit"
   case providerOauthCancel = "provider.oauth.cancel"
+  case credentialPoolAdd = "credential.pool.add"
+  case credentialPoolDelete = "credential.pool.delete"
   case customEndpointValidate = "provider.custom.validate"
   case customEndpointSave = "provider.custom.save"
   case customEndpointActivate = "provider.custom.activate"
@@ -180,6 +190,7 @@ enum HermesRouteAction: String, CaseIterable {
   case webhooksEnable = "webhooks.enable"
   case mcpTest = "mcp.test"
   case mcpAuth = "mcp.auth"
+  case mcpReplace = "mcp.replace"
   case mcpCatalogInstall = "mcp.catalog.install"
   case pairingApprove = "pairing.approve"
   case pairingRevoke = "pairing.revoke"
@@ -202,6 +213,7 @@ enum HermesRouteAction: String, CaseIterable {
   case botProfileConfigure = "bot.profile.configure"
   case botAvatarUpload = "bot.avatar.upload"
   case botAvatarGenerate = "bot.avatar.generate"
+  case botAvatarClear = "bot.avatar.clear"
   case botPetSelect = "bot.pet.select"
   case botRelaySend = "bot.relay.send"
   case configUpdate = "config.update"
@@ -236,6 +248,21 @@ enum HermesRouteAction: String, CaseIterable {
   case kanbanUpdate = "kanban.update"
   case kanbanMove = "kanban.move"
   case kanbanDelete = "kanban.delete"
+  case kanbanTaskOpen = "kanban.task.open"
+  case kanbanCommentAdd = "kanban.comment.add"
+  case kanbanAttachmentUpload = "kanban.attachment.upload"
+  case kanbanAttachmentDownload = "kanban.attachment.download"
+  case kanbanRelationLink = "kanban.relation.link"
+  case kanbanRelationUnlink = "kanban.relation.unlink"
+  case kanbanDispatch = "kanban.dispatch"
+  case kanbanReassign = "kanban.reassign"
+  case kanbanReclaim = "kanban.reclaim"
+  case kanbanSpecify = "kanban.specify"
+  case kanbanDecompose = "kanban.decompose"
+  case kanbanRunInspect = "kanban.run.inspect"
+  case kanbanRunTerminate = "kanban.run.terminate"
+  case kanbanTaskLog = "kanban.task.log"
+  case kanbanBoardSwitch = "kanban.board.switch"
   case collaborationSelect = "collaboration.select"
   case collaborationCreate = "collaboration.create"
   case collaborationDelete = "collaboration.delete"

@@ -6,10 +6,7 @@ import {
   HERMES_SWIFTUI_ROUTE_ACTIONS,
   HERMES_SWIFTUI_ROUTE_SNAPSHOT_VERSION,
 } from './swiftui-route-contract';
-import {
-  HermesCloudApi,
-  parseOfficialConversationPlaceholderId,
-} from '../api/HermesCloudApi';
+import { HermesCloudApi, parseOfficialConversationPlaceholderId } from '../api/HermesCloudApi';
 import {
   isRecord,
   isStringRecord,
@@ -22,7 +19,6 @@ import {
 import {
   createHermesSwiftUISessionsSnapshot,
   createHermesSwiftUISessionsSnapshotFromConversations,
-  filesSnapshot,
   sessionsSnapshot,
 } from './route-snapshots/sessions-files';
 import {
@@ -51,12 +47,16 @@ import { customModelConfiguration, customModelOperationError, modelsSnapshot } f
 import { systemSnapshot } from './route-snapshots/system';
 import { memorySnapshot } from './route-snapshots/memory';
 import { gitSnapshot } from './route-snapshots/git';
-import { fileImportUploadId, fileNameFromUri, operationShareUrls, presentAccountFile, presentConversationExport, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
+import { fileImportUploadId, fileNameFromUri, operationShareUrls, presentAccountFile, presentBackup, presentConversationExport, presentProfileExport, presentSessionExport, presentSkillContent, removeStagedFileImport } from './route-actions/presentation';
 import { performManagedFilesAction } from './route-actions/managed-files';
+import { loadAccountFilesPage, loadAccountFilesRouteFields } from './route-actions/account-files-page';
 import { resolveGitPath } from './route-actions/git';
 import { deleteUnifiedSessionSelection, loadSessionSurfaceMetadata, parseSessionIDs, parseSessionImport, resolveSessionActionTarget, updateUnifiedSessionFlag } from './route-actions/session-surfaces';
 import { configureBot, describeBot, generateBotAvatar, selectBotPet, sendBotRelay, uploadBotAvatar } from './route-actions/bot-mode';
 import { performChannelOnboardingAction } from './route-actions/channel-onboarding';
+import { performKanbanAction } from './route-actions/kanban';
+import { mcpServersDocument, replaceMcpServers } from './route-actions/mcp-editor';
+import { performModelAdminAction } from './route-actions/model-admin';
 import { hydrateToolsetConfigs, loadCronMetadata, loadLearningMetadata, loadModelProviderMetadata, loadSkillHubMetadata, loadToolRuntimeMetadata } from './route-loaders/remote-metadata'; // Account previews use temporaryPlaintextFile(name, 'account-file') and consumeAccountFile(... writeBoundedDownload) through presentation.ts.
 export type { HermesRouteLocale, HermesRouteLocaleInput } from './route-snapshots/support';
 export {
@@ -93,16 +93,7 @@ export async function loadHermesSwiftUIRouteSnapshot(
         sessionState,
       }, locale, metadata);
     }
-    case 'files': {
-      const managed = typeof api.listFiles === 'function'
-        ? await api.listFiles().catch(() => undefined)
-        : undefined;
-      return {
-        ...base,
-        files: filesSnapshot(source, localizer),
-        managedFilesJSON: managed ? JSON.stringify(managed) : undefined,
-      };
-    }
+    case 'files': return { ...base, ...await loadAccountFilesRouteFields(api, source, locale) };
     case 'git': {
       const root = isRecord(source) ? source : {};
       return {
@@ -144,6 +135,7 @@ export async function loadHermesSwiftUIRouteSnapshot(
           activePreset: stringValue(moa.active_preset) || stringValue(moa.activePreset) || stringValue(moa.default_preset),
           presetCount: Object.keys(presets).length,
         },
+        modelMoaJSON: JSON.stringify(moa),
         ...await loadModelProviderMetadata(api, profile),
       };
     }
@@ -164,12 +156,17 @@ export async function loadHermesSwiftUIRouteSnapshot(
     }
     case 'plugins':
       return { ...base, integrations: integrationsSnapshot(source, 'plugins', localizer) };
-    case 'mcp':
+    case 'mcp': {
+      const config = typeof api.getConfig === 'function'
+        ? await api.getConfig(profile).catch(() => undefined)
+        : undefined;
       return {
         ...base,
         integrations: integrationsSnapshot(source, 'mcp', localizer),
         installations: managedInstallationsSnapshot(source, 'mcp'),
+        ...(config !== undefined ? { mcpServersJSON: mcpServersDocument(config) } : {}),
       };
+    }
     case 'channels':
       return { ...base, integrations: integrationsSnapshot(source, 'channels', localizer) };
     case 'webhooks':
@@ -222,6 +219,7 @@ export async function loadHermesSwiftUIRouteSnapshot(
       return base;
   }
 }
+
 export async function performHermesSwiftUIRouteAction(
   api: HermesCloudApi,
   event: HermesSwiftUIRouteActionEvent,
@@ -241,14 +239,25 @@ export async function performHermesSwiftUIRouteAction(
   flowId?: string;
   oauthProvider?: string;
   oauthSessionId?: string;
+  accountFilesJSON?: string;
   managedFilesJSON?: string;
+  kanbanDetailJSON?: string;
 }> {
   const localizer = routeLocalizer(locale);
   const chinese = localizer.isChinese;
   const { action, payload } = event;
   const value = payload.value?.trim() || payload.name?.trim() || '';
+  const modelAdminResult = await performModelAdminAction(api, action, payload, profile, chinese);
+  if (modelAdminResult !== undefined) return modelAdminResult;
+  if (action === HERMES_SWIFTUI_ROUTE_ACTIONS.fileQuery) {
+    if (payload.route !== 'files') return 'none';
+    const page = await loadAccountFilesPage(api, payload, locale);
+    return { accountFilesJSON: JSON.stringify(page), message: '' };
+  }
   const managedFilesResult = await performManagedFilesAction(api, event);
   if (managedFilesResult !== undefined) return managedFilesResult;
+  const kanbanResult = await performKanbanAction(api, action, payload, profile, chinese);
+  if (kanbanResult !== undefined) return kanbanResult;
   switch (action) {
     case HERMES_SWIFTUI_ROUTE_ACTIONS.refresh:
       return 'reload';
@@ -603,6 +612,10 @@ export async function performHermesSwiftUIRouteAction(
       const flowId = stringValue(flow.flow_id) || stringValue(flow.flowId);
       return { message: url ? `${chinese ? '请在浏览器完成 MCP OAuth：' : 'Complete MCP OAuth in your browser: '} ${url}` : (chinese ? 'MCP OAuth 已启动' : 'MCP OAuth started'), url, flowId };
     }
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.mcpReplace:
+      if (payload.route !== 'mcp') return 'none';
+      await replaceMcpServers(api, payload.detail || payload.value || '', profile);
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.integrationUpdate:
       if (!payload.id || payload.route !== 'channels') return 'none';
       {
@@ -666,6 +679,10 @@ export async function performHermesSwiftUIRouteAction(
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botProfileConfigure: return payload.route === 'bots' && payload.id ? configureBot(api, payload.id, payload.detail || payload.value || '{}', chinese) : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botAvatarUpload: return payload.route === 'bots' && payload.id ? uploadBotAvatar(api, payload.id, payload.detail || payload.value || '') : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botAvatarGenerate: return payload.route === 'bots' && payload.id ? generateBotAvatar(api, payload.id, payload.detail || payload.value || '', chinese) : 'none';
+    case HERMES_SWIFTUI_ROUTE_ACTIONS.botAvatarClear:
+      if (payload.route !== 'bots' || !payload.id) return 'none';
+      await api.clearBotAsset(payload.id, 'avatar');
+      return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botPetSelect: return payload.route === 'bots' && payload.id ? selectBotPet(api, payload.id, payload.targetId || payload.value || '', payload.detail || '', chinese) : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.botRelaySend: return payload.route === 'bots' ? sendBotRelay(api, payload.targetId || payload.fields?.target || payload.id || '', payload.detail || payload.value || payload.fields?.message || '', payload.fields?.profile || profile, chinese) : 'none';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.profileUpdate:
@@ -732,15 +749,15 @@ export async function performHermesSwiftUIRouteAction(
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthStart: {
       if (!payload.id) return 'none';
-      const result = await api.startProviderOauth(payload.id, payload.fields ? { ...payload.fields } : {});
+      const result = await api.startProviderOauth(payload.id, payload.fields ? { ...payload.fields } : {}, profile);
       const url = stringValue(result.authorization_url) || stringValue(result.url);
       const sessionId = stringValue(result.session_id) || stringValue(result.sessionId);
       return { message: url ? (chinese ? 'Provider OAuth 页面已打开' : 'Provider OAuth page opened') : (chinese ? 'Provider OAuth 已启动' : 'Provider OAuth started'), url, oauthProvider: payload.id, oauthSessionId: sessionId };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthSubmit:
-      if (!payload.id) return 'none'; await api.submitProviderOauth(payload.id, payload.fields || {}); return 'reload';
+      if (!payload.id) return 'none'; await api.submitProviderOauth(payload.id, payload.fields || {}, profile); return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.providerOauthCancel:
-      if (!value) return 'none'; await api.cancelProviderOauth(value); return 'reload';
+      if (!value) return 'none'; await api.cancelProviderOauth(value, profile); return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.customEndpointValidate: {
       const config = parseJsonRecord(value); if (!config) return 'none'; const result = await api.validateCustomProviderEndpoint(config); return { message: stringValue(result.message) || (result.ok === false ? (chinese ? '自定义端点验证失败' : 'Custom endpoint validation failed') : (chinese ? '自定义端点验证通过' : 'Custom endpoint validated')) };
     }
@@ -849,7 +866,11 @@ export async function performHermesSwiftUIRouteAction(
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemBackup: {
       const result = await api.createBackup({});
-      return { message: stringValue(result.archive) || stringValue(result.message) || (chinese ? '备份已创建' : 'Backup created') };
+      const archive = stringValue(result.archive);
+      if (!archive) throw new Error(chinese ? '服务器没有返回备份文件' : 'The server did not return a backup archive');
+      const pid = typeof result.pid === 'number' && Number.isSafeInteger(result.pid) ? result.pid : undefined;
+      await presentBackup(api, archive, locale, pid);
+      return { message: chinese ? '备份已创建并可供保存或分享' : 'Backup created and ready to save or share' };
     }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemBackupImport: { const uri = payload.uris?.[0] || payload.value || ''; if (!uri) return 'none'; const name = payload.name || fileNameFromUri(uri) || 'hermes-backup.zip'; try { await api.uploadImport({ uri, name, mimeType: payload.fields?.mimeType || 'application/zip' }, payload.fields?.force === 'true'); } finally { if (payload.fields?.stagedImport === 'true') await removeStagedFileImport(uri); } return 'reload'; }
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemHookCreate: { const values = payload.detail ? parseJsonRecord(payload.detail) : payload.fields; if (!values) return 'none'; await api.createHook(values); return 'reload'; }
@@ -882,39 +903,6 @@ export async function performHermesSwiftUIRouteAction(
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.systemUpdate:
       await api.updateHermes();
-      return 'reload';
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanCreate:
-      if (!payload.name && !payload.value) return 'none';
-      {
-        const created = await api.createKanbanTask({
-          title: payload.name || payload.value || (chinese ? '新任务' : 'New task'),
-          body: payload.detail || '',
-        });
-        const task = isRecord(created.task) ? created.task : {};
-        const taskId = stringValue(task.id);
-        if (taskId && payload.targetId && payload.targetId !== 'triage') {
-          await api.updateKanbanTask(taskId, { status: payload.targetId });
-        }
-      }
-      return 'reload';
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanUpdate:
-      if (!payload.id) return 'none';
-      await api.updateKanbanTask(payload.id, {
-        ...(payload.name ? { title: payload.name } : {}),
-        ...(payload.detail !== undefined ? { body: payload.detail } : {}),
-        ...(payload.targetId ? { status: payload.targetId } : {}),
-      });
-      return 'reload';
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanMove:
-      if (!payload.id) return 'none';
-      await api.updateKanbanTask(payload.id, {
-        status: payload.targetId || payload.value,
-        position: payload.position,
-      });
-      return 'reload';
-    case HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanDelete:
-      if (!payload.id) return 'none';
-      await api.updateKanbanTask(payload.id, { archived: true });
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.collaborationSelect:
       return 'none';

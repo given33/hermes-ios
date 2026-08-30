@@ -225,6 +225,10 @@ export interface IOSContextNativeModule {
   startStreamingSpeech(locale?: string | null, rate?: number | null): Promise<boolean>;
   appendStreamingSpeech(text: string): Promise<boolean>;
   finishStreamingSpeech(): Promise<boolean>;
+  startPCMPlayback(sampleRate: number, channels: number): Promise<boolean>;
+  appendPCMPlayback(base64PCM: string): Promise<boolean>;
+  finishPCMPlayback(): Promise<boolean>;
+  stopPCMPlayback(interrupted?: boolean | null): Promise<boolean>;
   interruptSpeaking(): Promise<boolean>;
   stopSpeaking(): Promise<boolean>;
   getVoiceState(): Promise<{ recording: boolean; speaking: boolean }>;
@@ -567,6 +571,13 @@ export const HermesIOSContext = {
     requireContextModule().startStreamingSpeech(locale, rate),
   appendStreamingSpeech: (text: string) => requireContextModule().appendStreamingSpeech(text),
   finishStreamingSpeech: () => requireContextModule().finishStreamingSpeech(),
+  startPCMPlayback: (sampleRate: number, channels: number) =>
+    requireContextModule().startPCMPlayback(sampleRate, channels),
+  appendPCMPlayback: (base64PCM: string) =>
+    requireContextModule().appendPCMPlayback(base64PCM),
+  finishPCMPlayback: () => requireContextModule().finishPCMPlayback(),
+  stopPCMPlayback: (interrupted = false) =>
+    requireContextModule().stopPCMPlayback(interrupted),
   interruptSpeaking: () => requireContextModule().interruptSpeaking(),
   stopSpeaking: () => requireContextModule().stopSpeaking(),
   getVoiceState: () => requireContextModule().getVoiceState(),

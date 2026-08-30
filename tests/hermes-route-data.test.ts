@@ -520,8 +520,8 @@ test('native session, SkillHub, and provider controls complete official action f
   await performHermesSwiftUIRouteAction(api, { action: 'skillhub.scan', payload: { route: 'skills', value: 'owner/skill' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'skillhub.install', payload: { route: 'skills', value: 'owner/skill' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'skillhub.uninstall', payload: { route: 'skills', value: 'browser' } }, 'default');
-  const oauth = await performHermesSwiftUIRouteAction(api, { action: 'provider.oauth.start', payload: { route: 'models', id: 'openai' } }, 'default');
-  await performHermesSwiftUIRouteAction(api, { action: 'provider.oauth.submit', payload: { route: 'models', id: 'openai', fields: { code: '1234' } } }, 'default');
+  const oauth = await performHermesSwiftUIRouteAction(api, { action: 'provider.oauth.start', payload: { route: 'models', id: 'openai' } }, 'hk-worker');
+  await performHermesSwiftUIRouteAction(api, { action: 'provider.oauth.submit', payload: { route: 'models', id: 'openai', fields: { code: '1234' } } }, 'hk-worker');
   await performHermesSwiftUIRouteAction(api, { action: 'provider.custom.validate', payload: { route: 'models', value: '{"id":"edge"}' } }, 'default');
   await performHermesSwiftUIRouteAction(api, { action: 'provider.custom.save', payload: { route: 'models', value: '{"id":"edge"}' } }, 'hk-worker');
   assert.equal((oauth as { oauthSessionId?: string }).oauthSessionId, 'oauth-1');
@@ -529,7 +529,7 @@ test('native session, SkillHub, and provider controls complete official action f
     ['archive', 's1', true, 'hk-worker'], ['pin', 's1', true, 'default'], ['unread', 's1', false, 'default'],
     ['search', 'browser', 'all', 20, 'default'], ['preview', 'owner/skill', 'default'], ['scan', 'owner/skill', 'default'],
     ['install', 'owner/skill', 'default'], ['uninstall', 'browser', 'default'],
-    ['oauth-start', 'openai', {}], ['oauth-submit', 'openai', { code: '1234' }],
+    ['oauth-start', 'openai', {}, 'hk-worker'], ['oauth-submit', 'openai', { code: '1234' }, 'hk-worker'],
     ['endpoint-validate', { id: 'edge' }], ['endpoint-save', { id: 'edge' }, 'hk-worker'],
   ]);
 });
@@ -858,7 +858,7 @@ test('all native management routes render the current cloud workspace response',
       room: { id: 'room-1', name: '原生开发', messages: [{ id: 'm1', content: '云端消息' }] },
     },
     kanban: {
-      tasks: [{ id: 'task-1', title: '接入后端', status: 'doing' }],
+      tasks: [{ id: 'task-1', title: '接入后端', body: '保持 iOS 与上游任务正文一致', status: 'doing' }],
       boards: { boards: [{ slug: 'default' }], current: 'default' },
       stats: { total: 1 },
       workers: { workers: [{ task_id: 'task-1' }] },
@@ -930,6 +930,7 @@ test('all native management routes render the current cloud workspace response',
   assert.match(achievements.achievements?.recentUnlocksJSON ?? '', /first/);
   assert.equal(collaboration.collaboration?.messages[0].text, '云端消息');
   assert.equal(kanban.kanban?.[0].cards[0].title, '接入后端');
+  assert.equal(kanban.kanban?.[0].cards[0].detail, '保持 iOS 与上游任务正文一致');
   assert.match(kanban.kanbanMetaJSON ?? '', /"current":"default"/);
   assert.match(kanban.kanbanMetaJSON ?? '', /"total":1/);
   assert.equal(profiles.profiles?.[0].active, true);
@@ -1099,6 +1100,121 @@ test('native management actions write through the canonical cloud APIs', async (
     ['kanban-update', 'task-new', { status: 'ready' }],
     ['kanban-update', 'task-1', { title: '新标题', body: '新内容', status: 'doing' }],
     ['channel-update', 'telegram', { enabled: true, mode: 'polling' }, 'default'],
+  ]);
+});
+
+test('native advanced Kanban actions use the official task, worker, run, and board APIs', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    getKanbanTask: async (...args: unknown[]) => {
+      calls.push(['task', ...args]);
+      return { task: { id: args[0], status: 'doing' }, runs: [{ id: 41, status: 'running' }] };
+    },
+    dispatchKanban: async (...args: unknown[]) => { calls.push(['dispatch', ...args]); return { message: 'dispatched' }; },
+    reassignKanbanTask: async (...args: unknown[]) => { calls.push(['reassign', ...args]); return { ok: true }; },
+    reclaimKanbanTask: async (...args: unknown[]) => { calls.push(['reclaim', ...args]); return { ok: true }; },
+    specifyKanbanTask: async (...args: unknown[]) => { calls.push(['specify', ...args]); return { ok: true }; },
+    decomposeKanbanTask: async (...args: unknown[]) => { calls.push(['decompose', ...args]); return { ok: true }; },
+    inspectKanbanRun: async (...args: unknown[]) => { calls.push(['inspect', ...args]); return { alive: true, run_id: 41 }; },
+    terminateKanbanRun: async (...args: unknown[]) => { calls.push(['terminate', ...args]); return { status: 'terminated' }; },
+    getKanbanTaskLog: async (...args: unknown[]) => { calls.push(['log', ...args]); return { content: 'worker output' }; },
+    switchKanbanBoard: async (...args: unknown[]) => { calls.push(['switch', ...args]); return { current: args[0] }; },
+  } as unknown as HermesCloudApi;
+
+  const open = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.task.open',
+    payload: { route: 'kanban', id: 'task-1', fields: { board: 'default' } },
+  }, 'ios-worker');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.dispatch',
+    payload: { route: 'kanban', fields: { board: 'default', dryRun: 'true', max: '2' } },
+  }, 'ios-worker');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.reassign',
+    payload: { route: 'kanban', id: 'task-1', targetId: 'hk-worker', detail: 'move closer to user', fields: { board: 'default', reclaim: 'true' } },
+  }, 'ios-worker');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.reclaim',
+    payload: { route: 'kanban', id: 'task-1', detail: 'stalled', fields: { board: 'default' } },
+  }, 'ios-worker');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.specify',
+    payload: { route: 'kanban', id: 'task-1', fields: { author: 'dispatcher', board: 'default' } },
+  }, 'ios-worker');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.decompose',
+    payload: { route: 'kanban', id: 'task-1', fields: { board: 'default' } },
+  }, 'ios-worker');
+  const inspection = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.run.inspect',
+    payload: { route: 'kanban', id: 'task-1', targetId: '41', fields: { board: 'default' } },
+  }, 'ios-worker');
+  const termination = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.run.terminate',
+    payload: { route: 'kanban', id: 'task-1', targetId: '41', detail: 'operator stop', fields: { board: 'default' } },
+  }, 'ios-worker');
+  const log = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.task.log',
+    payload: { route: 'kanban', id: 'task-1', fields: { board: 'default', tail: '450' } },
+  }, 'ios-worker');
+  const switched = await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.board.switch',
+    payload: { route: 'kanban', targetId: 'hong-kong' },
+  }, 'ios-worker');
+
+  assert.match(typeof open === 'object' ? open.kanbanDetailJSON || '' : '', /"id":"task-1"/);
+  assert.match(typeof inspection === 'object' ? inspection.kanbanDetailJSON || '' : '', /"alive":true/);
+  assert.match(typeof termination === 'object' ? termination.kanbanDetailJSON || '' : '', /"status":"terminated"/);
+  assert.match(typeof log === 'object' ? log.kanbanDetailJSON || '' : '', /worker output/);
+  assert.equal(typeof switched === 'object' ? switched.kanbanDetailJSON : undefined, '');
+  assert.deepEqual(calls.filter(([kind]) => kind !== 'task'), [
+    ['dispatch', { board: 'default', dryRun: true, max: 2 }],
+    ['reassign', 'task-1', 'hk-worker', true, 'default', 'move closer to user'],
+    ['reclaim', 'task-1', 'stalled', 'default'],
+    ['specify', 'task-1', { author: 'dispatcher' }, 'default'],
+    ['decompose', 'task-1', { author: 'ios-worker' }, 'default'],
+    ['inspect', '41', 'default'],
+    ['terminate', '41', 'operator stop', 'default'],
+    ['log', 'task-1', { board: 'default', tail: 450 }],
+    ['switch', 'hong-kong'],
+  ]);
+  assert.equal(calls.filter(([kind]) => kind === 'task').length, 8);
+});
+
+test('native Kanban task writes remain pinned to the selected board', async () => {
+  const calls: unknown[][] = [];
+  const api = {
+    createKanbanTask: async (...args: unknown[]) => {
+      calls.push(['create', ...args]);
+      return { task: { id: 'task-new' } };
+    },
+    updateKanbanTask: async (...args: unknown[]) => { calls.push(['update', ...args]); },
+  } as unknown as HermesCloudApi;
+  const fields = { board: 'hong-kong' };
+
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.create',
+    payload: { route: 'kanban', name: 'HK task', targetId: 'ready', fields },
+  }, 'dispatcher');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.update',
+    payload: { route: 'kanban', id: 'task-1', name: 'Renamed', fields },
+  }, 'dispatcher');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.move',
+    payload: { route: 'kanban', id: 'task-1', targetId: 'doing', position: 2, fields },
+  }, 'dispatcher');
+  await performHermesSwiftUIRouteAction(api, {
+    action: 'kanban.delete',
+    payload: { route: 'kanban', id: 'task-1', fields },
+  }, 'dispatcher');
+
+  assert.deepEqual(calls, [
+    ['create', { title: 'HK task', body: '' }, 'hong-kong'],
+    ['update', 'task-new', { status: 'ready' }, 'hong-kong'],
+    ['update', 'task-1', { title: 'Renamed' }, 'hong-kong'],
+    ['update', 'task-1', { status: 'doing', position: 2 }, 'hong-kong'],
+    ['update', 'task-1', { archived: true }, 'hong-kong'],
   ]);
 });
 

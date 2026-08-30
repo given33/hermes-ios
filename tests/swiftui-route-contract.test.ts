@@ -22,6 +22,7 @@ test('SwiftUI route snapshots serialize with the versioned server-data contract'
       running: true,
       detail: 'complete process',
     }],
+    kanbanDetailJSON: '{"task":{"id":"task-42"}}',
   };
 
   assert.deepEqual(JSON.parse(encodeHermesSwiftUIRouteSnapshot(snapshot)), snapshot);
@@ -89,5 +90,27 @@ test('SwiftUI route actions reject unknown names and malformed payloads', () => 
       '{"route":"kanban","position":1.5}',
     ),
     null,
+  );
+  assert.deepEqual(
+    decodeHermesSwiftUIRouteAction(
+      HERMES_SWIFTUI_ROUTE_ACTIONS.kanbanRunTerminate,
+      JSON.stringify({
+        route: 'kanban',
+        id: 'task-42',
+        targetId: '7',
+        detail: 'operator stop',
+        fields: { board: 'default' },
+      }),
+    ),
+    {
+      action: 'kanban.run.terminate',
+      payload: {
+        route: 'kanban',
+        id: 'task-42',
+        targetId: '7',
+        detail: 'operator stop',
+        fields: { board: 'default' },
+      },
+    },
   );
 });

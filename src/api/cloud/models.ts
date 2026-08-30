@@ -185,32 +185,35 @@ export class HermesModelsCloudApi {
     return this.transport.json<JsonRecord>('/api/providers/validate', 'POST', config);
   }
 
-  getProviderOauth() {
-    return this.transport.request<JsonRecord>('/api/providers/oauth');
+  getProviderOauth(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/providers/oauth', { profile });
   }
 
-  startProviderOauth(provider: string, body: JsonRecord = {}) {
+  startProviderOauth(provider: string, body: JsonRecord = {}, profile = 'default') {
     return this.transport.json<JsonRecord>(
       `/api/providers/oauth/${encodeURIComponent(provider)}/start`, 'POST', body,
+      { profile },
     );
   }
 
-  submitProviderOauth(provider: string, body: JsonRecord) {
+  submitProviderOauth(provider: string, body: JsonRecord, profile = 'default') {
     return this.transport.json<JsonRecord>(
       `/api/providers/oauth/${encodeURIComponent(provider)}/submit`, 'POST', body,
+      { profile },
     );
   }
 
-  pollProviderOauth(provider: string, sessionId: string) {
+  pollProviderOauth(provider: string, sessionId: string, profile = 'default') {
     return this.transport.request<JsonRecord>(
       `/api/providers/oauth/${encodeURIComponent(provider)}/poll/${encodeURIComponent(sessionId)}`,
+      { profile },
     );
   }
 
-  cancelProviderOauth(sessionId: string) {
+  cancelProviderOauth(sessionId: string, profile = 'default') {
     return this.transport.request<JsonRecord>(
       `/api/providers/oauth/sessions/${encodeURIComponent(sessionId)}`,
-      { method: 'DELETE' },
+      { method: 'DELETE', profile },
     );
   }
 

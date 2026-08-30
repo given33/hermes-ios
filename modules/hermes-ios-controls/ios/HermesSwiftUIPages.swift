@@ -37,6 +37,7 @@ struct HermesRouteContent: View {
       HermesFilesPage(
         chinese: chinese,
         files: data.files,
+        accountFilesJSON: data.accountFilesJSON,
         managedFilesJSON: data.managedFilesJSON,
         onAction: onAction
       )
@@ -60,7 +61,10 @@ struct HermesRouteContent: View {
         models: data.models,
         auxiliary: data.modelAuxiliary,
         moa: data.modelMoa,
+        modelMoaJSON: data.modelMoaJSON,
         providerOauthJSON: data.providerOauthJSON,
+        providerOauthPendingJSON: data.providerOauthPendingJSON,
+        credentialPoolJSON: data.credentialPoolJSON,
         customProviderEndpointsJSON: data.customProviderEndpointsJSON,
         confirmation: data.modelConfirmation,
         operation: data.operation,
@@ -996,6 +1000,11 @@ private struct HermesGitFileSnapshot: Identifiable {
   var id: String { path }
 }
 
+private struct HermesKanbanBoardChoice: Identifiable, Hashable {
+  let id: String
+  let name: String
+}
+
 private struct HermesRemoteRoutePage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let route: HermesRoute
@@ -1014,6 +1023,7 @@ private struct HermesRemoteRoutePage: View {
   @State private var importingConfiguration = false
   @State private var importingBotAvatar = false
   @State private var avatarBotID = ""
+  @State private var clearingBotAvatarID = ""
   @State private var requestedSkillID = ""
   @State private var rollbackInstallationID = ""
   @State private var showingToolsetConfig = false
@@ -1024,6 +1034,8 @@ private struct HermesRemoteRoutePage: View {
   @State private var showingToolsetSchema = false
   @State private var editingToolsetID = ""
   @State private var editingToolsetConfigJSON = ""
+  @State private var showingMcpMapEditor = false
+  @State private var mcpMapJSON = ""
   @State private var skillHubQuery = ""
   @State private var skillHubIdentifier = ""
   @State private var cronBlueprintValues = "{}"
@@ -1042,6 +1054,7 @@ private struct HermesRemoteRoutePage: View {
   @State private var onboardingTelegramIDs = ""
   @State private var onboardingWhatsappMode = "pairing"
   @State private var onboardingWhatsappUsers = ""
+  @State private var selectedKanbanCard: HermesKanbanCardSnapshot?
 
   var body: some View {
     routeBody
@@ -1148,6 +1161,59 @@ private struct HermesRemoteRoutePage: View {
         )
         .environmentObject(appearance)
       }
+      .sheet(isPresented: $showingMcpMapEditor) {
+        NavigationStack {
+          Form {
+            Section(chinese ? "完整 MCP 配置" : "Complete MCP configuration") {
+              TextEditor(text: $mcpMapJSON)
+                .font(HermesFonts.mono(11))
+                .frame(minHeight: 320)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            }
+          }
+          .scrollContentBackground(.hidden)
+          .background(appearance.palette.background)
+          .navigationTitle("mcp.json")
+          .navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+              Button(chinese ? "取消" : "Cancel") { showingMcpMapEditor = false }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+              Button(chinese ? "保存" : "Save") {
+                onAction(.mcpReplace, HermesRouteActionPayload(route: "mcp", detail: mcpMapJSON))
+                showingMcpMapEditor = false
+              }
+              .disabled(mcpMapJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+          }
+        }
+        .presentationDetents([.large])
+      }
+      .sheet(item: $selectedKanbanCard) { card in
+        HermesKanbanTaskDetailSheet(
+          card: card,
+          detailJSON: data.kanbanDetailJSON,
+          profileChoices: kanbanProfileChoices,
+          board: kanbanCurrentBoard,
+          chinese: chinese,
+          onAction: onAction,
+          onNavigate: { target in
+            selectedKanbanCard = target
+            onAction(
+              .kanbanTaskOpen,
+              HermesRouteActionPayload(
+                route: "kanban",
+                id: target.id,
+                fields: kanbanCurrentBoard.map { ["board": $0] }
+              )
+            )
+          },
+          onDismiss: { selectedKanbanCard = nil }
+        )
+        .environmentObject(appearance)
+      }
       .sheet(isPresented: $editingHook) {
         NavigationStack {
           Form {
@@ -1234,6 +1300,23 @@ private struct HermesRemoteRoutePage: View {
         }
         Button(chinese ? "取消" : "Cancel", role: .cancel) {
           rollbackInstallationID = ""
+        }
+      }
+      .confirmationDialog(
+        chinese ? "清除此机器人的头像？" : "Clear this bot's avatar?",
+        isPresented: Binding(
+          get: { !clearingBotAvatarID.isEmpty },
+          set: { if !$0 { clearingBotAvatarID = "" } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button(chinese ? "清除头像" : "Clear Avatar", role: .destructive) {
+          let botID = clearingBotAvatarID
+          clearingBotAvatarID = ""
+          onAction(.botAvatarClear, HermesRouteActionPayload(route: "bots", id: botID))
+        }
+        Button(chinese ? "取消" : "Cancel", role: .cancel) {
+          clearingBotAvatarID = ""
         }
       }
   }
@@ -1501,7 +1584,19 @@ private struct HermesRemoteRoutePage: View {
         if route == .channels {
           channelOnboardingSection
         }
-        if route == .mcp { installationSection }
+        if route == .mcp {
+          if let document = data.mcpServersJSON, !document.isEmpty {
+            Section(chinese ? "配置" : "Configuration") {
+              Button {
+                mcpMapJSON = document
+                showingMcpMapEditor = true
+              } label: {
+                Label(chinese ? "编辑完整 mcp.json" : "Edit complete mcp.json", systemImage: "curlybraces.square")
+              }
+            }
+          }
+          installationSection
+        }
         ForEach(data.integrations) { item in
           HermesRemoteRow(icon: route == .plugins ? "puzzlepiece.extension" : route == .mcp ? "point.3.connected.trianglepath.dotted" : route == .channels ? "dot.radiowaves.left.and.right" : "arrow.triangle.branch", title: item.name, detail: item.detail, tint: item.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
             if route == .mcp && item.catalogEntry == true {
@@ -1833,100 +1928,7 @@ private struct HermesRemoteRoutePage: View {
         collaborationPendingText = ""
       }
     case .kanban:
-      Group {
-        if data.kanban.isEmpty {
-          ContentUnavailableView(
-            chinese ? "暂无看板任务" : "No Kanban tasks",
-            systemImage: "rectangle.3.group",
-            description: Text(chinese ? "点击右上角创建真实 Hermes 看板任务。" : "Create a Hermes Kanban task from the toolbar.")
-          )
-        } else {
-          VStack(alignment: .leading, spacing: 10) {
-            if let metadata = kanbanMetadataSummary {
-              HermesPanel {
-                HStack(spacing: 14) {
-                  Label(chinese ? "官方 Kanban 状态" : "Official Kanban status", systemImage: "chart.bar.xaxis")
-                    .font(HermesFonts.bodyBold(12))
-                  Spacer()
-                  Text(metadata)
-                    .font(HermesFonts.mono(11))
-                    .foregroundStyle(appearance.palette.secondary)
-                    .multilineTextAlignment(.trailing)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(metadata)
-              }
-            }
-            ScrollView(.horizontal) {
-              HStack(alignment: .top, spacing: 12) {
-              ForEach(data.kanban) { column in
-            VStack(alignment: .leading, spacing: 8) {
-              Text(column.title).font(HermesFonts.display(14))
-              ForEach(column.cards) { card in
-                HermesPanel {
-                  VStack(alignment: .leading, spacing: 5) {
-                    Text(card.title).font(HermesFonts.bodyBold(14))
-                    Text(card.detail).font(HermesFonts.body(12)).foregroundStyle(appearance.palette.secondary)
-                  }
-                }
-                .contextMenu {
-                  Button {
-                    editorID = card.id
-                    editorName = card.title
-                    editorValue = column.id
-                    editorDetail = card.detail
-                    editor = .kanban
-                  } label: {
-                    Label(chinese ? "编辑任务" : "Edit task", systemImage: "square.and.pencil")
-                  }
-                  Menu {
-                    ForEach(data.kanban.filter { $0.id != column.id }) { target in
-                      Button(target.title) {
-                        onAction(
-                          .kanbanMove,
-                          HermesRouteActionPayload(route: "kanban", id: card.id, targetId: target.id)
-                        )
-                      }
-                    }
-                  } label: {
-                    Label(chinese ? "移动到" : "Move to", systemImage: "arrow.right.circle")
-                  }
-                  Button(role: .destructive) { onAction(.kanbanDelete, HermesRouteActionPayload(route: "kanban", id: card.id)) } label: { Label(chinese ? "归档" : "Archive", systemImage: "archivebox") }
-                }
-              }
-              }.frame(width: 250, alignment: .topLeading)
-              }
-              .padding(14)
-            }
-          }
-        }
-        if let status = data.achievements.scanStatus, !status.isEmpty || data.achievements.recentUnlocksJSON != nil {
-          HermesPanel {
-            HStack(spacing: 10) {
-              Image(systemName: statusIcon(data.achievements.scanStatus))
-                .foregroundStyle(appearance.palette.accent)
-              VStack(alignment: .leading, spacing: 3) {
-                Text(chinese ? "官方扫描状态" : "Official scan status")
-                  .font(HermesFonts.bodyBold(12))
-                Text(data.achievements.scanStatus?.isEmpty == false
-                  ? data.achievements.scanStatus!
-                  : (chinese ? "就绪" : "Ready"))
-                  .font(HermesFonts.mono(11))
-                  .foregroundStyle(appearance.palette.secondary)
-              }
-              Spacer()
-              if let recent = recentAchievementCount {
-                Text((chinese ? "最近解锁 " : "Recent unlocks ") + String(recent))
-                  .font(HermesFonts.body(11))
-                  .foregroundStyle(appearance.palette.secondary)
-              }
-            }
-          }
-        }
-      }
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
-      .background(appearance.palette.background)
+      kanbanRoutePage
     case .profiles, .bots:
       List {
         if route == .bots {
@@ -2108,6 +2110,13 @@ private struct HermesRemoteRoutePage: View {
               avatarBotID = profile.id
               importingBotAvatar = true
             } label: { Label(chinese ? "上传头像" : "Upload avatar", systemImage: "person.crop.circle.badge.plus") }
+            if profile.botHasAvatar == true {
+              Button(role: .destructive) {
+                clearingBotAvatarID = profile.id
+              } label: {
+                Label(chinese ? "清除头像" : "Clear avatar", systemImage: "person.crop.circle.badge.minus")
+              }
+            }
             if let petEntries = botPetEntries, !petEntries.isEmpty {
               Menu {
                 ForEach(Array(petEntries.prefix(24).enumerated()), id: \.offset) { item in
@@ -2671,6 +2680,190 @@ private struct HermesRemoteRoutePage: View {
     }
   }
 
+  private var kanbanRoutePage: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HermesPanel {
+        VStack(alignment: .leading, spacing: 10) {
+          HStack(spacing: 12) {
+            Label(chinese ? "官方 Kanban" : "Official Kanban", systemImage: "chart.bar.xaxis")
+              .font(HermesFonts.bodyBold(13))
+            Spacer()
+            if let board = kanbanCurrentBoard, !board.isEmpty {
+              HermesStatusPill(text: board, color: appearance.palette.accent)
+            }
+          }
+          if let metadata = kanbanMetadataSummary {
+            Text(metadata)
+              .font(HermesFonts.mono(11))
+              .foregroundStyle(appearance.palette.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityLabel(metadata)
+          }
+          HStack(spacing: 10) {
+            if !kanbanBoardChoices.isEmpty {
+              Menu {
+                ForEach(kanbanBoardChoices) { board in
+                  Button {
+                    selectedKanbanCard = nil
+                    onAction(
+                      .kanbanBoardSwitch,
+                      HermesRouteActionPayload(
+                        route: "kanban",
+                        value: board.id,
+                        targetId: board.id,
+                        fields: kanbanActionFields
+                      )
+                    )
+                  } label: {
+                    if board.id == kanbanCurrentBoard {
+                      Label(board.name, systemImage: "checkmark")
+                    } else {
+                      Text(board.name)
+                    }
+                  }
+                }
+              } label: {
+                Label(chinese ? "切换看板" : "Switch board", systemImage: "rectangle.3.group")
+              }
+              .buttonStyle(.bordered)
+            }
+            Spacer(minLength: 4)
+            Button {
+              onAction(
+                .kanbanDispatch,
+                HermesRouteActionPayload(route: "kanban", fields: kanbanActionFields)
+              )
+            } label: {
+              Label(chinese ? "调度" : "Dispatch", systemImage: "paperplane.fill")
+            }
+            .buttonStyle(HermesPrimaryButtonStyle())
+          }
+        }
+      }
+      .padding(.horizontal, 14)
+      .padding(.top, 12)
+
+      if data.kanban.isEmpty {
+        ContentUnavailableView(
+          chinese ? "暂无看板任务" : "No Kanban tasks",
+          systemImage: "rectangle.3.group",
+          description: Text(chinese ? "点击右上角创建真实 Hermes 看板任务。" : "Create a Hermes Kanban task from the toolbar.")
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        ScrollView(.horizontal) {
+          HStack(alignment: .top, spacing: 12) {
+            ForEach(data.kanban) { column in
+              VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                  Text(column.title).font(HermesFonts.display(14))
+                  Spacer()
+                  Text(String(column.cards.count))
+                    .font(HermesFonts.mono(11))
+                    .foregroundStyle(appearance.palette.secondary)
+                }
+                ForEach(column.cards) { card in
+                  Button {
+                    selectedKanbanCard = card
+                    onAction(
+                      .kanbanTaskOpen,
+                      HermesRouteActionPayload(
+                        route: "kanban",
+                        id: card.id,
+                        fields: kanbanActionFields
+                      )
+                    )
+                  } label: {
+                    HermesPanel {
+                      VStack(alignment: .leading, spacing: 5) {
+                        Text(card.title)
+                          .font(HermesFonts.bodyBold(14))
+                          .foregroundStyle(appearance.palette.foreground)
+                          .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(card.detail)
+                          .font(HermesFonts.body(12))
+                          .foregroundStyle(appearance.palette.secondary)
+                          .multilineTextAlignment(.leading)
+                          .frame(maxWidth: .infinity, alignment: .leading)
+                      }
+                    }
+                  }
+                  .buttonStyle(.plain)
+                  .accessibilityHint(chinese ? "打开任务详情和运行控制" : "Open task details and run controls")
+                  .contextMenu {
+                    Button {
+                      editorID = card.id
+                      editorName = card.title
+                      editorValue = column.id
+                      editorDetail = card.detail
+                      editor = .kanban
+                    } label: {
+                      Label(chinese ? "编辑任务" : "Edit task", systemImage: "square.and.pencil")
+                    }
+                    Menu {
+                      ForEach(data.kanban.filter { $0.id != column.id }) { target in
+                        Button(target.title) {
+                          onAction(
+                            .kanbanMove,
+                            HermesRouteActionPayload(
+                              route: "kanban",
+                              id: card.id,
+                              targetId: target.id,
+                              fields: kanbanActionFields
+                            )
+                          )
+                        }
+                      }
+                    } label: {
+                      Label(chinese ? "移动到" : "Move to", systemImage: "arrow.right.circle")
+                    }
+                    Button(role: .destructive) {
+                      onAction(
+                        .kanbanDelete,
+                        HermesRouteActionPayload(route: "kanban", id: card.id, fields: kanbanActionFields)
+                      )
+                    } label: {
+                      Label(chinese ? "归档" : "Archive", systemImage: "archivebox")
+                    }
+                  }
+                }
+              }
+              .frame(width: 250, alignment: .topLeading)
+            }
+          }
+          .padding(14)
+        }
+      }
+      if let status = data.achievements.scanStatus,
+         !status.isEmpty || data.achievements.recentUnlocksJSON != nil {
+        HermesPanel {
+          HStack(spacing: 10) {
+            Image(systemName: statusIcon(data.achievements.scanStatus))
+              .foregroundStyle(appearance.palette.accent)
+            VStack(alignment: .leading, spacing: 3) {
+              Text(chinese ? "官方扫描状态" : "Official scan status")
+                .font(HermesFonts.bodyBold(12))
+              Text(data.achievements.scanStatus?.isEmpty == false
+                ? data.achievements.scanStatus!
+                : (chinese ? "就绪" : "Ready"))
+                .font(HermesFonts.mono(11))
+                .foregroundStyle(appearance.palette.secondary)
+            }
+            Spacer()
+            if let recent = recentAchievementCount {
+              Text((chinese ? "最近解锁 " : "Recent unlocks ") + String(recent))
+                .font(HermesFonts.body(11))
+                .foregroundStyle(appearance.palette.secondary)
+            }
+          }
+        }
+        .padding(.horizontal, 14)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(appearance.palette.background)
+  }
+
   private func localizedNode(_ value: String) -> String {
     switch value {
     case "server": return chinese ? "主服务器" : "Server"
@@ -2757,11 +2950,7 @@ private struct HermesRemoteRoutePage: View {
   /// summary makes diagnostics, worker liveness, board switching and profile
   /// catalogs visible on the phone without forcing a second network roundtrip.
   private var kanbanMetadataSummary: String? {
-    guard route == .kanban,
-          let text = data.kanbanMetaJSON,
-          let raw = text.data(using: .utf8),
-          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
-    else { return nil }
+    guard route == .kanban, let object = kanbanMetadataObject else { return nil }
     let boards = (object["boards"] as? [String: Any])?["boards"] as? [[String: Any]]
       ?? object["boards"] as? [[String: Any]] ?? []
     let stats = object["stats"] as? [String: Any]
@@ -2782,6 +2971,136 @@ private struct HermesRemoteRoutePage: View {
     if !diagnostics.isEmpty { parts.append((chinese ? "诊断 " : "diagnostics ") + String(diagnostics.count)) }
     if !profiles.isEmpty { parts.append((chinese ? "Profile " : "profiles ") + String(profiles.count)) }
     return parts.isEmpty ? nil : parts.joined(separator: " · ")
+  }
+
+  private var kanbanMetadataObject: [String: Any]? {
+    guard route == .kanban,
+          let text = data.kanbanMetaJSON,
+          let raw = text.data(using: .utf8),
+          let object = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    else { return nil }
+    return object
+  }
+
+  private var kanbanBoardChoices: [HermesKanbanBoardChoice] {
+    guard let object = kanbanMetadataObject else { return [] }
+    let catalog = object["boards"]
+    var choices: [HermesKanbanBoardChoice] = []
+
+    func appendRows(_ rows: [[String: Any]]) {
+      for row in rows {
+        guard let id = hermesKanbanString(row["slug"])
+          ?? hermesKanbanString(row["id"])
+          ?? hermesKanbanString(row["name"]), !id.isEmpty else { continue }
+        let name = hermesKanbanString(row["title"])
+          ?? hermesKanbanString(row["display_name"])
+          ?? hermesKanbanString(row["name"])
+          ?? id
+        choices.append(HermesKanbanBoardChoice(id: id, name: name))
+      }
+    }
+
+    if let rows = catalog as? [[String: Any]] {
+      appendRows(rows)
+    } else if let values = catalog as? [String] {
+      choices.append(contentsOf: values.map { HermesKanbanBoardChoice(id: $0, name: $0) })
+    } else if let wrapper = catalog as? [String: Any] {
+      if let rows = wrapper["boards"] as? [[String: Any]] { appendRows(rows) }
+      if let values = wrapper["boards"] as? [String] {
+        choices.append(contentsOf: values.map { HermesKanbanBoardChoice(id: $0, name: $0) })
+      }
+      if choices.isEmpty {
+        for key in wrapper.keys.sorted() where wrapper[key] is [String: Any] {
+          let row = wrapper[key] as? [String: Any] ?? [:]
+          let id = hermesKanbanString(row["slug"])
+            ?? hermesKanbanString(row["id"])
+            ?? key
+          let name = hermesKanbanString(row["title"])
+            ?? hermesKanbanString(row["name"])
+            ?? id
+          choices.append(HermesKanbanBoardChoice(id: id, name: name))
+        }
+      }
+    }
+
+    var seen = Set<String>()
+    return choices.filter { !$0.id.isEmpty && seen.insert($0.id).inserted }
+  }
+
+  private var kanbanCurrentBoard: String? {
+    guard let object = kanbanMetadataObject else { return nil }
+    let wrapper = object["boards"] as? [String: Any]
+
+    func boardID(_ value: Any?) -> String? {
+      if let direct = hermesKanbanString(value) { return direct }
+      guard let row = value as? [String: Any] else { return nil }
+      return hermesKanbanString(row["slug"])
+        ?? hermesKanbanString(row["id"])
+        ?? hermesKanbanString(row["name"])
+    }
+
+    let direct = boardID(object["current_board"])
+      ?? boardID(object["active_board"])
+      ?? boardID(object["current"])
+      ?? boardID(object["active"])
+      ?? boardID(wrapper?["current_board"])
+      ?? boardID(wrapper?["active_board"])
+      ?? boardID(wrapper?["current"])
+      ?? boardID(wrapper?["active"])
+    if let direct, !direct.isEmpty { return direct }
+
+    let rows = (wrapper?["boards"] as? [[String: Any]])
+      ?? (object["boards"] as? [[String: Any]])
+      ?? []
+    return rows.first(where: {
+      ($0["current"] as? Bool) == true || ($0["active"] as? Bool) == true
+    }).flatMap {
+      hermesKanbanString($0["slug"])
+        ?? hermesKanbanString($0["id"])
+        ?? hermesKanbanString($0["name"])
+    }
+  }
+
+  private var kanbanProfileChoices: [String] {
+    guard let object = kanbanMetadataObject else {
+      return data.profiles.map(\.id).filter { !$0.isEmpty }.sorted()
+    }
+    var profiles = data.profiles.map(\.id)
+
+    func appendCatalog(_ value: Any?) {
+      if let strings = value as? [String] {
+        profiles.append(contentsOf: strings)
+        return
+      }
+      if let rows = value as? [[String: Any]] {
+        profiles.append(contentsOf: rows.compactMap {
+          hermesKanbanString($0["profile"])
+            ?? hermesKanbanString($0["slug"])
+            ?? hermesKanbanString($0["id"])
+            ?? hermesKanbanString($0["name"])
+        })
+        return
+      }
+      if let wrapper = value as? [String: Any] {
+        for key in ["profiles", "assignees", "workers", "items"] {
+          if let nested = wrapper[key] { appendCatalog(nested) }
+        }
+      }
+    }
+
+    appendCatalog(object["profile_catalog"])
+    appendCatalog(object["assignee_catalog"])
+    appendCatalog(object["assignees_catalog"])
+    var seen = Set<String>()
+    return profiles
+      .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && seen.insert($0).inserted }
+      .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+  }
+
+  private var kanbanActionFields: [String: String]? {
+    guard let board = kanbanCurrentBoard, !board.isEmpty else { return nil }
+    return ["board": board]
   }
 
   private var recentAchievementCount: Int? {
@@ -2953,9 +3272,28 @@ private struct HermesRemoteRoutePage: View {
     case .kanban:
       guard !name.isEmpty else { return }
       if editorID.isEmpty {
-        onAction(.kanbanCreate, HermesRouteActionPayload(route: "kanban", name: name, detail: detail, targetId: value))
+        onAction(
+          .kanbanCreate,
+          HermesRouteActionPayload(
+            route: "kanban",
+            name: name,
+            detail: detail,
+            targetId: value,
+            fields: kanbanActionFields
+          )
+        )
       } else {
-        onAction(.kanbanUpdate, HermesRouteActionPayload(route: "kanban", id: editorID, name: name, detail: detail, targetId: value))
+        onAction(
+          .kanbanUpdate,
+          HermesRouteActionPayload(
+            route: "kanban",
+            id: editorID,
+            name: name,
+            detail: detail,
+            targetId: value,
+            fields: kanbanActionFields
+          )
+        )
       }
     case .channel:
       guard !editorID.isEmpty, !detail.isEmpty else { return }
@@ -2997,6 +3335,1007 @@ private struct HermesRemoteRoutePage: View {
           let json = String(data: updated, encoding: .utf8) else { return }
     onAction(.configUpdate, HermesRouteActionPayload(route: "config", value: json))
   }
+}
+
+private enum HermesKanbanPendingDanger: Equatable {
+  case reclaim
+  case terminate(String)
+}
+
+private struct HermesKanbanTaskDetailSheet: View {
+  @EnvironmentObject private var appearance: HermesAppearanceModel
+  let card: HermesKanbanCardSnapshot
+  let detailJSON: String?
+  let profileChoices: [String]
+  let board: String?
+  let chinese: Bool
+  let onAction: HermesRouteActionSink
+  let onNavigate: (HermesKanbanCardSnapshot) -> Void
+  let onDismiss: () -> Void
+  @State private var assignee = ""
+  @State private var attachmentImporterOpen = false
+  @State private var comment = ""
+  @State private var reason = ""
+  @State private var relationshipKind = "parent"
+  @State private var relationshipTaskID = ""
+  @State private var pendingDanger: HermesKanbanPendingDanger?
+
+  private var detail: HermesKanbanTaskDetail? {
+    HermesKanbanTaskDetail(json: detailJSON, expectedTaskID: card.id)
+  }
+
+  var body: some View {
+    NavigationStack {
+      Group {
+        if let detail {
+          Form {
+            taskSection(detail)
+            relationshipsSection(detail)
+            relationshipComposerSection
+            attachmentsSection(detail.attachments)
+            commentComposerSection
+            assignmentSection(detail)
+            taskActionsSection
+            if !detail.runs.isEmpty { runsSection(detail.runs) }
+            if let inspection = detail.inspection { inspectionSection(inspection) }
+            if let workerLog = detail.workerLog { workerLogSection(workerLog) }
+            if !detail.comments.isEmpty {
+              timelineSection(
+                chinese ? "评论" : "Comments",
+                icon: "text.bubble",
+                entries: detail.comments
+              )
+            }
+            if !detail.events.isEmpty {
+              timelineSection(
+                chinese ? "事件" : "Events",
+                icon: "clock.arrow.circlepath",
+                entries: detail.events
+              )
+            }
+            if let lastAction = detail.lastAction, !lastAction.isEmpty {
+              Section(chinese ? "最近操作" : "Last action") {
+                Text(lastAction)
+                  .font(HermesFonts.mono(10))
+                  .foregroundStyle(appearance.palette.secondary)
+                  .textSelection(.enabled)
+              }
+            }
+          }
+          .scrollContentBackground(.hidden)
+          .background(appearance.palette.background)
+        } else {
+          VStack(spacing: 14) {
+            ProgressView()
+            Text(chinese ? "正在加载任务详情" : "Loading task details")
+              .font(HermesFonts.bodyBold(14))
+            Text(card.title)
+              .font(HermesFonts.body(12))
+              .foregroundStyle(appearance.palette.secondary)
+              .multilineTextAlignment(.center)
+          }
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(appearance.palette.background)
+        }
+      }
+      .navigationTitle(chinese ? "任务详情" : "Task details")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .navigationBarLeading) {
+          Button {
+            onAction(
+              .kanbanTaskOpen,
+              HermesRouteActionPayload(route: "kanban", id: card.id, fields: actionFields())
+            )
+          } label: {
+            Image(systemName: "arrow.clockwise")
+          }
+          .accessibilityLabel(chinese ? "刷新任务" : "Refresh task")
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(chinese ? "完成" : "Done", action: onDismiss)
+        }
+      }
+    }
+    .presentationDetents([.large])
+    .presentationDragIndicator(.visible)
+    .onAppear { synchronizeAssignee() }
+    .onChange(of: detailJSON) { _, _ in synchronizeAssignee() }
+    .fileImporter(
+      isPresented: $attachmentImporterOpen,
+      allowedContentTypes: [.data],
+      allowsMultipleSelection: true
+    ) { result in
+      guard case let .success(urls) = result, !urls.isEmpty else { return }
+      DispatchQueue.global(qos: .userInitiated).async {
+        let stagedURLs = HermesFileImportStaging.stage(
+          urls,
+          maximumFileBytes: 25 * 1024 * 1024
+        )
+        guard !stagedURLs.isEmpty else { return }
+        DispatchQueue.main.async {
+          var fields = actionFields() ?? [:]
+          fields["author"] = "ios"
+          fields["stagedImport"] = "true"
+          onAction(
+            .kanbanAttachmentUpload,
+            HermesRouteActionPayload(
+              route: "kanban",
+              id: card.id,
+              requestId: "kanban-attachment-\(UUID().uuidString.lowercased())",
+              fields: fields,
+              uris: stagedURLs.map(\.absoluteString)
+            )
+          )
+        }
+      }
+    }
+    .confirmationDialog(
+      dangerTitle,
+      isPresented: Binding(
+        get: { pendingDanger != nil },
+        set: { if !$0 { pendingDanger = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      if pendingDanger == .reclaim {
+        Button(chinese ? "确认收回" : "Reclaim task", role: .destructive) {
+          pendingDanger = nil
+          onAction(
+            .kanbanReclaim,
+            HermesRouteActionPayload(
+              route: "kanban",
+              id: card.id,
+              detail: normalizedReason,
+              fields: actionFields()
+            )
+          )
+        }
+      }
+      if case let .terminate(runID)? = pendingDanger {
+        Button(chinese ? "确认终止" : "Terminate run", role: .destructive) {
+          pendingDanger = nil
+          onAction(
+            .kanbanRunTerminate,
+            HermesRouteActionPayload(
+              route: "kanban",
+              id: card.id,
+              detail: normalizedReason,
+              targetId: runID,
+              fields: actionFields()
+            )
+          )
+        }
+      }
+      Button(chinese ? "取消" : "Cancel", role: .cancel) { pendingDanger = nil }
+    }
+  }
+
+  @ViewBuilder private func taskSection(_ detail: HermesKanbanTaskDetail) -> some View {
+    Section {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
+          Text(detail.task.title.isEmpty ? card.title : detail.task.title)
+            .font(HermesFonts.display(18))
+            .frame(maxWidth: .infinity, alignment: .leading)
+          if !detail.task.status.isEmpty {
+            HermesStatusPill(
+              text: detail.task.status,
+              color: kanbanStatusColor(detail.task.status)
+            )
+          }
+        }
+        let body = detail.task.body.isEmpty ? card.detail : detail.task.body
+        if !body.isEmpty {
+          Text(body)
+            .font(HermesFonts.body(13))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+        }
+        if !detail.task.priority.isEmpty {
+          kanbanDetailRow(chinese ? "优先级" : "Priority", detail.task.priority)
+        }
+        if !detail.task.assignee.isEmpty {
+          kanbanDetailRow(chinese ? "负责人" : "Assignee", detail.task.assignee)
+        }
+        if !detail.task.currentRunID.isEmpty {
+          kanbanDetailRow(chinese ? "当前运行" : "Current run", detail.task.currentRunID)
+        }
+      }
+      if !detail.task.latestSummary.isEmpty {
+        VStack(alignment: .leading, spacing: 5) {
+          Label(chinese ? "最新摘要" : "Latest summary", systemImage: "text.alignleft")
+            .font(HermesFonts.bodyBold(12))
+          Text(detail.task.latestSummary)
+            .font(HermesFonts.body(12))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+        }
+      }
+      if !detail.task.result.isEmpty {
+        VStack(alignment: .leading, spacing: 5) {
+          Label(chinese ? "结果" : "Result", systemImage: "checkmark.circle")
+            .font(HermesFonts.bodyBold(12))
+          Text(detail.task.result)
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+        }
+      }
+      if !detail.task.diagnostics.isEmpty {
+        VStack(alignment: .leading, spacing: 5) {
+          Label(chinese ? "诊断与警告" : "Diagnostics and warnings", systemImage: "exclamationmark.triangle")
+            .font(HermesFonts.bodyBold(12))
+          Text(detail.task.diagnostics)
+            .font(HermesFonts.mono(10))
+            .foregroundStyle(appearance.palette.secondary)
+            .textSelection(.enabled)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private func relationshipsSection(_ detail: HermesKanbanTaskDetail) -> some View {
+    if !detail.parents.isEmpty {
+      Section(chinese ? "依赖 / 父任务" : "Dependencies / Parents") {
+        ForEach(detail.parents) { target in relationshipButton(target, relation: "parent") }
+      }
+    }
+    if !detail.children.isEmpty {
+      Section(chinese ? "子任务" : "Children") {
+        ForEach(detail.children) { target in relationshipButton(target, relation: "child") }
+      }
+    }
+  }
+
+  private var relationshipComposerSection: some View {
+    Section(chinese ? "关联任务" : "Link task") {
+      Picker(chinese ? "关系" : "Relationship", selection: $relationshipKind) {
+        Text(chinese ? "父任务" : "Parent").tag("parent")
+        Text(chinese ? "子任务" : "Child").tag("child")
+      }
+      .pickerStyle(.segmented)
+      TextField(chinese ? "任务 ID" : "Task ID", text: $relationshipTaskID)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+      Button {
+        let targetID = normalizedRelationshipTaskID
+        guard !targetID.isEmpty, targetID != card.id else { return }
+        onAction(
+          .kanbanRelationLink,
+          HermesRouteActionPayload(
+            route: "kanban",
+            id: card.id,
+            targetId: targetID,
+            fields: actionFields(["relation": relationshipKind])
+          )
+        )
+        relationshipTaskID = ""
+      } label: {
+        Label(chinese ? "建立关系" : "Link task", systemImage: "link.badge.plus")
+      }
+      .disabled(normalizedRelationshipTaskID.isEmpty || normalizedRelationshipTaskID == card.id)
+    }
+  }
+
+  private func relationshipButton(
+    _ target: HermesKanbanRelationshipTarget,
+    relation: String
+  ) -> some View {
+    Button {
+      onNavigate(
+        HermesKanbanCardSnapshot(
+          id: target.id,
+          title: target.title.isEmpty ? target.id : target.title,
+          detail: target.detail
+        )
+      )
+    } label: {
+      HStack(spacing: 10) {
+        Image(systemName: "arrow.triangle.branch")
+          .foregroundStyle(appearance.palette.accent)
+        VStack(alignment: .leading, spacing: 3) {
+          Text(target.title.isEmpty ? target.id : target.title)
+            .font(HermesFonts.bodyBold(13))
+          if target.title != target.id {
+            Text(target.id)
+              .font(HermesFonts.mono(9))
+              .foregroundStyle(appearance.palette.tertiary)
+          }
+          if !target.detail.isEmpty {
+            Text(target.detail)
+              .font(HermesFonts.body(11))
+              .foregroundStyle(appearance.palette.secondary)
+              .lineLimit(3)
+          }
+        }
+        Spacer()
+        if !target.status.isEmpty {
+          HermesStatusPill(text: target.status, color: kanbanStatusColor(target.status))
+        }
+        Image(systemName: "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(appearance.palette.tertiary)
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .swipeActions {
+      Button(role: .destructive) {
+        onAction(
+          .kanbanRelationUnlink,
+          HermesRouteActionPayload(
+            route: "kanban",
+            id: card.id,
+            targetId: target.id,
+            fields: actionFields(["relation": relation])
+          )
+        )
+      } label: {
+        Label(chinese ? "解除关系" : "Unlink", systemImage: "link.badge.minus")
+      }
+    }
+  }
+
+  @ViewBuilder private func attachmentsSection(_ attachments: [HermesKanbanAttachmentRecord]) -> some View {
+    Section(chinese ? "附件" : "Attachments") {
+      if attachments.isEmpty {
+        Text(chinese ? "暂无附件" : "No attachments")
+          .font(HermesFonts.body(12))
+          .foregroundStyle(appearance.palette.secondary)
+      } else {
+        ForEach(attachments) { attachment in
+          Button {
+            onAction(
+              .kanbanAttachmentDownload,
+              HermesRouteActionPayload(
+                route: "kanban",
+                id: card.id,
+                name: attachment.filename,
+                position: attachment.size,
+                targetId: attachment.id,
+                fields: actionFields()
+              )
+            )
+          } label: {
+            HStack(spacing: 10) {
+              Image(systemName: "paperclip")
+                .foregroundStyle(appearance.palette.accent)
+              VStack(alignment: .leading, spacing: 3) {
+                Text(attachment.filename)
+                  .font(HermesFonts.bodyBold(13))
+                Text(attachment.detail)
+                  .font(HermesFonts.mono(9))
+                  .foregroundStyle(appearance.palette.secondary)
+              }
+              Spacer()
+              Image(systemName: "arrow.down.circle")
+                .foregroundStyle(appearance.palette.secondary)
+            }
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+        }
+      }
+      Button {
+        attachmentImporterOpen = true
+      } label: {
+        Label(chinese ? "上传附件" : "Upload attachments", systemImage: "paperclip.badge.ellipsis")
+      }
+    }
+  }
+
+  private var commentComposerSection: some View {
+    Section(chinese ? "新增评论" : "Add comment") {
+      TextField(chinese ? "写下任务备注" : "Write a task note", text: $comment, axis: .vertical)
+        .lineLimit(2 ... 6)
+      Button {
+        let body = normalizedComment
+        guard !body.isEmpty else { return }
+        onAction(
+          .kanbanCommentAdd,
+          HermesRouteActionPayload(
+            route: "kanban",
+            id: card.id,
+            detail: body,
+            fields: actionFields(["author": "ios"])
+          )
+        )
+        comment = ""
+      } label: {
+        Label(chinese ? "添加评论" : "Add comment", systemImage: "text.bubble.fill")
+      }
+      .disabled(normalizedComment.isEmpty)
+    }
+  }
+
+  @ViewBuilder private func assignmentSection(_ detail: HermesKanbanTaskDetail) -> some View {
+    Section(chinese ? "任务分配" : "Assignment") {
+      if !profileChoices.isEmpty {
+        Menu {
+          ForEach(profileChoices, id: \.self) { profile in
+            Button(profile) { assignee = profile }
+          }
+        } label: {
+          HStack {
+            Label(chinese ? "选择 Profile" : "Choose profile", systemImage: "person.crop.circle")
+            Spacer()
+            Text(assignee.isEmpty ? (chinese ? "未选择" : "Not selected") : assignee)
+              .foregroundStyle(appearance.palette.secondary)
+          }
+        }
+      }
+      TextField(chinese ? "负责人 Profile" : "Assignee profile", text: $assignee)
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+      TextField(chinese ? "操作原因（可选）" : "Reason (optional)", text: $reason, axis: .vertical)
+        .lineLimit(2 ... 5)
+      HStack(spacing: 10) {
+        Button {
+          onAction(
+            .kanbanReassign,
+            HermesRouteActionPayload(
+              route: "kanban",
+              id: card.id,
+              targetId: normalizedAssignee,
+              detail: normalizedReason,
+              fields: actionFields()
+            )
+          )
+        } label: {
+          Label(chinese ? "重新分配" : "Reassign", systemImage: "person.crop.circle.badge.checkmark")
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(normalizedAssignee.isEmpty || normalizedAssignee == detail.task.assignee)
+
+        Button(role: .destructive) { pendingDanger = .reclaim } label: {
+          Label(chinese ? "收回" : "Reclaim", systemImage: "arrow.uturn.backward")
+        }
+        .buttonStyle(.bordered)
+      }
+    }
+  }
+
+  private var taskActionsSection: some View {
+    Section(chinese ? "任务操作" : "Task actions") {
+      HStack(spacing: 10) {
+        Button {
+          onAction(
+            .kanbanSpecify,
+            HermesRouteActionPayload(route: "kanban", id: card.id, fields: actionFields())
+          )
+        } label: {
+          Label(chinese ? "生成规格" : "Specify", systemImage: "doc.text.magnifyingglass")
+        }
+        .buttonStyle(.bordered)
+
+        Button {
+          onAction(
+            .kanbanDecompose,
+            HermesRouteActionPayload(route: "kanban", id: card.id, fields: actionFields())
+          )
+        } label: {
+          Label(chinese ? "拆分任务" : "Decompose", systemImage: "square.split.2x2")
+        }
+        .buttonStyle(.bordered)
+      }
+      Button {
+        var fields = actionFields() ?? [:]
+        fields["tail"] = "300"
+        onAction(
+          .kanbanTaskLog,
+          HermesRouteActionPayload(route: "kanban", id: card.id, fields: fields)
+        )
+      } label: {
+        Label(chinese ? "加载 Worker 日志" : "Load worker log", systemImage: "terminal")
+      }
+    }
+  }
+
+  @ViewBuilder private func runsSection(_ runs: [HermesKanbanRunRecord]) -> some View {
+    Section(chinese ? "运行" : "Runs") {
+      ForEach(runs) { run in
+        VStack(alignment: .leading, spacing: 7) {
+          HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+              Text((chinese ? "运行 " : "Run ") + run.id)
+                .font(HermesFonts.bodyBold(13))
+              let identity = [run.profile, run.stepKey].filter { !$0.isEmpty }.joined(separator: " · ")
+              if !identity.isEmpty {
+                Text(identity)
+                  .font(HermesFonts.mono(10))
+                  .foregroundStyle(appearance.palette.secondary)
+              }
+            }
+            Spacer()
+            if !run.status.isEmpty {
+              HermesStatusPill(text: run.status, color: kanbanStatusColor(run.status))
+            }
+          }
+          if !run.summary.isEmpty {
+            Text(run.summary)
+              .font(HermesFonts.body(12))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+          }
+          if !run.outcome.isEmpty { kanbanDetailRow(chinese ? "结果" : "Outcome", run.outcome) }
+          if !run.error.isEmpty {
+            Text(run.error)
+              .font(HermesFonts.mono(10))
+              .foregroundStyle(appearance.palette.destructive)
+              .textSelection(.enabled)
+          }
+          HStack(spacing: 10) {
+            Button {
+              onAction(
+                .kanbanRunInspect,
+                HermesRouteActionPayload(
+                  route: "kanban",
+                  id: card.id,
+                  targetId: run.id,
+                  fields: actionFields()
+                )
+              )
+            } label: {
+              Label(chinese ? "检查" : "Inspect", systemImage: "waveform.path.ecg")
+            }
+            .buttonStyle(.bordered)
+            if run.isActive {
+              Button(role: .destructive) { pendingDanger = .terminate(run.id) } label: {
+                Label(chinese ? "终止" : "Terminate", systemImage: "stop.circle")
+              }
+              .buttonStyle(.bordered)
+            }
+          }
+        }
+        .padding(.vertical, 4)
+      }
+    }
+  }
+
+  @ViewBuilder private func inspectionSection(_ inspection: HermesKanbanInspectionRecord) -> some View {
+    Section(chinese ? "运行检查" : "Run inspection") {
+      ForEach(inspection.fields) { field in
+        kanbanDetailRow(field.label, field.value)
+      }
+    }
+  }
+
+  @ViewBuilder private func workerLogSection(_ log: HermesKanbanWorkerLogRecord) -> some View {
+    Section(chinese ? "Worker 日志" : "Worker log") {
+      if !log.path.isEmpty { kanbanDetailRow(chinese ? "路径" : "Path", log.path) }
+      HStack(spacing: 12) {
+        if !log.size.isEmpty { kanbanDetailRow(chinese ? "大小" : "Size", log.size) }
+        if log.truncated {
+          HermesStatusPill(text: chinese ? "已截断" : "Truncated", color: appearance.palette.warning)
+        }
+      }
+      if log.content.isEmpty {
+        Text(log.exists ? (chinese ? "日志为空" : "Log is empty") : (chinese ? "日志文件不存在" : "Log file does not exist"))
+          .font(HermesFonts.body(12))
+          .foregroundStyle(appearance.palette.secondary)
+      } else {
+        ScrollView(.horizontal) {
+          Text(log.content)
+            .font(HermesFonts.mono(10))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minHeight: 100, maxHeight: 360)
+      }
+    }
+  }
+
+  @ViewBuilder private func timelineSection(
+    _ title: String,
+    icon: String,
+    entries: [HermesKanbanTimelineEntry]
+  ) -> some View {
+    Section(title) {
+      ForEach(entries) { entry in
+        VStack(alignment: .leading, spacing: 4) {
+          HStack(alignment: .firstTextBaseline, spacing: 7) {
+            Image(systemName: icon)
+              .foregroundStyle(appearance.palette.accent)
+            Text(entry.title)
+              .font(HermesFonts.bodyBold(12))
+            Spacer()
+            if !entry.date.isEmpty {
+              Text(entry.date)
+                .font(HermesFonts.mono(9))
+                .foregroundStyle(appearance.palette.tertiary)
+            }
+          }
+          if !entry.detail.isEmpty {
+            Text(entry.detail)
+              .font(HermesFonts.body(12))
+              .foregroundStyle(appearance.palette.secondary)
+              .textSelection(.enabled)
+          }
+        }
+        .padding(.vertical, 3)
+      }
+    }
+  }
+
+  private func kanbanDetailRow(_ label: String, _ value: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+      Text(label)
+        .font(HermesFonts.body(11))
+        .foregroundStyle(appearance.palette.secondary)
+      Spacer()
+      Text(value)
+        .font(HermesFonts.mono(10))
+        .multilineTextAlignment(.trailing)
+        .textSelection(.enabled)
+    }
+  }
+
+  private func actionFields(_ extra: [String: String] = [:]) -> [String: String]? {
+    var fields = extra
+    if let board, !board.isEmpty { fields["board"] = board }
+    return fields.isEmpty ? nil : fields
+  }
+
+  private func synchronizeAssignee() {
+    guard let next = detail?.task.assignee, assignee.isEmpty else { return }
+    assignee = next
+  }
+
+  private var normalizedAssignee: String {
+    assignee.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var normalizedReason: String {
+    reason.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var normalizedComment: String {
+    comment.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var normalizedRelationshipTaskID: String {
+    relationshipTaskID.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private var dangerTitle: String {
+    switch pendingDanger {
+    case .reclaim:
+      return chinese ? "确认收回此任务？当前 Worker 的处理可能被中断。" : "Reclaim this task? The active worker may be interrupted."
+    case .terminate:
+      return chinese ? "确认终止此运行？此操作无法撤销。" : "Terminate this run? This action cannot be undone."
+    case nil:
+      return ""
+    }
+  }
+
+  private func kanbanStatusColor(_ status: String) -> Color {
+    switch status.lowercased() {
+    case "done", "completed", "succeeded", "success": return appearance.palette.success
+    case "failed", "error", "cancelled", "terminated": return appearance.palette.destructive
+    case "running", "claimed", "in_progress", "active": return appearance.palette.accent
+    default: return appearance.palette.warning
+    }
+  }
+}
+
+private struct HermesKanbanTaskDetail {
+  let task: HermesKanbanTaskRecord
+  let comments: [HermesKanbanTimelineEntry]
+  let events: [HermesKanbanTimelineEntry]
+  let attachments: [HermesKanbanAttachmentRecord]
+  let parents: [HermesKanbanRelationshipTarget]
+  let children: [HermesKanbanRelationshipTarget]
+  let runs: [HermesKanbanRunRecord]
+  let inspection: HermesKanbanInspectionRecord?
+  let workerLog: HermesKanbanWorkerLogRecord?
+  let lastAction: String?
+
+  init?(json: String?, expectedTaskID: String) {
+    guard let json, !json.isEmpty,
+          let raw = json.data(using: .utf8),
+          let envelope = try? JSONSerialization.jsonObject(with: raw) as? [String: Any]
+    else { return nil }
+    let taskObject = envelope["task"] as? [String: Any] ?? envelope
+    let task = HermesKanbanTaskRecord(taskObject)
+    guard !task.id.isEmpty, task.id == expectedTaskID else { return nil }
+    self.task = task
+    comments = HermesKanbanTimelineEntry.rows(
+      from: envelope["comments"],
+      nestedKeys: ["comments", "items"],
+      kind: "comment"
+    )
+    events = HermesKanbanTimelineEntry.rows(
+      from: envelope["events"],
+      nestedKeys: ["events", "items"],
+      kind: "event"
+    )
+    attachments = hermesKanbanRows(
+      envelope["attachments"],
+      nestedKeys: ["attachments", "items"]
+    ).compactMap(HermesKanbanAttachmentRecord.init)
+    let links = envelope["links"] as? [String: Any] ?? [:]
+    let parentRows = hermesKanbanRows(
+      envelope["parent_results"],
+      nestedKeys: ["parents", "tasks", "items"]
+    )
+    var parentRecords = [String: HermesKanbanRelationshipTarget]()
+    for row in parentRows {
+      guard let parent = HermesKanbanRelationshipTarget(row) else { continue }
+      parentRecords[parent.id] = parent
+    }
+    parents = hermesKanbanIDs(links["parents"]).map { id in
+      parentRecords[id] ?? HermesKanbanRelationshipTarget(
+        id: id,
+        title: id,
+        status: "",
+        detail: ""
+      )
+    }
+    let childRows = hermesKanbanRows(
+      envelope["child_results"],
+      nestedKeys: ["children", "tasks", "items"]
+    )
+    var childRecords = [String: HermesKanbanRelationshipTarget]()
+    for row in childRows {
+      guard let child = HermesKanbanRelationshipTarget(row) else { continue }
+      childRecords[child.id] = child
+    }
+    children = hermesKanbanIDs(links["children"]).map { id in
+      childRecords[id] ?? HermesKanbanRelationshipTarget(
+        id: id,
+        title: id,
+        status: "",
+        detail: ""
+      )
+    }
+    runs = hermesKanbanRows(envelope["runs"], nestedKeys: ["runs", "items"])
+      .enumerated()
+      .map { HermesKanbanRunRecord($0.element, fallbackID: String($0.offset + 1)) }
+    inspection = (envelope["inspection"] as? [String: Any]).map(HermesKanbanInspectionRecord.init)
+    workerLog = (envelope["worker_log"] as? [String: Any]).map(HermesKanbanWorkerLogRecord.init)
+    lastAction = hermesKanbanText(envelope["last_action"])
+  }
+}
+
+private struct HermesKanbanRelationshipTarget: Identifiable {
+  let id: String
+  let title: String
+  let status: String
+  let detail: String
+
+  init(id: String, title: String, status: String, detail: String) {
+    self.id = id
+    self.title = title
+    self.status = status
+    self.detail = detail
+  }
+
+  init?(_ row: [String: Any]) {
+    guard let id = hermesKanbanString(row["id"]) ?? hermesKanbanString(row["task_id"]) else {
+      return nil
+    }
+    self.id = id
+    title = hermesKanbanString(row["title"]) ?? id
+    status = hermesKanbanString(row["status"]) ?? ""
+    detail = hermesKanbanText(row["latest_summary"])
+      ?? hermesKanbanText(row["result"])
+      ?? ""
+  }
+}
+
+private struct HermesKanbanAttachmentRecord: Identifiable {
+  let id: String
+  let filename: String
+  let contentType: String
+  let size: Int
+  let uploadedBy: String
+  let createdAt: String
+
+  init?(_ row: [String: Any]) {
+    guard let id = hermesKanbanString(row["id"]) else { return nil }
+    self.id = id
+    filename = hermesKanbanString(row["filename"]) ?? "attachment"
+    contentType = hermesKanbanString(row["content_type"]) ?? "application/octet-stream"
+    size = hermesKanbanInteger(row["size"])
+    uploadedBy = hermesKanbanString(row["uploaded_by"]) ?? ""
+    createdAt = hermesKanbanString(row["created_at"]) ?? ""
+  }
+
+  var detail: String {
+    var parts = [String]()
+    if size > 0 {
+      parts.append(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+    }
+    if !contentType.isEmpty { parts.append(contentType) }
+    if !uploadedBy.isEmpty { parts.append(uploadedBy) }
+    if !createdAt.isEmpty { parts.append(createdAt) }
+    return parts.joined(separator: " · ")
+  }
+}
+
+private struct HermesKanbanTaskRecord {
+  let id: String
+  let title: String
+  let body: String
+  let status: String
+  let assignee: String
+  let priority: String
+  let currentRunID: String
+  let latestSummary: String
+  let result: String
+  let diagnostics: String
+
+  init(_ row: [String: Any]) {
+    id = hermesKanbanString(row["id"]) ?? hermesKanbanString(row["task_id"]) ?? ""
+    title = hermesKanbanString(row["title"]) ?? hermesKanbanString(row["name"]) ?? ""
+    body = hermesKanbanText(row["body"]) ?? hermesKanbanText(row["description"]) ?? ""
+    status = hermesKanbanString(row["status"]) ?? ""
+    assignee = hermesKanbanString(row["assignee"])
+      ?? hermesKanbanString(row["profile"])
+      ?? ""
+    priority = hermesKanbanString(row["priority"]) ?? ""
+    currentRunID = hermesKanbanString(row["current_run_id"]) ?? ""
+    latestSummary = hermesKanbanText(row["latest_summary"]) ?? hermesKanbanText(row["summary"]) ?? ""
+    result = hermesKanbanText(row["result"]) ?? ""
+    diagnostics = [hermesKanbanText(row["diagnostics"]), hermesKanbanText(row["warnings"])]
+      .compactMap { $0 }
+      .filter { !$0.isEmpty }
+      .joined(separator: "\n")
+  }
+}
+
+private struct HermesKanbanTimelineEntry: Identifiable {
+  let id: String
+  let title: String
+  let detail: String
+  let date: String
+
+  static func rows(from value: Any?, nestedKeys: [String], kind: String) -> [HermesKanbanTimelineEntry] {
+    hermesKanbanRows(value, nestedKeys: nestedKeys).enumerated().map { index, row in
+      let fallbackTitle = kind == "comment" ? "Comment" : "Event"
+      return HermesKanbanTimelineEntry(
+        id: hermesKanbanString(row["id"]) ?? "\(kind)-\(index)",
+        title: hermesKanbanString(row["author"])
+          ?? hermesKanbanString(row["actor"])
+          ?? hermesKanbanString(row["kind"])
+          ?? hermesKanbanString(row["type"])
+          ?? hermesKanbanString(row["event"])
+          ?? hermesKanbanString(row["action"])
+          ?? fallbackTitle,
+        detail: hermesKanbanText(row["body"])
+          ?? hermesKanbanText(row["text"])
+          ?? hermesKanbanText(row["comment"])
+          ?? hermesKanbanText(row["message"])
+          ?? hermesKanbanText(row["detail"])
+          ?? hermesKanbanText(row["payload"])
+          ?? "",
+        date: hermesKanbanString(row["created_at"])
+          ?? hermesKanbanString(row["timestamp"])
+          ?? hermesKanbanString(row["date"])
+          ?? ""
+      )
+    }
+  }
+}
+
+private struct HermesKanbanRunRecord: Identifiable {
+  let id: String
+  let profile: String
+  let stepKey: String
+  let status: String
+  let endedAt: String
+  let outcome: String
+  let summary: String
+  let error: String
+
+  init(_ row: [String: Any], fallbackID: String) {
+    id = hermesKanbanString(row["id"])
+      ?? hermesKanbanString(row["run_id"])
+      ?? fallbackID
+    profile = hermesKanbanString(row["profile"])
+      ?? hermesKanbanString(row["assignee"])
+      ?? ""
+    stepKey = hermesKanbanString(row["step_key"]) ?? ""
+    status = hermesKanbanString(row["status"]) ?? ""
+    endedAt = hermesKanbanString(row["ended_at"]) ?? ""
+    outcome = hermesKanbanText(row["outcome"]) ?? ""
+    summary = hermesKanbanText(row["summary"]) ?? ""
+    error = hermesKanbanText(row["error"]) ?? ""
+  }
+
+  var isActive: Bool {
+    guard endedAt.isEmpty else { return false }
+    return !["done", "completed", "succeeded", "success", "failed", "error", "cancelled", "terminated"]
+      .contains(status.lowercased())
+  }
+}
+
+private struct HermesKanbanInspectionField: Identifiable {
+  let label: String
+  let value: String
+  var id: String { label }
+}
+
+private struct HermesKanbanInspectionRecord {
+  let fields: [HermesKanbanInspectionField]
+
+  init(_ source: [String: Any]) {
+    let object = source["inspection"] as? [String: Any] ?? source
+    let preferredKeys = [
+      "run_id", "status", "alive", "pid", "cpu_percent", "memory_rss_bytes",
+      "num_threads", "reason", "error",
+    ]
+    var fields: [HermesKanbanInspectionField] = []
+    var seen = Set<String>()
+    for key in preferredKeys + object.keys.sorted() where seen.insert(key).inserted {
+      guard let value = hermesKanbanText(object[key]), !value.isEmpty else { continue }
+      fields.append(HermesKanbanInspectionField(label: key.replacingOccurrences(of: "_", with: " "), value: value))
+    }
+    self.fields = fields
+  }
+}
+
+private struct HermesKanbanWorkerLogRecord {
+  let path: String
+  let exists: Bool
+  let size: String
+  let content: String
+  let truncated: Bool
+
+  init(_ source: [String: Any]) {
+    let object = source["log"] as? [String: Any] ?? source
+    path = hermesKanbanString(object["path"]) ?? ""
+    exists = (object["exists"] as? Bool) ?? !((hermesKanbanText(object["content"]) ?? "").isEmpty)
+    if let bytes = hermesKanbanString(object["size_bytes"]), !bytes.isEmpty {
+      size = bytes + " B"
+    } else {
+      size = hermesKanbanString(object["size"]) ?? ""
+    }
+    content = hermesKanbanText(object["content"])
+      ?? hermesKanbanText(object["text"])
+      ?? ""
+    truncated = (object["truncated"] as? Bool) ?? false
+  }
+}
+
+private func hermesKanbanRows(_ value: Any?, nestedKeys: [String]) -> [[String: Any]] {
+  if let rows = value as? [[String: Any]] { return rows }
+  guard let wrapper = value as? [String: Any] else { return [] }
+  for key in nestedKeys {
+    if let rows = wrapper[key] as? [[String: Any]] { return rows }
+  }
+  return []
+}
+
+private func hermesKanbanIDs(_ value: Any?) -> [String] {
+  guard let values = value as? [Any] else { return [] }
+  var seen = Set<String>()
+  return values.compactMap(hermesKanbanString).filter { seen.insert($0).inserted }
+}
+
+private func hermesKanbanInteger(_ value: Any?) -> Int {
+  if let number = value as? NSNumber { return max(0, number.intValue) }
+  if let string = value as? String, let number = Int(string) { return max(0, number) }
+  return 0
+}
+
+private func hermesKanbanString(_ value: Any?) -> String? {
+  if let string = value as? String {
+    let normalized = string.trimmingCharacters(in: .whitespacesAndNewlines)
+    return normalized.isEmpty ? nil : normalized
+  }
+  if let number = value as? NSNumber { return number.stringValue }
+  return nil
+}
+
+private func hermesKanbanText(_ value: Any?) -> String? {
+  if let string = hermesKanbanString(value) { return string }
+  guard let value, !(value is NSNull), JSONSerialization.isValidJSONObject(value),
+        let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
+        let text = String(data: data, encoding: .utf8), !text.isEmpty
+  else { return nil }
+  return text
 }
 
 private struct HermesRemoteEditorSheet: View {
@@ -3775,11 +5114,14 @@ private struct HermesFileSection: Identifiable {
 
 private enum HermesFileImportStaging {
   private static let directoryName = "HermesFileImports"
-  private static let maximumFileBytes = 64 * 1024 * 1024
+  private static let defaultMaximumFileBytes = 64 * 1024 * 1024
   private static let maximumBatchBytes = 128 * 1024 * 1024
   private static let maximumAge: TimeInterval = 24 * 60 * 60
 
-  static func stage(_ sourceURLs: [URL]) -> [URL] {
+  static func stage(
+    _ sourceURLs: [URL],
+    maximumFileBytes: Int = defaultMaximumFileBytes
+  ) -> [URL] {
     cleanupExpiredBatches()
     guard !sourceURLs.isEmpty, let root = stagingRoot() else { return [] }
 
@@ -3798,7 +5140,12 @@ private enum HermesFileImportStaging {
     var staged: [URL] = []
     for sourceURL in sourceURLs {
       guard remainingBudget > 0,
-            let destination = stage($0, in: batch, remainingBudget: remainingBudget)
+            let destination = stage(
+              sourceURL,
+              in: batch,
+              remainingBudget: remainingBudget,
+              maximumFileBytes: min(defaultMaximumFileBytes, max(1, maximumFileBytes))
+            )
       else { continue }
       if let size = fileSize(at: destination) {
         remainingBudget -= size
@@ -3813,7 +5160,8 @@ private enum HermesFileImportStaging {
   private static func stage(
     _ sourceURL: URL,
     in batch: URL,
-    remainingBudget: Int
+    remainingBudget: Int,
+    maximumFileBytes: Int
   ) -> URL? {
     let hasSecurityScope = sourceURL.startAccessingSecurityScopedResource()
     defer {
@@ -3959,6 +5307,7 @@ private struct HermesFilesPage: View {
   @EnvironmentObject private var appearance: HermesAppearanceModel
   let chinese: Bool
   let files: [HermesFileSnapshot]
+  let accountFilesJSON: String?
   let managedFilesJSON: String?
   let onAction: HermesRouteActionSink
   @State private var search = ""
@@ -4250,7 +5599,17 @@ private struct HermesFilesPage: View {
       if managedMode {
         managedContent
       } else {
-        toolbarContent
+        HermesAccountFilesPagedContent(
+          chinese: chinese,
+          initialFiles: files,
+          pageJSON: accountFilesJSON,
+          onAction: onAction,
+          onImport: { importerOpen = true },
+          onCreateFolder: {
+            folderPath = ""
+            folderCreateOpen = true
+          }
+        )
       }
     }
       .safeAreaInset(edge: .top, spacing: 0) {
@@ -4428,7 +5787,10 @@ private struct HermesModelsPage: View {
   let models: [HermesModelSnapshot]
   let auxiliary: HermesModelAuxiliarySnapshot
   let moa: HermesModelMoaSnapshot
+  let modelMoaJSON: String?
   let providerOauthJSON: String?
+  let providerOauthPendingJSON: String?
+  let credentialPoolJSON: String?
   let customProviderEndpointsJSON: String?
   let confirmation: HermesModelConfirmationSnapshot?
   let operation: HermesRouteOperationSnapshot?
@@ -4445,6 +5807,11 @@ private struct HermesModelsPage: View {
   @State private var presentedConfirmation: HermesModelConfirmationSnapshot?
   @State private var providerOauthID = ""
   @State private var providerOauthCode = ""
+  @State private var moaEditorJSON = ""
+  @FocusState private var moaEditorFocused: Bool
+  @State private var credentialProvider = ""
+  @State private var credentialLabel = ""
+  @State private var credentialKey = ""
   @State private var customEndpointJSON = "{}"
   @State private var customEndpointID = ""
 
@@ -4470,6 +5837,7 @@ private struct HermesModelsPage: View {
         auxiliaryPanel
         customModelPanel
         providerConnectionsPanel
+        credentialPoolPanel
         customProviderEndpointsPanel
       }
       .padding(14)
@@ -4481,6 +5849,7 @@ private struct HermesModelsPage: View {
     .onAppear {
       apply(configuration)
       displayedDetectedModels = detectedModels
+      moaEditorJSON = modelMoaJSON ?? "{}"
     }
     .onAppear { presentedConfirmation = confirmation }
     .onChange(of: configuration) { _, next in apply(next) }
@@ -4509,6 +5878,9 @@ private struct HermesModelsPage: View {
       detectedModelsExpanded = !detectedModels.isEmpty
     }
     .onChange(of: confirmation) { _, next in presentedConfirmation = next }
+    .onChange(of: modelMoaJSON) { _, next in
+      if !moaEditorFocused { moaEditorJSON = next ?? "{}" }
+    }
     .alert(
       chinese ? "确认模型费用" : "Confirm model pricing",
       isPresented: Binding(
@@ -4590,6 +5962,22 @@ private struct HermesModelsPage: View {
           Text(moa.enabled ? (chinese ? "MoA 已启用" : "MoA enabled") : (chinese ? "MoA 未启用" : "MoA disabled"))
             .font(HermesFonts.body(11)).foregroundStyle(moa.enabled ? appearance.palette.success : appearance.palette.secondary)
           if moa.presetCount > 0 { Text("· \(moa.presetCount) presets").font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary) }
+        }
+        if modelMoaJSON != nil {
+          TextEditor(text: $moaEditorJSON)
+            .font(HermesFonts.mono(11))
+            .frame(minHeight: 150)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .focused($moaEditorFocused)
+          Button {
+            moaEditorFocused = false
+            onAction(.modelMoaSave, HermesRouteActionPayload(route: "models", detail: moaEditorJSON))
+          } label: {
+            Label(chinese ? "保存 MoA 配置" : "Save MoA configuration", systemImage: "square.and.arrow.down")
+          }
+          .buttonStyle(.bordered)
+          .disabled(moaEditorJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
       }
     }
@@ -4703,6 +6091,12 @@ private struct HermesModelsPage: View {
       }
     }
   }
+  private var pendingProviderOauth: HermesProviderOauthPendingSnapshot? {
+    HermesProviderOauthPendingSnapshot.decode(providerOauthPendingJSON)
+  }
+  private var credentialPool: HermesCredentialPoolSnapshot? {
+    HermesCredentialPoolSnapshot.decode(credentialPoolJSON)
+  }
 
   @ViewBuilder private var providerConnectionsPanel: some View {
     if let metadata = providerOauthJSON, !metadata.isEmpty {
@@ -4711,6 +6105,28 @@ private struct HermesModelsPage: View {
           Label(chinese ? "官方 Provider OAuth" : "Official provider OAuth", systemImage: "person.badge.key")
             .font(HermesFonts.display(15))
           Text(metadata).font(HermesFonts.mono(10)).foregroundStyle(appearance.palette.secondary).textSelection(.enabled).lineLimit(8)
+          if let pending = pendingProviderOauth, !pending.cancelled {
+            HStack(spacing: 10) {
+              ProgressView().controlSize(.small)
+              VStack(alignment: .leading, spacing: 2) {
+                Text(pending.provider).font(HermesFonts.bodyBold(12))
+                Text(chinese ? "正在等待授权：\(pending.status)" : "Waiting for authorization: \(pending.status)")
+                  .font(HermesFonts.body(11))
+                  .foregroundStyle(appearance.palette.secondary)
+              }
+              Spacer()
+              Button(role: .cancel) {
+                onAction(.providerOauthCancel, HermesRouteActionPayload(
+                  route: "models",
+                  id: pending.provider,
+                  value: pending.sessionId
+                ))
+              } label: {
+                Label(chinese ? "取消" : "Cancel", systemImage: "xmark.circle")
+              }
+              .buttonStyle(.bordered)
+            }
+          }
           HStack {
             TextField(chinese ? "Provider 标识符" : "Provider id", text: $providerOauthID)
               .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -4718,7 +6134,10 @@ private struct HermesModelsPage: View {
               onAction(.providerOauthStart, HermesRouteActionPayload(route: "models", id: providerOauthID))
             } label: { Label(chinese ? "连接" : "Connect", systemImage: "link") }
               .buttonStyle(.borderedProminent)
-              .disabled(providerOauthID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+              .disabled(
+                providerOauthID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  || (pendingProviderOauth?.cancelled == false)
+              )
           }
           HStack {
             TextField(chinese ? "授权码（若 Provider 要求）" : "Authorization code (if required)", text: $providerOauthCode)
@@ -4731,6 +6150,78 @@ private struct HermesModelsPage: View {
           }
           Text(chinese ? "连接会打开官方 OAuth 页面，并在后台轮询完成状态。" : "The official OAuth page opens and completion is polled in the background.")
             .font(HermesFonts.body(11)).foregroundStyle(appearance.palette.secondary)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder private var credentialPoolPanel: some View {
+    if let pool = credentialPool {
+      HermesPanel {
+        VStack(alignment: .leading, spacing: 12) {
+          Label(chinese ? "凭据池" : "Credential pool", systemImage: "key.horizontal")
+            .font(HermesFonts.display(15))
+          ForEach(pool.providers) { provider in
+            VStack(alignment: .leading, spacing: 6) {
+              Text(provider.provider).font(HermesFonts.bodyBold(13))
+              if provider.entries.isEmpty {
+                Text(chinese ? "没有凭据" : "No credentials")
+                  .font(HermesFonts.body(11))
+                  .foregroundStyle(appearance.palette.secondary)
+              }
+              ForEach(provider.entries, id: \.index) { entry in
+                HStack(alignment: .top, spacing: 10) {
+                  VStack(alignment: .leading, spacing: 2) {
+                    Text((entry.label?.isEmpty == false ? entry.label : nil) ?? "#\(entry.index)")
+                      .font(HermesFonts.bodyBold(12))
+                    Text([
+                      entry.authType,
+                      entry.source,
+                      entry.lastStatus,
+                      entry.requestCount.map { "\(Int($0)) requests" },
+                    ].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                      .font(HermesFonts.body(10))
+                      .foregroundStyle(appearance.palette.secondary)
+                  }
+                  Spacer()
+                  Button(role: .destructive) {
+                    onAction(.credentialPoolDelete, HermesRouteActionPayload(
+                      route: "models",
+                      id: provider.provider,
+                      position: entry.index
+                    ))
+                  } label: {
+                    Image(systemName: "trash")
+                  }
+                  .buttonStyle(.borderless)
+                  .accessibilityLabel(chinese ? "删除凭据" : "Delete credential")
+                }
+              }
+            }
+          }
+          Divider()
+          TextField(chinese ? "Provider 标识符" : "Provider id", text: $credentialProvider)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+          TextField(chinese ? "标签（可选）" : "Label (optional)", text: $credentialLabel)
+          SecureField(chinese ? "新密钥" : "New secret", text: $credentialKey)
+            .textInputAutocapitalization(.never).autocorrectionDisabled()
+          Button {
+            let secret = credentialKey
+            credentialKey = ""
+            onAction(.credentialPoolAdd, HermesRouteActionPayload(
+              route: "models",
+              id: credentialProvider,
+              name: credentialLabel,
+              detail: secret
+            ))
+          } label: {
+            Label(chinese ? "添加凭据" : "Add credential", systemImage: "plus")
+          }
+          .buttonStyle(.borderedProminent)
+          .disabled(
+            credentialProvider.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              || credentialKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          )
         }
       }
     }
