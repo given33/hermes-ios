@@ -138,7 +138,8 @@ cross-gateway Bot Group Chat protocol: authoritative rooms, event replay,
 fenced failover, and `HermesRoom` scoped grants that dispatch through
 `/v1/runs`. The official modules and account-authenticated mobile bridge are
 merged into product backend commit `f1615708e4`; the native
-`/durable-group-chat` route is in iOS commit `df50c2d`. The bridge delegates
+`/durable-group-chat` route and managed-node health projection are in iOS
+commit `89a3b44`. The bridge delegates
 to the process-owned `HostedRoomService`, binds each room to one account
 generation, and never returns `API_SERVER_KEY` or a reusable room grant.
 
@@ -179,7 +180,7 @@ and live four-node validation still require their target environments.
 
 ### 2026-09-01 current-state audit
 
-- iOS commit `df50c2d` plus the current durable Group Chat integration passes
+- iOS commit `89a3b44` plus the current durable Group Chat integration passes
   `pnpm test` (880 passed / 0 failed), `pnpm typecheck`, and generated-contract
   checks. The new client has a typed owner-mobile bridge, incremental replay
   from a monotonic cursor, overlap de-duplication, and a 3 s recovery poll;
