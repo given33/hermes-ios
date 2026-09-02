@@ -535,6 +535,14 @@ export interface HermesSwiftUISystemNodeSnapshot {
   observedAt: string;
   metricsSource: string;
   recoveryState: string;
+  /** Optional fields from the managed-node health contract. */
+  fresh?: boolean;
+  ageSeconds?: number;
+  runtimeReady?: boolean;
+  runtimeFresh?: boolean;
+  metricsObservedAt?: string;
+  releaseCommit?: string;
+  releaseSchema?: string;
 }
 
 export interface HermesSwiftUIMemoryProviderSnapshot {

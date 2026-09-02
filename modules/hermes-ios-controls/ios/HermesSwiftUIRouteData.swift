@@ -1215,6 +1215,13 @@ struct HermesSystemNodeSnapshot: Decodable, Equatable, Identifiable {
   let observedAt: String
   let metricsSource: String
   let recoveryState: String
+  let fresh: Bool?
+  let ageSeconds: Double?
+  let runtimeReady: Bool?
+  let runtimeFresh: Bool?
+  let metricsObservedAt: String?
+  let releaseCommit: String?
+  let releaseSchema: String?
 }
 
 struct HermesSystemSnapshot: Decodable, Equatable {

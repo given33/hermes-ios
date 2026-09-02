@@ -2440,6 +2440,28 @@ private struct HermesRemoteRoutePage: View {
                   .font(HermesFonts.mono(11))
                   .foregroundStyle(appearance.palette.secondary)
               }
+              if node.fresh == false || node.runtimeReady == false || node.runtimeFresh == false {
+                Label(
+                  chinese ? "节点健康检查未通过" : "Node health check is not ready",
+                  systemImage: "exclamationmark.triangle"
+                )
+                .font(HermesFonts.body(11))
+                .foregroundStyle(appearance.palette.warning)
+              }
+              if let runtimeReady = node.runtimeReady {
+                HermesStatusPill(
+                  text: runtimeReady
+                    ? (chinese ? "运行时 Ready" : "Runtime ready")
+                    : (chinese ? "运行时未就绪" : "Runtime not ready"),
+                  color: runtimeReady ? appearance.palette.success : appearance.palette.warning
+                )
+              }
+              if let release = node.releaseCommit, !release.isEmpty {
+                let shortRelease = String(release.prefix(12))
+                Text(chinese ? "提交：\(shortRelease)" : "Commit: \(shortRelease)")
+                  .font(HermesFonts.mono(9))
+                  .foregroundStyle(appearance.palette.tertiary)
+              }
               Grid(horizontalSpacing: 12, verticalSpacing: 8) {
                 GridRow {
                   LabeledContent("CPU", value: node.metricsAvailable ? String(format: "%.0f%%", node.cpu) : "-")

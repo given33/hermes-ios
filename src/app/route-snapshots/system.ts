@@ -36,6 +36,27 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
     ) === true;
     const recoveryState = firstString(node, ['recovery_state', 'recoveryState']);
     const gatewayOnline = normalizedGateway?.state === 'online';
+    const runtime = isRecord(node.runtime) ? node.runtime : {};
+    const release = isRecord(node.release) ? node.release : {};
+    const fresh = optionalBoolean(node.fresh ?? node.is_fresh ?? node.isFresh);
+    const ageSeconds = optionalNumber(node.age_seconds ?? node.ageSeconds);
+    const runtimeReady = optionalBoolean(
+      node.runtime_ready
+        ?? node.runtimeReady
+        ?? runtime.worker_ready
+        ?? runtime.workerReady,
+    );
+    const runtimeFresh = optionalBoolean(node.runtime_fresh ?? node.runtimeFresh);
+    const metricsObservedAt = stringish(
+      node.metrics_observed_at
+        ?? node.metricsObservedAt
+        ?? metrics.sampled_at
+        ?? metrics.sampledAt,
+    );
+    const releaseCommit = firstString(release, ['commit', 'git_commit', 'gitCommit'])
+      || firstString(node, ['release_commit', 'releaseCommit']);
+    const releaseSchema = firstString(release, ['schema', 'schema_version', 'schemaVersion'])
+      || firstString(node, ['release_schema', 'releaseSchema']);
     return {
       id,
       label: firstString(node, ['label', 'display_name', 'displayName', 'name']) || id.toUpperCase(),
@@ -56,6 +77,13 @@ export function systemSnapshot(source: unknown, localizer: HermesRouteLocalizer)
       observedAt: stringish(node.observed_at ?? node.observedAt),
       metricsSource: firstString(node, ['metrics_source', 'metricsSource']),
       recoveryState,
+      ...(fresh === undefined ? {} : { fresh }),
+      ...(ageSeconds === undefined ? {} : { ageSeconds }),
+      ...(runtimeReady === undefined ? {} : { runtimeReady }),
+      ...(runtimeFresh === undefined ? {} : { runtimeFresh }),
+      ...(metricsObservedAt ? { metricsObservedAt } : {}),
+      ...(releaseCommit ? { releaseCommit } : {}),
+      ...(releaseSchema ? { releaseSchema } : {}),
     };
   }).filter((node) => node.id);
   const primaryNode = nodeSnapshots.find((node) => node.id === 'dbb3') || nodeSnapshots[0];
@@ -129,6 +157,15 @@ function firstNumber(record: Record<string, unknown>, keys: readonly string[]): 
     if (Number.isFinite(parsed)) return parsed;
   }
   return 0;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function optionalBoolean(value: unknown): boolean | undefined {
+  return booleanValue(value);
 }
 
 function booleanValue(value: unknown): boolean | undefined {

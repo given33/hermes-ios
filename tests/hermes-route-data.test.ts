@@ -970,6 +970,12 @@ test('system snapshots expose real DBB3 and WSL gateway metrics and versions', a
             observed_at: freshObservedAt,
             metrics_available: true,
             recovery_state: 'idle',
+            fresh: true,
+            age_seconds: 4,
+            runtime_fresh: true,
+            runtime: { worker_ready: true },
+            release: { commit: 'abcdef0123456789', schema: 'worker.v2' },
+            metrics_observed_at: freshObservedAt,
             metrics_source: 'linux_procfs',
             metrics: {
               cpu_percent: 21,
@@ -1008,6 +1014,13 @@ test('system snapshots expose real DBB3 and WSL gateway metrics and versions', a
   assert.equal(snapshot.system?.nodes[0].version, 'v0.18.2 (2026.7.7.2)');
   assert.equal(snapshot.system?.nodes[1].version, 'v0.18.3 (2026.7.8.1)');
   assert.equal(snapshot.system?.nodes[1].metricsSource, 'windows_psutil_push');
+  assert.equal(snapshot.system?.nodes[0].fresh, true);
+  assert.equal(snapshot.system?.nodes[0].ageSeconds, 4);
+  assert.equal(snapshot.system?.nodes[0].runtimeReady, true);
+  assert.equal(snapshot.system?.nodes[0].runtimeFresh, true);
+  assert.equal(snapshot.system?.nodes[0].releaseCommit, 'abcdef0123456789');
+  assert.equal(snapshot.system?.nodes[0].releaseSchema, 'worker.v2');
+  assert.equal(snapshot.system?.nodes[0].metricsObservedAt, freshObservedAt);
 });
 
 test('system snapshots reject stale device heartbeat flags from the server', async () => {
