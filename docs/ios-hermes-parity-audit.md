@@ -192,7 +192,7 @@ and live four-node validation still require their target environments.
 - `expo-doctor` has no package/configuration defect; it reports only that the
   global pnpm bin directory is absent from `PATH` on this Windows host.
 - Upstream `NousResearch/hermes-agent@d3e2ace1` is 799 commits ahead of product
-  backend `7cc319258d` from merge base `4f22543509`. The durable Group Chat subset
+  backend `d885da0ec3` from merge base `4f22543509`. The durable Group Chat subset
   is synchronized into product backend `main` as `f1615708e4`; this ledger still
   does not claim deployment, live multi-device parity, or release readiness.
 - The upstream Bot Mode performance fix `32fe129324` is selectively ported in
