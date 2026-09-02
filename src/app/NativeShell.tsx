@@ -155,6 +155,7 @@ const REFERENCE_SIDEBAR_GROUPS = [
     items: [
       { path: '/chat', labels: { en: 'Chat', zh: '聊天' }, symbol: 'message.fill', fallback: 'MessageSquare' },
       { path: '/agent-group', labels: { en: 'Agent Rooms', zh: 'Agent 房间' }, symbol: 'person.3.fill', fallback: 'Users' },
+      { path: '/durable-group-chat', labels: { en: 'Durable Group Chat', zh: '持久化群聊' }, symbol: 'person.3.sequence.fill', fallback: 'Users' },
       { path: '/agent-workspace', labels: { en: 'Agent Workspace', zh: 'Agent 空间' }, symbol: 'sparkles.rectangle.stack', fallback: 'Sparkles' },
       { path: '/workflows', labels: { en: 'Workflows', zh: '工作流' }, symbol: 'arrow.triangle.branch', fallback: 'Zap' },
       { path: '/cron', labels: { en: 'Jobs', zh: '任务' }, symbol: 'clock.arrow.circlepath', fallback: 'Clock' },
@@ -605,7 +606,7 @@ export function NativeShell({
                     (item) => item.path === route.path,
                   )?.label ?? route.path;
                   const chatRoute = route.routeId === 'chat';
-                  const jsParityRoute = route.routeId === 'agent-group';
+                  const jsParityRoute = route.routeId === 'agent-group' || route.routeId === 'durable-group-chat';
                   // Must mirror FrontendPreviewApp's usesNativeSwiftUIRoute
                   // exclusion list exactly: browser/memory/agent-hub render
                   // as RN pages (no SwiftUI toolbar), so hiding the native

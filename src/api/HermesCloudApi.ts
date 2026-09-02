@@ -276,6 +276,7 @@ export class HermesCloudApi {
   ): Promise<MobileConsoleResult> {
     return this.console.execute(line, profile, confirmed);
   }
+
   getSessions(limit = 50, offset = 0, profile = 'default') {
     return this.sessions.getSessions(limit, offset, profile);
   }

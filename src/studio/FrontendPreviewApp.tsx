@@ -83,6 +83,7 @@ import {
 import { ModelsManagementPage } from '../models/ModelsManagementPage';
 import { ChatPreviewPage } from './PreviewChatPage';
 import { AgentGroupChatPage } from './agent-group/AgentGroupChatPage';
+import { DurableGroupChatPage } from './durable-group-chat/DurableGroupChatPage';
 import { AgentWorkspacePage } from './agent-group/AgentWorkspacePage';
 import { AgentHubPage } from './hub/AgentHubPage';
 import { HermesStudioWorkflowPage } from './workflows/HermesStudioWorkflowPage';
@@ -525,6 +526,7 @@ function PreviewRoute({
     && route.routeId !== 'account'
     && route.routeId !== 'chat'
     && route.routeId !== 'agent-group'
+    && route.routeId !== 'durable-group-chat'
     && route.routeId !== 'agent-hub';
   useEffect(() => {
     if (usesNativeSwiftUIRoute) return undefined;
@@ -597,6 +599,7 @@ function PreviewRoute({
     !allowFixturePages
     && route.routeId !== 'chat'
     && route.routeId !== 'agent-group'
+    && route.routeId !== 'durable-group-chat'
     && route.routeId !== 'agent-workspace'
     && route.routeId !== 'agent-hub'
     && route.routeId !== 'account'
@@ -656,6 +659,15 @@ function PreviewRoute({
         notify={notify}
         onOpenNavigation={openNavigation}
         profile={profile}
+      />
+    );
+    case 'durable-group-chat': return (
+      <DurableGroupChatPage
+        client={client}
+        compact={compactNavigation}
+        isChinese={locale === 'zh'}
+        notify={notify}
+        onOpenNavigation={openNavigation}
       />
     );
     case 'agent-workspace': return (

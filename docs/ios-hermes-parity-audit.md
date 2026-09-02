@@ -1,6 +1,6 @@
 # iOS Hermes parity audit
 
-Last audited: 2026-08-30 (Asia/Shanghai)
+Last audited: 2026-09-01 (Asia/Shanghai)
 
 This is the working ledger for the iOS Hermes integration. A row is only
 marked **verified** when the upstream desktop control, the gateway endpoint,
@@ -14,7 +14,9 @@ exist. “API only” is deliberately not treated as completion.
 | Basic hosted chat | `apps/desktop/src/app/chat` | Hosted conversation enqueue + ordered lifecycle projection in `src/studio/chat`; native API uses `/api/plugins/collaboration/single/...` | `tests/hosted-conversation-events.test.ts`, `tests/low-latency-event-reducer.test.ts` | verified |
 | Low-latency chat events | Desktop event stream contract | WebSocket is preferred, authenticated with one-time `/api/auth/ws-ticket`; automatic SSE fallback remains for old gateways/proxies | `src/api/HermesApiClient.ts`, `src/studio/chat/useHostedConversationStream.ts`, `tests/api-client.test.ts` | verified |
 | Bot Mode core | Desktop Bot Mode roster/chat | `/api/bots` and canonical `official:v3:` session placeholders; Bots route opens the same hosted chat surface | `tests/cloud-api.test.ts`, `tests/hermes-route-data.test.ts` | verified (core) |
-| Worker collaboration | Desktop collaboration panel | Dispatcher + durable worker queue + `/api/plugins/collaboration/worker/ws`; iOS collaboration route uses the canonical room endpoints | backend role/deployment test suite; iOS collaboration source | verified |
+| Durable Bot Group Chat (same gateway) | Upstream `gateway/hosted_rooms.py` and `HostedRoomService` | Isolated backend branch `codex/ios-official-group-chat-sync` carries the official authority/replay/driver commits and exposes account-owned rooms through `/api/plugins/collaboration/mobile/group-chat`. iOS `/durable-group-chat` creates, replays, sends, renames, stops, retries, approves, and disbands rooms without receiving `API_SERVER_KEY` or `HermesRoom` grants. | backend focused suite `108 passed`; `tests/durable-group-chat-api.test.ts`; full iOS suite `880/880` | verified in isolated integration branch; product merge pending |
+| Durable cross-gateway Bot Group Chat (server-admitted members) | Official RoomLink invitations, scoped grants and `PeerMemberRoute` | The owner-mobile BFF exposes a secret-free `/gateways` catalog and accepts only a configured `gateway_id`/`profile`. The server uses the upstream peer registry to invite, probe, and register the official peer route; iOS displays the gateway/device target and never receives `API_SERVER_KEY` or `HermesRoom`. DBB3/WSL/HK connector nodes remain informational and cannot be selected as gateways. | backend focused suite `108 passed`; official two-gateway UAT; iOS durable API/route tests; full iOS suite `880/880` | code verified; live four-device rehearsal and admin/failover controls open |
+| Worker collaboration | Desktop collaboration panel | Dispatcher + durable worker queue + `/api/plugins/collaboration/worker/ws`; iOS collaboration route uses canonical room endpoints and shows managed-node state. Deployment, health aggregation, drain/restart and queue operations remain operator-only. | backend role/deployment test suite; iOS collaboration and managed-node source/tests | partial / operator-only |
 
 ## Native route matrix
 
@@ -36,6 +38,7 @@ exist. “API only” is deliberately not treated as completion.
 | Bot profile capabilities/assets | Bots context menu loads and edits the official `profiles.describe`/`profiles.configure` contract (skills, Toolsets, MCP, model, SOUL, `ui_meta`); avatar upload/read/clear delegates to `profiles.set_asset`/`profiles.get_asset`, and generation delegates to `image.generate` then `profiles.set_asset`, with native iOS controls and server-side `has_avatar` state | backend Bot Mode REST bridge tests; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
 | Bot Petdex avatar picker | Bots context menu reads a bounded (96-entry) projection of the upstream `pet.gallery` catalog and applies a selected first-frame thumbnail through `pet.thumb` → `profiles.set_asset`; native selection menu carries slug and manifest URL, while the dedicated gallery API remains available for future paging/search | backend pet bridge test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; generated action contract | verified (official bridge) |
 | Bot Mode cross-connection relay | Bots route reads the upstream relay roster and exposes a native target/message sheet; send queues through the canonical `tools.bot_relay.enqueue_envelope` helper with ambiguity/liveness/TTL safeguards | backend relay route test; `cloud-api-domains.test.ts`; `hermes-route-data.test.ts`; native source/action assertions | verified (official bridge) |
+| Durable Group Chat | `/durable-group-chat`; authenticated same-gateway room list/create, append-only replay, send, rename, stop, retry/approval controls, and confirmed disband | `tests/durable-group-chat-api.test.ts`, backend bridge tests, route-registry tests | verified in isolated integration branch; not yet release-merged |
 | Configuration | `/config`; raw config import/export, stream/compact toggles | config API tests | verified |
 | Environment | `/env`; set/reveal/delete with profile scope | environment route source test | verified |
 | System/maintenance | `/system`; gateway lifecycle, node reconnect, update check/update, Doctor, security audit, backup create/import, hooks list/create/delete, debug share, Curator run/pause, diagnostics, checkpoints and prune | system route source + API domain tests | verified |
@@ -125,12 +128,30 @@ assertion before it can move to **verified**.
 The mobile bridge verifies the interoperable Bot Mode core: profile roster and
 CRUD, canonical Bot Chat, server-persisted title/visibility/pin/group metadata,
 per-profile Routines, official profile capability/assets, Petdex avatar
-selection, and cross-connection relay. The upstream desktop plugin still owns
-one window-local orchestration detail that has no server contract: its local
-group-chat round engine (member holds and @mention handoffs). iOS uses the
-server-backed Hermes Studio collaboration room surface for group chat, with
-mentions, member management, interruption, approvals, workspace files, and
-authenticated low-latency event delivery. Pixel-pet runtime animation/state
+selection, and cross-connection relay. iOS uses the authenticated Hermes Studio
+collaboration room surface for group chat, with mentions, member management,
+interruption, approvals, workspace files, and authenticated low-latency event
+delivery.
+
+As of 2026-09-01, upstream `21b2095d` also has a distinct durable,
+cross-gateway Bot Group Chat protocol: authoritative rooms, event replay,
+fenced failover, and `HermesRoom` scoped grants that dispatch through
+`/v1/runs`. The official modules now exist in isolated backend branch
+`codex/ios-official-group-chat-sync`, together with an account-authenticated
+mobile bridge and the native `/durable-group-chat` route. The bridge delegates
+to the process-owned `HostedRoomService`, binds each room to one account
+generation, and never returns `API_SERVER_KEY` or a reusable room grant.
+
+The bridge now supports the safe server-admitted cross-gateway path: an
+operator-registered peer gateway can be selected by id/profile, while the
+server performs the upstream invitation, scope probe, and route registration.
+Peer add/remove, grant rotation/revocation administration, replication, and
+authority promotion/demotion remain server-operator workflows. The active
+deployment is one `hermes-manager` dispatcher plus DBB3, PC/WSL, and HK
+connector-only worker lanes; a second physical server is selectable only after
+it runs an independent HTTPS RoomLink gateway and is registered as a peer.
+Live four-device rehearsal, product merge, signed-device testing, and worker
+health/operations controls remain open. Pixel-pet runtime animation/state
 controls remain explicitly out of scope by product decision; Petdex selection
 and static avatar rendering are supported.
 
@@ -148,9 +169,35 @@ the gated `deploy-hk-worker` workflow and by the transactional
 
 The repository is being audited on Windows. TypeScript, contract generation,
 the complete iOS JavaScript test suite, and the backend role/deployment test
-subset run here. A native Xcode compile and the Linux-only/full backend suite
-require their respective host environments; until those are run, this ledger
-must not claim release-level native-build verification.
+subset run here. Native verification is additionally evidenced by successful
+macOS GitHub Actions run `33315711026` for iOS commit `9898e21`: Release device
+and simulator compiles, extension targets, entitlement checks, app validation,
+and unsigned IPA packaging completed. This is stronger than a source-only
+claim, but it is not a signed EAS production build, a TestFlight install, or a
+physical-device network/performance check. The Linux-only/full backend suite
+and live four-node validation still require their target environments.
+
+### 2026-09-01 current-state audit
+
+- iOS commit `9898e21` plus the current durable Group Chat integration passes
+  `pnpm test` (880 passed / 0 failed), `pnpm typecheck`, and generated-contract
+  checks. The new client has a typed owner-mobile bridge, incremental replay
+  from a monotonic cursor, overlap de-duplication, and a 3 s recovery poll;
+  it is not a live frame-rate or network-latency measurement. The prior
+  production source-graph verification and iOS Expo export remain valid
+  (3,840 modules; approximately 9.31 MB Hermes bytecode; 73 assets).
+  Native font and production-bundle validators both pass.
+- `expo-doctor` has no package/configuration defect; it reports only that the
+  global pnpm bin directory is absent from `PATH` on this Windows host.
+- Upstream `NousResearch/hermes-agent@21b2095d` is 423 commits ahead of product
+  backend `7536ce7` from merge base `4f225435`. The durable Group Chat subset
+  has been synchronized only into the isolated backend branch, so this ledger
+  includes the server-admitted cross-gateway bridge, but this ledger still does
+  not claim product merge, live multi-device parity, or release readiness.
+- Client regression coverage now prohibits direct shipment of `API_SERVER_KEY`,
+  `HermesRoom` authorization, and direct `/v1/runs` or `/v1/room-members`
+  calls. The bridge provides same-gateway and server-admitted peer execution
+  while preserving the upstream authorization model for remote administration.
 
 ### 2026-08-29 continuation: managed-file facade budget
 

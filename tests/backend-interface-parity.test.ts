@@ -24,6 +24,7 @@ const apiSources = [
   'src/api/cloud/console.ts',
   'src/api/cloud/conversations.ts',
   'src/api/cloud/cron.ts',
+  'src/api/cloud/durable-group-chat.ts',
   'src/api/cloud/extensions.ts',
   'src/api/cloud/files.ts',
   'src/api/cloud/management.ts',
@@ -62,6 +63,9 @@ test('iOS release-critical API surface remains connected to official backend rou
     '/api/bot-mode/relay/send',
     '/rooms',
     '/events',
+
+    // Owner-mobile bridge for official durable Group Chat.
+    '/api/plugins/collaboration/mobile/group-chat',
 
     // Main user-facing capability groups.
     '/api/model/info',
@@ -115,4 +119,17 @@ test('iOS Agent Rooms keep WebSocket first with SSE and polling fallbacks', () =
   assert.match(controller, /hasHealthyRoomStream/);
   assert.match(controller, /setInterval\(\(\) =>/);
   assert.match(controller, /2_500/);
+});
+
+test('iOS does not embed privileged official API-server credentials', () => {
+  // The upstream durable Group Chat API deliberately separates a gateway-wide
+  // Bearer key from short-lived HermesRoom grants. Mobile account credentials
+  // are neither of those capabilities, so client code must never manufacture
+  // or ship either authorization form while a server-side mobile bridge is
+  // still required.
+  assert.doesNotMatch(
+    apiSources,
+    /\bAPI_SERVER_KEY\b|Authorization\s*:\s*['"`]?HermesRoom\b|['"`]\/v1\/(?:runs|room-members)/,
+    'iOS must use an authenticated mobile backend bridge rather than expose API-server or room-grant authority',
+  );
 });

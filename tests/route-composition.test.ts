@@ -174,13 +174,13 @@ function navProjection(
 test('freezes the customized WebUI built-in route map without bundled plugins', () => {
   assert.deepEqual(
     HERMES_NATIVE_ROUTES.map((route) => route.path),
-    [...CORE_ROUTE_PATHS, '/agent-group', '/agent-workspace', '/chat'],
+    [...CORE_ROUTE_PATHS, '/agent-group', '/durable-group-chat', '/agent-workspace', '/chat'],
   );
   assert.deepEqual(
     HERMES_NATIVE_ROUTES.filter((route) => route.visibleInSidebar)
       .map((route) => route.path)
       .sort(),
-    [...CORE_NAV_PATHS, '/agent-group', '/agent-workspace', '/chat'].sort(),
+    [...CORE_NAV_PATHS, '/agent-group', '/durable-group-chat', '/agent-workspace', '/chat'].sort(),
   );
   assert.deepEqual(HERMES_NATIVE_ROUTES[0], {
     id: 'root',
@@ -329,11 +329,11 @@ test('composes conditional chat and strictly boolean-gated analytics navigation'
   });
   assert.deepEqual(
     enabled.routes.map((route) => route.path),
-    [...CORE_ROUTE_PATHS, '/agent-group', '/agent-workspace', '/chat'],
+    [...CORE_ROUTE_PATHS, '/agent-group', '/durable-group-chat', '/agent-workspace', '/chat'],
   );
   assert.deepEqual(
     enabled.coreItems.map((item) => item.path),
-    ['/chat', '/agent-group', '/agent-workspace', ...CORE_NAV_PATHS],
+    ['/chat', '/agent-group', '/durable-group-chat', '/agent-workspace', ...CORE_NAV_PATHS],
   );
   assert.equal(enabled.routes.at(-1)?.key, 'builtin:/chat');
 });
@@ -349,6 +349,7 @@ test('composes exact English and Chinese core labels and icons', () => {
   assert.deepEqual(navProjection(english.coreItems), [
     { path: '/chat', label: 'Chat', icon: 'Terminal' },
     { path: '/agent-group', label: 'Agent Rooms', icon: 'Users' },
+    { path: '/durable-group-chat', label: 'Durable Group Chat', icon: 'Users' },
     { path: '/agent-workspace', label: 'Agent Workspace', icon: 'Sparkles' },
     ...CORE_NAV_PATHS.map((path, index) => ({
       path,
@@ -366,6 +367,7 @@ test('composes exact English and Chinese core labels and icons', () => {
   assert.deepEqual(navProjection(chinese.coreItems), [
     { path: '/chat', label: '\u804a\u5929', icon: 'Terminal' },
     { path: '/agent-group', label: 'Agent \u623f\u95f4', icon: 'Users' },
+    { path: '/durable-group-chat', label: '\u6301\u4e45\u5316\u7fa4\u804a', icon: 'Users' },
     { path: '/agent-workspace', label: 'Agent \u7a7a\u95f4', icon: 'Sparkles' },
     ...CORE_NAV_PATHS.map((path, index) => ({
       path,

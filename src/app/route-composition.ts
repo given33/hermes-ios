@@ -180,6 +180,13 @@ const AGENT_GROUP_NAV_ITEM: BuiltinNavigationDefinition = {
   icon: 'Users',
 };
 
+const DURABLE_GROUP_CHAT_NAV_ITEM: BuiltinNavigationDefinition = {
+  routeId: 'durable-group-chat',
+  path: '/durable-group-chat',
+  labels: { en: 'Durable Group Chat', zh: '持久化群聊' },
+  icon: 'Users',
+};
+
 const AGENT_WORKSPACE_NAV_ITEM: BuiltinNavigationDefinition = {
   routeId: 'agent-workspace',
   path: '/agent-workspace',
@@ -385,7 +392,7 @@ function getBuiltinNavigation(
   locale: NativeRouteLocale,
 ): ComposedNavigationItem[] {
   const definitions = embeddedChat
-    ? [CHAT_NAV_ITEM, AGENT_GROUP_NAV_ITEM, AGENT_WORKSPACE_NAV_ITEM, ...BUILTIN_NAV_REST]
+    ? [CHAT_NAV_ITEM, AGENT_GROUP_NAV_ITEM, DURABLE_GROUP_CHAT_NAV_ITEM, AGENT_WORKSPACE_NAV_ITEM, ...BUILTIN_NAV_REST]
     : [...BUILTIN_NAV_REST];
   const visibleDefinitions = showTokenAnalytics
     ? definitions

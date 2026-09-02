@@ -1,7 +1,17 @@
 import type { HermesCloudApi as HermesCloudApiType } from './HermesCloudApi';
+import type { HermesRequestOptions } from './HermesApiClient';
 import type { MobileHostedCommand, MobileHostedCommandResult } from './cloud/console';
+import {
+  HermesDurableGroupChatCloudApi,
+  type CreateDurableGroupChatInput,
+  type DurableGroupChatCapabilities,
+  type DurableGroupChatEventPage,
+  type DurableGroupChatGatewayCatalog,
+  type DurableGroupChatRoom,
+  type DurableGroupChatRoomState,
+} from './cloud/durable-group-chat';
 import { HermesGitCloudApi } from './cloud/git';
-import type { JsonRecord } from './cloud/transport';
+import type { JsonRecord, HermesCloudTransport } from './cloud/transport';
 
 /**
  * Optional surface methods are installed outside the facade's composition
@@ -10,6 +20,18 @@ import type { JsonRecord } from './cloud/transport';
  */
 declare module './HermesCloudApi' {
 export interface HermesCloudApi {
+  getDurableGroupChatCapabilities(signal?: AbortSignal): Promise<DurableGroupChatCapabilities>;
+  getDurableGroupChatRooms(signal?: AbortSignal): Promise<{ rooms: DurableGroupChatRoom[] }>;
+  getDurableGroupChatGateways(signal?: AbortSignal): Promise<DurableGroupChatGatewayCatalog>;
+  createDurableGroupChat(input: CreateDurableGroupChatInput): ReturnType<HermesDurableGroupChatCloudApi['createRoom']>;
+  getDurableGroupChatRoom(roomId: string, signal?: AbortSignal): Promise<DurableGroupChatRoomState>;
+  getDurableGroupChatEvents(roomId: string, options?: { sinceSeq?: number; limit?: number; signal?: AbortSignal }): Promise<DurableGroupChatEventPage>;
+  sendDurableGroupChatMessage(roomId: string, input: { idempotencyKey: string; text: string; threadId: string }): ReturnType<HermesDurableGroupChatCloudApi['sendMessage']>;
+  renameDurableGroupChat(roomId: string, input: { idempotencyKey: string; name: string }): ReturnType<HermesDurableGroupChatCloudApi['renameRoom']>;
+  stopDurableGroupChat(roomId: string, idempotencyKey: string): ReturnType<HermesDurableGroupChatCloudApi['stopRoom']>;
+  deleteDurableGroupChat(roomId: string): ReturnType<HermesDurableGroupChatCloudApi['deleteRoom']>;
+  retryDurableGroupChatTask(roomId: string, taskId: string): ReturnType<HermesDurableGroupChatCloudApi['retryTask']>;
+  approveDurableGroupChatTask(roomId: string, input: { memberId: string; taskId: string; executionGeneration: number; requestId: string; choice: 'once' | 'deny' }): ReturnType<HermesDurableGroupChatCloudApi['approveTask']>;
   getMemoryStatus(profile?: string): Promise<JsonRecord>; setMemoryProvider(provider: string, profile?: string): Promise<JsonRecord>;
   resetMemory(target?: 'all' | 'memory' | 'user', profile?: string): Promise<JsonRecord>;
   getMemoryProviderConfig(name: string, profile?: string, surface?: string): Promise<JsonRecord>;
@@ -182,7 +204,23 @@ function git(self: HermesCloudApiType) {
 }
 
 export function installHermesCloudApiSurface(CloudApi: { prototype: object }) {
+  const durableGroupChat = (api: any) => new HermesDurableGroupChatCloudApi({
+    request: (path: string, options?: HermesRequestOptions) => api.request(path, options),
+    json: (path: string, method: 'DELETE' | 'PATCH' | 'POST' | 'PUT', body: JsonRecord, options?: HermesRequestOptions) => api.json(path, method, body, options),
+  } as HermesCloudTransport);
 Object.assign(CloudApi.prototype, {
+  getDurableGroupChatCapabilities(this: any, s?: AbortSignal) { return durableGroupChat(this).getCapabilities(s); },
+  getDurableGroupChatRooms(this: any, s?: AbortSignal) { return durableGroupChat(this).listRooms(s); },
+  getDurableGroupChatGateways(this: any, s?: AbortSignal) { return durableGroupChat(this).listGateways(s); },
+  createDurableGroupChat(this: any, i: CreateDurableGroupChatInput) { return durableGroupChat(this).createRoom(i); },
+  getDurableGroupChatRoom(this: any, i: string, s?: AbortSignal) { return durableGroupChat(this).getRoom(i, s); },
+  getDurableGroupChatEvents(this: any, i: string, o = {}) { return durableGroupChat(this).listEvents(i, o); },
+  sendDurableGroupChatMessage(this: any, i: string, v: { idempotencyKey: string; text: string; threadId: string }) { return durableGroupChat(this).sendMessage(i, v); },
+  renameDurableGroupChat(this: any, i: string, v: { idempotencyKey: string; name: string }) { return durableGroupChat(this).renameRoom(i, v); },
+  stopDurableGroupChat(this: any, i: string, k: string) { return durableGroupChat(this).stopRoom(i, k); },
+  deleteDurableGroupChat(this: any, i: string) { return durableGroupChat(this).deleteRoom(i); },
+  retryDurableGroupChatTask(this: any, i: string, t: string) { return durableGroupChat(this).retryTask(i, t); },
+  approveDurableGroupChatTask(this: any, i: string, v: { memberId: string; taskId: string; executionGeneration: number; requestId: string; choice: 'once' | 'deny' }) { return durableGroupChat(this).approveTask(i, v); },
   getMemoryStatus(this: any, p = 'default') { return this.memory.getMemoryStatus(p); }, setMemoryProvider(this: any, provider: string, p = 'default') { return this.memory.setMemoryProvider(provider, p); }, resetMemory(this: any, t = 'all', p = 'default') { return this.memory.resetMemory(t, p); }, getMemoryProviderConfig(this: any, n: string, p = 'default', s = '') { return this.memory.getMemoryProviderConfig(n, p, s); }, setupMemoryProvider(this: any, n: string, v = {}) { return this.memory.setupMemoryProvider(n, v); }, updateMemoryProviderConfig(this: any, n: string, v: JsonRecord, p = 'default', s = '') { return this.memory.updateMemoryProviderConfig(n, v, p, s); }, startMemoryProviderOAuth(this: any, n: string, p = 'default') { return this.memory.startMemoryProviderOAuth(n, p); }, getMemoryProviderOAuthStatus(this: any, n: string, p = 'default') { return this.memory.getMemoryProviderOAuthStatus(n, p); },
   getGitStatus(this: HermesCloudApiType, p: string) { return git(this).getStatus(p); }, getGitGhAuth(this: HermesCloudApiType, r = false) { return git(this).getGhAuth(r); }, getGitWorktrees(this: HermesCloudApiType, p: string) { return git(this).getWorktrees(p); }, getGitBranches(this: HermesCloudApiType, p: string) { return git(this).getBranches(p); }, getGitBaseBranches(this: HermesCloudApiType, p: string) { return git(this).getBaseBranches(p); }, getGitReviewList(this: HermesCloudApiType, p: string, s = 'uncommitted', b = '') { return git(this).getReviewList(p, s, b); }, getGitReviewDiff(this: HermesCloudApiType, p: string, f: string, s = 'uncommitted', b = '', st = false) { return git(this).getReviewDiff(p, f, s, b, st); }, getGitFileDiff(this: HermesCloudApiType, p: string, f: string) { return git(this).getFileDiff(p, f); }, getGitCommitContext(this: HermesCloudApiType, p: string) { return git(this).getCommitContext(p); }, getGitRevParse(this: HermesCloudApiType, p: string, r = '') { return git(this).getRevParse(p, r); }, getGitShipInfo(this: HermesCloudApiType, p: string) { return git(this).getShipInfo(p); }, listGitPullRequests(this: HermesCloudApiType, p: string, b = [], n = []) { return git(this).listPullRequests(p, b, n); }, stageGitFile(this: HermesCloudApiType, p: string, f: string) { return git(this).stage(p, f); }, unstageGitFile(this: HermesCloudApiType, p: string, f: string) { return git(this).unstage(p, f); }, revertGitFile(this: HermesCloudApiType, p: string, f: string) { return git(this).revert(p, f); }, commitGit(this: HermesCloudApiType, p: string, m: string, push = false) { return git(this).commit(p, m, push); }, pushGit(this: HermesCloudApiType, p: string) { return git(this).push(p); }, createGitPullRequest(this: HermesCloudApiType, p: string) { return git(this).createPullRequest(p); }, addGitWorktree(this: HermesCloudApiType, p: string, o = {}) { return git(this).addWorktree(p, o); }, removeGitWorktree(this: HermesCloudApiType, p: string, w: string, f = false) { return git(this).removeWorktree(p, w, f); }, switchGitBranch(this: HermesCloudApiType, p: string, b: string) { return git(this).switchBranch(p, b); },
   streamFile(this: any, p: string, s?: AbortSignal) { return this.files.streamFile(p, s); }, listFilesystem(this: any, p = '', d = 1) { return this.files.listFilesystem(p, d); }, readFilesystemText(this: any, p: string) { return this.files.readFilesystemText(p); }, writeFilesystemText(this: any, p: string, c: string) { return this.files.writeFilesystemText(p, c); }, readFilesystemDataUrl(this: any, p: string) { return this.files.readFilesystemDataUrl(p); }, downloadFilesystem(this: any, p: string) { return this.files.downloadFilesystem(p); }, getGitRoot(this: any, p = '') { return this.files.getGitRoot(p); }, getDefaultCwd(this: any) { return this.files.getDefaultCwd(); },
