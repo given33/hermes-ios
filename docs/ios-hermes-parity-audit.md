@@ -192,7 +192,7 @@ and live four-node validation still require their target environments.
 - `expo-doctor` has no package/configuration defect; it reports only that the
   global pnpm bin directory is absent from `PATH` on this Windows host.
 - Upstream `NousResearch/hermes-agent@d3e2ace1` is 799 commits ahead of product
-  backend `d885da0ec3` from merge base `4f22543509`. The durable Group Chat subset
+  backend `8925c34e7d` from merge base `4f22543509`. The durable Group Chat subset
   is synchronized into product backend `main` as `f1615708e4`; this ledger still
   does not claim deployment, live multi-device parity, or release readiness.
 - The upstream Bot Mode performance fix `32fe129324` is selectively ported in
@@ -200,6 +200,11 @@ and live four-node validation still require their target environments.
   processes for five minutes, and cross-connection relay waiters poll reply
   files every 250 ms instead of every two seconds. Focused backend coverage is
   `139 passed`; this is a code-level latency improvement, not a WAN measurement.
+- Official dashboard fix `6545812c86` is ported in product backend
+  `8925c34e7d`: `/api/model/options` now uses the await-safe config-only profile
+  scope, so a slow models.dev cache miss cannot hold the process-wide skills
+  lock and freeze concurrent dashboard requests. The model-options/API and
+  off-loop regression slices pass `126 tests` combined.
 - Client regression coverage now prohibits direct shipment of `API_SERVER_KEY`,
   `HermesRoom` authorization, and direct `/v1/runs` or `/v1/room-members`
   calls. The bridge provides same-gateway and server-admitted peer execution
