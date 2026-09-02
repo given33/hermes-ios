@@ -1,6 +1,6 @@
 # iOS Hermes parity audit
 
-Last audited: 2026-09-01 (Asia/Shanghai)
+Last audited: 2026-09-02 (Asia/Shanghai)
 
 This is the working ledger for the iOS Hermes integration. A row is only
 marked **verified** when the upstream desktop control, the gateway endpoint,
@@ -133,7 +133,7 @@ collaboration room surface for group chat, with mentions, member management,
 interruption, approvals, workspace files, and authenticated low-latency event
 delivery.
 
-As of 2026-09-01, upstream `21b2095d` also has a distinct durable,
+As of 2026-09-02, upstream `d3e2ace1` also has a distinct durable,
 cross-gateway Bot Group Chat protocol: authoritative rooms, event replay,
 fenced failover, and `HermesRoom` scoped grants that dispatch through
 `/v1/runs`. The official modules and account-authenticated mobile bridge are
@@ -178,7 +178,7 @@ claim, but it is not a signed EAS production build, a TestFlight install, or a
 physical-device network/performance check. The Linux-only/full backend suite
 and live four-node validation still require their target environments.
 
-### 2026-09-01 current-state audit
+### 2026-09-02 current-state audit
 
 - iOS commit `0d18efa` plus the current durable Group Chat integration passes
   `pnpm test` (882 passed / 0 failed), `pnpm typecheck`, and generated-contract
@@ -191,10 +191,15 @@ and live four-node validation still require their target environments.
   Native font and production-bundle validators both pass.
 - `expo-doctor` has no package/configuration defect; it reports only that the
   global pnpm bin directory is absent from `PATH` on this Windows host.
-- Upstream `NousResearch/hermes-agent@21b2095d` is 423 commits ahead of product
-  backend `7536ce7` from merge base `4f225435`. The durable Group Chat subset
+- Upstream `NousResearch/hermes-agent@d3e2ace1` is 799 commits ahead of product
+  backend `7cc319258d` from merge base `4f22543509`. The durable Group Chat subset
   is synchronized into product backend `main` as `f1615708e4`; this ledger still
   does not claim deployment, live multi-device parity, or release readiness.
+- The upstream Bot Mode performance fix `32fe129324` is selectively ported in
+  product backend: remote `/models` metadata is memoized across one-shot
+  processes for five minutes, and cross-connection relay waiters poll reply
+  files every 250 ms instead of every two seconds. Focused backend coverage is
+  `139 passed`; this is a code-level latency improvement, not a WAN measurement.
 - Client regression coverage now prohibits direct shipment of `API_SERVER_KEY`,
   `HermesRoom` authorization, and direct `/v1/runs` or `/v1/room-members`
   calls. The bridge provides same-gateway and server-admitted peer execution
