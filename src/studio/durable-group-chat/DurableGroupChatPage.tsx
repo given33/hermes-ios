@@ -41,6 +41,10 @@ import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { NativeButton } from '../../components/ui/NativeButton';
 import { useTheme } from '../../design/ThemeProvider';
 import { multiplyAlpha } from '../../design/control-contracts';
+import {
+  appendDurableGroupChatMember,
+  durableGroupChatMemberToken,
+} from './member-selection';
 
 const ACTIVE_POLL_MS = 3_000;
 const ACTIVE_CATCH_UP_MS = 50;
@@ -115,6 +119,12 @@ function durableGatewayLabel(gateway: DurableGroupChatGateway): string {
   return `${gateway.gateway_id} · ${device}${status ? ` · ${status}` : ''}`;
 }
 
+function gatewayProfileSelectable(gateway: DurableGroupChatGateway): boolean {
+  return gateway.room_member_supported !== false
+    && gateway.room_link_ready !== false
+    && gateway.online !== false;
+}
+
 function isNotFoundError(error: unknown): boolean {
   return typeof error === 'object'
     && error !== null
@@ -160,6 +170,9 @@ export function DurableGroupChatPage({
   const [renameValue, setRenameValue] = useState('');
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const selectedMemberTokens = useMemo(() => new Set(
+    membersInput.split(',').map((value) => value.trim()).filter(Boolean),
+  ), [membersInput]);
 
   const cancelRoomsRequest = useCallback(() => {
     roomsRequestRef.current += 1;
@@ -479,6 +492,15 @@ export function DurableGroupChatPage({
     }
   };
 
+  const selectGatewayProfile = useCallback((gateway: DurableGroupChatGateway, profile: string) => {
+    if (!gatewayProfileSelectable(gateway)) return;
+    setMembersInput((current) => appendDurableGroupChatMember(
+      current,
+      gateway.gateway_id,
+      profile,
+    ));
+  }, []);
+
   const sendMessage = async () => {
     const roomId = activeRoomId;
     if (!api || !roomId || selectedRoomRef.current !== roomId || !draft.trim()) return;
@@ -620,7 +642,7 @@ export function DurableGroupChatPage({
         <View style={[styles.createPanel, { borderBottomColor: tokens.colors.border }]}> 
           <TextInput accessibilityLabel={isChinese ? '群聊名称' : 'Group Chat name'} onChangeText={setRoomName} placeholder={isChinese ? '群聊名称' : 'Group name'} placeholderTextColor={tokens.colors.textTertiary} style={[styles.input, { borderColor: tokens.colors.border, color: tokens.colors.foreground }]} value={roomName} />
           <TextInput accessibilityLabel={isChinese ? '成员 Profile' : 'Member profiles'} onChangeText={setMembersInput} placeholder="default, reviewer, gateway/profile" placeholderTextColor={tokens.colors.textTertiary} style={[styles.input, { borderColor: tokens.colors.border, color: tokens.colors.foreground }]} value={membersInput} />
-          <Text style={[styles.inputHint, { color: tokens.colors.textTertiary }]}>{isChinese ? '本地成员填写 profile；跨网关成员填写 gateway/profile。' : 'Use profile for local members or gateway/profile for a remote member.'}</Text>
+          <Text style={[styles.inputHint, { color: tokens.colors.textTertiary }]}>{isChinese ? '本地成员填写 profile；跨网关成员填写 gateway/profile。也可从下方已注册 Gateway 中点选。' : 'Use profile for local members or gateway/profile for a remote member. You can also select a registered gateway below.'}</Text>
           {gateways.length > 0 ? (
             <View style={styles.gatewayCatalog}>
               <Text style={[styles.catalogTitle, { color: tokens.colors.textSecondary }]}>{isChinese ? '可用 Gateway / Device' : 'Available gateways / devices'}</Text>
@@ -628,12 +650,47 @@ export function DurableGroupChatPage({
                 data={gateways}
                 horizontal
                 keyExtractor={(gateway) => gateway.gateway_id}
-                renderItem={({ item: gateway }) => (
+                renderItem={({ item: gateway }) => {
+                  const selectable = gatewayProfileSelectable(gateway);
+                  return (
                   <View style={[styles.gatewayChip, { borderColor: tokens.colors.border }]}>
                     <Text numberOfLines={1} style={[styles.gatewayText, { color: tokens.colors.foreground }]}>{durableGatewayLabel(gateway)}</Text>
-                    {gateway.profiles.length > 0 ? <Text numberOfLines={1} style={[styles.gatewayProfiles, { color: tokens.colors.textTertiary }]}>{gateway.profiles.join(', ')}</Text> : null}
+                    {gateway.profiles.length > 0 ? (
+                      <View style={styles.gatewayProfileList}>
+                        {gateway.profiles.map((profile) => {
+                          const memberToken = durableGroupChatMemberToken(gateway.gateway_id, profile);
+                          const selected = memberToken ? selectedMemberTokens.has(memberToken) : false;
+                          return (
+                            <IOSPressable
+                              accessibilityLabel={isChinese
+                                ? `选择 ${gateway.gateway_id} 上的 ${profile}`
+                                : `Select ${profile} on ${gateway.gateway_id}`}
+                              accessibilityState={{ disabled: !selectable, selected }}
+                              disabled={!selectable || !memberToken}
+                              haptic="selection"
+                              key={`${gateway.gateway_id}-${profile}`}
+                              onPress={() => selectGatewayProfile(gateway, profile)}
+                              style={[
+                                styles.gatewayProfileChip,
+                                {
+                                  backgroundColor: selected
+                                    ? multiplyAlpha(tokens.colors.primary, 0.16)
+                                    : 'transparent',
+                                  borderColor: selected ? tokens.colors.primary : tokens.colors.border,
+                                  opacity: selectable ? 1 : 0.55,
+                                },
+                              ]}
+                            >
+                              <Text numberOfLines={1} style={[styles.gatewayProfiles, { color: selected ? tokens.colors.primary : tokens.colors.textTertiary }]}>{profile}</Text>
+                            </IOSPressable>
+                          );
+                        })}
+                      </View>
+                    ) : null}
+                    {!selectable && gateway.reason ? <Text numberOfLines={2} style={[styles.gatewayReason, { color: tokens.colors.warning }]}>{gateway.reason}</Text> : null}
                   </View>
-                )}
+                  );
+                }}
                 showsHorizontalScrollIndicator={false}
               />
             </View>
@@ -730,7 +787,10 @@ const styles = StyleSheet.create({
   catalogTitle: { fontSize: 11, fontWeight: '600' },
   gatewayChip: { borderRadius: 6, borderWidth: 1, maxWidth: 220, minWidth: 150, paddingHorizontal: 8, paddingVertical: 6 },
   gatewayText: { fontSize: 11, fontWeight: '600' },
-  gatewayProfiles: { fontSize: 10, marginTop: 3 },
+  gatewayProfileList: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 5 },
+  gatewayProfileChip: { borderRadius: 6, borderWidth: 1, maxWidth: 190, minHeight: 26, paddingHorizontal: 7, paddingVertical: 4 },
+  gatewayProfiles: { fontSize: 10 },
+  gatewayReason: { fontSize: 9, lineHeight: 12, marginTop: 5 },
   executionNodeNotice: { fontSize: 10, lineHeight: 14 },
   body: { flex: 1, flexDirection: 'row' },
   roomRailList: { flexGrow: 0, width: 220 },

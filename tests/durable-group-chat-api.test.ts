@@ -128,6 +128,10 @@ test('durable Group Chat UI uses bounded virtualized replay and lifecycle fences
   assert.match(source, /target\?\.peer_id/);
   assert.match(source, /target\?\.installation_id/);
   assert.match(source, /Available gateways \/ devices/);
+  assert.match(source, /selectGatewayProfile/);
+  assert.match(source, /appendDurableGroupChatMember/);
+  assert.match(source, /gatewayProfileSelectable/);
+  assert.match(source, /accessibilityState=\{\{ disabled: !selectable, selected \}\}/);
   assert.match(source, /executionNodes/);
   assert.match(source, /connector-only \/ 仅执行节点不可作为 RoomLink gateway/);
   assert.match(source, /connectorOnlyGatewayIds/);
