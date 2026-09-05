@@ -1,4 +1,5 @@
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
+import { mapWithConcurrency } from '../../api/map-with-concurrency';
 import type { HermesSwiftUIToolsetSnapshot } from '../swiftui-route-contract';
 
 export async function loadCronMetadata(api: HermesCloudApi, profile = 'default', source?: unknown) {
@@ -6,15 +7,18 @@ export async function loadCronMetadata(api: HermesCloudApi, profile = 'default',
     typeof api.getCronBlueprints === 'function' ? api.getCronBlueprints().catch(() => undefined) : undefined,
     typeof api.getDeliveryTargets === 'function' ? api.getDeliveryTargets().catch(() => undefined) : undefined,
   ]);
-  const rows = source && typeof source === 'object' && !Array.isArray(source) && Array.isArray((source as { jobs?: unknown }).jobs)
-    ? (source as { jobs: unknown[] }).jobs.filter((job): job is Record<string, unknown> => typeof job === 'object' && job !== null)
-    : [];
-  const runEntries = await Promise.all(rows.map(async (job) => {
+  const jobs: unknown[] = Array.isArray(source) ? source
+    : source && typeof source === 'object' && Array.isArray((source as { jobs?: unknown }).jobs)
+      ? (source as { jobs: unknown[] }).jobs
+      : [];
+  const rows = jobs.filter((job): job is Record<string, unknown> => typeof job === 'object' && job !== null && !Array.isArray(job));
+  const runEntries = await mapWithConcurrency(rows, 4, async (job) => {
     const id = typeof job.id === 'string' ? job.id : '';
     if (!id || typeof api.getCronJobRuns !== 'function') return undefined;
-    const runs = await api.getCronJobRuns(id, profile, 20).catch(() => undefined);
+    const jobProfile = typeof job.profile === 'string' && job.profile.trim() ? job.profile : profile;
+    const runs = await api.getCronJobRuns(id, jobProfile, 20).catch(() => undefined);
     return runs === undefined ? undefined : [id, runs] as const;
-  }));
+  });
   const cronRuns = Object.fromEntries(runEntries.filter((entry) => entry !== undefined));
   return {
     ...(blueprints !== undefined ? { cronBlueprintsJSON: JSON.stringify(blueprints) } : {}),
@@ -28,7 +32,8 @@ export async function hydrateToolsetConfigs(
   toolsets: readonly HermesSwiftUIToolsetSnapshot[],
   profile: string,
 ) {
-  return Promise.all(toolsets.map(async (toolset) => {
+  // Each toolset fans out to three independent official endpoints.
+  return mapWithConcurrency(toolsets, 2, async (toolset) => {
     if (typeof api.getToolsetConfig !== 'function') return toolset;
     try {
       const [config, models, providers] = await Promise.all([
@@ -45,7 +50,7 @@ export async function hydrateToolsetConfigs(
     } catch {
       return toolset;
     }
-  }));
+  });
 }
 
 export async function loadToolRuntimeMetadata(api: HermesCloudApi, profile: string) {

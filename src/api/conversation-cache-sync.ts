@@ -9,6 +9,7 @@ import type {
   OptimisticConversationLedgerItem,
 } from './conversation-store-types';
 import { CONVERSATION_CACHE_VERSION, cloneCachedConversation } from './conversation-cache-repository';
+import { mapWithConcurrency } from './map-with-concurrency';
 import { isRecord, normalizeOwner, numberValue } from './conversation-storage-primitives';
 import {
   cloneCollaborationMessage,
@@ -363,25 +364,4 @@ function timestampNumber(value: unknown): number {
   if (Number.isFinite(numeric)) return numeric;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-async function mapWithConcurrency<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  operation: (value: T) => Promise<R>,
-): Promise<R[]> {
-  if (!values.length) return [];
-  const results = new Array<R>(values.length);
-  let nextIndex = 0;
-  const worker = async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await operation(values[index]);
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(1, concurrency), values.length) }, worker),
-  );
-  return results;
 }

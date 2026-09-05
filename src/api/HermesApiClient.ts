@@ -164,8 +164,11 @@ export class HermesApiClient {
     credential: string | HermesAccessTokenProvider,
     fetchImpl: typeof fetch = fetch,
     streamFetchImpl?: typeof fetch,
+    originPolicy: 'hermes' | 'companion' = 'hermes',
   ) {
-    this.baseUrl = normalizeBaseUrl(baseUrl);
+    this.baseUrl = originPolicy === 'companion'
+      ? normalizeCompanionBaseUrl(baseUrl)
+      : normalizeBaseUrl(baseUrl);
     if (typeof credential === 'string') {
       const accessToken = credential.trim();
       if (!accessToken) throw new Error('Hermes access token is required');
@@ -285,7 +288,7 @@ export class HermesApiClient {
   forCompanionOrigin(baseUrl: string): HermesApiClient {
     const normalized = normalizeCompanionBaseUrl(baseUrl);
     if (normalized === this.baseUrl) return this;
-    return new HermesApiClient(normalized, this.credential, this.fetchImpl, this.streamFetchImpl);
+    return new HermesApiClient(normalized, this.credential, this.fetchImpl, this.streamFetchImpl, 'companion');
   }
 
   async request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
@@ -334,7 +337,7 @@ export class HermesApiClient {
     // Coalesce identical in-flight GETs. Route polling, the AppState listener,
     // and pull-to-refresh routinely fire the same snapshot GET while a slower
     // copy is still on the wire; the duplicates add radio time and parse work
-    // without ever producing fresher data than the shared reply. Only the
+    // without producing fresher data until a mutation intervenes. Only the
     // plain polling shape joins a flight: a caller-supplied body, header set,
     // or abort signal opts out, so requests that differ in anything but
     // timing keep their own connection and cancelling one caller can never
@@ -342,6 +345,17 @@ export class HermesApiClient {
     // failed flight is shared only by the callers that raced it — later
     // callers start a fresh request instead of inheriting the stale error.
     const method = (requestInit.method || 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      // A write can affect multiple collections/profiles. Retire all shared
+      // snapshots on both boundaries, including reads begun during the write.
+      // A failed response may still follow a committed server-side change.
+      this.inflightGets.clear();
+      try {
+        return await execute();
+      } finally {
+        this.inflightGets.clear();
+      }
+    }
     const coalescible = method === 'GET'
       && !requestInit.body
       && !callerHeaders

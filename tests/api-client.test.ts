@@ -761,3 +761,19 @@ function abortLikeError(): Error {
   error.name = 'AbortError';
   return error;
 }
+
+test('the companion factory can execute an authenticated request to an allowed LAN origin', async () => {
+  const calls: FetchCall[] = [];
+  const client = new HermesApiClient('https://hermes.test', 'mobile-secret', async (input, init) => {
+    calls.push({ url: String(input), init: init ?? {} });
+    return jsonResponse(String(input), { ok: true });
+  });
+  const companion = client.forCompanionOrigin('http://192.168.1.20:8787');
+  assert.deepEqual(await companion.request('/api/status'), { ok: true });
+  assert.equal(calls[0].url, 'http://192.168.1.20:8787/api/status');
+  assert.equal(new Headers(calls[0].init.headers).get('Authorization'), 'Bearer mobile-secret');
+  assert.throws(() => client.forOrigin('http://192.168.1.20:8787'), HermesCleartextBaseUrlError);
+  assert.throws(() => client.forCompanionOrigin('http://example.com'), HermesCleartextBaseUrlError);
+  assert.throws(() => companion.forOrigin('http://192.168.1.20:8787'), HermesCleartextBaseUrlError);
+  assert.throws(() => new HermesApiClient('http://192.168.1.20:8787', 'mobile-secret'), HermesCleartextBaseUrlError);
+});
