@@ -16,8 +16,8 @@ export async function loadCronMetadata(api: HermesCloudApi, profile = 'default',
     const id = typeof job.id === 'string' ? job.id : '';
     if (!id || typeof api.getCronJobRuns !== 'function') return undefined;
     const jobProfile = typeof job.profile === 'string' && job.profile.trim() ? job.profile : profile;
-    const runs = await api.getCronJobRuns(id, jobProfile, 20).catch(() => undefined);
-    return runs === undefined ? undefined : [id, runs] as const;
+    const runs = await api.getCronJobRuns(id, jobProfile, 20).catch(() => ({ unavailable: true }));
+    return [JSON.stringify([jobProfile, id]), { ...runs, jobId: id, profile: jobProfile }] as const;
   });
   const cronRuns = Object.fromEntries(runEntries.filter((entry) => entry !== undefined));
   return {

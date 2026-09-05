@@ -933,11 +933,18 @@ struct HermesLogSnapshot: Decodable, Equatable, Identifiable {
 
 struct HermesCronJobSnapshot: Decodable, Equatable, Identifiable {
   let id: String
+  let profile: String?
+  let deliver: String?
   let name: String
   let schedule: String
   let prompt: String
   let enabled: Bool
   let lastRun: String
+
+  var scopedID: String {
+    let owner = profile ?? "default"
+    return "\(owner.utf8.count):\(owner)\(id)"
+  }
 }
 
 struct HermesSkillSnapshot: Decodable, Equatable, Identifiable {

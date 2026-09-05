@@ -52,13 +52,18 @@ export function cronSnapshot(source: unknown, localizer: HermesRouteLocalizer): 
   return rows.flatMap((entry, index) => {
     if (!isRecord(entry)) return [];
     const id = stringValue(entry.id) || `cron-${index}`;
+    const schedule = isRecord(entry.schedule) ? entry.schedule : {};
     return [{
       id,
-      name: localizer.serverText(stringValue(entry.name) || stringValue(entry.title) || id),
-      schedule: stringValue(entry.schedule) || stringValue(entry.cron) || '-',
-      prompt: localizer.serverText(stringValue(entry.prompt) || stringValue(entry.script) || ''),
+      profile: stringValue(entry.profile) || 'default',
+      deliver: stringValue(entry.deliver) || 'local',
+      name: stringValue(entry.name) || stringValue(entry.title) || id,
+      schedule: stringValue(entry.schedule) || stringValue(schedule.expr)
+        || (schedule.kind === 'interval' && typeof schedule.minutes === 'number' ? `every ${schedule.minutes}m` : '')
+        || stringValue(schedule.run_at) || stringValue(entry.schedule_display) || stringValue(entry.cron) || '-',
+      prompt: stringValue(entry.prompt) || stringValue(entry.script) || '',
       enabled: entry.enabled !== false && entry.paused !== true,
-      lastRun: formatDateValue(entry.last_run || entry.lastRun || entry.updated_at),
+      lastRun: formatDateValue(entry.last_run_at || entry.last_run || entry.lastRun || entry.updated_at),
     }];
   });
 }

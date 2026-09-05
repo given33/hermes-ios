@@ -32,8 +32,27 @@ test('cron history loads every job with bounded network concurrency', async () =
   const api = { getCronJobRuns: (id: string) => tracker.run(id) } as unknown as HermesCloudApi;
   const result = await loadCronMetadata(api, 'default', { jobs });
   assert.equal(tracker.count, jobs.length);
-  assert.deepEqual(Object.keys(JSON.parse(result.cronRunsJSON!)), jobs.map(({ id }) => id));
+  assert.deepEqual(Object.keys(JSON.parse(result.cronRunsJSON!)), jobs.map(({ id }) => JSON.stringify(['default', id])));
   assert.ok(tracker.peak <= 4, `peak ${tracker.peak} exceeds 4`);
+});
+
+test('same cron id in different profiles keeps both histories and exposes a failed load', async () => {
+  const api = {
+    getCronJobRuns: async (_id: string, profile: string) => {
+      if (profile === 'unreachable') throw new Error('offline');
+      return { runs: [{ id: `run-${profile}` }] };
+    },
+  } as unknown as HermesCloudApi;
+  const result = await loadCronMetadata(api, 'all', [
+    { id: 'shared', profile: 'first' },
+    { id: 'shared', profile: 'second' },
+    { id: 'shared', profile: 'unreachable' },
+  ]);
+  assert.deepEqual(Object.values(JSON.parse(result.cronRunsJSON!)), [
+    { runs: [{ id: 'run-first' }], jobId: 'shared', profile: 'first' },
+    { runs: [{ id: 'run-second' }], jobId: 'shared', profile: 'second' },
+    { unavailable: true, jobId: 'shared', profile: 'unreachable' },
+  ]);
 });
 
 test('toolset hydration preserves order and all catalogs with bounded requests', async () => {

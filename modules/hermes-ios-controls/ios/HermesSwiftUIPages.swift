@@ -1075,6 +1075,7 @@ private struct HermesRemoteRoutePage: View {
   @State private var hookDeleteEvent = ""
   @State private var hookDeleteCommand = ""
   @State private var routineEditorProfile = ""
+  @State private var cronEditorDelivery = "local"
   @State private var onboardingChannel = "telegram"
   @State private var onboardingTelegramIDs = ""
   @State private var onboardingWhatsappMode = "pairing"
@@ -1105,6 +1106,8 @@ private struct HermesRemoteRoutePage: View {
           name: $editorName,
           value: $editorValue,
           detail: $editorDetail,
+          cronDelivery: $cronEditorDelivery,
+          cronTargets: HermesCronDeliveryTarget.decode(data.cronDeliveryTargetsJSON),
           kanbanColumns: data.kanban,
           onCancel: { editor = nil },
           onSave: { saveEditor(kind) }
@@ -1435,28 +1438,12 @@ private struct HermesRemoteRoutePage: View {
             }
           }
         }
-        if let targets = data.cronDeliveryTargetsJSON, !targets.isEmpty {
-          Section(chinese ? "投递目标" : "Delivery targets") {
-            Text(targets)
-              .font(HermesFonts.mono(10))
-              .foregroundStyle(appearance.palette.secondary)
-              .textSelection(.enabled)
-              .lineLimit(4)
-          }
-        }
-        if let runs = data.cronRunsJSON, !runs.isEmpty {
-          Section(chinese ? "运行历史" : "Run history") {
-            Text(runs)
-              .font(HermesFonts.mono(10))
-              .foregroundStyle(appearance.palette.secondary)
-              .textSelection(.enabled)
-              .lineLimit(14)
-          }
-        }
-        ForEach(data.cron) { job in
-        HermesRemoteRow(icon: job.enabled ? "clock.arrow.circlepath" : "pause.circle", title: job.name, detail: "\(job.schedule) · \(job.lastRun)", tint: job.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
+        HermesCronDeliverySection(chinese: chinese, targets: HermesCronDeliveryTarget.decode(data.cronDeliveryTargetsJSON))
+        HermesCronHistorySection(chinese: chinese, jobs: data.cron, json: data.cronRunsJSON)
+        ForEach(data.cron, id: \.scopedID) { job in
+        HermesRemoteRow(icon: job.enabled ? "clock.arrow.circlepath" : "pause.circle", title: job.name, detail: "\(job.profile ?? "default") · \(job.schedule) · \(job.lastRun)", tint: job.enabled ? appearance.palette.accent : appearance.palette.tertiary) {
           Button {
-            onAction(.cronToggle, HermesRouteActionPayload(route: "cron", id: job.id, enabled: !job.enabled))
+            onAction(.cronToggle, HermesRouteActionPayload(route: "cron", id: job.id, enabled: !job.enabled, fields: ["profile": job.profile ?? "default"]))
           } label: {
             Image(systemName: job.enabled ? "pause.fill" : "play.fill")
           }
@@ -1468,23 +1455,24 @@ private struct HermesRemoteRoutePage: View {
             editorName = job.name
             editorValue = job.schedule
             editorDetail = job.prompt
-            routineEditorProfile = ""
+            routineEditorProfile = job.profile ?? "default"
+            cronEditorDelivery = job.deliver ?? "local"
             editor = .cron
           } label: {
             Label(chinese ? "编辑定时任务" : "Edit scheduled job", systemImage: "square.and.pencil")
           }
           Button {
-            onAction(.cronRun, HermesRouteActionPayload(route: "cron", id: job.id))
+            onAction(.cronRun, HermesRouteActionPayload(route: "cron", id: job.id, fields: ["profile": job.profile ?? "default"]))
           } label: {
             Label(chinese ? "立即运行" : "Run now", systemImage: "play.fill")
           }
         }
         .swipeActions {
           Button {
-            onAction(.cronRun, HermesRouteActionPayload(route: "cron", id: job.id))
+            onAction(.cronRun, HermesRouteActionPayload(route: "cron", id: job.id, fields: ["profile": job.profile ?? "default"]))
           } label: { Label(chinese ? "立即运行" : "Run now", systemImage: "play.fill") }
           Button(role: .destructive) {
-            onAction(.cronDelete, HermesRouteActionPayload(route: "cron", id: job.id))
+            onAction(.cronDelete, HermesRouteActionPayload(route: "cron", id: job.id, fields: ["profile": job.profile ?? "default"]))
           } label: { Label(chinese ? "删除" : "Delete", systemImage: "trash") }
         }
       }
@@ -2090,6 +2078,7 @@ private struct HermesRemoteRoutePage: View {
                   .contextMenu {
                     Button {
                       routineEditorProfile = group.element.profile
+                      cronEditorDelivery = job.deliver ?? "local"
                       editorID = job.id
                       editorName = job.name
                       editorValue = job.schedule
@@ -2107,6 +2096,7 @@ private struct HermesRemoteRoutePage: View {
                 }
                 Button {
                   routineEditorProfile = group.element.profile
+                  cronEditorDelivery = "local"
                   editorID = ""
                   editorName = ""
                   editorValue = "0 * * * *"
@@ -3384,7 +3374,10 @@ private struct HermesRemoteRoutePage: View {
         ? data.collaboration.availableProfiles.joined(separator: ", ")
         : ""
     editorDetail = ""
-    if kind == .cron { routineEditorProfile = "" }
+    if kind == .cron {
+      routineEditorProfile = ""
+      cronEditorDelivery = "local"
+    }
     if kind == .config { editorDetail = data.config.exportText }
     if kind == .environment { editorValue = "" }
     if kind == .skill {
@@ -3419,13 +3412,14 @@ private struct HermesRemoteRoutePage: View {
       guard !name.isEmpty, !detail.isEmpty else { return }
       let schedule = value.isEmpty ? "0 * * * *" : value
       if editorID.isEmpty {
-        var fields = ["schedule": schedule]
+        var fields = ["schedule": schedule, "deliver": cronEditorDelivery]
         if !routineEditorProfile.isEmpty { fields["profile"] = routineEditorProfile }
         onAction(.cronCreate, HermesRouteActionPayload(route: "cron", name: name, detail: detail, enabled: true, fields: fields))
       } else if let encoded = try? JSONSerialization.data(withJSONObject: [
         "name": name,
         "prompt": detail,
         "schedule": schedule,
+        "deliver": cronEditorDelivery,
       ], options: [.sortedKeys]), let json = String(data: encoded, encoding: .utf8) {
         var fields: [String: String] = [:]
         if !routineEditorProfile.isEmpty { fields["profile"] = routineEditorProfile }
@@ -4799,6 +4793,8 @@ private struct HermesRemoteEditorSheet: View {
   @Binding var name: String
   @Binding var value: String
   @Binding var detail: String
+  @Binding var cronDelivery: String
+  let cronTargets: [HermesCronDeliveryTarget]
   let kanbanColumns: [HermesKanbanColumnSnapshot]
   let onCancel: () -> Void
   let onSave: () -> Void
@@ -4886,6 +4882,16 @@ private struct HermesRemoteEditorSheet: View {
           if kind == .cron || kind == .webhooks || kind == .profiles || kind == .kanban {
             TextField(detailLabel, text: $detail, axis: .vertical)
               .lineLimit(3...8)
+          }
+          if kind == .cron {
+            Picker(chinese ? "投递目标" : "Delivery", selection: $cronDelivery) {
+              if !cronTargets.contains(where: { $0.id == cronDelivery && $0.home_target_set }) {
+                Text(cronDelivery).tag(cronDelivery)
+              }
+              ForEach(cronTargets.filter(\.home_target_set)) { target in
+                Text(target.name).tag(target.id)
+              }
+            }
           }
         }
       }

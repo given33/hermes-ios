@@ -492,6 +492,7 @@ export async function performHermesSwiftUIRouteAction(
         prompt: payload.detail || payload.value || '',
         schedule: payload.fields?.schedule || payload.value || '0 * * * *',
         enabled: payload.enabled ?? true,
+        deliver: payload.fields?.deliver || 'local',
       }, payload.fields?.profile || profile);
       return 'reload';
     case HERMES_SWIFTUI_ROUTE_ACTIONS.cronUpdate: { if (!payload.id) return 'none'; const updates = payload.detail ? parseJsonRecord(payload.detail) : payload.fields; if (!updates || Object.keys(updates).length === 0) return 'none'; await api.updateCronJob(payload.id, updates, payload.fields?.profile || profile); return 'reload'; }

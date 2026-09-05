@@ -305,6 +305,8 @@ export interface HermesSwiftUILogSnapshot {
 
 export interface HermesSwiftUICronJobSnapshot {
   id: string;
+  profile?: string;
+  deliver?: string;
   name: string;
   schedule: string;
   prompt: string;
