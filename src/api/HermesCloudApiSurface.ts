@@ -116,6 +116,7 @@ export interface HermesCloudApi {
   getCronJob(id: string, profile?: string): Promise<JsonRecord>; getCronJobRuns(id: string, profile?: string, limit?: number): Promise<JsonRecord>;
   getToolsetModels(name: string, provider?: string, profile?: string): Promise<JsonRecord>; setToolsetModel(name: string, model: string, provider?: string, profile?: string): Promise<JsonRecord>; getToolsetProviders(name: string, profile?: string): Promise<JsonRecord>; setToolsetProvider(name: string, provider: string, capability?: 'search' | 'extract', profile?: string): Promise<JsonRecord>; saveToolsetEnvironment(name: string, env: Record<string, string>, profile?: string): Promise<JsonRecord>; runToolsetPostSetup(name: string, key: string, profile?: string): Promise<JsonRecord>;
   installSkillHub(identifier: string, profile?: string): Promise<JsonRecord>; uninstallSkillHub(name: string, profile?: string): Promise<JsonRecord>; updateSkillsHub(profile?: string): Promise<JsonRecord>; getSkillHubSources(profile?: string): Promise<JsonRecord>; searchSkillHub(query?: string, source?: string, limit?: number, profile?: string): Promise<JsonRecord>; previewSkillHub(identifier: string, profile?: string): Promise<JsonRecord>; scanSkillHub(identifier: string, profile?: string): Promise<JsonRecord>;
+  getOfficialSkills(profile?: string): Promise<JsonRecord>;
   getManagedInstallation(operationId: string): Promise<JsonRecord>;
   revealEnvironmentVariable(key: string, profile?: string): Promise<JsonRecord>; openProfileTerminal(name: string): Promise<JsonRecord>; getProfileDesktopOverlay(name: string): Promise<JsonRecord>;
   enableWebhooks(): Promise<JsonRecord>;
@@ -249,6 +250,7 @@ Object.assign(CloudApi.prototype, {
   uninstallSkillHub(this: any, n: string, p = 'default') { return this.extensions.uninstallSkillHub(n, p); },
   updateSkillsHub(this: any, p = 'default') { return this.extensions.updateSkillsHub(p); },
   getSkillHubSources(this: any, p = 'default') { return this.extensions.getSkillHubSources(p); },
+  getOfficialSkills(this: any, p = 'default') { return this.extensions.getOfficialSkills(p); },
   searchSkillHub(this: any, q = '', s = 'all', l = 20, p = 'default') { return this.extensions.searchSkillHub(q, s, l, p); },
   previewSkillHub(this: any, i: string, p = 'default') { return this.extensions.previewSkillHub(i, p); },
   scanSkillHub(this: any, i: string, p = 'default') { return this.extensions.scanSkillHub(i, p); },

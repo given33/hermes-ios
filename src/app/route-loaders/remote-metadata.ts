@@ -65,10 +65,12 @@ export async function loadToolRuntimeMetadata(api: HermesCloudApi, profile: stri
 }
 
 export async function loadSkillHubMetadata(api: HermesCloudApi, profile: string) {
-  const sources = typeof api.getSkillHubSources === 'function'
-    ? await api.getSkillHubSources(profile).catch(() => undefined)
-    : undefined;
-  return sources === undefined ? {} : { skillHubSourcesJSON: JSON.stringify(sources) };
+  const [sources, official] = await Promise.all([
+    typeof api.getSkillHubSources === 'function' ? api.getSkillHubSources(profile).catch(() => undefined) : undefined,
+    typeof api.getOfficialSkills === 'function'
+      ? api.getOfficialSkills(profile).catch(() => ({ unavailable: true })) : { unavailable: true },
+  ]);
+  return { skillHubSourcesJSON: JSON.stringify({ ...sources, official }) };
 }
 
 export async function loadLearningMetadata(api: HermesCloudApi, profile: string) {

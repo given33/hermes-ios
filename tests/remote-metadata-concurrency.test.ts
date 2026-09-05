@@ -3,7 +3,28 @@ import test from 'node:test';
 
 import type { HermesCloudApi } from '../src/api/HermesCloudApi';
 import type { HermesSwiftUIToolsetSnapshot } from '../src/app/swiftui-route-contract';
-import { hydrateToolsetConfigs, loadCronMetadata } from '../src/app/route-loaders/remote-metadata';
+import { hydrateToolsetConfigs, loadCronMetadata, loadSkillHubMetadata } from '../src/app/route-loaders/remote-metadata';
+
+test('official catalog preserves installed metadata and requested profile', async () => {
+  const calls: string[] = [];
+  const skills = [{ identifier: 'official/ops/daily', name: 'Daily', installed: true, category: 'ops', description: 'Daily check' }];
+  const api = {
+    getSkillHubSources: async () => ({ sources: [{ id: 'official' }] }),
+    getOfficialSkills: async (profile: string) => { calls.push(profile); return { skills }; },
+  } as unknown as HermesCloudApi;
+  const result = await loadSkillHubMetadata(api, 'worker');
+  assert.deepEqual(calls, ['worker']);
+  assert.deepEqual(JSON.parse(result.skillHubSourcesJSON), { sources: [{ id: 'official' }], official: { skills } });
+});
+
+test('official catalog failure stays visible while other skill sources remain usable', async () => {
+  const api = {
+    getSkillHubSources: async () => ({ sources: [{ id: 'github' }] }),
+    getOfficialSkills: async () => { throw new Error('unavailable'); },
+  } as unknown as HermesCloudApi;
+  const result = await loadSkillHubMetadata(api, 'worker');
+  assert.deepEqual(JSON.parse(result.skillHubSourcesJSON), { sources: [{ id: 'github' }], official: { unavailable: true } });
+});
 
 function trackedRequest() {
   let active = 0;

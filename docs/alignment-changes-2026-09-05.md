@@ -48,3 +48,15 @@ feature additions and backend deployment alignment remain separate work.
   in run `33945396630`. No physical-device or signed-installation result exists.
 - Blueprint parameter editing still uses JSON; full Cron feature acceptance is
   open. History details do not yet open profile-scoped run transcripts.
+
+## Official Skill Catalog
+
+The public facade calls `/api/skills/hub/official` with the selected profile.
+The native skills page shows the official optional catalog with local filtering,
+category and installed status; preview, scan and install reuse existing actions.
+Catalog failures remain visible while other sources stay usable. Source names
+are now structured rows, avoiding rendering the entire catalog again as JSON.
+The TypeScript suite passes 898 tests with no failures/skips; typecheck passes.
+Cron commit `9c220e9` passed native device/Simulator Release compilation in
+run `33947207725`. Native compilation of the skill catalog is still pending;
+live catalog installation and physical-device acceptance are not yet verified.

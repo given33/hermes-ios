@@ -440,6 +440,10 @@ export class HermesExtensionsCloudApi {
     return this.transport.request<JsonRecord>('/api/skills/hub/sources', { query: { profile } });
   }
 
+  getOfficialSkills(profile = 'default') {
+    return this.transport.request<JsonRecord>('/api/skills/hub/official', { query: { profile } });
+  }
+
   searchSkillHub(query = '', source = 'all', limit = 20, profile = 'default') {
     return this.transport.request<JsonRecord>('/api/skills/hub/search', {
       query: { q: query, source, limit, profile },

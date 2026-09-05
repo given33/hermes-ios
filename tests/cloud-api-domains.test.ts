@@ -19,6 +19,12 @@ import { HermesCloudApi } from '../src/api/HermesCloudApi';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
+test('official optional skills use the canonical profile-scoped endpoint', async () => {
+  const { api, calls } = recordingApi();
+  await api.getOfficialSkills('worker');
+  assert.deepEqual(calls, [{ path: '/api/skills/hub/official', options: { query: { profile: 'worker' } } }]);
+});
+
 interface RecordedCall {
   options: Omit<HermesRequestOptions, 'signal'> & {
     connectTimeoutMs?: number;

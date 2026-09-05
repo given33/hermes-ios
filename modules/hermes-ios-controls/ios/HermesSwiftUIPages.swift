@@ -1484,13 +1484,10 @@ private struct HermesRemoteRoutePage: View {
   private var skillsRouteBody: some View {
       List {
         installationSection
+        HermesOfficialSkillsSection(json: data.skillHubSourcesJSON, chinese: chinese, onAction: onAction)
         if let sources = data.skillHubSourcesJSON, !sources.isEmpty {
           Section(chinese ? "SkillHub 来源" : "SkillHub sources") {
-            Text(sources)
-              .font(HermesFonts.mono(10))
-              .foregroundStyle(appearance.palette.secondary)
-              .textSelection(.enabled)
-              .lineLimit(6)
+            HermesSkillHubSourceRows(json: sources)
             Button {
               onAction(.skillHubUpdate, HermesRouteActionPayload(route: "skills"))
             } label: {
