@@ -321,6 +321,11 @@ export function FrontendPreviewApp({
   return (
     <NativeLocalizationProvider locale={locale}>
       <View style={styles.root}>
+      {!client && Platform.OS === 'web' ? <View style={{ backgroundColor: tokens.colors.background, paddingVertical: 6, paddingHorizontal: 16 }}>
+        <PreviewText style={{ fontSize: 12, color: tokens.colors.textSecondary }}>
+          {locale === 'zh' ? '演示数据 · 未连接后端' : 'Demo data · Backend disconnected'}
+        </PreviewText>
+      </View> : null}
       <NativeShell
         key={navigationTarget
           ? `navigation-${navigationTarget.requestId}`

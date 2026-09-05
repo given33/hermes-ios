@@ -42,6 +42,7 @@ import {
   latestChatRuntimeWaitingState,
 } from './chat-runtime-state';
 import { truncateByCodePoints } from './text-clamp';
+import { toolActivityCategory } from './tool-activity-category';
 import { parseTodoItems, todoItemsFromActivity } from './chat-todo-model';
 
 export type {
@@ -1156,11 +1157,17 @@ export function streamEventToActivity(
                       ? '审查摘要'
                       : eventType === 'btw.complete' ? '旁支回答' : '后台任务'
                     : toolName || '工具调用';
-  const status = eventType === 'tool.error' || eventType === 'tool.failed'
+  const reportedStatus = stringValue(payload.status).toLowerCase();
+  const status = /\.(?:cancelled|canceled)$/.test(eventType)
+      || ['cancelled', 'canceled', 'stopped'].includes(reportedStatus)
+    ? 'cancelled'
+    : eventType === 'tool.error' || eventType === 'tool.failed'
       || eventType === 'subagent.failed'
       || eventType === 'command.failed'
+      || ['failed', 'error'].includes(reportedStatus)
+      || Boolean(structuredText(payload.error))
     ? 'failed'
-    : eventType === 'subagent.queued'
+    : eventType.endsWith('.queued') || ['queued', 'pending', 'starting'].includes(reportedStatus)
       ? 'queued'
     : eventType === 'tool.end'
         || eventType === 'tool.complete'
@@ -1206,6 +1213,8 @@ export function streamEventToActivity(
     durationMs,
     error: structuredText(payload.error) || undefined,
     id: stringValue(payload.tool_id)
+      || stringValue(payload.call_id)
+      || stringValue(payload.tool_call_id)
       || stringValue(payload.command_id)
       || stringValue(payload.child_session_id)
       || stringValue(payload.subagent_id)
@@ -1245,6 +1254,8 @@ export function streamEventToActivity(
     startedAt: startedAt || undefined,
     status,
     toolName: toolName || name,
+    callId: stringValue(payload.call_id) || stringValue(payload.tool_call_id) || undefined,
+    parentCallId: stringValue(payload.parent_call_id) || undefined,
     files: (Array.isArray(payload.files)
       ? (payload.files as unknown[]).map((item) => stringValue(item)).filter(Boolean)
       : []) as string[],
@@ -1422,6 +1433,8 @@ function activityFromRecord(
   const rawId = stringValue(item.id)
     || stringValue(item.activity_id)
     || stringValue(item.tool_id)
+    || stringValue(item.call_id)
+    || stringValue(item.tool_call_id)
     || stringValue(item.seq);
   const rawPresentation = isRecord(item.presentation_meta)
     ? item.presentation_meta
@@ -1461,7 +1474,7 @@ function activityFromRecord(
     severity: stringValue(item.severity) || undefined,
     agentName: stringValue(item.agent_name) || undefined,
     reworkRound: numberValue(item.rework_round) || undefined,
-    callId: stringValue(item.call_id) || undefined,
+    callId: stringValue(item.call_id) || stringValue(item.tool_call_id) || undefined,
     parentCallId: stringValue(item.parent_call_id) || undefined,
     presentationMeta: rawPresentation
       ? {
@@ -1679,18 +1692,18 @@ function roleStageLabel(
 }
 
 function activityCategory(name: string): string {
-  const lowered = name.toLowerCase();
-  if (/file|read|write|patch|文件/.test(lowered)) return 'file';
-  if (/browser|search|web|浏览|搜索/.test(lowered)) return 'browser';
-  if (/mcp/.test(lowered)) return 'mcp';
-  if (/skill|技能/.test(lowered)) return 'skill';
-  return 'command';
+  return toolActivityCategory(name);
 }
 
 function normalizedActivityCategory(category: string, name: string): string {
   const normalized = category.toLowerCase();
   if (/reason|think|思考|推理/.test(normalized)) return 'reasoning';
-  if (/search|browser|web|搜索|浏览/.test(normalized)) return 'search';
+  const semantic = toolActivityCategory(name);
+  if (['search', 'browser', 'edit', 'schedule', 'subagent'].includes(semantic)) return semantic;
+  if (/browser|web|浏览/.test(normalized)) return 'browser';
+  if (/search|搜索/.test(normalized)) return 'search';
+  if (/edit|patch|修改/.test(normalized)) return 'edit';
+  if (/schedule|cron|计划/.test(normalized)) return 'schedule';
   if (/file|文件/.test(normalized)) return 'file';
   if (/command|terminal|shell|命令/.test(normalized)) return 'command';
   if (/model|模型/.test(normalized)) return 'model';
@@ -1739,6 +1752,9 @@ export function activityCategoryLabel(category: string, chinese = true): string 
   const labels = chinese
     ? {
         command: '命令',
+        browser: '网页读取',
+        edit: '代码修改',
+        schedule: '计划任务',
         file: '文件',
         handoff: '交接',
         mcp: 'MCP',
@@ -1751,6 +1767,9 @@ export function activityCategoryLabel(category: string, chinese = true): string 
       }
     : {
         command: 'Command',
+        browser: 'Web reading',
+        edit: 'Code changes',
+        schedule: 'Scheduled work',
         file: 'File',
         handoff: 'Handoff',
         mcp: 'MCP',

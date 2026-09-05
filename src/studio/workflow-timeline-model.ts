@@ -169,6 +169,13 @@ export function activityPrimaryDetail(activity: HermesChatActivity): string {
   const structured = parseRecord(input);
   const category = activity.category.toLowerCase();
   const tool = `${activity.toolName || ''} ${activity.name}`.toLowerCase();
+  if (category === 'schedule') {
+    return [pickString(structured, ['action']), pickString(structured, ['schedule', 'name', 'job_id'])]
+      .filter(Boolean).join(' · ') || firstNonEmptyLine(activity.preview || activity.name);
+  }
+  if (category === 'subagent') {
+    return firstNonEmptyLine(pickString(structured, ['task', 'prompt', 'agent', 'profile']) || activity.preview || activity.name);
+  }
   if (category === 'command' || /(?:terminal|shell|exec|command)/.test(tool)) {
     return firstNonEmptyLine(
       pickString(structured, ['command', 'cmd', 'script'])
@@ -177,7 +184,7 @@ export function activityPrimaryDetail(activity: HermesChatActivity): string {
       || activity.preview,
     );
   }
-  if (category === 'file' || /(?:file|read|write|edit|patch)/.test(tool)) {
+  if (category === 'file' || category === 'edit' || /(?:file|write|edit|patch)/.test(tool)) {
     return firstNonEmptyLine(
       pickString(structured, ['path', 'file_path', 'filePath', 'file', 'filename', 'target'])
       || input

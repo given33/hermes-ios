@@ -16,6 +16,16 @@ interface FetchCall {
   init: RequestInit;
 }
 
+test('mobile authentication calls a browser-compatible fetch without a client receiver', async () => {
+  const browserFetch = async function (this: unknown): Promise<Response> {
+    assert.ok(this === undefined || this === globalThis, 'browser fetch rejects a foreign receiver');
+    return Response.json({ registration_open: false, account_configured: true,
+      email_verification_required: true, owner_email_configured: true });
+  };
+  const status = await new MobileAuthApiClient('https://hermes.test', browserFetch).getStatus();
+  assert.equal(status.accountConfigured, true);
+});
+
 const initialConnection: SavedConnection = {
   accountGeneration: 'acctgen_generation_a',
   baseUrl: 'https://hermes.test',

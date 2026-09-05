@@ -285,12 +285,12 @@ export function PreviewText({
   const mono = variant === 'mono';
   const display = variant === 'heading' || variant === 'label';
   const fontSize = variant === 'heading'
-    ? rootSize
+    ? rootSize * 1.067
     : variant === 'label' || variant === 'tiny'
-      ? rootSize * 0.7
+      ? rootSize * 0.8
       : variant === 'muted'
-        ? rootSize * 0.76
-        : rootSize * 0.84;
+        ? rootSize * 0.933
+        : mono ? rootSize * 0.867 : rootSize;
   return (
     <Text
       numberOfLines={numberOfLines}
@@ -308,9 +308,9 @@ export function PreviewText({
             display ? 600 : 400,
           ),
           fontSize,
-          letterSpacing: variant === 'label' ? rootSize * 0.06 : 0,
+          letterSpacing: 0,
           lineHeight: fontSize * 1.45,
-          textTransform: variant === 'label' ? 'uppercase' : 'none',
+          textTransform: 'none',
         },
         style,
       ]}

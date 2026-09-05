@@ -57,6 +57,13 @@ export function IOSPressable({
   return (
     <AnimatedPressable
       {...props}
+      {...(Platform.OS === 'web' ? {
+        'aria-busy': props['aria-busy'] ?? props.accessibilityState?.busy,
+        'aria-checked': props['aria-checked'] ?? props.accessibilityState?.checked,
+        'aria-disabled': props['aria-disabled'] ?? disabled ?? props.accessibilityState?.disabled,
+        'aria-expanded': props['aria-expanded'] ?? props.accessibilityState?.expanded,
+        'aria-selected': props['aria-selected'] ?? props.accessibilityState?.selected,
+      } : {})}
       disabled={disabled}
       onPressIn={(event) => {
         setPressed(true);

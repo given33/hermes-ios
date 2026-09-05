@@ -45,6 +45,7 @@ import { initializeTemporaryPlaintextFiles } from '../api/temporary-plaintext-fi
 // Fixture mode is intentionally web-only.  An Expo Go bundle is still a
 // native Hermes client and must cross the real AuthProvider/official API
 // boundary even when a developer accidentally leaves the preview flag set.
+const CAN_PREVIEW_LOGIN = __DEV__ && Platform.OS === 'web';
 const FRONTEND_PREVIEW = Platform.OS === 'web' && (
   process.env.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'
   || isFrontendPreviewRuntime
@@ -52,6 +53,15 @@ const FRONTEND_PREVIEW = Platform.OS === 'web' && (
 
 export function HermesNativeApp() {
   const fontsLoaded = useWebUiFonts();
+  const [loginPreview, setLoginPreview] = useState<boolean | null>(CAN_PREVIEW_LOGIN ? null : false);
+  useEffect(() => {
+    if (!CAN_PREVIEW_LOGIN) return;
+    let cancelled = false;
+    void Linking.getInitialURL().then((url) => {
+      if (!cancelled) setLoginPreview(Boolean(url && new URL(url).searchParams.get('view') === 'login'));
+    }).catch(() => { if (!cancelled) setLoginPreview(false); });
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => {
     try {
       startNativeFrameRateController();
@@ -71,8 +81,8 @@ export function HermesNativeApp() {
 
   return (
     <View style={styles.root}>
-      {fontsLoaded ? (
-        FRONTEND_PREVIEW ? (
+      {fontsLoaded && loginPreview !== null ? (
+        FRONTEND_PREVIEW && !loginPreview ? (
           <FrontendPreviewThemeProvider>
             <ThemedNativeSurface>
               <ThemedStatusBar />

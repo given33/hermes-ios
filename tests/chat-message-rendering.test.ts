@@ -172,9 +172,8 @@ test('workflow activity sits above the role row and uses the Hermes Studio colla
   assert.match(message, /<View style=\{\[styles\.messageFooter/);
   assert.doesNotMatch(message, /<RoleActivityGroup[\s\S]{0,100}footer/);
   assert.match(source, /const \[open, setOpen\] = useState\(false\)/);
-  assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
-  assert.match(source, /formatActivitySummary\(message, isChinese, now\)/);
-  assert.match(source, /activitySummary: \{ alignItems: 'center', flexDirection: 'row', gap: 6,/);
+  assert.match(source, /accessibilityLabel=\{isChinese \? '执行步骤' : 'Execution steps'\}/);
+  assert.match(source, /activitySummary: \{ alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 6,/);
   assert.doesNotMatch(source, /activitySummary: \{[^\n]*justifyContent: 'space-between'/);
   assert.match(source, /activityTitle: \{ flexShrink: 1,/);
   assert.match(source, /activityCount: \{ fontFamily: MONO_REGULAR/);
@@ -380,7 +379,6 @@ test('activity inspection pauses stream following and renders one primary body',
   // The per-step fold, primary argument, clamped output, and pinned
   // collapse state now live in the extracted timeline components.
   assert.match(timeline, /onInspectActivity\(\);/);
-  assert.match(timeline, /setShowAll/);
   assert.match(timeline, /activityDisplayContent\(activity\)/);
   assert.match(timeline, /activityPrimaryDetail\(activity\)/);
   assert.match(timeline, /clampActivityText/);

@@ -1,6 +1,28 @@
 import type { HermesChatViewMessage as ChatMessage } from '../api/chat-view-model';
 import type { CollaborationMessage, SingleConversation } from '../api/HermesCloudApi';
 
+function previewExecutionSteps(turnId: string): NonNullable<ChatMessage['activities']> {
+  const base = { duration: '', preview: '', status: 'completed' as const };
+  return [
+    { ...base, id: `${turnId}-search`, category: 'search', name: 'web_search', toolName: 'web_search', durationMs: 840,
+      input: JSON.stringify({ query: 'Hermes Agent releases' }),
+      output: JSON.stringify({ results: [{ title: 'Hermes Agent releases', url: 'https://github.com/NousResearch/hermes-agent/releases', snippet: 'Official release history' }] }) },
+    { ...base, id: `${turnId}-read`, category: 'browser', name: 'web_extract', durationMs: 420,
+      input: JSON.stringify({ url: 'https://github.com/NousResearch/hermes-agent' }), output: 'Demo excerpt from a source.' },
+    { ...base, id: `${turnId}-edit`, category: 'edit', name: 'file_edit', durationMs: 90,
+      input: JSON.stringify({ path: 'src/client.ts', old_text: 'const retryLimit = 0;\n', new_text: 'const retryLimit = 3;\n' }), output: 'Demo change only.' },
+    { ...base, id: `${turnId}-terminal`, category: 'command', name: 'terminal', durationMs: 1200,
+      input: JSON.stringify({ command: 'pnpm test' }),
+      output: Array.from({ length: 140 }, (_, i) => `demo test ${i + 1}: sample execution output`).join('\n') },
+    { ...base, id: `${turnId}-failed`, category: 'command', name: 'terminal', status: 'failed', durationMs: 1500,
+      input: JSON.stringify({ command: 'curl https://unavailable.invalid' }), error: 'Demo error: connection timed out' },
+    { ...base, id: `${turnId}-schedule`, category: 'schedule', name: 'cronjob', status: 'queued',
+      input: JSON.stringify({ action: 'create', schedule: '0 9 * * 1-5' }) },
+    { ...base, id: `${turnId}-agent`, category: 'subagent', name: 'delegate_task', status: 'cancelled',
+      input: JSON.stringify({ task: 'Review client changes', profile: 'research' }) },
+  ];
+}
+
 export function previewConversationHistory(
   isChinese: boolean,
   accountGeneration: string,
@@ -92,23 +114,12 @@ export function previewTurnMessages({
   if (!collaborative) {
     const completedAt = startedAt + 620;
     return [{
-      activities: [{
-        category: 'runtime',
-        completedAt,
-        duration: '0.6s',
-        durationMs: 620,
-        id: `${turnId}-thinking`,
-        name: isChinese ? '模型思考' : 'Model reasoning',
-        output: isChinese ? '识别为简单对话，由单 Hermes 直接回复。' : 'Classified as a simple turn and answered by a single Hermes agent.',
-        preview: isChinese ? '简单对话' : 'Simple turn',
-        startedAt,
-        status: 'completed',
-      }],
+      activities: previewExecutionSteps(turnId),
       avatarRole: 'hermes',
       completedAt,
       content: isChinese
-        ? '你好，我是 Hermes。当前消息按简单对话处理，没有启动协作群聊。'
-        : 'Hello, I am Hermes. This was handled as a simple turn without starting collaboration.',
+        ? '演示执行记录：包含成功、失败、取消和待执行步骤。未执行真实请求。'
+        : 'Demo execution record: successful, failed, cancelled and pending steps. No real requests were executed.',
       createdAt: startedAt,
       durationMs: 620,
       firstTokenAt: startedAt,

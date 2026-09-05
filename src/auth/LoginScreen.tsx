@@ -6,6 +6,7 @@ import {
   Animated,
   Easing,
   KeyboardAvoidingView,
+  Image,
   Platform,
   ScrollView,
   StyleSheet,
@@ -18,20 +19,11 @@ import {
   type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, {
-  Circle,
-  Defs,
-  LinearGradient,
-  Line,
-  Path,
-  RadialGradient,
-  Rect,
-  Stop,
-} from 'react-native-svg';
+import { ArrowRight, Check, Eye, EyeOff, LockKeyhole, Moon, Sun } from 'lucide-react-native';
 
 import { IOSPressable } from '../components/ios/IOSPressable';
-import { WEBUI_FONT_FAMILIES } from '../app/webui-fonts';
 import { IOS_MOTION } from '../design/ios-motion';
+import { useMotion } from '../design/motion';
 import { useAuth } from './AuthProvider';
 import { MAX_FACE_ID_ATTEMPTS } from './auth-state';
 import {
@@ -48,15 +40,15 @@ import {
 const {
   appearanceStorageKey,
   button: LOGIN_BUTTON,
-  card: LOGIN_CARD,
   entrance: LOGIN_ENTRANCE,
   input: LOGIN_INPUT,
-  monogram: LOGIN_MONOGRAM,
   providerButton: PROVIDER_BUTTON,
   segmented: LOGIN_SEGMENTED,
   toggle: LOGIN_TOGGLE,
 } = LOGIN_VISUAL_CONTRACT;
 const LOGIN_EASE_OUT = Easing.bezier(...IOS_MOTION.curve.decelerate);
+const BODY_REGULAR = 'HermesGoogle-IBMPlexSans-400-Normal';
+const BODY_SEMIBOLD = 'HermesGoogle-IBMPlexSans-600-Normal';
 const PROVIDER_BUTTON_EASE_OUT = Easing.bezier(
   ...IOS_MOTION.curve.standard,
 );
@@ -76,15 +68,17 @@ export function LoginScreen() {
     logout,
   } = useAuth();
   const insets = useSafeAreaInsets();
+  const motion = useMotion();
   const { height } = useWindowDimensions();
   const usernameInput = useRef<TextInputHandle>(null);
   const passwordInput = useRef<TextInputHandle>(null);
   const emailInput = useRef<TextInputHandle>(null);
   const verificationCodeInput = useRef<TextInputHandle>(null);
-  const entranceOpacity = useRef(new Animated.Value(0)).current;
-  const entranceOffset = useRef(new Animated.Value(LOGIN_ENTRANCE.translateY)).current;
+  const entranceOpacity = useRef(new Animated.Value(motion.reduceMotion ? 1 : 0)).current;
+  const entranceOffset = useRef(new Animated.Value(motion.reduceMotion ? 0 : LOGIN_ENTRANCE.translateY)).current;
   const [scheme, setScheme] = useState<LoginColorScheme>(LOGIN_VISUAL_CONTRACT.defaultScheme);
   const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [submittedMode, setSubmittedMode] = useState<'login' | 'register' | null>(null);
   const [email, setEmail] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
   const [username, setUsername] = useState('');
@@ -100,7 +94,8 @@ export function LoginScreen() {
   const loading = state.status === 'loading';
   const locked = state.status === 'locked';
   const busy = state.status !== 'loading' && state.status !== 'authenticated' && state.busy;
-  const error = state.status === 'provisioning' ? state.error : undefined;
+  const error = state.status === 'provisioning' && (submittedMode === null || submittedMode === mode)
+    ? state.error : undefined;
   const lockError = state.status === 'locked' ? state.error : undefined;
   const lockAttempts = state.status === 'locked' ? state.failedAttempts : 0;
   const canSubmit =
@@ -151,13 +146,13 @@ export function LoginScreen() {
   useEffect(() => {
     const animation = Animated.parallel([
       Animated.timing(entranceOpacity, {
-        duration: LOGIN_ENTRANCE.durationMs,
+        duration: motion.duration(LOGIN_ENTRANCE.durationMs),
         easing: LOGIN_EASE_OUT,
         toValue: 1,
         useNativeDriver: true,
       }),
       Animated.timing(entranceOffset, {
-        duration: LOGIN_ENTRANCE.durationMs,
+        duration: motion.duration(LOGIN_ENTRANCE.durationMs),
         easing: LOGIN_EASE_OUT,
         toValue: 0,
         useNativeDriver: true,
@@ -165,7 +160,7 @@ export function LoginScreen() {
     ]);
     animation.start();
     return () => animation.stop();
-  }, [entranceOffset, entranceOpacity]);
+  }, [entranceOffset, entranceOpacity, motion]);
 
   useEffect(() => {
     if (codeCooldown <= 0) return undefined;
@@ -181,6 +176,7 @@ export function LoginScreen() {
 
   const submit = () => {
     if (state.status === 'provisioning' && canSubmit) {
+      setSubmittedMode(mode);
       if (mode === 'register') {
         void register(email, verificationCode, username, password);
       } else {
@@ -218,7 +214,6 @@ export function LoginScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: palette.backgroundBottom }]}>
-      <LoginBackdrop palette={palette} />
       <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
       <AppearanceToggle
         icon={scheme === 'light' ? 'moon' : 'sun'}
@@ -259,14 +254,12 @@ export function LoginScreen() {
               style={[
                 styles.card,
                 {
-                  backgroundColor: palette.card,
-                  borderColor: palette.cardBorder,
-                  shadowColor: palette.shadow,
+                  backgroundColor: 'transparent',
                 },
               ]}
             >
               <Text accessibilityRole="header" style={[styles.heading, { color: palette.text }]}>
-                {locked ? '解锁' : mode === 'register' ? '创建账号' : '欢迎回来'}
+                {locked ? '解锁 Hermes' : mode === 'register' ? '创建账号' : '欢迎回来'}
               </Text>
               <Text style={[styles.subtitle, { color: palette.textSecondary }]}>
                 {loading
@@ -275,7 +268,7 @@ export function LoginScreen() {
                     ? '使用 Face ID 解锁受保护的 Hermes 连接。'
                     : mode === 'register'
                       ? '使用 QQ 邮箱验证码创建 Hermes 账号。'
-                      : '登录后继续使用 Hermes Agent 管理面板。'}
+                      : '登录 Hermes'}
               </Text>
 
               {loading ? (
@@ -367,7 +360,7 @@ export function LoginScreen() {
                             returnKeyType="next"
                             style={[
                               styles.input,
-                              { backgroundColor: palette.inputFill, color: palette.text },
+                              { backgroundColor: palette.inputFill, borderColor: palette.inputBorder, color: palette.text },
                               focusedField === 'email' && {
                                 borderColor: palette.accent,
                               },
@@ -408,7 +401,7 @@ export function LoginScreen() {
                               returnKeyType="next"
                               style={[
                                 styles.input,
-                                { backgroundColor: palette.inputFill },
+                                { backgroundColor: palette.inputFill, borderColor: palette.inputBorder, color: palette.text },
                                 focusedField === 'verificationCode' && {
                                   borderColor: palette.accent,
                                 },
@@ -483,7 +476,7 @@ export function LoginScreen() {
                         returnKeyType="next"
                         style={[
                           styles.input,
-                          { backgroundColor: palette.inputFill, color: palette.text },
+                          { backgroundColor: palette.inputFill, borderColor: palette.inputBorder, color: palette.text },
                           focusedField === 'username' && {
                             borderColor: palette.accent,
                           },
@@ -525,7 +518,7 @@ export function LoginScreen() {
                         style={[
                           styles.input,
                           styles.inputWithAccessory,
-                          { backgroundColor: palette.inputFill },
+                          { backgroundColor: palette.inputFill, borderColor: palette.inputBorder, color: palette.text },
                           focusedField === 'password' && {
                             borderColor: palette.accent,
                           },
@@ -538,7 +531,6 @@ export function LoginScreen() {
                           pointerEvents="none"
                           style={[
                             styles.inputFocusRing,
-                            styles.inputAccessoryRing,
                             { borderColor: palette.accent },
                           ]}
                         />
@@ -621,11 +613,9 @@ export function LoginScreen() {
             </View>
 
             <View style={styles.footer}>
-              <View style={[styles.footerLine, { backgroundColor: palette.separator }]} />
               <Text style={[styles.footerText, { color: palette.textTertiary }]}>
-                公网访问 · 需要身份验证
+                Hermes Agent
               </Text>
-              <View style={[styles.footerLine, { backgroundColor: palette.separator }]} />
             </View>
           </Animated.View>
         </ScrollView>
@@ -637,45 +627,11 @@ export function LoginScreen() {
 function BrandMark({ palette }: { palette: LoginPalette }) {
   return (
     <View style={styles.brandColumn}>
-      <View
-        style={[
-          styles.monogram,
-          {
-            borderRadius: LOGIN_MONOGRAM.radius,
-            overflow: 'hidden' as const,
-          },
-        ]}
-      >
-          <Svg
-            height={LOGIN_MONOGRAM.size}
-            pointerEvents="none"
-            style={styles.monogramGradient}
-            width={LOGIN_MONOGRAM.size}
-          >
-            <Defs>
-              <LinearGradient id="login-monogram-gradient" x1="0" x2="0" y1="0" y2="1">
-                <Stop offset="0%" stopColor={palette.accent} />
-                <Stop offset="100%" stopColor={palette.accentDeep} />
-              </LinearGradient>
-            </Defs>
-            <Rect
-              fill="url(#login-monogram-gradient)"
-              height={LOGIN_MONOGRAM.size}
-              width={LOGIN_MONOGRAM.size}
-              x={0}
-              y={0}
-            />
-          </Svg>
-          <Text style={[styles.monogramLetter, { color: palette.accentText }]}>
-            {LOGIN_MONOGRAM.letter}
-          </Text>
+      <Image source={require('../../assets/icon.png')} accessibilityLabel="Hermes" style={{ width: 48, height: 48, borderRadius: 8 }} />
+      <View style={styles.brandCopy}>
+        <Text accessibilityRole="header" style={[styles.brandText, { color: palette.text }]}>Hermes</Text>
+        <Text style={[styles.brandTagline, { color: palette.textSecondary }]}>Agent 工作空间</Text>
       </View>
-      <Text accessibilityRole="header" style={[styles.brandText, { color: palette.text }]}>
-        HERMES AGENT
-      </Text>
-      <Text style={[styles.brandTagline, { color: palette.textTertiary }]}>
-        智能体工作台
-      </Text>
     </View>
   );
 }
@@ -726,18 +682,19 @@ function SegmentedControl({
   onChange(next: 'login' | 'register'): void;
 }) {
   const indicatorProgress = useRef(new Animated.Value(value === 'register' ? 1 : 0)).current;
+  const motion = useMotion();
   const [trackWidth, setTrackWidth] = useState(0);
 
   useEffect(() => {
     const animation = Animated.timing(indicatorProgress, {
-      duration: IOS_MOTION.duration.control,
+      duration: motion.duration(IOS_MOTION.duration.control),
       easing: PROVIDER_BUTTON_EASE_OUT,
       toValue: value === 'register' ? 1 : 0,
       useNativeDriver: true,
     });
     animation.start();
     return () => animation.stop();
-  }, [indicatorProgress, value]);
+  }, [indicatorProgress, value, motion]);
 
   // The pill slides one half-track; the inset (3) matches the indicator's
   // top/bottom/left/right inset in styles.
@@ -863,7 +820,7 @@ function ProviderButton({
         accessibilityElementsHidden
         accessible={false}
         importantForAccessibility="no-hide-descendants"
-        style={[styles.primaryButton, { backgroundColor: accent }]}
+        style={[styles.primaryButton, { backgroundColor: accent, opacity: disabled ? 0.45 : 1 }]}
       >
         {busy ? (
           <ActivityIndicator color={accentText} size="small" />
@@ -871,6 +828,7 @@ function ProviderButton({
         <Text style={[styles.primaryButtonText, { color: accentText }]}>
           {label}
         </Text>
+        {!busy ? <ArrowRight color={accentText} size={18} /> : null}
         <Animated.View
           accessibilityElementsHidden
           accessible={false}
@@ -884,6 +842,7 @@ function ProviderButton({
           <Text style={[styles.primaryButtonText, { color: accentText }]}>
             {label}
           </Text>
+          {!busy ? <ArrowRight color={accentText} size={18} /> : null}
         </Animated.View>
         <Animated.View
           accessibilityElementsHidden
@@ -898,6 +857,7 @@ function ProviderButton({
           <Text style={[styles.primaryButtonText, { color: accentText }]}>
             {label}
           </Text>
+          {!busy ? <ArrowRight color={accentText} size={18} /> : null}
         </Animated.View>
       </View>
       {focusVisible ? (
@@ -913,159 +873,30 @@ function ProviderButton({
   );
 }
 
-function LoginBackdrop({ palette }: { palette: LoginPalette }) {
-  return (
-    <View pointerEvents="none" style={styles.backdrop}>
-      <Svg height="100%" width="100%">
-        <Defs>
-          <LinearGradient id="login-canvas" x1="0" x2="0" y1="0" y2="1">
-            <Stop offset="0%" stopColor={palette.backgroundTop} />
-            <Stop offset="100%" stopColor={palette.backgroundBottom} />
-          </LinearGradient>
-          <RadialGradient
-            cx="50%"
-            cy="0%"
-            id="login-top-glow"
-            rx="70.710678%"
-            ry="55%"
-          >
-            <Stop offset="0%" stopColor={palette.glow} />
-            <Stop offset="100%" stopColor={palette.glow} stopOpacity={0} />
-          </RadialGradient>
-        </Defs>
-        <Rect fill="url(#login-canvas)" height="100%" width="100%" />
-        <Rect fill="url(#login-top-glow)" height="100%" width="100%" />
-      </Svg>
-    </View>
-  );
-}
-
 function SunGlyph({ color }: { color: string }) {
-  return (
-    <Svg
-      fill="none"
-      height={20}
-      pointerEvents="none"
-      stroke={color}
-      strokeLinecap="round"
-      strokeWidth={1.8}
-      width={20}
-    >
-      <Circle cx={10} cy={10} r={3.4} />
-      {[
-        [10, 1.6, 10, 3.6],
-        [10, 16.4, 10, 18.4],
-        [1.6, 10, 3.6, 10],
-        [16.4, 10, 18.4, 10],
-        [4.2, 4.2, 5.6, 5.6],
-        [14.4, 14.4, 15.8, 15.8],
-        [15.8, 4.2, 14.4, 5.6],
-        [4.2, 15.8, 5.6, 14.4],
-      ].map(([x1, y1, x2, y2]) => (
-        <Line key={`sun-ray-${x1}-${y1}`} x1={x1} x2={x2} y1={y1} y2={y2} />
-      ))}
-    </Svg>
-  );
+  return <Sun color={color} pointerEvents="none" size={20} strokeWidth={1.8} />;
 }
 
 function MoonGlyph({ color }: { color: string }) {
-  return (
-    <Svg
-      fill="none"
-      height={20}
-      pointerEvents="none"
-      stroke={color}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={1.8}
-      width={20}
-    >
-      <Path d="M 15.6 12.4 A 6.2 6.2 0 1 1 7.6 4.4 A 5 5 0 0 0 15.6 12.4 Z" />
-    </Svg>
-  );
+  return <Moon color={color} pointerEvents="none" size={20} strokeWidth={1.8} />;
 }
 
 function EyeGlyph({ color, visible }: { color: string; visible: boolean }) {
-  if (visible) {
-    return (
-      <Svg
-        fill="none"
-        height={20}
-        pointerEvents="none"
-        stroke={color}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={1.6}
-        width={20}
-      >
-        <Path d="M 1.8 10 C 4.4 5.6 7.2 3.6 10 3.6 C 12.8 3.6 15.6 5.6 18.2 10 C 15.6 14.4 12.8 16.4 10 16.4 C 7.2 16.4 4.4 14.4 1.8 10 Z" />
-        <Circle cx={10} cy={10} r={2.6} />
-      </Svg>
-    );
-  }
-  return (
-    <Svg
-      fill="none"
-      height={20}
-      pointerEvents="none"
-      stroke={color}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={1.6}
-      width={20}
-    >
-      <Path d="M 1.8 10 C 4.4 5.6 7.2 3.6 10 3.6 C 12.8 3.6 15.6 5.6 18.2 10 C 15.6 14.4 12.8 16.4 10 16.4 C 7.2 16.4 4.4 14.4 1.8 10 Z" />
-      <Line x1={3.4} x2={16.6} y1={16.8} y2={3.2} />
-    </Svg>
-  );
+  const Icon = visible ? Eye : EyeOff;
+  return <Icon color={color} pointerEvents="none" size={20} strokeWidth={1.8} />;
 }
 
 function CheckmarkGlyph({ color }: { color: string }) {
-  return (
-    <Svg
-      fill="none"
-      height={12}
-      pointerEvents="none"
-      stroke={color}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={2.2}
-      width={12}
-    >
-      <Path d="M 2 6.4 L 4.8 9.2 L 10 3.2" />
-    </Svg>
-  );
+  return <Check color={color} pointerEvents="none" size={12} strokeWidth={2.2} />;
 }
 
 function LockGlyph({ color }: { color: string }) {
-  return (
-    <Svg
-      fill="none"
-      height={28}
-      pointerEvents="none"
-      stroke={color}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth={1.8}
-      width={28}
-    >
-      <Rect height={10} rx={2.4} width={16} x={6} y={12} />
-      <Path d="M 9.4 12 V 9.2 A 4.6 4.6 0 0 1 18.6 9.2 V 12" />
-      <Circle cx={14} cy={17} r={1.4} />
-    </Svg>
-  );
+  return <LockKeyhole color={color} pointerEvents="none" size={28} strokeWidth={1.8} />;
 }
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-  },
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
   },
   toggleSlot: {
     position: 'absolute',
@@ -1087,66 +918,46 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 28,
   },
   panel: {
     width: '100%',
     maxWidth: 416,
   },
   brandColumn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 28,
-    gap: 10,
+    marginBottom: 44,
+    gap: 12,
   },
-  monogram: {
-    width: LOGIN_MONOGRAM.size,
-    height: LOGIN_MONOGRAM.size,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  monogramGradient: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-  },
-  monogramLetter: {
-    fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
-    fontSize: 30,
-    lineHeight: 34,
-  },
+  brandCopy: { flex: 1, gap: 1 },
   brandText: {
-    fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
-    fontSize: 19,
-    letterSpacing: 5.376,
-    lineHeight: 25.2,
+    fontWeight: '600',
+    fontSize: 25,
+    letterSpacing: 0,
+    lineHeight: 32,
   },
   brandTagline: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 12.8,
-    letterSpacing: 1.6,
-    lineHeight: 18,
+    fontFamily: BODY_REGULAR,
+    fontSize: 14,
+    letterSpacing: 0,
+    lineHeight: 20,
   },
   card: {
-    borderWidth: 1,
-    borderRadius: LOGIN_CARD.radius,
-    padding: LOGIN_CARD.padding,
-    shadowOffset: { width: 0, height: LOGIN_CARD.shadowOffsetY },
-    shadowOpacity: LOGIN_CARD.shadowOpacity,
-    shadowRadius: LOGIN_CARD.shadowRadius,
-    elevation: 8,
+    padding: 0,
   },
   heading: {
     marginBottom: 6,
-    fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
-    fontSize: 27,
-    letterSpacing: 1.2,
-    lineHeight: 34,
+    fontWeight: '600',
+    fontSize: 26,
+    letterSpacing: 0,
+    lineHeight: 36,
   },
   subtitle: {
-    marginBottom: 22,
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 14.4,
-    lineHeight: 21.6,
+    marginBottom: 28,
+    fontFamily: BODY_REGULAR,
+    fontSize: 14,
+    lineHeight: 22,
   },
   loadingRow: {
     minHeight: 72,
@@ -1155,7 +966,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   loadingText: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontFamily: BODY_REGULAR,
     fontSize: 14,
     lineHeight: 21,
   },
@@ -1164,9 +975,9 @@ const styles = StyleSheet.create({
   },
   formTitle: {
     textAlign: 'center',
-    fontFamily: WEBUI_FONT_FAMILIES.RulesCompressedMedium,
+    fontFamily: BODY_SEMIBOLD,
     fontSize: 15,
-    letterSpacing: 1.2,
+    letterSpacing: 0,
     lineHeight: 22,
   },
   lockGlyph: {
@@ -1201,18 +1012,18 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   segmentedLabel: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
-    fontSize: 13.2,
-    lineHeight: 18,
+    fontFamily: BODY_SEMIBOLD,
+    fontSize: 14,
+    lineHeight: 20,
   },
   field: {
     gap: 6,
   },
   fieldLabel: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 12.4,
-    letterSpacing: 0.6,
-    lineHeight: 17,
+    fontFamily: BODY_REGULAR,
+    fontSize: 14,
+    letterSpacing: 0,
+    lineHeight: 20,
   },
   input: {
     paddingHorizontal: 14,
@@ -1220,9 +1031,9 @@ const styles = StyleSheet.create({
     borderRadius: LOGIN_INPUT.radius,
     minHeight: LOGIN_INPUT.minHeight,
     borderColor: 'transparent',
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 15.2,
-    lineHeight: 22.8,
+    fontFamily: BODY_REGULAR,
+    fontSize: 16,
+    lineHeight: 24,
   },
   inputWithAccessory: {
     paddingRight: 48,
@@ -1239,9 +1050,6 @@ const styles = StyleSheet.create({
     borderWidth: LOGIN_INPUT.focusRingWidth,
     borderRadius: LOGIN_INPUT.radius + LOGIN_INPUT.focusRingWidth,
     opacity: 0.9,
-  },
-  inputAccessoryRing: {
-    right: 44,
   },
   passwordToggle: {
     position: 'absolute',
@@ -1272,13 +1080,13 @@ const styles = StyleSheet.create({
     opacity: 0.45,
   },
   codeButtonText: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
-    fontSize: 12.4,
-    lineHeight: 17,
+    fontFamily: BODY_SEMIBOLD,
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: 'center',
   },
   codeMessage: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontFamily: BODY_REGULAR,
     fontSize: 12,
     lineHeight: 18,
   },
@@ -1288,9 +1096,9 @@ const styles = StyleSheet.create({
     borderRadius: LOGIN_INPUT.radius,
   },
   errorText: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 13.12,
-    lineHeight: 19.68,
+    fontFamily: BODY_REGULAR,
+    fontSize: 14,
+    lineHeight: 20,
   },
   providerButtonFrame: {
     position: 'relative',
@@ -1307,10 +1115,10 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     flexShrink: 1,
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
-    fontSize: 14.4,
-    letterSpacing: 2.2,
-    lineHeight: 20,
+    fontFamily: BODY_SEMIBOLD,
+    fontSize: 16,
+    letterSpacing: 0,
+    lineHeight: 22,
     textAlign: 'center',
   },
   providerButtonVisualLayer: {
@@ -1347,10 +1155,10 @@ const styles = StyleSheet.create({
     borderRadius: LOGIN_VISUAL_CONTRACT.button.radius - 2,
   },
   secondaryButtonText: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseBold,
-    fontSize: 12.48,
-    letterSpacing: 2.2,
-    lineHeight: 18.72,
+    fontFamily: BODY_SEMIBOLD,
+    fontSize: 14,
+    letterSpacing: 0,
+    lineHeight: 20,
   },
   softAction: {
     minHeight: 44,
@@ -1361,9 +1169,9 @@ const styles = StyleSheet.create({
     borderRadius: LOGIN_INPUT.radius,
   },
   softActionText: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 13.12,
-    lineHeight: 19.68,
+    fontFamily: BODY_REGULAR,
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: 'center',
   },
   buttonPressed: {
@@ -1371,7 +1179,7 @@ const styles = StyleSheet.create({
   },
   attemptText: {
     textAlign: 'center',
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontFamily: BODY_REGULAR,
     fontSize: 12,
     lineHeight: 18,
   },
@@ -1390,9 +1198,9 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   rememberText: {
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
-    fontSize: 13.12,
-    lineHeight: 19.68,
+    fontFamily: BODY_REGULAR,
+    fontSize: 14,
+    lineHeight: 20,
   },
   footer: {
     flexDirection: 'row',
@@ -1401,16 +1209,11 @@ const styles = StyleSheet.create({
     marginTop: 28,
     gap: 14.4,
   },
-  footerLine: {
-    width: 24,
-    height: 1,
-    marginBottom: 2.4,
-  },
   footerText: {
     flexShrink: 1,
-    fontFamily: WEBUI_FONT_FAMILIES.CollapseRegular,
+    fontFamily: BODY_REGULAR,
     fontSize: 12,
-    letterSpacing: 1.2,
+    letterSpacing: 0,
     lineHeight: 20.4,
     textAlign: 'center',
   },

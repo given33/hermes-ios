@@ -24,6 +24,7 @@ import {
   Plug,
   Puzzle,
   Radio,
+  Search,
   Settings,
   Shield,
   ShieldCheck,
@@ -61,6 +62,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import Reanimated, {
@@ -148,7 +150,7 @@ interface ReferenceSidebarItem {
   symbol: SFSymbol;
 }
 
-const REFERENCE_SIDEBAR_GROUPS = [
+const REFERENCE_SIDEBAR_CATALOG = [
   {
     id: 'agent',
     labels: { en: 'Agent', zh: 'Agent' },
@@ -207,10 +209,20 @@ const REFERENCE_SIDEBAR_GROUPS = [
   labels: Record<NativeRouteLocale, string>;
 }[];
 
+const REFERENCE_SIDEBAR_GROUPS = REFERENCE_SIDEBAR_CATALOG;
 const REFERENCE_SIDEBAR_ROUTES = REFERENCE_SIDEBAR_GROUPS.reduce<ReferenceSidebarItem[]>(
   (items, group) => [...items, ...group.items],
   [],
 );
+
+const REFERENCE_NAV_GROUPS = [
+  { id: 'workspace', labels: { en: 'Workspace', zh: '工作空间' }, paths: ['/chat', '/agent-group', '/durable-group-chat', '/agent-workspace'] },
+  { id: 'automation', labels: { en: 'Automation', zh: '自动化' }, paths: ['/cron', '/workflows', '/kanban'] },
+  { id: 'capabilities', labels: { en: 'Capabilities', zh: 'Agent 能力' }, paths: ['/models', '/skills', '/memory', '/mcp', '/plugins', '/bots'] },
+  { id: 'resources', labels: { en: 'Resources', zh: '资源' }, paths: ['/files', '/git', '/browser', '/smart-weather', '/achievements'] },
+  { id: 'operations', labels: { en: 'Operations', zh: '运行管理' }, paths: ['/channels', '/logs', '/analytics', '/runtime-center', '/pairing', '/webhooks'] },
+  { id: 'settings', labels: { en: 'Settings', zh: '设置' }, paths: ['/profiles', '/config', '/account', '/env'] },
+].map((group) => ({ ...group, items: group.paths.map((path) => REFERENCE_SIDEBAR_ROUTES.find((item) => item.path === path)!) }));
 
 const COLOR_TRANSITION_EASING = Easing.bezier(
   ...IOS_MOTION.curve.standard,
@@ -955,6 +967,13 @@ function ExpoReferenceSidebar({
   const bodyFont = resolveNativeFontStack(tokens.typography.fontSans, 500);
   const monoFont = resolveNativeFontStack(tokens.typography.fontMono, 400);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [query, setQuery] = useState('');
+  const filteredGroups = useMemo(() => {
+    const term = query.trim().toLocaleLowerCase();
+    return REFERENCE_NAV_GROUPS.map((group) => ({ ...group, items: group.items.filter((item) =>
+      `${item.labels.zh} ${item.labels.en} ${item.path}`.toLocaleLowerCase().includes(term)),
+    })).filter((group) => group.items.length > 0);
+  }, [query]);
   const toggleGroup = (id: string) => {
     setCollapsedGroups((current) => ({ ...current, [id]: !current[id] }));
   };
@@ -993,7 +1012,7 @@ function ExpoReferenceSidebar({
           ]}
         >
           <View style={styles.referenceSidebarBrand}>
-            <StudioOfficialAvatar size={24} />
+            <StudioOfficialAvatar size={32} />
             <Text
               adjustsFontSizeToFit
               minimumFontScale={0.82}
@@ -1018,8 +1037,26 @@ function ExpoReferenceSidebar({
 
         {slots?.profile?.(slotContext)}
 
-        {REFERENCE_SIDEBAR_GROUPS.map((group) => {
-          const collapsed = Boolean(collapsedGroups[group.id]);
+        <View style={[styles.navigationSearch, { backgroundColor: tokens.colors.card, borderColor: tokens.colors.border }]}>
+          <Search color={tokens.colors.textSecondary} size={18} />
+          <TextInput
+            accessibilityLabel={locale === 'zh' ? '搜索功能' : 'Search navigation'}
+            autoCapitalize="none"
+            autoCorrect={false}
+            onChangeText={setQuery}
+            placeholder={locale === 'zh' ? '搜索功能' : 'Search navigation'}
+            placeholderTextColor={tokens.colors.textTertiary}
+            style={[styles.navigationSearchInput, { color: tokens.colors.foreground, fontFamily: bodyFont }]}
+            value={query}
+          />
+          {query ? <IOSPressable accessibilityRole="button" accessibilityLabel={locale === 'zh' ? '清除搜索' : 'Clear search'}
+            onPress={() => setQuery('')} style={styles.navigationSearchClear}><X size={16} color={tokens.colors.textSecondary} /></IOSPressable> : null}
+        </View>
+        {!filteredGroups.length ? <Text style={[styles.navigationEmpty, { color: tokens.colors.textSecondary }]}>
+          {locale === 'zh' ? '未找到功能' : 'No matching features'}
+        </Text> : null}
+        {filteredGroups.map((group) => {
+          const collapsed = !query.trim() && Boolean(collapsedGroups[group.id]);
           return (
             <View key={group.id} style={styles.referenceSidebarGroup}>
               <IOSPressable
@@ -1447,11 +1484,11 @@ const styles = StyleSheet.create({
   referenceSidebarClose: {
     alignItems: 'center',
     borderRadius: 6,
-    height: 28,
+    height: 44,
     justifyContent: 'center',
     position: 'absolute',
     right: 10,
-    width: 28,
+    width: 44,
   },
   referenceSidebarScroll: {
     flex: 1,
@@ -1472,11 +1509,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   referenceSidebarGroupLabel: {
-    fontSize: 10,
+    fontSize: 12,
     fontWeight: '600',
-    letterSpacing: 0.8,
-    lineHeight: 15,
-    textTransform: 'uppercase',
+    letterSpacing: 0,
+    lineHeight: 18,
   },
   referenceSidebarGroupArrowCollapsed: {
     transform: [{ rotate: '-90deg' }],
@@ -1485,7 +1521,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    minHeight: 52,
+    minHeight: 48,
+    marginHorizontal: 10,
+    borderRadius: 6,
     paddingHorizontal: 18,
   },
   referenceSidebarRowLabel: {
@@ -1537,6 +1575,10 @@ const styles = StyleSheet.create({
     minHeight: 0,
     overflow: 'hidden',
   },
+  navigationSearch: { marginHorizontal: 16, marginVertical: 12, paddingLeft: 12, flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth },
+  navigationSearchInput: { flex: 1, minWidth: 0, minHeight: 44, fontSize: 16, lineHeight: 22 },
+  navigationSearchClear: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
+  navigationEmpty: { fontSize: 14, lineHeight: 22, padding: 18 },
   navItem: {
     alignItems: 'center',
     flexDirection: 'row',

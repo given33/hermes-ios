@@ -1,4 +1,4 @@
-import { Code2, Menu, MessageSquare, Users } from 'lucide-react-native';
+import { Code2, Menu, MessageSquare, Users, History } from 'lucide-react-native';
 import { Text, View } from 'react-native';
 
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
@@ -196,9 +196,9 @@ export function ChatHeader({
             {!compact ? <Text style={{ color: tokens.colors.foreground, fontSize: 10 }}>Coding</Text> : null}
           </IOSPressable>
         </View>
-        <View style={styles.gatewayStatuses}>
+        {gatewayStatuses.length ? <View style={[styles.gatewayStatuses, compact && { width: 12 }]}>
           {gatewayStatuses.map((gateway) => (
-            <View key={gateway.id} style={styles.gatewayStatusRow}>
+            <View key={gateway.id} style={[styles.gatewayStatusRow, compact && { width: 12 }]}>
               <View
                 accessibilityLabel={`${gateway.label} ${gateway.state}`}
                 style={[
@@ -214,13 +214,13 @@ export function ChatHeader({
                   },
                 ]}
               />
-              <Text
+              {!compact ? <Text
                 numberOfLines={1}
                 style={[styles.gatewayStatusLabel, { color: tokens.colors.textSecondary }]}
               >
                 {gateway.label}
-              </Text>
-              <Text
+              </Text> : null}
+              {!compact ? <Text
                 numberOfLines={1}
                 style={[styles.gatewayStatusVersion, { color: tokens.colors.textTertiary }]}
               >
@@ -233,25 +233,27 @@ export function ChatHeader({
                         ? (isChinese ? '离线' : 'offline')
                         : (isChinese ? '检测中' : 'checking')
                 )}
-              </Text>
+              </Text> : null}
             </View>
           ))}
-        </View>
+        </View> : null}
         <IOSPressable
           accessibilityLabel={isChinese ? '会话' : 'Conversations'}
+          accessibilityRole="button"
           onPress={onOpenConversations}
           pressedStyle={{ backgroundColor: tokens.colors.accent }}
           style={[
             styles.modelTools,
+            compact && { width: 44, minHeight: 44, paddingHorizontal: 0, justifyContent: 'center' },
             {
               backgroundColor: tokens.colors.card,
               borderColor: tokens.colors.border,
             },
           ]}
         >
-          <Text style={[styles.modelToolsText, { color: tokens.colors.foreground }]}>
+          {compact ? <History size={18} color={tokens.colors.foreground} /> : <Text style={[styles.modelToolsText, { color: tokens.colors.foreground }]}>
             {isChinese ? '会话' : 'Conversations'}
-          </Text>
+          </Text>}
         </IOSPressable>
         {!compact ? <LiveDot busy={sending} /> : null}
       </View>

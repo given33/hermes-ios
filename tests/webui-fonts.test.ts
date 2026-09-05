@@ -91,14 +91,13 @@ test('Expo embeds the exact font assets and runtime maps each file explicitly', 
   assert.match(fontSource, /GENERATED_NATIVE_FONT_ASSETS/);
 });
 
-test('LoginScreen uses the canonical display and body font mappings without weight guessing', () => {
+test('LoginScreen uses bundled readable sans-serif faces', () => {
   const loginSource = readFileSync(
     resolve(projectRoot, 'src', 'auth', 'LoginScreen.tsx'),
     'utf8',
   );
 
-  assert.match(loginSource, /WEBUI_FONT_FAMILIES\.CollapseRegular/);
-  assert.match(loginSource, /WEBUI_FONT_FAMILIES\.CollapseBold/);
-  assert.match(loginSource, /WEBUI_FONT_FAMILIES\.RulesCompressedMedium/);
+  assert.match(loginSource, /HermesGoogle-IBMPlexSans-400-Normal/);
+  assert.match(loginSource, /HermesGoogle-IBMPlexSans-600-Normal/);
   assert.doesNotMatch(loginSource, /fontFamily:[^\n]+fontWeight/);
 });

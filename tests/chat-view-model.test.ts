@@ -514,7 +514,7 @@ test('server workflow metadata restores sender, runtime, timestamps, handoff, an
   assert.equal(formatActivitySummary(message, true, completedAt), '已处理 2m 12s');
   assert.equal(formatMessageLocalTime(startedAt, true, startedAt), '09:05');
   assert.equal(messageStatusLabel(message.status, true), '已完成');
-  assert.deepEqual(message.activities?.map(({ category }) => category), ['search', 'file']);
+  assert.deepEqual(message.activities?.map(({ category }) => category), ['search', 'edit']);
   assert.equal(message.activities?.[0].name, '搜索 Hermes 托管接口');
   assert.equal(message.activities?.[0].toolName, 'web_search');
   assert.equal(message.activities?.[0].durationMs, 32_000);
@@ -533,7 +533,7 @@ test('role avatars and activity labels distinguish current workflow participants
   assert.equal(avatarRoleFor('default', 'reporter'), 'dbb3-worker');
   assert.equal(avatarRoleFor('supervisor', 'supervisor'), 'dbb3-worker');
   assert.equal(activityCategoryLabel('reasoning', true), '思考');
-  assert.equal(activityCategoryLabel('browser', true), '搜索');
+  assert.equal(activityCategoryLabel('browser', true), '网页读取');
   assert.equal(activityCategoryLabel('mcp', false), 'MCP');
 });
 

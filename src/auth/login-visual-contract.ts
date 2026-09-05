@@ -3,9 +3,8 @@
  *
  * The screen renders before ThemeProvider exists (it IS the auth boundary),
  * so it carries its own dual-scheme palette: light by default, user-toggled
- * dark, persisted to AsyncStorage under `appearanceStorageKey`. Every color,
- * radius, and motion value the screen paints comes from here — the component
- * file must stay free of literal styling values.
+ * dark, persisted to AsyncStorage under `appearanceStorageKey`. Shared colors
+ * and control dimensions live here; the screen owns its unframed layout.
  */
 
 export type LoginColorScheme = 'light' | 'dark';
@@ -50,24 +49,24 @@ export interface LoginPalette {
 }
 
 export const LOGIN_LIGHT_PALETTE: LoginPalette = {
-  backgroundTop: '#f7f8fb',
-  backgroundBottom: '#e9edf5',
+  backgroundTop: '#ffffff',
+  backgroundBottom: '#ffffff',
   glow: 'rgba(0, 83, 253, 0.10)',
   card: '#ffffff',
   cardBorder: 'rgba(15, 18, 22, 0.06)',
   text: '#0f1216',
   textSecondary: 'rgba(15, 18, 22, 0.62)',
   textTertiary: 'rgba(15, 18, 22, 0.42)',
-  inputFill: '#f2f4f8',
-  inputBorder: 'rgba(15, 18, 22, 0.08)',
+  inputFill: '#ffffff',
+  inputBorder: 'rgba(15, 18, 22, 0.16)',
   inputPlaceholder: 'rgba(15, 18, 22, 0.36)',
-  accent: '#0053fd',
-  accentHover: '#1a66fd',
-  accentActive: '#0049df',
+  accent: '#202727',
+  accentHover: '#354441',
+  accentActive: '#111816',
   accentDeep: '#0040c8',
   accentText: '#ffffff',
-  accentLabel: '#0053fd',
-  accentSoft: 'rgba(0, 83, 253, 0.10)',
+  accentLabel: '#157858',
+  accentSoft: 'rgba(21, 120, 88, 0.08)',
   error: '#d92d20',
   errorSoft: 'rgba(217, 45, 32, 0.08)',
   separator: 'rgba(15, 18, 22, 0.08)',
@@ -78,24 +77,24 @@ export const LOGIN_LIGHT_PALETTE: LoginPalette = {
 };
 
 export const LOGIN_DARK_PALETTE: LoginPalette = {
-  backgroundTop: '#101217',
-  backgroundBottom: '#08090c',
+  backgroundTop: '#141817',
+  backgroundBottom: '#141817',
   glow: 'rgba(58, 106, 222, 0.14)',
   card: '#191c23',
   cardBorder: 'rgba(255, 255, 255, 0.07)',
   text: '#f3f5f9',
   textSecondary: 'rgba(243, 245, 249, 0.64)',
   textTertiary: 'rgba(243, 245, 249, 0.42)',
-  inputFill: '#22262f',
-  inputBorder: 'rgba(255, 255, 255, 0.08)',
+  inputFill: '#1c2320',
+  inputBorder: 'rgba(255, 255, 255, 0.18)',
   inputPlaceholder: 'rgba(243, 245, 249, 0.38)',
-  accent: '#3a6ade',
-  accentHover: '#4d7ce8',
-  accentActive: '#3160c4',
+  accent: '#e8efec',
+  accentHover: '#ffffff',
+  accentActive: '#cbdad3',
   accentDeep: '#2c55a4',
-  accentText: '#ffffff',
-  accentLabel: '#9bb9f9',
-  accentSoft: 'rgba(58, 106, 222, 0.16)',
+  accentText: '#15241e',
+  accentLabel: '#80d6b1',
+  accentSoft: 'rgba(128, 214, 177, 0.12)',
   error: '#f97066',
   errorSoft: 'rgba(249, 112, 102, 0.12)',
   separator: 'rgba(255, 255, 255, 0.08)',
@@ -192,22 +191,22 @@ export const LOGIN_VISUAL_CONTRACT = {
     letter: 'H',
   },
   segmented: {
-    height: 40,
-    radius: 12,
-    indicatorRadius: 10,
+    height: 44,
+    radius: 8,
+    indicatorRadius: 6,
   },
   input: {
-    radius: 12,
-    minHeight: 48,
+    radius: 8,
+    minHeight: 52,
     focusRingWidth: 2,
   },
   button: {
-    radius: 14,
+    radius: 8,
     minHeight: 50,
   },
   toggle: {
-    size: 40,
-    radius: 20,
+    size: 44,
+    radius: 22,
   },
   providerButton: {
     filterTransition: {

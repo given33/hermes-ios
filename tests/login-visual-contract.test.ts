@@ -28,28 +28,28 @@ test('login contract ships light as the default and persists the toggle choice',
   assert.equal(isLoginColorScheme('amber'), false);
 });
 
-test('light palette is a legible elevated-card scheme around the Nous accent', () => {
-  assert.equal(LOGIN_LIGHT_PALETTE.backgroundTop, '#f7f8fb');
-  assert.equal(LOGIN_LIGHT_PALETTE.backgroundBottom, '#e9edf5');
+test('light palette uses a neutral canvas and high-contrast controls', () => {
+  assert.equal(LOGIN_LIGHT_PALETTE.backgroundTop, '#ffffff');
+  assert.equal(LOGIN_LIGHT_PALETTE.backgroundBottom, '#ffffff');
   assert.equal(LOGIN_LIGHT_PALETTE.card, '#ffffff');
   assert.equal(LOGIN_LIGHT_PALETTE.text, '#0f1216');
-  assert.equal(LOGIN_LIGHT_PALETTE.accent, '#0053fd');
+  assert.equal(LOGIN_LIGHT_PALETTE.accent, '#202727');
   assert.equal(LOGIN_LIGHT_PALETTE.accentDeep, '#0040c8');
   assert.equal(LOGIN_LIGHT_PALETTE.accentText, '#ffffff');
-  assert.equal(LOGIN_LIGHT_PALETTE.inputFill, '#f2f4f8');
+  assert.equal(LOGIN_LIGHT_PALETTE.inputFill, '#ffffff');
   assert.equal(LOGIN_LIGHT_PALETTE.error, '#d92d20');
 });
 
 test('dark palette mirrors every light key with an elevated dark card', () => {
   assert.deepEqual(Object.keys(LOGIN_DARK_PALETTE).sort(), Object.keys(LOGIN_LIGHT_PALETTE).sort());
-  assert.equal(LOGIN_DARK_PALETTE.backgroundTop, '#101217');
-  assert.equal(LOGIN_DARK_PALETTE.backgroundBottom, '#08090c');
+  assert.equal(LOGIN_DARK_PALETTE.backgroundTop, '#141817');
+  assert.equal(LOGIN_DARK_PALETTE.backgroundBottom, '#141817');
   assert.equal(LOGIN_DARK_PALETTE.card, '#191c23');
   assert.equal(LOGIN_DARK_PALETTE.text, '#f3f5f9');
-  assert.equal(LOGIN_DARK_PALETTE.accent, '#3a6ade');
-  assert.equal(LOGIN_LIGHT_PALETTE.accentLabel, '#0053fd');
-  assert.equal(LOGIN_DARK_PALETTE.accentLabel, '#9bb9f9');
-  assert.equal(LOGIN_DARK_PALETTE.accentText, '#ffffff');
+  assert.equal(LOGIN_DARK_PALETTE.accent, '#e8efec');
+  assert.equal(LOGIN_LIGHT_PALETTE.accentLabel, '#157858');
+  assert.equal(LOGIN_DARK_PALETTE.accentLabel, '#80d6b1');
+  assert.equal(LOGIN_DARK_PALETTE.accentText, '#15241e');
   assert.equal(LOGIN_DARK_PALETTE.error, '#f97066');
   // Every palette channel must be present — no partially defined scheme can
   // leave a control painting an undefined color.
@@ -61,12 +61,12 @@ test('dark palette mirrors every light key with an elevated dark card', () => {
   }
 });
 
-test('login shape and motion tokens stay modern-iOS: soft card, pill inputs, spring press', () => {
-  assert.equal(LOGIN_VISUAL_CONTRACT.card.radius, 24);
-  assert.equal(LOGIN_VISUAL_CONTRACT.input.radius, 12);
-  assert.equal(LOGIN_VISUAL_CONTRACT.button.radius, 14);
+test('login controls preserve usable hit targets and restrained corners', () => {
+  assert.equal(LOGIN_VISUAL_CONTRACT.input.radius, 8);
+  assert.equal(LOGIN_VISUAL_CONTRACT.input.minHeight, 52);
+  assert.equal(LOGIN_VISUAL_CONTRACT.button.radius, 8);
   assert.equal(LOGIN_VISUAL_CONTRACT.button.minHeight, 50);
-  assert.equal(LOGIN_VISUAL_CONTRACT.segmented.radius, 12);
+  assert.equal(LOGIN_VISUAL_CONTRACT.segmented.radius, 8);
   assert.equal(LOGIN_VISUAL_CONTRACT.entrance.durationMs, 280);
   assert.equal(LOGIN_VISUAL_CONTRACT.entrance.translateY, 14);
   assert.equal(LOGIN_VISUAL_CONTRACT.providerButton.filterTransition.durationMs, 120);
@@ -148,7 +148,8 @@ test('LoginScreen consumes the pure visual contract instead of duplicating sourc
   assert.match(source, /reduceProviderButtonInteraction/);
   assert.match(source, /IOS_MOTION\.duration\.content|LOGIN_ENTRANCE\.durationMs/);
   assert.match(source, /IOS_MOTION\.duration\.press/);
-  assert.doesNotMatch(source, /ReduceMotion|useReducedMotion|reduceMotion/);
+  assert.match(source, /motion\.duration\(LOGIN_ENTRANCE\.durationMs\)/);
+  assert.match(source, /motion\.reduceMotion \? 0 : LOGIN_ENTRANCE\.translateY/);
   assert.match(source, /providerButtonFocusRing/);
   assert.match(source, /accessibilityLabel=\{label\}/);
   assert.ok((source.match(/accessible=\{false\}/g) ?? []).length >= 2);

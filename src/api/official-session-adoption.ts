@@ -2,6 +2,7 @@ import type {
   CollaborationMessage,
   JsonRecord,
 } from './HermesCloudApi';
+import { toolActivityCategory } from './tool-activity-category';
 
 export function normalizeOfficialSessionMessages(
   messages: readonly JsonRecord[],
@@ -47,7 +48,7 @@ export function normalizeOfficialSessionMessages(
           const activity: JsonRecord = {
             category: activityCategory(stringValue(fn.name) || stringValue(rawCall.name)),
             id,
-            input: structuredText(fn.arguments ?? rawCall.arguments),
+            input: toolPayloadText(fn.arguments ?? rawCall.arguments),
             kind: 'tool',
             name: stringValue(fn.name) || stringValue(rawCall.name) || 'tool',
             output: '',
@@ -59,7 +60,7 @@ export function normalizeOfficialSessionMessages(
       } else if (role === 'tool') {
         const activity = toolsById.get(stringValue(message.tool_call_id) || stringValue(message.id));
         if (!activity) continue;
-        activity.output = structuredText(message.content);
+        activity.output = toolPayloadText(message.content);
         activity.error = structuredText(message.error);
         activity.status = activity.error ? 'failed' : 'completed';
       }
@@ -106,15 +107,11 @@ export function normalizeOfficialSessionMessages(
   return normalized;
 }
 
-function activityCategory(name: string): string {
-  const normalized = name.toLowerCase();
-  if (normalized.includes('terminal') || normalized.includes('command')) return 'command';
-  if (normalized.includes('file')) return 'file';
-  if (normalized.includes('browser')) return 'browser';
-  if (normalized.includes('mcp')) return 'mcp';
-  if (normalized.includes('skill')) return 'skill';
-  if (normalized.includes('delegate') || normalized.includes('subagent')) return 'subagent';
-  return 'other';
+function activityCategory(name: string): string { return toolActivityCategory(name); }
+
+function toolPayloadText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  return value === undefined || value === null ? '' : JSON.stringify(value);
 }
 
 function structuredText(value: unknown): string {

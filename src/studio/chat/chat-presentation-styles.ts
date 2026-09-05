@@ -96,7 +96,7 @@ export const styles = StyleSheet.create({
   todoRow: { alignItems: 'center', flexDirection: 'row', gap: 7, minHeight: 20 },
   todoTitle: { flex: 1, fontFamily: BODY_REGULAR, fontSize: 12, lineHeight: 17 },
   todoRunningDot: { borderRadius: 3, height: 6, width: 6 },
-  activitySummary: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 24, paddingHorizontal: 3, paddingVertical: 2 },
+  activitySummary: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 6, minHeight: 44, paddingHorizontal: 3, paddingVertical: 6 },
   activityTitle: { flexShrink: 1, fontFamily: BODY_MEDIUM, fontSize: 11, lineHeight: 15 },
   activityCount: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13 },
   activityTimeline: { gap: 4, paddingBottom: 4 },

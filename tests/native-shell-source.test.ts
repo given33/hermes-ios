@@ -181,7 +181,7 @@ test('sidebar uses one opaque safe-area surface, full-width hit targets, and no 
 test('reference sidebar exposes the major backend work surfaces without reviewer workflow', () => {
   const source = read('src/app/NativeShell.tsx');
   const sidebar = source.slice(
-    source.indexOf('const REFERENCE_SIDEBAR_GROUPS'),
+    source.indexOf('const REFERENCE_SIDEBAR_CATALOG'),
     source.indexOf('const REFERENCE_SIDEBAR_ROUTES'),
   );
   assert.match(sidebar, /path: '\/git'/);
@@ -210,7 +210,7 @@ test('compact reference sidebar preserves usable width, readable branding, and t
   assert.match(referenceSidebar, /adjustsFontSizeToFit/);
   assert.match(referenceSidebar, /minimumFontScale=\{0\.82\}/);
   assert.match(groupHeaderStyle, /minHeight: 44/);
-  assert.match(rowStyle, /minHeight: 52/);
+  assert.match(rowStyle, /minHeight: 48/);
 });
 
 test('navigation actions dismiss the keyboard before changing routes or opening the sidebar', () => {
@@ -259,10 +259,11 @@ test('the compact fallback sidebar is one continuous panel without row dividers'
     source.indexOf('function ShellNavigationItem'),
   );
 
-  assert.match(sidebar, /<ScrollView[\s\S]*referenceSidebarHeader[\s\S]*REFERENCE_SIDEBAR_GROUPS[\s\S]*referenceSidebarFooter[\s\S]*<\/ScrollView>/);
+  assert.match(sidebar, /<ScrollView[\s\S]*referenceSidebarHeader[\s\S]*filteredGroups[\s\S]*referenceSidebarFooter[\s\S]*<\/ScrollView>/);
   assert.doesNotMatch(sidebar, /referenceSidebarSection|referenceSidebarSectionLabel|borderBottomWidth/);
   assert.match(sidebar, /Hermes Agent/);
   assert.doesNotMatch(sidebar, /Hermes Studio/);
+  assert.match(source, /const REFERENCE_SIDEBAR_GROUPS = REFERENCE_SIDEBAR_CATALOG/);
   assert.match(source, /const REFERENCE_SIDEBAR_ROUTES = REFERENCE_SIDEBAR_GROUPS\.reduce/);
 });
 

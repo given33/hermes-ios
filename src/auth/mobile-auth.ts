@@ -239,10 +239,12 @@ export class MobileAuthApiClient {
     });
     let response: Response;
     let text: string;
+    // Browser fetch rejects a client instance as its receiver.
+    const fetchImpl = this.fetchImpl;
     try {
       const result = await Promise.race([
         (async () => {
-          const fetched = await this.fetchImpl(url.toString(), {
+          const fetched = await fetchImpl(url.toString(), {
             ...init,
             headers,
             signal: abortController.signal,
