@@ -303,10 +303,16 @@ export function TeamStatusBar({
     )?.runtimeTurnId;
     for (const message of messages) {
       if (message.role === 'user') continue;
+      const isTeamMember = Boolean(
+        message.memberId
+        || message.roleStage === 'worker'
+        || message.roleStage === 'reviewer'
+        || message.activities?.some((activity) => activity.category === 'subagent'),
+      );
       const inCurrentTurn = !currentTurnId || message.runtimeTurnId === currentTurnId;
-      if (message.status === 'running' || message.status === 'streaming') {
+      if (isTeamMember && (message.status === 'running' || message.status === 'streaming')) {
         workingCount += 1;
-      } else if (message.status === 'completed') {
+      } else if (isTeamMember && message.status === 'completed') {
         doneCount += 1;
       }
       for (const activity of message.activities || []) {

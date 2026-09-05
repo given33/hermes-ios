@@ -42,14 +42,14 @@ test('light palette uses a neutral canvas and high-contrast controls', () => {
 
 test('dark palette mirrors every light key with an elevated dark card', () => {
   assert.deepEqual(Object.keys(LOGIN_DARK_PALETTE).sort(), Object.keys(LOGIN_LIGHT_PALETTE).sort());
-  assert.equal(LOGIN_DARK_PALETTE.backgroundTop, '#141817');
-  assert.equal(LOGIN_DARK_PALETTE.backgroundBottom, '#141817');
-  assert.equal(LOGIN_DARK_PALETTE.card, '#191c23');
+  assert.equal(LOGIN_DARK_PALETTE.backgroundTop, '#151719');
+  assert.equal(LOGIN_DARK_PALETTE.backgroundBottom, '#151719');
+  assert.equal(LOGIN_DARK_PALETTE.card, '#1c1f23');
   assert.equal(LOGIN_DARK_PALETTE.text, '#f3f5f9');
   assert.equal(LOGIN_DARK_PALETTE.accent, '#e8efec');
   assert.equal(LOGIN_LIGHT_PALETTE.accentLabel, '#157858');
-  assert.equal(LOGIN_DARK_PALETTE.accentLabel, '#80d6b1');
-  assert.equal(LOGIN_DARK_PALETTE.accentText, '#15241e');
+  assert.equal(LOGIN_DARK_PALETTE.accentLabel, '#9cb8ff');
+  assert.equal(LOGIN_DARK_PALETTE.accentText, '#151719');
   assert.equal(LOGIN_DARK_PALETTE.error, '#f97066');
   // Every palette channel must be present — no partially defined scheme can
   // leave a control painting an undefined color.

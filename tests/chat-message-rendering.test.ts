@@ -184,6 +184,15 @@ test('workflow activity sits above the role row and uses the Hermes Studio colla
   assert.match(source, /activities\.length \? \(/);
 });
 
+test('team status counts only real member or subagent messages', () => {
+  assert.match(roleActivitySource, /const isTeamMember = Boolean\(/);
+  assert.match(roleActivitySource, /message\.memberId/);
+  assert.match(roleActivitySource, /message\.roleStage === 'worker'/);
+  assert.match(roleActivitySource, /activity\.category === 'subagent'/);
+  assert.match(roleActivitySource, /isTeamMember && \(message\.status === 'running'/);
+  assert.match(roleActivitySource, /isTeamMember && message\.status === 'completed'/);
+});
+
 test('only user timestamps stay adjacent to sender names while assistant runtime metadata stays hidden', () => {
   const messageStart = source.indexOf('function UnifiedMessage');
   const messageEnd = source.indexOf('function MessageAvatar', messageStart);
