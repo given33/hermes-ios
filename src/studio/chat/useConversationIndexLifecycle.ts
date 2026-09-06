@@ -47,11 +47,9 @@ export function useConversationIndexLifecycle({
     const appStateSubscription = AppState.addEventListener('change', (state) => {
       if (state !== 'active') return;
       void replayDurableOutboxes()
-        .catch(reportError)
+        .catch(() => undefined)
         .then(() => refreshConversationIndex(activeConversationIdRef.current))
-        .catch((error) => {
-          if (!disposed) onError(error);
-        });
+        .catch(() => undefined);
     });
 
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -60,7 +58,9 @@ export function useConversationIndexLifecycle({
       if (stopped) return;
       if (AppState.currentState === 'active') {
         await replayDurableOutboxes().catch(reportError);
-        await refreshConversationIndex(activeConversationIdRef.current).catch(reportError);
+        // Background refresh is best effort. A slow index must not turn a
+        // completed chat into a second "server failed" message.
+        await refreshConversationIndex(activeConversationIdRef.current).catch(() => undefined);
       }
       if (!stopped) timer = setTimeout(() => void refresh(), refreshIntervalMs);
     };
