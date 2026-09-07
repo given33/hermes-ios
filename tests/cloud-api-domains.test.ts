@@ -34,7 +34,7 @@ interface RecordedCall {
   path: string;
 }
 
-function recordingApi() {
+function recordingApi(transcript = 'voice transcript') {
   const calls: RecordedCall[] = [];
   const client = {
     request<T>(path: string, options: HermesRequestOptions = {}): Promise<T> {
@@ -53,7 +53,7 @@ function recordingApi() {
         return Promise.resolve({
           ok: true,
           provider: 'test-stt',
-          transcript: 'voice transcript',
+          transcript,
         } as T);
       }
       return Promise.resolve({} as T);
@@ -73,6 +73,13 @@ function recordingApi() {
   } as HermesApiClient;
   return { api: new HermesCloudApi(client), calls };
 }
+
+test('silent voice recordings remain a successful empty transcript, as in desktop voice mode', async () => {
+  const { api } = recordingApi('');
+  const result = await api.transcribeAudio('data:audio/wav;base64,AA==', 'audio/wav');
+  assert.equal(result.transcript, '');
+  assert.equal(result.provider, 'test-stt');
+});
 
 function parsedBody(call: RecordedCall): unknown {
   return JSON.parse(String(call.options.body));

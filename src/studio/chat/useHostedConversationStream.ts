@@ -1,5 +1,5 @@
 import { useEffect, type MutableRefObject } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
 import { withAbortableDeadline } from '../../api/async-deadline';
@@ -34,6 +34,7 @@ interface HostedConversationStreamOptions {
     deferCacheWrite?: boolean,
   ): void | Promise<void>;
   applyLifecycleEvents(events: readonly HostedLifecycleEvent[], conversationId?: string): void | Promise<void>;
+  onTurnObserved?(turnId: string): void;
   resetLifecycleRuntime?(): void;
   cacheOwner: string;
   cloudApi: HermesCloudApi | null;
@@ -63,6 +64,7 @@ export function useHostedConversationStream({
   activeConversationIdRef,
   applyConversation,
   applyLifecycleEvents,
+  onTurnObserved,
   cacheOwner,
   cloudApi,
   cursorRef,
@@ -73,11 +75,12 @@ export function useHostedConversationStream({
   requestTimeoutMs,
   resetLifecycleRuntime,
 }: HostedConversationStreamOptions): void {
+  const streamEnabled = hostedRunning || primeHostedStream;
   useEffect(() => {
     if (
       !cloudApi
       || !activeConversationId
-      || (!hostedRunning && !primeHostedStream)
+      || !streamEnabled
     ) return undefined;
 
     let disposed = false;
@@ -91,7 +94,6 @@ export function useHostedConversationStream({
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     const expectedAccountGeneration = accountGenerationFromOwnerScope(cacheOwner);
     let reconciliationQueue = Promise.resolve();
-    const activeGeneration = generation.advanceActive();
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
     const lifecycleCurrent = () => isConversationStorageEpochCurrent(cacheOwner, ownerEpoch);
     if (!lifecycleCurrent()) return undefined;
@@ -123,7 +125,7 @@ export function useHostedConversationStream({
       ) {
         return;
       }
-      const delay = reconnectDelay(reconnectAttempt);
+      const delay = reconnectDelay(reconnectAttempt, Math.random, 300, 5_000);
       reconnectAttempt += 1;
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
@@ -158,17 +160,16 @@ export function useHostedConversationStream({
           if (
             disposed
             || !lifecycleCurrent()
-            || !generation.isActiveCurrent(activeGeneration)
             || activeConversationIdRef.current !== activeConversationId
           ) return;
           if (incomingAccountGeneration !== expectedAccountGeneration) {
             throw new Error('Hermes hosted stream crossed its account generation');
           }
+          for (const turnId of new Set(events.map((event) => event.turn_id))) onTurnObserved?.(turnId);
           await reconcileInOrder(async () => {
             if (
               disposed
               || !lifecycleCurrent()
-              || !generation.isActiveCurrent(activeGeneration)
               || activeConversationIdRef.current !== activeConversationId
             ) return;
             if (conversation) {
@@ -184,7 +185,7 @@ export function useHostedConversationStream({
             } else if (events.length) {
               await applyLifecycleEvents(events, activeConversationId);
             }
-            if (!lifecycleCurrent() || !generation.isActiveCurrent(activeGeneration)) return;
+            if (!lifecycleCurrent()) return;
             cursorRef.current.set(activeConversationId, cursor);
             streamHealthy = true;
             reconnectAttempt = 0;
@@ -201,23 +202,21 @@ export function useHostedConversationStream({
         EVENT_STREAM_CONNECTION_TIMEOUT_MS,
         armIdleWatchdog,
       );
-      // The hosted conversation contract is transport-neutral. Prefer the
-      // lower-latency WebSocket mirror on native clients, but immediately
-      // fall back to the existing SSE implementation when a proxy, old
-      // server, or captive network does not permit the upgrade.
-      const consumePreferred = consumeHostedConversationEventsWebSocket(
+      // Expo's streaming fetch uses the same path on iOS and web. Do not
+      // delay native first tokens behind a WebSocket upgrade timeout.
+      const consumePreferred = consumeSse().catch((error: unknown) => {
+        if (Platform.OS === 'web' || streamController?.signal.aborted) throw error;
+        return consumeHostedConversationEventsWebSocket(
           cloudApi,
           activeConversationId,
-          eventCursor,
+          cursorRef.current.get(activeConversationId) || eventCursor,
           expectedAccountGeneration,
-          streamController.signal,
+          streamController!.signal,
           applyFrame,
           armIdleWatchdog,
           EVENT_STREAM_CONNECTION_TIMEOUT_MS,
-        ).catch((error: unknown) => {
-          if (streamController?.signal.aborted) throw error;
-          return consumeSse();
-        });
+        );
+      });
       void consumePreferred.catch((error: unknown) => {
         if (!streamController?.signal.aborted) {
           streamHealthy = false;
@@ -251,7 +250,7 @@ export function useHostedConversationStream({
       }
       if (AppState.currentState === 'active' && !streamHealthy) {
         await reconcileInOrder(() => withAbortableDeadline(
-          (signal) => loadConversation(activeConversationId, activeGeneration, signal),
+          (signal) => loadConversation(activeConversationId, generation.active(), signal),
           Math.min(requestTimeoutMs, EVENT_STREAM_CONNECTION_TIMEOUT_MS),
           'Hermes conversation polling timed out',
         )).catch((error: unknown) => {
@@ -291,12 +290,12 @@ export function useHostedConversationStream({
     accountGenerationRef,
     applyConversation,
     applyLifecycleEvents,
+    onTurnObserved,
     cacheOwner,
     cloudApi,
     cursorRef,
     generation,
-    hostedRunning,
-    primeHostedStream,
+    streamEnabled,
     loadConversation,
     requestTimeoutMs,
   ]);

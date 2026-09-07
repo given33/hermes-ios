@@ -144,7 +144,7 @@ export function useConversationIndexController({
       ) {
         return cached;
       }
-      applyConversation(cached, ownerEpoch, false, true);
+      await applyConversation(cached, ownerEpoch, false, true);
       return cached;
     }
     if (conversationId.startsWith('official:')) {
@@ -185,8 +185,25 @@ export function useConversationIndexController({
       ) {
         return cached;
       }
-      applyConversation(cached, ownerEpoch, false, true);
-      return cached;
+      await applyConversation(cached, ownerEpoch, false, true);
+      try {
+        return await withAbortableDeadline(
+          (signal) => loadConversation(conversationId, expectedGeneration, signal, true),
+          requestTimeoutMs,
+          'Hermes conversation refresh timed out',
+        );
+      } catch (error) {
+        if (isConversationNotFoundError(error)) throw error;
+        if (
+          isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
+          && captureConversationDeletionRevision(cacheOwner) === deletionRevision
+          && activeConversationIdRef.current === conversationId
+          && (!expectedGeneration || conversationSyncGenerationRef.current.isActiveCurrent(expectedGeneration))
+        ) notify(isChinese
+          ? '已显示离线会话，暂时无法核对服务器最新状态，请稍后重试。'
+          : 'Showing the offline conversation. Unable to check the latest server state; retry shortly.');
+        return cached;
+      }
     }
     return loadConversation(conversationId, expectedGeneration, undefined, true);
   }, [
@@ -196,7 +213,10 @@ export function useConversationIndexController({
     conversationIndexRef,
     conversationSyncGenerationRef,
     loadConversation,
+    isChinese,
+    notify,
     profile,
+    requestTimeoutMs,
   ]);
 
   const loadConversationIndex = useCallback(async (
@@ -294,7 +314,8 @@ export function useConversationIndexController({
           localChatConversations,
         );
         const immediate = localConversations.find(({ id }) => id === immediateId);
-        if (immediate && isCompleteConversation(immediate)) {
+        if (immediate && isCompleteConversation(immediate)
+          && conversationSyncGenerationRef.current.isActiveCurrent(syncGeneration)) {
           applyConversation(immediate, ownerEpoch, false, true);
         }
       } else if (shouldHydrateCache && mergedOptimisticLedgers.length) {
@@ -311,11 +332,14 @@ export function useConversationIndexController({
         conversationIndexRef.current = localConversations;
         setConversations(localConversations);
         const immediate = localConversations[0];
-        if (immediate) applyConversation(immediate, ownerEpoch, false, true);
+        if (immediate && conversationSyncGenerationRef.current.isActiveCurrent(syncGeneration)) {
+          applyConversation(immediate, ownerEpoch, false, true);
+        }
       }
     }
     if (!cloudApi) {
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+      if (!conversationSyncGenerationRef.current.isActiveCurrent(syncGeneration)) return;
       if (fixtureMode) {
         const fixtureHistory = previewConversationHistory(
           isChinese,
@@ -407,10 +431,7 @@ export function useConversationIndexController({
       selectableConversations,
     );
     if (reconciliation.downloadIds.length) {
-      // Publish and persist the lightweight index before downloading every
-      // changed transcript. A fresh install gets an immediately usable
-      // history rail, while the bounded detail pass below completes the
-      // durable on-device copy without blocking one conversation on another.
+      // Publish the lightweight history rail before fetching the selected chat.
       const provisional = filterConversationDeletionTombstones(
         mergeOptimisticConversationSummaries(
           reconciliation.conversations,
@@ -428,9 +449,13 @@ export function useConversationIndexController({
       ) return;
     }
     const missingIds = new Set<string>();
+    // Opening a chat owns its transcript fetch. Refreshing the sidebar must
+    // not download every historical session or compete with the live stream.
+    const downloadIds = activeConversationIdRef.current
+      ? [] : reconciliation.downloadIds.filter((id) => id === requestedActiveId);
     const downloaded = await mapWithConcurrency(
-      reconciliation.downloadIds,
-      3,
+      downloadIds,
+      1,
       async (id) => {
         try {
           return (await cloudApi.getConversation(id, signal)).conversation;
@@ -439,9 +464,7 @@ export function useConversationIndexController({
             missingIds.add(id);
             return null;
           }
-          // Keep the persisted summary and continue downloading the rest of
-          // the account. The next index refresh retries only rows whose
-          // fingerprint still differs from a complete local transcript.
+          // Keep the summary available so opening the chat can retry.
           return null;
         }
       },
@@ -469,6 +492,7 @@ export function useConversationIndexController({
       synchronizedChatConversations,
     );
     commitConversationIndex(synchronized, activeId, ownerEpoch);
+    if (!conversationSyncGenerationRef.current.isActiveCurrent(syncGeneration)) return;
     if (!activeId) {
       activeConversationIdRef.current = '';
       activeHostedTurnIdRef.current = '';
@@ -481,7 +505,9 @@ export function useConversationIndexController({
       if (!pendingTurnActiveRef.current) setSending(false);
       return;
     }
-    await openConversation(activeId, syncGeneration);
+    if (activeConversationIdRef.current !== activeId) {
+      await openConversation(activeId, syncGeneration);
+    }
   }, [
     activeConversationIdRef,
     activeHostedTurnIdRef,

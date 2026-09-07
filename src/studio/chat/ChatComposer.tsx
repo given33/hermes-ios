@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { AudioLines, Camera, ChevronDown, Mic, Plus, Square, X } from 'lucide-react-native';
-import type { RefObject } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import {
   ActionSheetIOS,
   ScrollView,
@@ -32,6 +32,7 @@ import { styles } from './chat-presentation-styles';
 import type { ChatAttachment, PendingPhase } from './chat-types';
 import type { SlashCommandDescriptor } from './useChatComposerNavigationController';
 import type { HermesVoiceChoice, HermesVoiceState } from './useHermesVoice';
+import { ConversationContextControl } from './ConversationContextControl';
 
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
@@ -61,6 +62,8 @@ interface ChatComposerModel {
   voiceDurationMs: number;
   voicePreview: string;
   voiceState: HermesVoiceState;
+  voiceConversation?: boolean;
+  voiceLevel?: number;
 }
 
 interface ChatComposerActions {
@@ -82,12 +85,14 @@ interface ChatComposerActions {
 }
 
 export interface ChatComposerProps {
+  modelControl?: ReactNode;
+  contextUsage?: { percent?: number; usedTokens?: number; maxTokens?: number };
   actions: ChatComposerActions;
   inputRef: RefObject<TextInput | null>;
   model: ChatComposerModel;
 }
 
-export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
+export function ChatComposer({ actions, contextUsage, inputRef, model, modelControl }: ChatComposerProps) {
   const { tokens } = useTheme();
   const motion = useMotion();
   const attachmentCount = model.attachments.length;
@@ -201,16 +206,18 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
           </ScrollView>
         ) : null}
 
-        {voiceInputActive ? (
+        {voiceInputActive || model.voiceConversation ? (
           <View style={styles.openMinisVoiceInput}>
             <View style={styles.openMinisVoiceTopRow}>
               <Text style={[styles.openMinisVoiceStatus, { color: tokens.colors.textSecondary }]}>
-                {model.voiceState === 'transcribing'
+                {model.hostedRunning || model.sending
+                  ? (model.isChinese ? '正在回复' : 'Responding') : model.voiceState === 'speaking'
+                  ? (model.isChinese ? '正在朗读' : 'Speaking') : model.voiceState === 'transcribing'
                   ? (model.isChinese ? '正在转写' : 'Transcribing')
                   : formatVoiceDuration(model.voiceDurationMs)}
               </Text>
               <IOSPressable
-                accessibilityLabel={model.isChinese ? '取消语音输入' : 'Cancel voice input'}
+                accessibilityLabel={model.isChinese ? '结束语音会话' : 'End voice conversation'}
                 haptic="light"
                 hitSlop={10}
                 onPress={actions.onCancelVoiceInput}
@@ -220,7 +227,12 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
               </IOSPressable>
             </View>
             {model.voiceState === 'listening' ? (
-              <OpenMinisVoiceWaveform color={tokens.colors.textSecondary} />
+              <View accessibilityLabel={model.isChinese ? '麦克风音量' : 'Microphone level'} accessibilityValue={{ now: Math.round((model.voiceLevel || 0) * 100), min: 0, max: 100 }}
+                style={{ height: 28, justifyContent: 'center' }}>
+                <View style={{ height: 4, backgroundColor: tokens.colors.border, borderRadius: 2, overflow: 'hidden' }}>
+                  <View style={{ height: 4, width: `${Math.round((model.voiceLevel || 0) * 100)}%`, backgroundColor: tokens.colors.primary }} />
+                </View>
+              </View>
             ) : (
               <View style={styles.pendingDots}>
                 {[0, 1, 2].map((dot) => <PendingDot delay={dot * 120} key={dot} />)}
@@ -239,7 +251,7 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
             onChangeText={actions.onContentChange}
             onFocus={actions.onFocus}
             onSubmitEditing={actions.onSend}
-            placeholder={model.isChinese ? '输入消息（@ 可提醒成员）' : 'Message Hermes (@ to mention members)'}
+            placeholder={model.isChinese ? '发送消息给 Hermes' : 'Message Hermes'}
             placeholderTextColor={tokens.colors.textDisabled}
             returnKeyType="send"
             ref={inputRef}
@@ -340,6 +352,8 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
           ) : null}
 
           <View style={styles.openMinisToolbarSpacer} />
+          <ConversationContextControl isChinese={model.isChinese} {...contextUsage} />
+          {modelControl}
 
           <IOSPressable
             accessibilityActions={[{
@@ -354,7 +368,7 @@ export function ChatComposer({ actions, inputRef, model }: ChatComposerProps) {
               ? model.isChinese ? '关闭自动朗读回复' : 'Turn off spoken replies'
               : model.voiceState === 'listening'
                 ? model.isChinese ? '停止录音并转写' : 'Stop and transcribe'
-                : model.isChinese ? '语音输入' : 'Voice input'}
+                : model.voiceConversation ? (model.isChinese ? '打断并说话' : 'Interrupt and speak') : model.isChinese ? '开始语音会话' : 'Start voice conversation'}
             accessibilityHint={model.isChinese
               ? '长按可切换自动朗读回复'
               : 'Long press to toggle spoken replies'}

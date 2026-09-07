@@ -6,7 +6,7 @@ function previewExecutionSteps(turnId: string): NonNullable<ChatMessage['activit
   return [
     { ...base, id: `${turnId}-search`, category: 'search', name: 'web_search', toolName: 'web_search', durationMs: 840,
       input: JSON.stringify({ query: 'Hermes Agent releases' }),
-      output: JSON.stringify({ results: [{ title: 'Hermes Agent releases', url: 'https://github.com/NousResearch/hermes-agent/releases', snippet: 'Official release history' }] }) },
+      output: JSON.stringify({ success: true, data: { web: [{ title: 'Hermes Agent releases', url: 'https://github.com/NousResearch/hermes-agent/releases', description: 'Official release history' }] } }) },
     { ...base, id: `${turnId}-read`, category: 'browser', name: 'web_extract', durationMs: 420,
       input: JSON.stringify({ url: 'https://github.com/NousResearch/hermes-agent' }), output: 'Demo excerpt from a source.' },
     { ...base, id: `${turnId}-edit`, category: 'edit', name: 'file_edit', durationMs: 90,

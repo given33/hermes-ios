@@ -164,44 +164,9 @@ export function useConversationActionsController({
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     prepareComposerNavigation();
-    if (cloudApi) {
-      try {
-        const result = await cloudApi.createConversation(
-          profile,
-          isChinese ? '新对话' : 'New conversation',
-        );
-        if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
-        if (
-          String(result.conversation.account_generation || '').trim()
-          !== accountGenerationFromOwnerScope(cacheOwner)
-        ) {
-          throw new Error('New conversation crossed its account generation');
-        }
-        await commitConversationIndex(
-          [
-            result.conversation,
-            ...conversationIndexRef.current.filter(
-              ({ id }) => id !== result.conversation.id,
-            ),
-          ],
-          result.conversation.id,
-          ownerEpoch,
-        );
-        if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
-        autoFollowStreamRef.current = true;
-        clearOptimisticHostedTurn();
-        optimisticMessagesRef.current = [];
-        setCollaborationState('single');
-        resetPendingStateMachine();
-        await applyConversation(result.conversation, ownerEpoch, false, true);
-        prepareComposerNavigation();
-      } catch (error) {
-        if (isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) {
-          notify(serverFailure(error, isChinese));
-        }
-      }
-      return;
-    }
+    // The durable first-message enqueue creates the server conversation
+    // atomically. No late create response may replace a newly sent turn.
+    conversationSyncGenerationRef.current.advanceActive();
     autoFollowStreamRef.current = true;
     clearOptimisticHostedTurn();
     optimisticMessagesRef.current = [];
@@ -211,6 +176,7 @@ export function useConversationActionsController({
     pendingChatSendRef.current = null;
     pendingTurnActiveRef.current = false;
     activeConversationIdRef.current = '';
+    activeHostedTurnIdRef.current = '';
     setActiveConversationId('');
     setActiveHostedTurnId('');
     setHostedRunning(false);
@@ -397,6 +363,11 @@ export function useConversationActionsController({
     ];
     prepareComposerNavigation();
     const generation = conversationSyncGenerationRef.current.advanceActive();
+    if (activeConversationIdRef.current !== conversationId) {
+      activeConversationIdRef.current = conversationId;
+      setActiveConversationId(conversationId);
+      setMessages([]);
+    }
     try {
       await openConversation(conversationId, generation);
     } catch (error) {

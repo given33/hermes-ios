@@ -2,7 +2,18 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import type { HermesChatViewMessage } from '../src/api/chat-view-types';
-import { mergeLiveMessagesIntoSnapshot } from '../src/studio/chat/chat-domain';
+import { mergeLiveMessagesIntoSnapshot, serverFailure } from '../src/studio/chat/chat-domain';
+
+test('storage quota errors show local recovery copy without exposing storage keys', () => {
+  for (const name of ['QuotaExceededError', 'NS_ERROR_DOM_QUOTA_REACHED']) {
+    const error = new DOMException('private-account-cache-key'.repeat(100), name);
+    assert.match(serverFailure(error, true), /本地存储空间不足/);
+    assert.match(serverFailure(error, false), /Local storage is full/);
+    assert.doesNotMatch(serverFailure(error, true), /private-account|服务器操作失败/);
+    assert.ok(serverFailure(error, false).length < 120);
+  }
+  assert.match(serverFailure(new Error('Other failure'), false), /Other failure/);
+});
 
 function message(
   id: string,
@@ -21,6 +32,45 @@ function message(
     ...overrides,
   };
 }
+
+test('a delayed live reply stays in its own turn when a later prompt already exists', () => {
+  const a = message('u1', 'completed', { role: 'user' });
+  const b = message('u2', 'completed', { role: 'user', runtimeTurnId: 'turn-2' });
+  const live = message('live-1', 'running');
+  const merged = mergeLiveMessagesIntoSnapshot([a, b], [a, live, b]);
+  assert.deepEqual(merged.map(({ id }) => id), ['u1', 'live-1', 'u2']);
+  const durable = mergeLiveMessagesIntoSnapshot([a, message('durable-1', 'completed'), b], merged);
+  assert.deepEqual(durable.map(({ id }) => id), ['u1', 'durable-1', 'u2']);
+  assert.equal(durable[1].renderKey, 'live-1');
+});
+
+test('snapshot matches message IDs before phase metadata and never appends the same ID twice', () => {
+  const persisted = message('same-id', 'completed', { profile: 'default' });
+  const live = message('same-id', 'running', { profile: undefined, roleStage: 'worker' });
+  const merged = mergeLiveMessagesIntoSnapshot([persisted], [live]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 'same-id');
+  assert.equal(merged[0].status, 'completed');
+});
+
+test('user echoes cannot merge into an assistant in the same task', () => {
+  const persisted = message('reply', 'running');
+  const user = message('user', 'completed', { role: 'user', content: 'User task' });
+  const merged = mergeLiveMessagesIntoSnapshot([user, persisted], [user]);
+  assert.deepEqual(merged.map(({ id, role }) => ({ id, role })), [
+    { id: 'user', role: 'user' }, { id: 'reply', role: 'assistant' },
+  ]);
+});
+
+test('distinct team members in the same phase retain their own streamed text', () => {
+  const a = message('server-a', 'running', { memberId: 'a', roleStage: 'worker', content: 'A' });
+  const b = message('server-b', 'running', { memberId: 'b', roleStage: 'worker', content: 'B' });
+  const merged = mergeLiveMessagesIntoSnapshot([a, b], [
+    { ...b, id: 'live-b', content: 'B complete' },
+    { ...a, id: 'live-a', content: 'A complete' },
+  ]);
+  assert.deepEqual(merged.map(({ content }) => content), ['A complete', 'B complete']);
+});
 
 test('durable terminal chat state cannot be reopened by an old live message', () => {
   for (const terminalStatus of ['completed', 'failed', 'cancelled']) {

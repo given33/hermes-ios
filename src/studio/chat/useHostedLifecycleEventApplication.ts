@@ -2,9 +2,10 @@ import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 
 
 import type { HostedLifecycleEvent } from '../../api/hosted-conversation-events';
 import { applyHostedLifecycleEvents } from '../../api/hosted-lifecycle-view-model';
+import { observeChatDelivery } from '../../api/chat-delivery-timing';
 import type { HostedRuntimeProjection } from '../../api/hosted-runtime-reducer';
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
-import type { PendingPhase } from './chat-types';
+import type { PendingChatSend, PendingPhase } from './chat-types';
 
 const HOSTED_EVENT_BATCH_WINDOW_MS = 80;
 
@@ -16,7 +17,12 @@ interface QueuedHostedLifecycleEvent {
 interface HostedLifecycleEventApplicationOptions {
   activeConversationId: string;
   activeConversationIdRef: MutableRefObject<string>;
+  activeHostedTurnIdRef: MutableRefObject<string>;
+  pendingChatSendRef: MutableRefObject<PendingChatSend | null>;
   cacheOwner: string;
+  clearOptimisticHostedTurn(): void;
+  clearOptimisticPendingTurn(conversationId: string): Promise<void>;
+  resetPendingStateMachine(): void;
   firstTokenAtRef: MutableRefObject<number>;
   isChinese: boolean;
   messagesRef: MutableRefObject<ChatMessage[]>;
@@ -38,7 +44,12 @@ interface HostedLifecycleEventApplicationOptions {
 export function useHostedLifecycleEventApplication({
   activeConversationId,
   activeConversationIdRef,
+  activeHostedTurnIdRef,
+  pendingChatSendRef,
   cacheOwner,
+  clearOptimisticHostedTurn,
+  clearOptimisticPendingTurn,
+  resetPendingStateMachine,
   firstTokenAtRef,
   isChinese,
   messagesRef,
@@ -85,10 +96,13 @@ export function useHostedLifecycleEventApplication({
       events,
       isChinese,
       runtimeRef.current,
+      pendingChatSendRef.current?.userMessage.runtimeTurnId || activeHostedTurnIdRef.current,
     );
     runtimeRef.current = result.runtime;
     setRuntime(result.runtime);
-    setMessages(result.messages);
+    const nextMessages = observeChatDelivery(result.messages, messagesRef.current);
+    messagesRef.current = nextMessages;
+    setMessages(nextMessages);
     for (const notice of result.notices) notify(notice);
     if (result.firstTokenAt && !firstTokenAtRef.current) {
       firstTokenAtRef.current = result.firstTokenAt;
@@ -103,14 +117,22 @@ export function useHostedLifecycleEventApplication({
     }
     if (result.completed || result.failed || result.cancelled) {
       pendingTurnActiveRef.current = false;
+      clearOptimisticHostedTurn();
+      resetPendingStateMachine();
       setHostedRunning(false);
       setSending(false);
+      void clearOptimisticPendingTurn(activeConversationId);
     } else if (result.turnActive) {
       pendingTurnActiveRef.current = true;
       setHostedRunning(true);
     }
   }, [
     activeConversationIdRef,
+    activeHostedTurnIdRef,
+    clearOptimisticHostedTurn,
+    clearOptimisticPendingTurn,
+    resetPendingStateMachine,
+    pendingChatSendRef,
     firstTokenAtRef,
     isChinese,
     messagesRef,

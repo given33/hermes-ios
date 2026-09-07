@@ -10,8 +10,6 @@ import { CodingPiChatView } from '../coding-pi/CodingPiChatView';
 import { ChatComposer } from './ChatComposer';
 import { ChatHeader } from './ChatHeader';
 import { ChatMessageStream } from './ChatMessageStream';
-import { ContextUsageRing } from './ChatPresentation';
-import { ChatPlanDrawer } from './ChatPlanDrawer';
 import { ConversationHistory, styles } from './ChatPresentation';
 import type { ChatPlan } from './chat-plan-model';
 
@@ -79,11 +77,14 @@ export function ChatPageShell({
   // undefined → no stale flash), and crossing a mode boundary deliberately
   // drops the previous surface's reading instead of letting the ring render
   // a value that no longer belongs to what is on screen.
-  const contextUsedPercent = useMemo(() => {
+  const contextUsage = useMemo(() => {
     const { messages } = streamProps;
     for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const value = messages[index].contextUsedPercent;
-      if (typeof value === 'number') return value;
+      const message = messages[index];
+      if (message.roleStage === 'worker') continue;
+      if (typeof message.contextUsedPercent === 'number') return {
+        percent: message.contextUsedPercent, usedTokens: message.contextUsedTokens, maxTokens: message.contextMaxTokens,
+      };
     }
     return undefined;
   }, [streamProps.messages, headerProps.chatMode, headerProps.collaborationState]);
@@ -113,23 +114,6 @@ export function ChatPageShell({
                 safeAreaLeft={safeAreaLeft}
                 safeAreaRight={safeAreaRight}
               />
-              <ChatPlanDrawer
-                isChinese={isChinese}
-                plan={plan}
-                safeAreaLeft={safeAreaLeft}
-                safeAreaRight={safeAreaRight}
-              >
-                <View
-                  style={[
-                    styles.contextUsageRow,
-                    { paddingRight: (compact ? 4 : 8) + safeAreaRight },
-                  ]}
-                >
-                  <ContextUsageRing
-                    isChinese={isChinese}
-                    value={contextUsedPercent}
-                  />
-                </View>
                 <Reanimated.View
                   style={[
                     styles.composer,
@@ -141,9 +125,8 @@ export function ChatPageShell({
                     composerKeyboardStyle,
                   ]}
                 >
-                  <ChatComposer {...composerProps} />
+                  <ChatComposer {...composerProps} contextUsage={contextUsage} />
                 </Reanimated.View>
-              </ChatPlanDrawer>
             </>
           )}
         </View>

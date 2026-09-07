@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   hostedTurnVisibilityFailure,
   reconcileHostedTurnVisibilityFailures,
+  pruneConfirmedHostedTurnFailures,
 } from '../src/api/chat-view-model';
 import type { SingleConversation } from '../src/api/HermesCloudApi';
 
@@ -25,6 +26,21 @@ test('hosted turn timeout produces one retryable terminal message', () => {
   assert.equal(failure.message.status, 'failed');
   assert.equal(failure.message.createdAt, 1_000);
   assert.match(failure.message.content, /server did not confirm/i);
+});
+
+test('confirmed task removes legacy durable timeout notices without hiding other failures', () => {
+  const timeout = hostedTurnVisibilityFailure('turn-1').message;
+  const unknown = hostedTurnVisibilityFailure('turn-other').message;
+  const actualFailure = { ...timeout, id: 'server-failed-1', content: 'Tool failed' };
+  for (const status of ['running', 'completed', 'cancelled', 'failed']) {
+    const snapshot = conversation({ hosted_turns: { 'turn-1': { status } } });
+    assert.deepEqual(
+      pruneConfirmedHostedTurnFailures(snapshot, [timeout, unknown, actualFailure]),
+      [unknown, actualFailure],
+    );
+    assert.equal(reconcileHostedTurnVisibilityFailures(snapshot, [timeout], []).messages.length, 0);
+  }
+  assert.deepEqual(pruneConfirmedHostedTurnFailures(conversation(), [timeout]), [timeout]);
 });
 
 test('hosted turn visibility failure survives missing-state polls and clears on authority', () => {

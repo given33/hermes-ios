@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { conversationCacheStorage } from './conversation-cache-storage';
 
 import type {
   CollaborationMessage,
@@ -97,7 +98,7 @@ export class ConversationLocalStore {
   private readonly drafts: ConversationDraftRepository;
 
   constructor(private readonly storage: ConversationStorageAdapter = AsyncStorage) {
-    this.cache = new ConversationCacheRepository(storage);
+    this.cache = new ConversationCacheRepository(conversationCacheStorage(storage));
     this.deleteOutbox = new ConversationDeleteOutboxRepository(
       storage,
       enqueueConversationStorageWrite,

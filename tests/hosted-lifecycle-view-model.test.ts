@@ -73,6 +73,39 @@ test('canonical reasoning deltas stream into the same thinking activity', () => 
   assert.equal(result.messages[0].activities?.[0].output, '先核对 模型状态。');
 });
 
+test('a previous turn finishing cannot cancel the next send or replace its live runtime', () => {
+  const active = applyHostedLifecycleEvents([], [{
+    ...event(10, 'reasoning.delta', { text: 'Current thought', entity_id: 'r' }), turn_id: 'next',
+  }]);
+  const result = applyHostedLifecycleEvents(active.messages, [
+    event(11, 'message.completed', { text: 'Old answer' }),
+    event(12, 'turn.completed'),
+  ], true, active.runtime, 'next');
+  assert.equal(result.completed, false);
+  assert.equal(result.failed, false);
+  assert.equal(result.cancelled, false);
+  assert.equal(result.runtime.turnId, 'next');
+  assert.equal(result.runtime.terminal, false);
+  assert.equal(result.messages.find((message) => message.runtimeTurnId === 'turn-1')?.content, 'Old answer');
+  assert.equal(result.messages.find((message) => message.runtimeTurnId === 'next')?.activities?.[0].output, 'Current thought');
+});
+
+test('one tool call remains one row across generating, usage, command output, and completion', () => {
+  const result = applyHostedLifecycleEvents([], [
+    event(1, 'tool.progress', { source_event_type: 'tool.generating', name: 'memory' }),
+    event(2, 'tool.started', { tool_id: 'call-1', name: 'memory', args: { action: 'add', content: 'preference' } }),
+    event(3, 'command.output', { source_event_type: 'session.usage', unmapped_frontend_event: true, usage: {} }),
+    event(4, 'tool.completed', { tool_id: 'call-1', name: 'memory', result: 'saved' }),
+    event(5, 'command.output', { tool_id: 'call-1', output: 'detail' }),
+  ]);
+  assert.equal(result.messages[0].activities?.length, 1);
+  const activity = result.messages[0].activities![0];
+  assert.equal(activity.id, 'call-1');
+  assert.equal(activity.name, 'memory');
+  assert.equal(activity.status, 'completed');
+  assert.match(activity.input!, /preference/);
+});
+
 test('reasoning content/message payload variants still start the thinking clock', () => {
   const base = {
     account_generation: 'account-1',
@@ -246,6 +279,23 @@ test('interim answer text stays in the same streaming message', () => {
   assert.equal(streamed.messages.length, 1);
   assert.equal(streamed.messages[0].content, 'Early answer completed');
   assert.equal(streamed.messages[0].status, 'completed');
+});
+
+test('late gateway metadata and retry frames cannot restore the stop button after completion', () => {
+  const done = applyHostedLifecycleEvents([], [
+    event(1, 'message.completed', { text: '3973' }),
+  ]);
+  const replayed = applyHostedLifecycleEvents(done.messages, [
+    event(2, 'agent.started', { source_event_type: 'session.info' }),
+    event(3, 'connection.retry_started', { attempt: 1 }),
+    event(4, 'tool.completed', { tool_id: 'call-1', name: 'terminal', result: '3973' }),
+  ], true, done.runtime, 'turn-1');
+  assert.equal(replayed.completed, true);
+  assert.equal(replayed.turnActive, false);
+  assert.equal(replayed.phase, undefined);
+  assert.equal(replayed.messages[0].status, 'completed');
+  assert.equal(replayed.messages[0].content, '3973');
+  assert.equal(replayed.messages[0].completedAt, done.messages[0].completedAt);
 });
 
 test('official browser and MoA progress render as stable structured activities', () => {

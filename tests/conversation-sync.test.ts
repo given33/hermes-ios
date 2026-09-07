@@ -598,6 +598,21 @@ test('a failed first outbox write leaves the original draft and attachment claim
   assert.equal(recovered?.attachments[0]?.uri, 'file:///cache/draft-file.txt');
 });
 
+test('an acknowledged previous send does not let its stale optimistic marker block the next send', async () => {
+  const store = new ConversationLocalStore(new MemoryStorage());
+  const owner = 'https://example.test|send-next@example.test';
+  const first = hostedTurnFixture('first');
+  const second = hostedTurnFixture('second');
+  second.item.conversationId = first.item.conversationId;
+  await store.initializePendingEnqueue(owner, first.item, [first.message], first.pendingTurn);
+  const blocked = await store.initializePendingEnqueue(owner, second.item, [second.message], second.pendingTurn);
+  assert.equal(blocked.durable, false);
+  await store.removePendingEnqueue(owner, first.item.input.requestId);
+  const next = await store.initializePendingEnqueue(owner, second.item, [second.message], second.pendingTurn);
+  assert.equal(next.durable, true);
+  assert.equal((await store.readPendingEnqueues(owner))[0].input.requestId, 'second');
+});
+
 test('initialization recovers an outbox write committed before its adapter reports failure', async () => {
   let interruptNextOutboxWrite = true;
   const storage = new class extends MemoryStorage {
@@ -1194,6 +1209,26 @@ test('identical optimistic user sends consume distinct legacy server echoes', ()
   assert.equal(reconciliation.pending.length, 2);
 });
 
+test('confirmed optimistic prompts stay before their replies throughout the grace period', () => {
+  const user = (id: string, runtimeTurnId: string): HermesChatViewMessage => ({
+    id, runtimeTurnId, content: 'hello', name: 'You', role: 'user', createdAt: 10_000,
+  });
+  const a = user('u1', 't1'), b = user('u2', 't2');
+  const reply = (id: string, runtimeTurnId: string): HermesChatViewMessage => ({
+    id, runtimeTurnId, content: 'reply', name: 'Hermes', role: 'assistant', status: 'completed',
+  });
+  const server = [a, reply('a1', 't1'), b, reply('a2', 't2')];
+  const first = reconcileOptimisticMessages(server, [a, b], 20_000);
+  const second = reconcileOptimisticMessages(server, first.pending, 21_000);
+  const settled = reconcileOptimisticMessages(server, second.pending, 200_000);
+  for (const result of [first, second, settled]) {
+    assert.deepEqual(result.messages.map(({ id }) => id), ['u1', 'a1', 'u2', 'a2']);
+  }
+  const delayed = reconcileOptimisticMessages([a, reply('a1', 't1'), reply('a2', 't2')], [b], 22_000);
+  assert.deepEqual(delayed.messages.map(({ id }) => id), ['u1', 'a1', 'u2', 'a2']);
+  assert.equal(delayed.pending[0].optimisticConfirmedAt, undefined);
+});
+
 test('lightweight index summaries never clear a complete cached transcript', () => {
   const cached = conversation('conversation-1', 100, [
     { id: 'm-1', role: 'user', name: 'You', content: 'one' },
@@ -1251,6 +1286,30 @@ test('session-page synchronization stores full changed transcripts for later loc
   assert.equal(synchronized.activeConversationId, 'unchanged');
   assert.equal(restored?.conversations.find(({ id }) => id === 'unchanged')?.messages[0].content, '本地完整正文');
   assert.equal(restored?.conversations.find(({ id }) => id === 'changed')?.messages.length, 2);
+});
+
+test('cache quota cannot discard downloaded sessions or pretend they were saved offline', async () => {
+  const storage = new MemoryStorage();
+  const store = new ConversationLocalStore(storage);
+  const owner = 'https://example.test|quota-sync@example.test';
+  const remote = conversation('remote', 200, [{ id: 'remote-message', role: 'assistant', name: 'Hermes', content: 'Server result' }]);
+  const originalWrite = storage.setItem.bind(storage);
+  storage.setItem = async () => { throw Object.assign(new Error('Storage full'), { name: 'QuotaExceededError' }); };
+  const api = {
+    async getUnifiedConversations() { return { conversations: [remote] }; },
+    async getConversation() { return { conversation: remote }; },
+  } as unknown as HermesCloudApi;
+  const snapshot = await synchronizeConversationCache(api, store, owner);
+  assert.equal(snapshot.cacheWarning, 'quota');
+  assert.equal(snapshot.conversations[0].messages[0].content, 'Server result');
+  assert.equal(await store.read(owner), null);
+  storage.setItem = originalWrite;
+  const retried = await synchronizeConversationCache(api, store, owner);
+  assert.equal(retried.cacheWarning, undefined);
+  assert.equal((await store.read(owner))?.conversations[0].id, 'remote');
+  storage.setItem = async () => { throw new Error('Unrelated storage failure'); };
+  remote.updated_at = 300;
+  await assert.rejects(synchronizeConversationCache(api, store, owner), /Unrelated storage failure/);
 });
 
 test('unchanged authoritative transcripts perform no detail download or local write', async () => {

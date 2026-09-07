@@ -60,6 +60,8 @@ export interface PreviewComposerOptions {
   voiceChoices: readonly HermesVoiceChoice[];
   voicePreview: string;
   voiceState: HermesVoiceState;
+  voiceConversation?: boolean;
+  voiceLevel?: number;
   cancelVoiceInput(): void;
   startVoiceInput(): void;
   stopVoiceInput(): void;
@@ -174,6 +176,8 @@ export function buildPreviewComposerProps(
       voiceChoices: options.voiceChoices,
       voicePreview: options.voicePreview,
       voiceState: options.voiceState,
+      voiceConversation: options.voiceConversation,
+      voiceLevel: options.voiceLevel,
     },
   };
 }

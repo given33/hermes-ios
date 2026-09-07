@@ -10,7 +10,8 @@ import type {
 } from './conversation-store-types';
 import { CONVERSATION_CACHE_VERSION, cloneCachedConversation } from './conversation-cache-repository';
 import { mapWithConcurrency } from './map-with-concurrency';
-import { isRecord, normalizeOwner, numberValue } from './conversation-storage-primitives';
+import { isConversationSynchronizationCurrent } from './conversation-storage-coordinator';
+import { isRecord, isStorageQuotaError, normalizeOwner, numberValue } from './conversation-storage-primitives';
 import {
   cloneCollaborationMessage,
   cloneOptimisticLedgerEntry,
@@ -294,13 +295,24 @@ export async function synchronizeConversationCache(
   )
     ? cached?.activeConversationId || ''
     : conversations[0]?.id || '';
-  const wrote = await store.writeSynchronized(
-    owner,
-    generation,
-    conversations,
-    activeConversationId,
-  );
-  if (!wrote) {
+  let wrote = false;
+  let cacheWarning: 'quota' | undefined;
+  try {
+    wrote = await store.writeSynchronized(owner, generation, conversations, activeConversationId);
+  } catch (error) {
+    if (!isStorageQuotaError(error)) {
+      throw error;
+    }
+    if (!isConversationSynchronizationCurrent(owner, generation)) {
+      const latest = await store.read(owner);
+      if (latest) return latest;
+      throw error;
+    }
+    // Downloaded server data remains usable. Never report a failed durable
+    // cache write as success or apply this fallback to drafts/send outboxes.
+    cacheWarning = 'quota';
+  }
+  if (!wrote && !cacheWarning) {
     const latest = await store.read(owner);
     if (latest) return latest;
   }
@@ -310,6 +322,7 @@ export async function synchronizeConversationCache(
     activeConversationId,
     conversations,
     syncedAt: Date.now(),
+    ...(cacheWarning ? { cacheWarning } : {}),
   };
 }
 

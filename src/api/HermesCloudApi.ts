@@ -346,8 +346,8 @@ export class HermesCloudApi {
     return this.models.getModelInfo(profile);
   }
 
-  getModelOptions(profile = 'default') {
-    return this.models.getModelOptions(profile);
+  getModelOptions(profile = 'default', configuredOnly = false) {
+    return this.models.getModelOptions(profile, configuredOnly);
   }
 
   getCustomModel(profile = 'default'): Promise<CustomModelConfiguration> {

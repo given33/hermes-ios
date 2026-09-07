@@ -213,6 +213,7 @@ export function ConversationHistory({
             >
               <View style={{ alignItems: 'center', flexDirection: 'row', gap: 4 }}>
                 <IOSPressable
+                  testID={`open-conversation-${conversation.id}`}
                   accessibilityLabel={`${selectionMode
                     ? (isChinese ? '选择会话' : 'Select conversation')
                     : (isChinese ? '打开会话' : 'Open conversation')} ${conversation.title || ''}`}

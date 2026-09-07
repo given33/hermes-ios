@@ -99,7 +99,6 @@ export class HermesAudioCloudApi {
     const transcript = typeof value.transcript === 'string'
       ? value.transcript.trim()
       : '';
-    if (!transcript) throw new Error('Hermes returned an empty voice transcript');
     return {
       provider: typeof value.provider === 'string' ? value.provider : '',
       transcript,

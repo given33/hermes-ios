@@ -46,6 +46,25 @@ test('sources preserve real titles, deduplicate URLs and refuse non-web or crede
   for (const url of ['file:///secret', 'data:text/html,test', 'not a url']) assert.equal(activitySourceUrl(url), null);
 });
 
+test('official v0.21 search data.web survives live events and session replay as navigable sources', () => {
+  // tools/web_tools.py at official 29112bef099274229cadff79cdff7bf7b99c4b77.
+  const output = JSON.stringify({ success: true, data: { web: [
+    { title: 'Official reference', url: 'https://example.com/reference', description: 'Search excerpt' },
+    { title: 'Duplicate', url: 'https://example.com/reference' },
+    { title: 'Invalid', url: 'javascript:alert(1)' },
+  ] } });
+  const expected = [{ title: 'Official reference', url: 'https://example.com/reference', description: 'Search excerpt' }];
+  const live = streamEventToActivity('tool.end', { tool_name: 'web_search', tool_id: 'search-1', output });
+  assert.ok(live);
+  assert.deepEqual(activityDetails(live).sources, expected);
+  const messages = normalizeOfficialSessionMessages([
+    { role: 'assistant', tool_calls: [{ id: 'search-1', function: { name: 'web_search', arguments: { query: 'reference' } } }] },
+    { role: 'tool', tool_call_id: 'search-1', content: output },
+  ], 'research', 'session-1');
+  const restored = (messages[0].meta?.activities as Record<string, unknown>[])[0];
+  assert.deepEqual(activityDetails(activity({ output: String(restored.output) })).sources, expected);
+});
+
 test('edit arguments produce requested diffs without claiming a failed edit was applied', () => {
   const detail = activityDetails(activity({ status: 'failed', input: JSON.stringify({
     path: 'src/main.ts', old_text: 'const value = 1;\n', new_text: 'const value = 2;\n',
@@ -60,7 +79,9 @@ test('edit arguments produce requested diffs without claiming a failed edit was 
 test('oversized or malformed payloads remain accessible as raw output', () => {
   const text = '{' + 'x'.repeat(250_000);
   assert.equal(activityDetails(activity({ output: text })).output, text);
-  assert.deepEqual(activityDetails(activity({ input: '{invalid' })).fields, [{ key: 'tool', value: 'tool' }]);
+  assert.deepEqual(activityDetails(activity({ input: '{invalid' })).fields, [
+    { key: 'arguments', value: '{invalid' }, { key: 'tool', value: 'tool' },
+  ]);
 });
 
 test('official history retains structured tool arguments and results for detail rendering', () => {

@@ -242,6 +242,7 @@ export function useHostedSendController({
         ? `已添加 ${attachmentCount} 个附件`
         : `${attachmentCount} attachments`),
       createdAt: userMessageCreatedAt,
+      submittedAt: userMessageCreatedAt,
       durationMs: 0,
       id: userMessageId,
       name: isChinese ? '你' : 'You',
@@ -254,8 +255,7 @@ export function useHostedSendController({
     const sendKey = hostedTurnDeliveryClaimKey(cacheOwner, userMessageId);
     cancelledPendingSendKeysRef.current.delete(sendKey);
     const isCurrentSend = () => (
-      pendingTurnActiveRef.current
-      && sendOperationGenerationRef.current === sendGeneration
+      sendOperationGenerationRef.current === sendGeneration
       && !cancelledPendingSendKeysRef.current.has(sendKey)
       && isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
     );
@@ -522,11 +522,6 @@ export function useHostedSendController({
         }, ownerEpoch);
         return;
       }
-      // Keep the optimistic composer state local while delivery is in flight,
-      // but do not start SSE until the server has accepted the turn. Starting
-      // it here races a brand-new conversation with /enqueue: the first GET
-      // can receive 404, after which the stream hook enters reconnect backoff
-      // and the first live token waits behind an avoidable retry.
       // The official Hermes gateway owns model readiness, retries, and
       // provider errors. A client-side /api/model preflight adds a cold-start
       // round trip and can disagree with the session that will actually run.
@@ -601,10 +596,15 @@ export function useHostedSendController({
       setActiveConversationId(conversationId);
       if (activeConversationIdRef.current === conversationId) {
         activeHostedTurnIdRef.current = hostedTurnId;
-        beginOptimisticHostedTurn(conversationId, hostedTurnId);
+        const completedOnStream = messagesRef.current.some((message) => (
+          message.role === 'assistant' && message.runtimeTurnId === hostedTurnId
+          && ['completed', 'failed', 'cancelled'].includes(message.status || '')
+        ));
+        if (!completedOnStream) beginOptimisticHostedTurn(conversationId, hostedTurnId);
         setActiveHostedTurnId(hostedTurnId);
-        setHostedRunning(true);
-        pendingTurnActiveRef.current = true;
+        setHostedRunning(!completedOnStream);
+        setSending(!completedOnStream);
+        pendingTurnActiveRef.current = !completedOnStream;
         pendingChatSendRef.current = null;
         cancelledPendingSendKeysRef.current.delete(sendKey);
         // SSE is the authoritative post-acceptance path. Keep outbox cleanup
@@ -616,6 +616,14 @@ export function useHostedSendController({
       }
     } catch (error) {
       if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
+      if (pendingChatSendRef.current?.key === sendKey
+        && pendingChatSendRef.current.queuedItem?.deliveryAcceptedAt) {
+        // The stream acknowledged this request before its HTTP response.
+        // A timed-out POST must not create a second error or retry the task.
+        hostedAccepted = true;
+        enqueueAcknowledged = true;
+        return;
+      }
       if (!isCurrentSend() || error instanceof HostedTurnCancelledDuringDelivery) {
         // Only tear down the durable row when the user explicitly cancelled.
         // A send detached by a conversation switch keeps its outbox item so
@@ -683,6 +691,8 @@ export function useHostedSendController({
         const failure = serverFailure(error, isChinese);
         pendingChatSendRef.current = null;
         pendingTurnActiveRef.current = false;
+        setHostedRunning(false);
+        setSending(false);
         notify(isChinese
           ? `本地存储失败，草稿已恢复：${failure}`
           : `Local storage failed. Your draft was restored: ${failure}`);

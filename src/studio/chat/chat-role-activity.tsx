@@ -1,20 +1,15 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
-import { Activity as ActivityIcon } from 'lucide-react-native';
-import Reanimated, { Easing, FadeIn, FadeOut } from 'react-native-reanimated';
 import {
-  activityDisplayContent,
   messageIsRunning,
   type HermesChatActivity as ChatActivity,
   type HermesChatViewMessage as ChatMessage,
 } from '../../api/chat-view-model';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
-import { IOS_MOTION } from '../../design/ios-motion';
-import { useMotion } from '../../design/motion';
 import { useTheme } from '../../design/ThemeProvider';
-import { ReasoningSection } from '../ReasoningSection';
 import { AnimatedChevron, WorkflowTimeline } from '../WorkflowTimeline';
+import { ReasoningSection } from '../ReasoningSection';
 import {
   activityIsRunning,
   reasoningElapsedLabel,
@@ -26,9 +21,7 @@ import type {
   HostedRuntimeProjection,
 } from '../../api/hosted-runtime-types';
 import { HostedSubagentRoster } from './hosted-subagent-roster';
-import { HostedTrajectoryViewer } from './hosted-trajectory-viewer';
-const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
-const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
+import { currentTurnMessages, latestMemberMessages } from './chat-member-model';
 const AwaitingChoiceCard = memo(function AwaitingChoiceCard({
   activity,
   isChinese,
@@ -139,7 +132,7 @@ export function AgentRoster({
     // agent's session window: its complete run, step by step.
     const groups = new Map<string, ChatActivity[]>();
     const names = new Map<string, string>();
-    for (const message of messages) {
+    for (const message of currentTurnMessages(messages)) {
       for (const activity of message.activities || []) {
         if (activity.category !== 'subagent') continue;
         // Persisted ids are `remote-subagent:{profile}:{index}:{goal}` —
@@ -289,7 +282,6 @@ export function TeamStatusBar({
 }) {
   const { tokens } = useTheme();
   const [rosterOpen, setRosterOpen] = useState(false);
-  const [trajectoryOpen, setTrajectoryOpen] = useState(false);
   const { working, done, awaiting, corrective, subagents } = useMemo(() => {
     let workingCount = 0;
     let doneCount = 0;
@@ -301,11 +293,10 @@ export function TeamStatusBar({
     const currentTurnId = [...messages].reverse().find(
       (message) => message.runtimeTurnId,
     )?.runtimeTurnId;
-    for (const message of messages) {
+    for (const message of latestMemberMessages(messages)) {
       if (message.role === 'user') continue;
       const isTeamMember = Boolean(
-        message.memberId
-        || message.roleStage === 'worker'
+        message.roleStage === 'worker'
         || message.roleStage === 'reviewer'
         || message.activities?.some((activity) => activity.category === 'subagent'),
       );
@@ -339,37 +330,15 @@ export function TeamStatusBar({
       subagents: subagentCount,
     };
   }, [messages]);
-  const runtimeComponents = Object.values(runtime?.components || {});
-  const runtimeProviders = Object.values(runtime?.providers || {});
-  const runtimeWaiting = runtimeComponents.filter((item) => item.lifecycle === 'waiting').length;
-  const runtimeUnloading = runtimeComponents.filter((item) => item.lifecycle === 'unloading' || item.lifecycle === 'leaving').length;
-  const runtimeDraining = runtimeProviders.filter((item) => item.status === 'draining').length;
-  const runtimeDegraded = runtimeProviders.filter((item) => item.status === 'unhealthy').length;
   const runtimeSubagents = Object.values(runtime?.subagents || {});
   const runtimeSubagentCount = runtimeSubagents.length;
-  const trajectory = runtime?.trajectory;
-  const hasTrajectory = Boolean(trajectory && trajectory.records.length);
-  const hasRuntime = Boolean(runtime && (
-    runtimeComponents.length > 0
-    || runtimeProviders.length > 0
-    || runtime.terminal
-    || runtime.hasGap
-    || runtime.resetRequired
-    || hasTrajectory
-  ));
-  if (!working && !done && !awaiting && !subagents && !runtimeSubagentCount && !corrective && !hasRuntime && !reconnectAttempt) return null;
   const parts: string[] = [];
   if (working) parts.push(`${working} ${isChinese ? '成员干活' : 'working'}`);
   if (done) parts.push(`${done} ${isChinese ? '成员完成' : 'done'}`);
   if (awaiting) parts.push(`${awaiting} ${isChinese ? '等你决定' : 'awaiting you'}`);
   if (corrective) parts.push(`${corrective} ${isChinese ? '需整改' : 'corrective'}`);
-  if (runtimeWaiting) parts.push(`${runtimeWaiting} waiting`);
-  if (runtimeDraining) parts.push(`${runtimeDraining} draining`);
-  if (runtimeUnloading) parts.push(`${runtimeUnloading} unloading`);
-  if (runtimeDegraded) parts.push(`${runtimeDegraded} degraded`);
-  if (runtimeSubagentCount) parts.push(`${runtimeSubagentCount} workers`);
-  if (reconnectAttempt) parts.push(`reconnect ${reconnectAttempt}`);
-  if (runtime?.terminal) parts.push('terminal confirmed');
+  if (reconnectAttempt) parts.push(isChinese ? '正在重新连接' : 'Reconnecting');
+  if (!parts.length && !subagents && !runtimeSubagentCount) return null;
   return (
     <View style={[styles.teamStatusBar, { backgroundColor: tokens.colors.card, borderColor: multiplyAlpha(tokens.colors.textTertiary, 0.25) }]}>
       <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: working ? '#D28B22' : tokens.colors.success }} />
@@ -384,13 +353,13 @@ export function TeamStatusBar({
           style={[styles.rosterToggle, { borderColor: multiplyAlpha(tokens.colors.textTertiary, 0.35) }]}
         >
           <Text style={[styles.rosterToggleText, { color: tokens.colors.textSecondary }]}>
-            {isChinese ? `智能体 ${subagents}` : `agents ${subagents}`}
+            {isChinese ? '查看成员' : 'View members'}
           </Text>
         </IOSPressable>
       ) : null}
       {rosterOpen ? (
         <>
-          {subagents ? <AgentRoster isChinese={isChinese} messages={messages} /> : null}
+          {subagents && !runtimeSubagentCount ? <AgentRoster isChinese={isChinese} messages={messages} /> : null}
           {runtimeSubagentCount ? (
             <HostedSubagentRoster
               isChinese={isChinese}
@@ -400,19 +369,6 @@ export function TeamStatusBar({
             />
           ) : null}
         </>
-      ) : null}
-      {hasTrajectory ? (
-        <IOSPressable
-          accessibilityLabel={isChinese ? '打开执行轨迹' : 'Open trajectory'}
-          haptic="selection"
-          onPress={() => setTrajectoryOpen((current) => !current)}
-          style={[styles.rosterToggle, { borderColor: multiplyAlpha(tokens.colors.textTertiary, 0.35) }]}
-        >
-          <ActivityIcon color={tokens.colors.primary} size={14} />
-        </IOSPressable>
-      ) : null}
-      {trajectoryOpen && trajectory ? (
-        <HostedTrajectoryViewer isChinese={isChinese} trajectory={trajectory} />
       ) : null}
     </View>
   );
@@ -504,13 +460,11 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   onRespondToChoice?(activityId: string, text: string): void;
 }) {
   const { tokens } = useTheme();
-  const motion = useMotion();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => messageIsRunning(message));
   const manualPinRef = useRef(false);
   const activities = message.activities || [];
-  const reasoningActivities = activities.filter(
-    (activity) => activity.category === 'reasoning',
-  );
+  const reasoningActivities = activities.filter((activity) => activity.category === 'reasoning');
+  const reasoningText = reasoningActivities.map((activity) => activity.output || activity.preview || activity.detail || '').filter(Boolean).join('\n\n');
   const awaitingActivities = activities.filter(
     (activity) => activity.category === 'awaiting',
   );
@@ -524,19 +478,17 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
       && activity.category !== 'rework'
     ),
   );
-  const reasoningText = reasoningActivities
-    .map((activity) => activityDisplayContent(activity))
-    .filter(Boolean)
-    .join('\n\n');
-  const reasoningRunning = reasoningActivities.some(
-    (activity) => activity.status === 'queued' || activity.status === 'running',
-  );
   const running = messageIsRunning(message);
   const now = useNowTicker(running);
   // Live workflow display: while the turn runs the activity group stays
   // open so tool calls / searches appear in real time; once the turn ends it
   // collapses by default. A manual tap pins the state until the next turn.
   useEffect(() => {
+    if (!running) {
+      manualPinRef.current = false;
+      setOpen(false);
+      return;
+    }
     if (manualPinRef.current) return;
     setOpen(running);
   }, [running]);
@@ -562,7 +514,7 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
           {isChinese ? `${stepActivities.length} 个工具调用` : `${stepActivities.length} tool calls`}
         </Text>
       ) : null}
-      {activities.length ? (
+      {stepActivities.length || reasoningText ? (
         <AnimatedChevron
           color={tokens.colors.textTertiary}
           open={open}
@@ -610,11 +562,11 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
           ))}
         </View>
       ) : null}
-      {stepActivities.length || reasoningActivities.length ? (
+      {stepActivities.length || reasoningText ? (
         <IOSPressable
           accessibilityRole="button"
           accessibilityState={{ expanded: open }}
-          accessibilityLabel={isChinese ? '执行步骤' : 'Execution steps'}
+          accessibilityLabel={isChinese ? '执行过程' : 'Execution details'}
           haptic="selection"
           onPress={() => {
             manualPinRef.current = true;
@@ -632,25 +584,16 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
         <View style={styles.activitySummary}>{summary}</View>
       )}
       {open ? (
-        <Reanimated.View
-          entering={FadeIn
-            .duration(motion.fadeDuration(IOS_MOTION.duration.control))
-            .easing(IOS_DECELERATE_EASING)}
-          exiting={FadeOut
-            .duration(motion.fadeDuration(IOS_MOTION.duration.press))
-            .easing(IOS_STANDARD_EASING)}
+        <View
           style={styles.activityTimeline}
         >
-          {reasoningText ? (
-            <ReasoningSection
-              detailStyle={styles.reasoningActivityDetail}
-              durationLabel={reasoningElapsedLabel(reasoningActivities, now)}
-              isChinese={isChinese}
-              onInspectActivity={onInspectActivity}
-              running={reasoningRunning}
-              text={reasoningText}
-            />
-          ) : null}
+          {reasoningText ? <ReasoningSection
+            isChinese={isChinese}
+            running={reasoningActivities.some(activityIsRunning)}
+            durationLabel={reasoningElapsedLabel(reasoningActivities, now)}
+            text={reasoningText}
+            onInspectActivity={onInspectActivity}
+          /> : null}
           {stepActivities.length ? (
             <WorkflowTimeline
               activities={stepActivities}
@@ -659,7 +602,7 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
               onInspectActivity={onInspectActivity}
             />
           ) : null}
-        </Reanimated.View>
+        </View>
       ) : null}
     </View>
   );

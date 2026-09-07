@@ -3,6 +3,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react';
 import {
   Keyboard,
@@ -18,6 +19,7 @@ import {
 import {
   HOSTED_TURN_RETRY_DELAY_MS,
 } from '../api/hosted-turn-delivery-state';
+import { captureConversationStorageEpoch } from '../api/conversation-storage-coordinator';
 import {
   type HermesChatViewMessage as ChatMessage,
   type ConversationCollaborationState,
@@ -36,6 +38,7 @@ import { useChatFeatureModes } from './chat/useChatFeatureModes';
 import { useChatPageState } from './chat/useChatPageState';
 import { useHostedTurnDeliveryService } from './chat/useHostedTurnDeliveryService';
 import { useHermesVoice } from './chat/useHermesVoice';
+import { ChatModelControl } from './chat/ChatModelControl';
 import { useHostedConversationStream } from './chat/useHostedConversationStream';
 import { useConversationIndexLifecycle } from './chat/useConversationIndexLifecycle';
 import { useChatScrollController } from './chat/useChatScrollController';
@@ -269,6 +272,7 @@ export function ChatPreviewPage({
     hostedTurnVisibilityFailuresRef,
     isChinese,
     localStore,
+    notify,
     optimisticHostedTurnConfirmedRef,
     optimisticHostedTurnDeadlineRef,
     optimisticHostedTurnIdRef,
@@ -344,6 +348,7 @@ export function ChatPreviewPage({
     handleOutboxFailure,
     hostedTurnDeliveryClaimsRef,
     hostedTurnDeliveryService,
+    messagesRef,
     isChinese,
     loadConversation,
     localStore,
@@ -496,6 +501,8 @@ export function ChatPreviewPage({
     setSending,
   });
 
+  const voiceSubmitRef = useRef<() => void>(() => undefined);
+  const [modelSwitching, setModelSwitching] = useState(false);
   const voice = useHermesVoice({
     agentTurnActive: hostedRunning || sending,
     applyTranscript: useCallback((next: string) => {
@@ -503,7 +510,7 @@ export function ChatPreviewPage({
       setContent(next);
     }, []),
     describeError: useCallback(
-      (error: unknown) => serverFailure(error, isChinese),
+      (error: unknown) => error instanceof Error ? error.message : String(error),
       [isChinese],
     ),
     cloudApi,
@@ -516,6 +523,11 @@ export function ChatPreviewPage({
       () => voiceInterruptAgentRef.current?.(),
       [],
     ),
+    onSubmitTranscript: useCallback((text: string) => {
+      contentRef.current = text;
+      setContent(text);
+      voiceSubmitRef.current();
+    }, []),
     profile,
   });
   const checkApiRelay = useRelayCheckAction({ cloudApi, isChinese, notify });
@@ -565,7 +577,12 @@ export function ChatPreviewPage({
   const hostedLifecycleApplication = useHostedLifecycleEventApplication({
     activeConversationId,
     activeConversationIdRef,
+    activeHostedTurnIdRef,
+    pendingChatSendRef,
     cacheOwner,
+    clearOptimisticHostedTurn,
+    clearOptimisticPendingTurn,
+    resetPendingStateMachine,
     firstTokenAtRef,
     isChinese,
     messagesRef,
@@ -584,6 +601,23 @@ export function ChatPreviewPage({
     notify,
     turnId: activeHostedTurnIdRef.current || hostedLifecycleApplication.runtime?.turnId || '',
   });
+  const acknowledgeStreamedTurn = useCallback((turnId: string) => {
+    const pending = pendingChatSendRef.current;
+    const item = pending?.queuedItem;
+    if (!localStore || !item || item.input.turnId !== turnId || item.deliveryAcceptedAt) return;
+    const acceptedItem = { ...item, deliveryAcceptedAt: Date.now(), lastError: '', nextAttemptAt: 0 };
+    pending.queuedItem = acceptedItem;
+    const epoch = captureConversationStorageEpoch(cacheOwner);
+    // An authenticated event proves acceptance even if the POST response was
+    // lost. Settle the durable intent without resetting the live UI phase.
+    void localStore.acceptPendingEnqueueIfActive(cacheOwner, acceptedItem, {
+      attempt: 0, phase: 'connecting', phaseStartedAt: item.queuedAt,
+      turnId, updatedAt: Date.now(), userMessageId: item.input.message.id,
+    }, epoch).then(async (mutation) => {
+      if (mutation.item?.cancelledAt) return;
+      if (mutation.item) await localStore.removePendingEnqueueIfLeaseOwned(cacheOwner, mutation.item, epoch);
+    }).catch(() => undefined);
+  }, [cacheOwner, localStore, pendingChatSendRef]);
   useHostedConversationStream({
     accountGenerationRef: hostedAccountGenerationRef,
     activeConversationId,
@@ -595,21 +629,13 @@ export function ChatPreviewPage({
     cursorRef: hostedEventCursorRef,
     generation: conversationSyncGenerationRef.current,
     hostedRunning,
-    // Reuse the official hosted-events SSE for an idle, existing conversation
-    // so enqueue does not pay a second connection handshake on every turn.
-    // A freshly-created local conversation is marked pending in the durable
-    // outbox before its id becomes active; do not race its first /enqueue with
-    // a 404 stream open. The official enqueue route creates and pre-warms it.
-    primeHostedStream: Boolean(
-      activeConversationId
-      && !(
-        pendingChatSendRef.current?.conversationId === activeConversationId
-        && pendingChatSendRef.current.queuedItem?.conversationPending
-      )
-    ),
+    // The enqueue response can be delayed after acceptance. Subscribe as soon
+    // as the local intent exists so that delay cannot hold back model output.
+    primeHostedStream: Boolean(activeConversationId),
     loadConversation,
     requestTimeoutMs: HOSTED_TURN_REQUEST_TIMEOUT_MS,
     resetLifecycleRuntime: hostedLifecycleApplication.reset,
+    onTurnObserved: acknowledgeStreamedTurn,
   });
 
   const {
@@ -674,7 +700,7 @@ export function ChatPreviewPage({
     };
   }, [canCancelHostedTurn, cancelActiveHostedTurn]);
 
-  const requestSend = useChatSendAction({
+  const submitChat = useChatSendAction({
     attachmentsRef,
     canCancelHostedTurn,
     cancelActiveHostedTurn,
@@ -686,6 +712,20 @@ export function ChatPreviewPage({
     setContent,
     setSlashMenuOpen,
   });
+  const queuedModelSendRef = useRef(false);
+  const modelSwitchingRef = useRef(modelSwitching);
+  modelSwitchingRef.current = modelSwitching;
+  const requestSend = useCallback(() => {
+    if (modelSwitchingRef.current) { queuedModelSendRef.current = true; return; }
+    submitChat();
+  }, [submitChat]);
+  useEffect(() => {
+    if (!modelSwitching && queuedModelSendRef.current) {
+      queuedModelSendRef.current = false;
+      submitChat();
+    }
+  }, [modelSwitching, submitChat]);
+  useEffect(() => { voiceSubmitRef.current = requestSend; }, [requestSend]);
 
   const {
     appendLargePastedText,
@@ -728,13 +768,13 @@ export function ChatPreviewPage({
       backgroundColor={tokens.colors.background}
       compact={compact}
       composerKeyboardStyle={composerKeyboardStyle}
-      composerProps={buildPreviewComposerProps({
+      composerProps={{ ...buildPreviewComposerProps({
         activeConversationIdRef,
         appendLargePastedText,
         attachments,
         autoFollowStreamRef,
         canCancelHostedTurn,
-        canSend,
+        canSend: canSend && !modelSwitching,
         cancelActiveHostedTurn,
         cancellingHostedTurn,
         cleanupAttachmentSources,
@@ -764,7 +804,7 @@ export function ChatPreviewPage({
         shareAttachment,
         slashMenuOpen,
         updateAttachments,
-      })}
+      }), modelControl: <ChatModelControl api={cloudApi} profile={profile} busy={hostedRunning || sending || voice.voiceConversation} isChinese={isChinese} notify={notify} onBusyChange={setModelSwitching} /> }}
       headerProps={{
         chatMode,
         collaborationState,

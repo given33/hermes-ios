@@ -11,6 +11,8 @@ import type {
   SingleConversation,
 } from '../../api/HermesCloudApi';
 import { accountGenerationFromOwnerScope } from '../../auth/account-identity';
+import { isStorageQuotaError } from '../../api/conversation-storage-primitives';
+import { observeChatDelivery } from '../../api/chat-delivery-timing';
 import type {
   ConversationLocalStore,
   OptimisticPendingTurn,
@@ -33,6 +35,7 @@ import {
   hostedTurnVisibilityFailure,
   reconcileHostedTurnVisibilityFailures,
   reconcileOptimisticMessages,
+  pruneConfirmedHostedTurnFailures,
   type ConversationCollaborationState,
   type HermesChatViewMessage as ChatMessage,
   type HostedTurnVisibilityFailure,
@@ -62,6 +65,7 @@ interface ConversationSnapshotControllerOptions {
   hostedTurnVisibilityFailuresRef: MutableRefObject<Map<string, HostedTurnVisibilityFailure[]>>;
   isChinese: boolean;
   localStore: ConversationLocalStore | null;
+  notify(message: string): void;
   optimisticHostedTurnConfirmedRef: MutableRefObject<boolean>;
   optimisticHostedTurnDeadlineRef: MutableRefObject<number>;
   optimisticHostedTurnIdRef: MutableRefObject<string>;
@@ -106,6 +110,7 @@ export function useConversationSnapshotController({
   hostedTurnVisibilityFailuresRef,
   isChinese,
   localStore,
+  notify,
   optimisticHostedTurnConfirmedRef,
   optimisticHostedTurnDeadlineRef,
   optimisticHostedTurnIdRef,
@@ -128,9 +133,23 @@ export function useConversationSnapshotController({
   updatePendingPhase,
 }: ConversationSnapshotControllerOptions) {
   const cacheWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const cacheFailureNotifiedRef = useRef<{ owner: string; epoch: number } | null>(null);
   const sessionEntryStateRef = useRef(new Map<string, { cursor: number; generation: string }>());
   const reconnectAttemptRef = useRef(reconnectAttempt);
   reconnectAttemptRef.current = reconnectAttempt;
+
+  const reportCacheFailure = useCallback((expectedEpoch: number, deletionRevision: number) => {
+    if (
+      !isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)
+      || captureConversationDeletionRevision(cacheOwner) !== deletionRevision
+      || (cacheFailureNotifiedRef.current?.owner === cacheOwner
+        && cacheFailureNotifiedRef.current.epoch === expectedEpoch)
+    ) return;
+    cacheFailureNotifiedRef.current = { owner: cacheOwner, epoch: expectedEpoch };
+    notify(isChinese
+      ? '消息已显示，但离线副本未能保存。请检查本地存储空间后刷新会话。'
+      : 'Messages are visible, but the offline copy could not be saved. Check local storage and refresh the conversation.');
+  }, [cacheOwner, isChinese, notify]);
 
   const persistConversationCache = useCallback((
     conversations: readonly SingleConversation[],
@@ -146,15 +165,26 @@ export function useConversationSnapshotController({
     ) return Promise.resolve();
     cacheWriteRef.current = cacheWriteRef.current
       .catch(() => undefined)
-      .then(() => {
+      .then(async () => {
         if (
           !isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)
           || captureConversationDeletionRevision(cacheOwner) !== expectedDeletionRevision
         ) return;
-        return localStore.write(cacheOwner, conversations, activeId, expectedEpoch);
+        try {
+          await localStore.write(cacheOwner, conversations, activeId, expectedEpoch);
+          if (
+            isConversationStorageEpochCurrent(cacheOwner, expectedEpoch)
+            && captureConversationDeletionRevision(cacheOwner) === expectedDeletionRevision
+          ) cacheFailureNotifiedRef.current = null;
+        } catch (error) {
+          // This is a derived transcript cache, never the durable send outbox
+          // or draft. Quota exhaustion must not undo a server-backed UI action.
+          if (!isStorageQuotaError(error)) throw error;
+          reportCacheFailure(expectedEpoch, expectedDeletionRevision);
+        }
       });
     return cacheWriteRef.current;
-  }, [cacheOwner, localStore]);
+  }, [cacheOwner, localStore, reportCacheFailure]);
 
   const commitConversationIndex = useCallback(async (
     conversations: readonly SingleConversation[],
@@ -172,12 +202,13 @@ export function useConversationSnapshotController({
       // Serializing a long conversation into device storage on this call
       // blocks native fetch callbacks and makes the first token look slow.
       setTimeout(() => {
-        void persistConversationCache(next, activeId, expectedEpoch, deletionRevision);
+        void persistConversationCache(next, activeId, expectedEpoch, deletionRevision)
+          .catch(() => reportCacheFailure(expectedEpoch, deletionRevision));
       }, 0);
       return;
     }
     await persistConversationCache(next, activeId, expectedEpoch, deletionRevision);
-  }, [activeConversationIdRef, cacheOwner, conversationIndexRef, persistConversationCache, setConversations]);
+  }, [activeConversationIdRef, cacheOwner, conversationIndexRef, persistConversationCache, reportCacheFailure, setConversations]);
 
   const applyConversation = useCallback(async (
     incomingConversation: SingleConversation,
@@ -207,6 +238,7 @@ export function useConversationSnapshotController({
       conversationIndexRef.current,
       incomingConversation,
     ).find(({ id }) => id === incomingConversation.id) || incomingConversation;
+    const switchingConversation = activeConversationIdRef.current !== conversation.id;
     activeConversationIdRef.current = conversation.id;
     setActiveConversationId(conversation.id);
     updateConversationCollaborationState(
@@ -284,8 +316,8 @@ export function useConversationSnapshotController({
     } else {
       hostedTurnVisibilityFailuresRef.current.delete(conversation.id);
     }
-    const trackedTurnId = activeHostedTurnIdRef.current
-      || activePersistedPendingTurn?.turnId
+    const trackedTurnId = activePersistedPendingTurn?.turnId
+      || activeHostedTurnIdRef.current
       || runningHostedTurnId;
     if (trackedTurnId && pendingTurnActiveRef.current) {
       const trackedTurnState = conversationHostedTurnState(conversation, trackedTurnId);
@@ -348,7 +380,7 @@ export function useConversationSnapshotController({
     ) || [];
     const reconciledOptimistic = reconcileOptimisticMessages(
       nextMessages,
-      currentOptimistic,
+      pruneConfirmedHostedTurnFailures(conversation, currentOptimistic),
       Date.now(),
       activePersistedPendingTurn
         ? new Set([activePersistedPendingTurn.userMessageId])
@@ -361,15 +393,17 @@ export function useConversationSnapshotController({
     }
     nextMessages = reconciledOptimistic.messages;
     setMessages((current) => {
+      if (switchingConversation) return nextMessages;
       // Fold live messages into the snapshot before replacing: live-only
       // interactive cards (awaiting choice / supervisor verdict / rework)
       // survive the swap, and persisted ids are adopted so React keys stay
       // stable and messages do not remount mid-turn.
-      const merged = mergeLiveMessagesIntoSnapshot(nextMessages, current);
+      const merged = observeChatDelivery(mergeLiveMessagesIntoSnapshot(nextMessages, current), current);
       return sameChatMessages(current, merged) ? current : merged;
     });
-    activeHostedTurnIdRef.current = runningHostedTurnId;
-    setActiveHostedTurnId(runningHostedTurnId);
+    const currentTurnId = activePersistedPendingTurn?.turnId || runningHostedTurnId;
+    activeHostedTurnIdRef.current = currentTurnId;
+    setActiveHostedTurnId(currentTurnId);
     // Keep the stream alive while a durable enqueue is still awaiting server
     // acknowledgement.  The local pending-turn state is authoritative for
     // this short hand-off window; dropping hostedRunning here closes the SSE

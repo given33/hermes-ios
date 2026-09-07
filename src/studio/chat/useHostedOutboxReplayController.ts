@@ -87,6 +87,7 @@ interface HostedOutboxReplayControllerOptions {
   localStore: ConversationLocalStore | null;
   maxReconnectAttempts: number;
   mountedRef: MutableRefObject<boolean>;
+  messagesRef: MutableRefObject<ChatMessage[]>;
   optimisticMessagesByConversationRef: MutableRefObject<Map<string, ChatMessage[]>>;
   optimisticMessagesRef: MutableRefObject<ChatMessage[]>;
   optimisticPendingByConversationRef: MutableRefObject<Map<string, OptimisticPendingTurn>>;
@@ -147,6 +148,7 @@ export function useHostedOutboxReplayController({
   localStore,
   maxReconnectAttempts,
   mountedRef,
+  messagesRef,
   optimisticMessagesByConversationRef,
   optimisticMessagesRef,
   optimisticPendingByConversationRef,
@@ -208,17 +210,28 @@ export function useHostedOutboxReplayController({
     const optimistic = (optimisticMessagesByConversationRef.current.get(item.conversationId) || [])
       .filter(({ id }) => !failureIds.has(id));
     optimisticMessagesByConversationRef.current.set(item.conversationId, optimistic);
-    optimisticPendingByConversationRef.current.set(item.conversationId, pendingTurn);
-    if (mountedRef.current && activeConversationIdRef.current === item.conversationId) {
+    const currentTurn = activeHostedTurnIdRef.current;
+    const deliveredMessages = messagesRef.current.filter((message) => (
+      message.role === 'assistant' && message.runtimeTurnId === item.input.turnId
+    ));
+    const terminal = deliveredMessages.some((message) => (
+      ['completed', 'failed', 'cancelled'].includes(message.status || '')
+    ));
+    const ownsForeground = activeConversationIdRef.current === item.conversationId
+      && (!currentTurn || currentTurn === item.input.turnId) && !terminal;
+    if (ownsForeground) optimisticPendingByConversationRef.current.set(item.conversationId, pendingTurn);
+    if (mountedRef.current && ownsForeground) {
       optimisticMessagesRef.current = optimistic;
       setMessages((current) => current.filter(({ id }) => !failureIds.has(id)));
       pendingTurnActiveRef.current = true;
-      updatePendingPhase('connecting', acceptedAt);
+      if (!deliveredMessages.length) updatePendingPhase('connecting', item.queuedAt);
       setReconnectAttempt(0);
     }
     return transition;
   }, [
     activeConversationIdRef,
+    activeHostedTurnIdRef,
+    messagesRef,
     cacheOwner,
     localStore,
     mountedRef,
@@ -358,14 +371,6 @@ export function useHostedOutboxReplayController({
               }
               continue;
             }
-            activeHostedTurnIdRef.current = acceptedMutation.item.input.turnId;
-            beginOptimisticHostedTurn(
-              acceptedMutation.item.conversationId,
-              acceptedMutation.item.input.turnId,
-            );
-            setActiveHostedTurnId(acceptedMutation.item.input.turnId);
-            setHostedRunning(true);
-            setSending(true);
             const settled = await settleAcceptedOutboxItem(
               acceptedMutation.item,
               expectedOwnerEpoch,
@@ -435,7 +440,13 @@ export function useHostedOutboxReplayController({
               activeConversationIdRef.current = item.conversationId;
               setActiveConversationId(item.conversationId);
             }
-            if (activeConversationIdRef.current === item.conversationId) {
+            const terminal = messagesRef.current.some((message) => (
+              message.role === 'assistant' && message.runtimeTurnId === item.input.turnId
+              && ['completed', 'failed', 'cancelled'].includes(message.status || '')
+            ));
+            if (activeConversationIdRef.current === item.conversationId
+              && (!activeHostedTurnIdRef.current || activeHostedTurnIdRef.current === item.input.turnId)
+              && !terminal) {
               activeHostedTurnIdRef.current = item.input.turnId;
               beginOptimisticHostedTurn(item.conversationId, item.input.turnId);
               setActiveHostedTurnId(item.input.turnId);
@@ -506,6 +517,7 @@ export function useHostedOutboxReplayController({
     hostedTurnDeliveryClaimsRef,
     isChinese,
     loadConversation,
+    messagesRef,
     localStore,
     setActiveConversationId,
     setActiveHostedTurnId,

@@ -126,7 +126,7 @@ export function conversationMessagesToView(
           : activity
       )),
       completedAt: converted.completedAt || terminal.completedAt || undefined,
-      status: ['queued', 'running'].includes(converted.status || '')
+      status: ['queued', 'running', 'streaming'].includes(converted.status || '')
         ? terminal.status
         : converted.status,
       updatedAt: terminal.completedAt || converted.updatedAt,
@@ -344,7 +344,7 @@ export function reconcileOptimisticMessages(
   protectedMessageIds: ReadonlySet<string> = new Set(),
 ): { messages: HermesChatViewMessage[]; pending: HermesChatViewMessage[] } {
   const consumedServerMessageIds = new Set<string>();
-  const hiddenServerMessageIds = new Set<string>();
+  const confirmedReplacements = new Map<string, HermesChatViewMessage>();
   const pending = optimisticMessages.flatMap((optimistic) => {
     const supersededLocalFailure = optimistic.role === 'assistant'
       && optimistic.status === 'failed'
@@ -390,6 +390,8 @@ export function reconcileOptimisticMessages(
             return !consumedServerMessageIds.has(serverMessage.id)
               && serverMessage.role === 'user'
               && serverMessage.content === optimistic.content
+              && (!optimistic.runtimeTurnId || !serverMessage.runtimeTurnId
+                || serverMessage.runtimeTurnId === optimistic.runtimeTurnId)
               && optimisticCreatedAt > 0
               && serverCreatedAt > 0
               && Math.abs(serverCreatedAt - optimisticCreatedAt)
@@ -403,36 +405,34 @@ export function reconcileOptimisticMessages(
     );
     if (!contentConfirmation) return [optimistic];
     consumedServerMessageIds.add(contentConfirmation.id);
-    if (protectedMessageIds.has(optimistic.id)) {
-      hiddenServerMessageIds.add(contentConfirmation.id);
-      return [{
-        ...optimistic,
-        optimisticConfirmedAt: optimistic.optimisticConfirmedAt || now,
-      }];
-    }
     if (
+      !protectedMessageIds.has(optimistic.id)
+      &&
       optimistic.optimisticConfirmedAt
       && now - optimistic.optimisticConfirmedAt >= OPTIMISTIC_CONFIRMATION_GRACE_MS
     ) return [];
-    hiddenServerMessageIds.add(contentConfirmation.id);
-    return [{
+    const confirmed = {
+      ...contentConfirmation,
       ...optimistic,
       optimisticConfirmedAt: optimistic.optimisticConfirmedAt || now,
-    }];
+    };
+    confirmedReplacements.set(contentConfirmation.id, confirmed);
+    return [confirmed];
   });
-  const pendingIds = new Set(pending.map(({ id }) => id));
-  // Keep the server's own ordering for confirmed messages and append
-  // optimistic entries in send order. Sorting the merged list by createdAt
-  // mixes client-clock timestamps (optimistic messages) with server-clock
-  // timestamps, so any clock skew reorders previous messages on every
-  // snapshot — the visible "jump" when a new message is sent.
+  // A confirmed optimistic echo occupies the server message's existing slot.
+  // Its durable outbox grace period must never move it below its own reply.
+  const messages = serverMessages.map((message) => confirmedReplacements.get(message.id) || message);
+  const visibleIds = new Set(messages.map(({ id }) => id));
+  for (const message of pending) {
+    if (visibleIds.has(message.id)) continue;
+    const replyIndex = message.role === 'user' && message.runtimeTurnId
+      ? messages.findIndex((candidate) => candidate.role !== 'user' && candidate.runtimeTurnId === message.runtimeTurnId)
+      : -1;
+    messages.splice(replyIndex >= 0 ? replyIndex : messages.length, 0, message);
+    visibleIds.add(message.id);
+  }
   return {
-    messages: [
-      ...serverMessages.filter(({ id }) => (
-        !pendingIds.has(id) && !hiddenServerMessageIds.has(id)
-      )),
-      ...pending,
-    ],
+    messages,
     // A server replica can confirm a message and then briefly return an older
     // snapshot. Require another confirmation after the grace period before
     // deleting the durable ledger entry.
@@ -619,6 +619,8 @@ export function collaborationMessageToView(
       || undefined,
     completedAt: completedAt || undefined,
     content: visibleMessageContent(message, meta),
+    contextUsedTokens: typeof meta.context_used === 'number' && meta.context_used >= 0 ? meta.context_used : undefined,
+    contextMaxTokens: typeof meta.context_max === 'number' && meta.context_max > 0 ? meta.context_max : undefined,
     contextUsedPercent: (() => {
       const raw = message.context_used_percent
         ?? meta.context_used_percent
@@ -630,7 +632,7 @@ export function collaborationMessageToView(
       // a bare token count style integer below the ratio threshold.
       const normalize = (value: number): number | undefined => (
         Number.isFinite(value) && value >= 0
-          ? Math.min(100, value <= 1 ? value * 100 : value)
+          ? Math.min(100, meta.context_max ? value : value <= 1 ? value * 100 : value)
           : undefined
       );
       if (typeof raw === 'number') return normalize(raw);
@@ -642,6 +644,7 @@ export function collaborationMessageToView(
     createdAt: createdAt || undefined,
     durationMs,
     firstTokenAt: timestampValue(meta.first_token_at) || undefined,
+    finalReport: Boolean(meta.final_report),
     handoffTarget: stringListValue(message.handoff_to)
       || stringListValue(meta.handoff_to)
       || stringListValue(meta.handoff_target)
@@ -1035,7 +1038,7 @@ export function reconcileHostedTurnVisibilityFailures(
   messages: HermesChatViewMessage[],
   failures: readonly HostedTurnVisibilityFailure[],
 ): { failures: HostedTurnVisibilityFailure[]; messages: HermesChatViewMessage[] } {
-  let nextMessages = messages;
+  let nextMessages = pruneConfirmedHostedTurnFailures(conversation, messages);
   const remaining: HostedTurnVisibilityFailure[] = [];
   for (const failure of failures) {
     if (conversationHostedTurnState(conversation, failure.turnId) !== 'missing') continue;
@@ -1043,6 +1046,19 @@ export function reconcileHostedTurnVisibilityFailures(
     nextMessages = upsertChatMessage(nextMessages, failure.message);
   }
   return { failures: remaining, messages: nextMessages };
+}
+
+/** Legacy timeout notices are durable optimistic rows, never server authority. */
+export function pruneConfirmedHostedTurnFailures(
+  conversation: SingleConversation,
+  messages: readonly HermesChatViewMessage[],
+): HermesChatViewMessage[] {
+  const prefix = 'hosted-sync-failed-';
+  return messages.filter((message) => (
+    message.role !== 'assistant'
+    || !message.id.startsWith(prefix)
+    || conversationHostedTurnState(conversation, message.id.slice(prefix.length)) === 'missing'
+  ));
 }
 
 export function attachmentContext(

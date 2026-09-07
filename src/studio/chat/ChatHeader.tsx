@@ -8,8 +8,8 @@ import { StudioOfficialAvatar } from '../../components/studio/StudioOfficialAvat
 import { multiplyAlpha } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
 import { CollaborationMemberStack } from './ChatCollaborationPresentation';
-import { LiveDot } from './ChatPresentation';
 import { styles } from './chat-presentation-styles';
+import { latestMemberMessages } from './chat-member-model';
 
 export type ChatMode = 'single' | 'agent-group' | 'coding';
 
@@ -103,8 +103,8 @@ export function ChatHeader({
           {!compact && chatMode === 'single' && collaborationState !== 'single' ? (
             <Text numberOfLines={1} style={[styles.headingSubtitle, { color: tokens.colors.textTertiary }]}>
               {collaborationState === 'lifting'
-                ? (isChinese ? '群聊正在拉起' : 'Starting group chat')
-                : (isChinese ? '群聊已拉起' : 'Group chat ready')}
+                ? (isChinese ? '正在安排协作' : 'Preparing collaboration')
+                : (isChinese ? 'Hermes 负责最终汇报' : 'Hermes coordinates the final response')}
             </Text>
           ) : null}
           {!compact && chatMode === 'coding' ? (
@@ -123,7 +123,7 @@ export function ChatHeader({
                 numberOfLines={1}
                 style={[styles.collaborationHeaderCount, { color: tokens.colors.textTertiary }]}
               >
-                {isChinese ? '4 位成员' : '4 members'}
+                {isChinese ? `${latestMemberMessages(messages).length} 位成员` : `${latestMemberMessages(messages).length} members`}
               </Text>
             ) : null}
             <View style={[styles.collaborationHeaderConnection, { backgroundColor: tokens.colors.success }]} />
@@ -255,7 +255,6 @@ export function ChatHeader({
             {isChinese ? '会话' : 'Conversations'}
           </Text>}
         </IOSPressable>
-        {!compact ? <LiveDot busy={sending} /> : null}
       </View>
     </View>
   );

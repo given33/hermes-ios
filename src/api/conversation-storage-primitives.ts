@@ -48,3 +48,7 @@ function hexStorageKey(prefix: string, value: string): string {
   }
   return encoded;
 }
+export function isStorageQuotaError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'name' in error
+    && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED');
+}

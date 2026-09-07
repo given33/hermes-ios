@@ -73,29 +73,15 @@ export function timelineCollapseReducer(
         : [...state.pinnedIds, action.id],
     };
   }
-  const runningIds = new Set(
-    action.entries.filter(({ running }) => running).map(({ id }) => id),
-  );
-  // A previously auto-expanded step collapses again the moment it stops
-  // running (or leaves the timeline); user-pinned entries are never touched.
-  const autoExpandedIds = state.autoExpandedIds.filter((id) => runningIds.has(id));
-  let expandedIds = state.expandedIds.filter((id) => (
-    !state.autoExpandedIds.includes(id) || autoExpandedIds.includes(id)
-  ));
-  const nextAutoExpandedIds = [...autoExpandedIds];
-  for (const entry of action.entries) {
-    if (!entry.running || state.pinnedIds.includes(entry.id)) continue;
-    if (!expandedIds.includes(entry.id)) expandedIds = [...expandedIds, entry.id];
-    if (!nextAutoExpandedIds.includes(entry.id)) nextAutoExpandedIds.push(entry.id);
-  }
-  if (
-    sameIdList(state.autoExpandedIds, nextAutoExpandedIds)
-    && sameIdList(state.expandedIds, expandedIds)
-  ) return state;
+  const liveIds = new Set(action.entries.map(({ id }) => id));
+  const expandedIds = state.expandedIds.filter((id) => liveIds.has(id) && state.pinnedIds.includes(id));
+  const pinnedIds = state.pinnedIds.filter((id) => liveIds.has(id));
+  if (!state.autoExpandedIds.length && sameIdList(state.expandedIds, expandedIds)
+    && sameIdList(state.pinnedIds, pinnedIds)) return state;
   return {
-    autoExpandedIds: nextAutoExpandedIds,
+    autoExpandedIds: [],
     expandedIds,
-    pinnedIds: state.pinnedIds,
+    pinnedIds,
   };
 }
 
@@ -165,8 +151,20 @@ export function timelineEntryLiveStates(
  * tools, and the most specific available text otherwise.
  */
 export function activityPrimaryDetail(activity: HermesChatActivity): string {
+  const detail = primaryDetail(activity);
+  const compact = firstNonEmptyLine(detail).replace(/\s+/gu, ' ').trim();
+  const bounded = truncateByCodePoints(compact, 160);
+  return bounded.length < compact.length ? `${bounded}…` : bounded;
+}
+
+function primaryDetail(activity: HermesChatActivity): string {
   const input = activity.input?.trim() || '';
   const structured = parseRecord(input);
+  // Structured payloads belong in expanded details, never in the row summary.
+  const inputSummary = structured
+    ? pickString(structured, ['task_id', 'job_id', 'name', 'action', 'profile', 'agent', 'id'])
+      || activity.toolName || activity.name
+    : input;
   const category = activity.category.toLowerCase();
   const tool = `${activity.toolName || ''} ${activity.name}`.toLowerCase();
   if (category === 'schedule') {
@@ -179,7 +177,7 @@ export function activityPrimaryDetail(activity: HermesChatActivity): string {
   if (category === 'command' || /(?:terminal|shell|exec|command)/.test(tool)) {
     return firstNonEmptyLine(
       pickString(structured, ['command', 'cmd', 'script'])
-      || input
+      || inputSummary
       || activity.detail
       || activity.preview,
     );
@@ -187,7 +185,7 @@ export function activityPrimaryDetail(activity: HermesChatActivity): string {
   if (category === 'file' || category === 'edit' || /(?:file|write|edit|patch)/.test(tool)) {
     return firstNonEmptyLine(
       pickString(structured, ['path', 'file_path', 'filePath', 'file', 'filename', 'target'])
-      || input
+      || inputSummary
       || activity.detail
       || activity.preview,
     );
@@ -199,13 +197,13 @@ export function activityPrimaryDetail(activity: HermesChatActivity): string {
   ) {
     return firstNonEmptyLine(
       pickString(structured, ['query', 'pattern', 'q', 'url', 'keyword'])
-      || input
+      || inputSummary
       || activity.detail
       || activity.preview,
     );
   }
   const preview = activity.preview === activity.name ? '' : activity.preview;
-  return firstNonEmptyLine(input || activity.detail || preview || activity.output || '');
+  return firstNonEmptyLine(inputSummary || activity.detail || preview || activity.output || '');
 }
 
 export function clampActivityText(
@@ -288,11 +286,11 @@ export function turnPhaseChip(
 }
 
 export function firstTokenLabel(
-  message: Pick<HermesChatViewMessage, 'createdAt' | 'firstTokenAt' | 'modelStartedAt' | 'startedAt'>,
+  message: Pick<HermesChatViewMessage, 'createdAt' | 'firstTokenAt' | 'modelStartedAt' | 'startedAt' | 'submittedAt' | 'firstObservedAt'>,
   chinese: boolean,
 ): string {
-  const baseline = message.modelStartedAt || message.startedAt || message.createdAt || 0;
-  const firstTokenAt = message.firstTokenAt || 0;
+  const baseline = message.submittedAt || message.modelStartedAt || message.startedAt || message.createdAt || 0;
+  const firstTokenAt = message.submittedAt ? message.firstObservedAt || 0 : message.firstTokenAt || 0;
   if (!baseline || firstTokenAt <= baseline) return '';
   const elapsed = formatDurationLabel(firstTokenAt - baseline);
   if (!elapsed) return '';
@@ -309,6 +307,7 @@ export function turnTimingLine(
     HermesChatViewMessage,
     'activities' | 'completedAt' | 'createdAt' | 'durationMs' | 'firstTokenAt' | 'modelStartedAt'
     | 'startedAt' | 'status' | 'updatedAt'
+    | 'submittedAt' | 'firstObservedAt' | 'completedObservedAt'
   >,
   chinese: boolean,
   now = Date.now(),

@@ -1,13 +1,9 @@
 import {
   createAudioPlayer,
-  RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
-  useAudioRecorder,
-  useAudioRecorderState,
   type AudioPlayer,
 } from 'expo-audio';
-import { File as ExpoFile } from 'expo-file-system';
 import * as Speech from 'expo-speech';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Keyboard } from 'react-native';
@@ -19,7 +15,10 @@ import {
 } from '../../../modules/hermes-ios-context';
 import type { ElevenLabsVoice } from '../../api/cloud/audio';
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
-import { ServerSpeechSession, type PCMPlaybackSink } from './server-speech-session';
+import { ServerSpeechSession } from './server-speech-session';
+import { createPCMPlaybackSink } from './pcm-playback-sink';
+import { readVoiceRecording, releaseVoiceRecording } from './voice-recording';
+import { useVoiceCapture } from './useVoiceCapture';
 import {
   LOADING_VOICE_RUNTIME,
   resolveVoiceRuntime,
@@ -65,6 +64,7 @@ interface UseHermesVoiceOptions {
   messages: readonly VoiceMessage[];
   notify(message: string): void;
   onInterruptAgent?(): Promise<void> | void;
+  onSubmitTranscript?(text: string): void;
   profile?: string;
 }
 
@@ -74,14 +74,6 @@ const EMPTY_STREAMING_CURSOR: StreamingSpeechCursor = {
   sourceLength: 0,
 };
 
-function recordingMimeType(uri: string): string {
-  const normalized = uri.toLowerCase();
-  if (normalized.endsWith('.m4a') || normalized.endsWith('.mp4')) return 'audio/mp4';
-  if (normalized.endsWith('.aac')) return 'audio/aac';
-  if (normalized.endsWith('.wav')) return 'audio/wav';
-  return 'audio/webm';
-}
-
 function isAbortError(error: unknown): boolean {
   return typeof error === 'object'
     && error !== null
@@ -90,23 +82,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 function deleteTemporaryRecording(uri: string): void {
-  if (!uri) return;
-  try {
-    const file = new ExpoFile(uri);
-    if (file.exists) file.delete();
-  } catch {
-    // The recorder may already have released its temporary file.
-  }
-}
-
-function pcmPlaybackSink(): PCMPlaybackSink | null {
-  if (!hasNativeIOSContext) return null;
-  return {
-    append: (base64PCM) => HermesIOSContext.appendPCMPlayback(base64PCM),
-    finish: () => HermesIOSContext.finishPCMPlayback(),
-    start: (sampleRate, channels) => HermesIOSContext.startPCMPlayback(sampleRate, channels),
-    stop: (interrupted) => HermesIOSContext.stopPCMPlayback(interrupted),
-  };
+  releaseVoiceRecording(uri);
 }
 
 export function useHermesVoice({
@@ -120,10 +96,10 @@ export function useHermesVoice({
   messages,
   notify,
   onInterruptAgent,
+  onSubmitTranscript,
   profile = 'default',
 }: UseHermesVoiceOptions) {
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(recorder, 250);
+  const { recorder, state: recorderState } = useVoiceCapture();
   const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimePolicy>(LOADING_VOICE_RUNTIME);
   const [voiceChoices, setVoiceChoices] = useState<HermesVoiceChoice[]>([]);
   const [voiceChoiceBusy, setVoiceChoiceBusy] = useState(false);
@@ -133,6 +109,12 @@ export function useHermesVoice({
   const [nativeVoiceDurationMs, setNativeVoiceDurationMs] = useState(0);
   const [readRepliesAloud, setReadRepliesAloud] = useState(false);
   const [speakingMessageId, setSpeakingMessageId] = useState('');
+  const [voiceConversation, setVoiceConversation] = useState(false);
+  const conversationRef = useRef(false);
+  const awaitingResponseRef = useRef(false);
+  const speechHeardRef = useRef(false);
+  const lastSpeechAtRef = useRef(0);
+  const closingRecordingRef = useRef(false);
   const voiceDraftBeforeRef = useRef('');
   const voiceDraftPrefixRef = useRef('');
   const autoSpokenMessageIdRef = useRef('');
@@ -162,11 +144,22 @@ export function useHermesVoice({
   const applyFinalTranscript = useCallback((transcript: string) => {
     const normalized = transcript.trim();
     if (!normalized) {
-      throw new Error(isChinese ? '没有识别到语音，请重试。' : 'No speech was recognized. Try again.');
+      setVoicePreview(isChinese ? '未检测到语音，正在继续聆听' : 'No speech detected. Listening again.');
+      return;
+    }
+    if (conversationRef.current && /^(停止|结束|退出语音|结束语音|stop|goodbye|never mind)[。.!！]?$/i.test(normalized)) {
+      conversationRef.current = false;
+      setVoiceConversation(false);
+      setReadRepliesAloud(false);
+      return;
     }
     applyTranscript(`${voiceDraftPrefixRef.current}${normalized}`);
     setVoicePreview(normalized);
-  }, [applyTranscript, isChinese]);
+    if (conversationRef.current && onSubmitTranscript) {
+      awaitingResponseRef.current = true;
+      onSubmitTranscript(normalized);
+    }
+  }, [applyTranscript, isChinese, onSubmitTranscript]);
 
   const stopEncodedAudio = useCallback(() => {
     const playback = fallbackPlaybackRef.current;
@@ -225,6 +218,8 @@ export function useHermesVoice({
         activeServerSpeechRef.current = null;
         setSpeakingMessageId('');
         setVoiceState('idle');
+        conversationRef.current = false;
+        setVoiceConversation(false);
         notify(describeError(error));
       },
       onFinished: () => {
@@ -232,13 +227,20 @@ export function useHermesVoice({
         activeServerSpeechRef.current = null;
         setSpeakingMessageId('');
         setVoiceState('idle');
+        awaitingResponseRef.current = false;
       },
       onStarted: () => {
         if (activeServerSpeechRef.current?.session !== session) return;
         setSpeakingMessageId(messageId);
         setVoiceState('speaking');
       },
-      pcmSink: pcmPlaybackSink(),
+      pcmSink: createPCMPlaybackSink(() => {
+        if (activeServerSpeechRef.current?.session !== session) return;
+        activeServerSpeechRef.current = null;
+        awaitingResponseRef.current = false;
+        setSpeakingMessageId('');
+        setVoiceState('idle');
+      }),
       playEncodedAudio,
       profile,
       stopEncodedAudio,
@@ -288,7 +290,11 @@ export function useHermesVoice({
     setSpeakingMessageId(messageId);
     Speech.speak(text, {
       language: isChinese ? 'zh-CN' : 'en-US',
-      onDone: () => setSpeakingMessageId((current) => current === messageId ? '' : current),
+      onDone: () => {
+        awaitingResponseRef.current = false;
+        setSpeakingMessageId((current) => current === messageId ? '' : current);
+        setVoiceState('idle');
+      },
       onError: (error) => {
         setSpeakingMessageId((current) => current === messageId ? '' : current);
         notify(describeError(error));
@@ -309,14 +315,12 @@ export function useHermesVoice({
       if (operation !== voiceOperationRef.current) return;
       if (!uri) throw new Error('Hermes could not read the voice recording');
       if (!cloudApi) throw new Error('Hermes server connection is unavailable');
-      const file = new ExpoFile(uri);
-      const mimeType = recordingMimeType(uri);
-      const base64 = await file.base64();
+      const { dataUrl, mimeType } = await readVoiceRecording(uri);
       if (operation !== voiceOperationRef.current) return;
       const abortController = new AbortController();
       transcriptionAbortRef.current = abortController;
       const result = await cloudApi.transcribeAudio(
-        `data:${mimeType};base64,${base64}`,
+        dataUrl,
         mimeType,
         abortController.signal,
         profile,
@@ -330,6 +334,8 @@ export function useHermesVoice({
       restoreVoiceDraft();
       const message = describeError(error);
       setVoiceError(message);
+      conversationRef.current = false;
+      setVoiceConversation(false);
       notify(message);
     } finally {
       expoRecordingRef.current = false;
@@ -353,11 +359,19 @@ export function useHermesVoice({
     restoreVoiceDraft,
   ]);
 
-  const stopVoiceInput = useCallback(async () => {
-    if (voiceState !== 'listening') return;
+  const stopVoiceInput = useCallback(async (forceTranscribe = true) => {
+    if (voiceState !== 'listening' || closingRecordingRef.current) return;
+    closingRecordingRef.current = true;
     const operation = ++voiceOperationRef.current;
     try {
       setVoiceError('');
+      if (!forceTranscribe && !speechHeardRef.current && expoRecordingRef.current) {
+        await recorder.stop();
+        expoRecordingRef.current = false;
+        deleteTemporaryRecording(recorder.uri || '');
+        setVoiceState('idle');
+        return;
+      }
       if (nativeRecognitionRef.current) {
         nativeRecognitionRef.current = false;
         acceptNativeTranscriptRef.current = false;
@@ -377,10 +391,17 @@ export function useHermesVoice({
       const message = describeError(error);
       setVoiceError(message);
       notify(message);
+    } finally {
+      closingRecordingRef.current = false;
     }
-  }, [applyFinalTranscript, describeError, focusComposer, notify, restoreVoiceDraft, stopExpoVoiceInput, voiceState]);
+  }, [applyFinalTranscript, describeError, focusComposer, notify, recorder, restoreVoiceDraft, stopExpoVoiceInput, voiceState]);
 
   const cancelVoiceInput = useCallback(async () => {
+    conversationRef.current = false;
+    setVoiceConversation(false);
+    awaitingResponseRef.current = false;
+    setReadRepliesAloud(false);
+    await stopCurrentSpeech();
     ++voiceOperationRef.current;
     acceptNativeTranscriptRef.current = false;
     transcriptionAbortRef.current?.abort();
@@ -404,7 +425,7 @@ export function useHermesVoice({
       setVoiceState('idle');
       focusComposer();
     }
-  }, [focusComposer, recorder, recorderState.isRecording, recorderState.url, restoreVoiceDraft]);
+  }, [focusComposer, recorder, recorderState.isRecording, recorderState.url, restoreVoiceDraft, stopCurrentSpeech]);
 
   const startVoiceInput = useCallback(async () => {
     if (voiceState === 'listening' || voiceState === 'transcribing') return;
@@ -417,6 +438,15 @@ export function useHermesVoice({
       await stopCurrentSpeech(agentTurnActive || voiceState === 'speaking');
       setVoiceError('');
       setVoicePreview('');
+      speechHeardRef.current = false;
+      lastSpeechAtRef.current = Date.now();
+      if (!conversationRef.current) {
+        autoSpokenMessageIdRef.current = [...messages].reverse().find((message) => message.role === 'assistant')?.id || '';
+        conversationRef.current = true;
+        setVoiceConversation(true);
+        setReadRepliesAloud(true);
+      }
+      awaitingResponseRef.current = false;
       const currentDraft = getDraft();
       voiceDraftBeforeRef.current = currentDraft;
       const current = currentDraft.trimEnd();
@@ -434,6 +464,8 @@ export function useHermesVoice({
             : 'Allow Hermes to use Microphone and Speech Recognition in Settings.';
           setVoiceError(message);
           notify(message);
+          conversationRef.current = false;
+          setVoiceConversation(false);
           return;
         }
         if (operation !== voiceOperationRef.current) return;
@@ -455,6 +487,8 @@ export function useHermesVoice({
           : 'Allow Hermes to use the microphone in Settings.';
         setVoiceError(message);
         notify(message);
+        conversationRef.current = false;
+        setVoiceConversation(false);
         return;
       }
       if (operation !== voiceOperationRef.current) return;
@@ -473,12 +507,14 @@ export function useHermesVoice({
       restoreVoiceDraft();
       setVoiceState('idle');
       const message = describeError(error);
+      conversationRef.current = false;
+      setVoiceConversation(false);
       setVoiceError(message);
       notify(message);
     }
   }, [
     agentTurnActive, cloudApi, describeError, getDraft, isChinese, notify, onInterruptAgent,
-    recorder, restoreVoiceDraft, stopCurrentSpeech, voiceRuntime.loaded, voiceRuntime.sttMode, voiceState,
+    messages, recorder, restoreVoiceDraft, stopCurrentSpeech, voiceRuntime.loaded, voiceRuntime.sttMode, voiceState,
   ]);
 
   const toggleMessageSpeech = useCallback(async (message: VoiceMessage) => {
@@ -495,6 +531,8 @@ export function useHermesVoice({
 
   const toggleReadRepliesAloud = useCallback(() => {
     if (readRepliesAloud) {
+      conversationRef.current = false;
+      setVoiceConversation(false);
       setReadRepliesAloud(false);
       if (hasNativeIOSContext) {
         void HermesIOSContext.setVoiceNarrationEnabled(false).catch(() => undefined);
@@ -559,6 +597,9 @@ export function useHermesVoice({
     void Speech.stop().catch(() => undefined);
     setSpeakingMessageId('');
     setVoiceState('idle');
+    conversationRef.current = false;
+    setVoiceConversation(false);
+    awaitingResponseRef.current = false;
     setVoiceRuntime(LOADING_VOICE_RUNTIME);
     setVoiceChoices([]);
     setVoiceChoiceBusy(false);
@@ -620,7 +661,7 @@ export function useHermesVoice({
         if (generation !== streamingSpeechGenerationRef.current) return;
         const status = (latest.status || '').toLowerCase();
         const failed = status === 'failed' || status === 'cancelled' || status === 'canceled';
-        const pending = status === 'queued' || status === 'running';
+        const pending = status === 'queued' || status === 'running' || status === 'streaming';
 
         if (voiceRuntime.ttsMode === 'server') {
           let cursor = serverSpeechCursorRef.current;
@@ -688,6 +729,23 @@ export function useHermesVoice({
   ]);
 
   useEffect(() => {
+    if (!voiceConversation || voiceState !== 'listening' || nativeRecognitionRef.current) return;
+    if (recorderState.level >= 0.075) {
+      speechHeardRef.current = true;
+      lastSpeechAtRef.current = Date.now();
+    }
+    if ((speechHeardRef.current && Date.now() - lastSpeechAtRef.current >= 1_250)
+      || (!speechHeardRef.current && recorderState.durationMillis >= 12_000)
+      || recorderState.durationMillis >= 60_000) void stopVoiceInput(false);
+  }, [recorderState.durationMillis, recorderState.level, stopVoiceInput, voiceConversation, voiceState]);
+
+  useEffect(() => {
+    if (!voiceConversation || voiceState !== 'idle' || agentTurnActive || speakingMessageId || awaitingResponseRef.current) return;
+    const timer = setTimeout(() => { if (conversationRef.current) void startVoiceInput(); }, 350);
+    return () => clearTimeout(timer);
+  }, [agentTurnActive, speakingMessageId, startVoiceInput, voiceConversation, voiceState]);
+
+  useEffect(() => {
     if (voiceState !== 'listening') {
       if (voiceState !== 'transcribing') setNativeVoiceDurationMs(0);
       return undefined;
@@ -710,11 +768,16 @@ export function useHermesVoice({
         acceptNativeTranscriptRef.current = false;
         nativeRecognitionRef.current = false;
         setVoiceError('');
+        applyFinalTranscript(event.text);
         focusComposer();
       }
     });
     const state = HermesIOSContext.subscribeVoiceState((event) => {
       setVoiceState(event.state);
+      if (event.state === 'idle' && activeServerSpeechRef.current) {
+        activeServerSpeechRef.current = null;
+        awaitingResponseRef.current = false;
+      }
       if (event.state !== 'speaking') {
         setSpeakingMessageId('');
       }
@@ -735,7 +798,7 @@ export function useHermesVoice({
       void HermesIOSContext.stopVoiceRecognition().catch(() => undefined);
       void HermesIOSContext.stopSpeaking().catch(() => undefined);
     };
-  }, [applyTranscript, focusComposer, notify, restoreVoiceDraft]);
+  }, [applyFinalTranscript, applyTranscript, focusComposer, notify, restoreVoiceDraft]);
 
   useEffect(() => () => {
     ++voiceOperationRef.current;
@@ -770,6 +833,8 @@ export function useHermesVoice({
       ? nativeVoiceDurationMs
       : voiceState === 'listening' ? recorderState.durationMillis : 0,
     voiceError,
+    voiceConversation,
+    voiceLevel: recorderState.level,
     voicePreview,
     voiceState,
   };

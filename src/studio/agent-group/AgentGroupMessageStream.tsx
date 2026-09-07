@@ -657,7 +657,10 @@ const styles = {
   list: { gap: 12, flexGrow: 1, paddingTop: 16 },
   emptyList: { justifyContent: 'center' as const },
   emptyListCompact: { justifyContent: 'flex-start' as const, paddingTop: 24 },
-  emptyState: { alignItems: 'center' as const, gap: 10, maxWidth: 560, paddingHorizontal: 24, alignSelf: 'center' as const },
+  // FlatList uses `inverted`, which applies a vertical flip to its empty
+  // component on web as well as native. Counter-flip the content so the
+  // empty-state copy and avatars remain readable.
+  emptyState: { alignItems: 'center' as const, gap: 10, maxWidth: 560, paddingHorizontal: 24, alignSelf: 'center' as const, transform: [{ scaleY: -1 }] },
   emptyAvatars: { alignItems: 'center' as const, flexDirection: 'row' as const, gap: 5, marginBottom: 3 },
   emptyTitle: { fontSize: 14, fontWeight: '700' as const, textAlign: 'center' as const },
   emptyText: { fontSize: 12, lineHeight: 18, textAlign: 'center' as const },

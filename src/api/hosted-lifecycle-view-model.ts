@@ -33,7 +33,16 @@ export function applyHostedLifecycleEvents(
   events: readonly HostedLifecycleEvent[],
   chinese = true,
   runtime?: HostedRuntimeProjection,
+  controllingTurnId?: string,
 ): HostedLifecycleApplication {
+  if (controllingTurnId && events.some((event) => event.turn_id !== controllingTurnId)) {
+    // History may finish checkpointing after the next send starts. Reconcile
+    // its bubbles without letting its terminal event end the current send.
+    const history = applyHostedLifecycleEvents(messages,
+      events.filter((event) => event.turn_id !== controllingTurnId), chinese);
+    return applyHostedLifecycleEvents(history.messages,
+      events.filter((event) => event.turn_id === controllingTurnId), chinese, runtime);
+  }
   const runtimeProjection = reduceHostedRuntimeEvents(runtime, events);
   let nextMessages = messages;
   let completed = false;
@@ -104,6 +113,7 @@ export function applyHostedLifecycleEvents(
     const wasMessageCompleted = Boolean(
       message.completedAt != null || message.status === 'completed',
     );
+    const settledMessage = wasMessageCompleted ? message : undefined;
     const sourceEventType = stringValue(payload.source_event_type).toLowerCase();
     const requestAccepted = sourceEventType === 'request.accepted'
       || (!sourceEventType && stringValue(payload.status).toLowerCase() === 'started');
@@ -263,7 +273,12 @@ export function applyHostedLifecycleEvents(
       || eventType === 'rework.started'
       || eventType === 'rework.dispatched'
     ) {
-      if (eventType === 'command.output' && sourceEventType === 'status.update') {
+      if (eventType === 'command.output' && (sourceEventType === 'status.update'
+          || payload.unmapped_frontend_event === true)) {
+        continue;
+      }
+      if (sourceEventType === 'tool.generating' && !payload.tool_id && !payload.call_id
+          && !payload.tool_call_id && !payload.entity_id) {
         continue;
       }
       const activity = streamEventToActivity(eventType, payload, occurredAt);
@@ -274,6 +289,9 @@ export function applyHostedLifecycleEvents(
         const mergedActivity = existing
           ? {
               ...activity,
+              category: eventType === 'command.output' ? existing.category : activity.category,
+              completedAt: activity.completedAt || existing.completedAt,
+              durationMs: activity.durationMs || existing.durationMs,
               input: activity.input || existing.input,
               name: activity.name === '命令' ? existing.name : activity.name,
               output: eventType === 'command.output'
@@ -282,6 +300,8 @@ export function applyHostedLifecycleEvents(
                 ? appendDelta(existing.output || '', activity.output || '')
                 : activity.output || existing.output,
               startedAt: existing.startedAt || activity.startedAt,
+              status: existing.status === 'completed' && activity.status === 'running'
+                ? existing.status : activity.status,
               toolName: activity.toolName === '命令' ? existing.toolName : activity.toolName,
               files: activity.files || existing.files,
               question: activity.question || existing.question,
@@ -333,7 +353,9 @@ export function applyHostedLifecycleEvents(
       }
       message = {
         ...message,
-        activities: completeTransientActivities(message.activities, occurredAt),
+        activities: eventType === 'message.completed'
+          ? finishActivities(completeTransientActivities(message.activities, occurredAt), 'completed', occurredAt)
+          : completeTransientActivities(message.activities, occurredAt),
         completedAt: eventType === 'message.completed' ? occurredAt : undefined,
         content,
         modelStartedAt,
@@ -346,7 +368,8 @@ export function applyHostedLifecycleEvents(
       };
       phase = 'responding';
       phaseStartedAt = message.firstTokenAt || occurredAt;
-      if (eventType === 'message.completed') completed = true;
+      // A worker completing its message does not complete the parent turn.
+      if (eventType === 'message.completed' && liveRoleStage === 'chat') completed = true;
     } else if (eventType === 'turn.cancel_requested') {
       turnActive = true;
       message = {
@@ -382,6 +405,18 @@ export function applyHostedLifecycleEvents(
     } else {
       continue;
     }
+    if (settledMessage && !terminalTurnEvent) {
+      message = {
+        ...message,
+        status: settledMessage.status || 'completed',
+        completedAt: settledMessage.completedAt,
+        timingLabel: undefined,
+        activities: finishActivities(message.activities,
+          settledMessage.status === 'cancelled' ? 'cancelled'
+            : settledMessage.status === 'failed' ? 'failed' : 'completed',
+          settledMessage.completedAt || occurredAt),
+      };
+    }
     nextMessages = upsertLiveMessage(nextMessages, message);
     if (terminalTurnEvent) {
       // A team turn can have several live role bubbles. The synthetic turn
@@ -403,6 +438,22 @@ export function applyHostedLifecycleEvents(
           : candidate
       ));
     }
+  }
+
+  const latestTurnId = controllingTurnId || events.at(-1)?.turn_id || runtimeProjection.turnId;
+  const settledTurnMessage = nextMessages.find((message) => (
+    message.role === 'assistant' && message.runtimeTurnId === latestTurnId
+    && (!message.roleStage || message.roleStage === 'chat' || runtimeProjection.terminal)
+    && ['completed', 'failed', 'cancelled'].includes(message.status || '')
+  ));
+  if (events.length && settledTurnMessage) {
+    completed = settledTurnMessage.status === 'completed';
+    cancelled = settledTurnMessage.status === 'cancelled';
+    failed = settledTurnMessage.status === 'failed';
+    turnActive = false;
+    phase = undefined;
+    phaseStartedAt = undefined;
+    reconnectAttempt = 0;
   }
 
   return {

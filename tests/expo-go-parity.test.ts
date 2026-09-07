@@ -83,7 +83,7 @@ test('Expo Go loads the native authenticated surface, not the Web fixture previe
   assert.match(previewMode, /Platform\.OS === 'web'/);
   assert.doesNotMatch(previewMode, /Platform\.OS === 'web' \|\| isExpoGoRuntime/);
   assert.match(nativeApp, /<AuthProvider>/);
-  assert.match(nativeApp, /isFrontendPreviewRuntime/);
+  assert.doesNotMatch(nativeApp, /isFrontendPreviewRuntime|acctgen_frontend_preview/);
   assert.match(previewApp, /isFrontendPreviewRuntime/);
   assert.match(shell, /jsParityRoute = route\.routeId === 'agent-group'/);
   assert.doesNotMatch(shell, /jsParityRoute[\s\S]{0,120}route\.routeId === 'workflows'/);

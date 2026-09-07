@@ -156,8 +156,11 @@ test('distributable IPA builds always launch the authenticated production fronte
   assert.match(workflow, /HERMES_DISTRIBUTABLE_BUILD: '1'/);
   assert.match(workflow, /branches:\s*\n\s*- main/);
   assert.doesNotMatch(workflow, /inputs\.frontend_preview/);
-  assert.match(app, /process\.env\.EXPO_PUBLIC_FRONTEND_PREVIEW === '1'/);
-  assert.doesNotMatch(app, /__DEV__[\s\S]{0,80}EXPO_PUBLIC_FRONTEND_PREVIEW/);
+  const entry = app.slice(app.indexOf('export function HermesNativeApp()'), app.indexOf('function NativeAuthRoot()'));
+  assert.match(entry, /<AuthProvider>[\s\S]*<NativeAuthRoot\s*\/>[\s\S]*<\/AuthProvider>/);
+  assert.doesNotMatch(entry, /FrontendPreviewApp|FRONTEND_PREVIEW|loginPreview/);
+  assert.match(app, /if \(state\.status !== 'authenticated'\) return <LoginScreen\s*\/>/);
+  assert.match(app, /if \(!client\) return null/);
   assert.match(metro, /EXPO_PUBLIC_FRONTEND_PREVIEW !== '1'/);
   assert.match(metro, /production-fixtures\.ts/);
   assert.match(metro, /production-route-stubs\.tsx/);
@@ -315,6 +318,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
     read('src/studio/chat/useConversationActionsController.ts'),
     read('src/studio/chat/useChatComposerNavigationController.ts'),
     read('src/studio/chat/useHermesVoice.ts'),
+    read('src/studio/chat/useVoiceCapture.ts'),
   ].join('\n');
   const contextMenu = read('src/components/ios/IOSContextMenu.tsx');
   const contextMenuBridge = read('modules/hermes-context-menu/index.ts');
@@ -369,7 +373,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /UIImagePickerPresentationStyle\.FULL_SCREEN/);
   assert.match(chat, /onLongPress=\{voiceInputActive \? undefined : actions\.onToggleReadRepliesAloud\}/);
   assert.doesNotMatch(chat, /语音输入需要在 iPhone 原生版本中使用/);
-  assert.match(chat, /useAudioRecorder\(RecordingPresets\.HIGH_QUALITY\)/);
+  assert.match(chat, /useAudioRecorder\(\{ \.\.\.RecordingPresets\.HIGH_QUALITY, isMeteringEnabled: true \}\)/);
   assert.match(chat, /cloudApi\.transcribeAudio\(/);
   assert.match(chat, /mimeType,\s*abortController\.signal,\s*profile/);
   assert.match(chat, /subscribeVoiceTranscript/);
@@ -389,8 +393,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /OpenMinisVoiceWaveform/);
   assert.match(chat, /openMinisToolbar: \{[^}]*flexDirection: 'row'/);
   assert.match(chat, /openMinisRoundControl: \{[^}]*height: 38[^}]*width: 38/);
-  assert.match(chat, /<ChatPlanDrawer/);
-  assert.match(chat, /const chatPlan = useMemo\(\(\) => latestChatPlan\(displayMessages\)/);
+  assert.doesNotMatch(read('src/studio/chat/ChatPageShell.tsx'), /<ChatPlanDrawer/);
   assert.match(chat, /ChevronUp/);
   assert.match(chat, /ChevronDown/);
   assert.match(chat, /accessibilityState=\{\{ expanded: open \}\}/);
@@ -415,9 +418,8 @@ test('chat preview preserves the customized collaboration single-chat contract',
   assert.match(chat, /function RoleActivityGroup/);
   assert.match(chat, /const \[open, setOpen\] = useState\(false\)/);
   assert.match(chat, /styles\.activityCount/);
-  assert.match(chat, /activity\.category === 'reasoning'/);
-  assert.match(chat, /styles\.reasoningActivityDetail/);
-  assert.match(chat, /activityDisplayContent\(activity\)/);
+  assert.match(chat, /activity\.category !== 'reasoning'/);
+  assert.match(chat, /<ReasoningSection/);
   assert.match(chat, /function ConversationHistory/);
   assert.match(chat, /previewConversationHistory/);
   assert.match(chat, /accessibilityLabel=\{isChinese \? '[^']+' : 'Refresh history'\}[\s\S]{0,100}onPress=\{onRefresh\}/);
@@ -509,7 +511,7 @@ test('chat preview preserves the customized collaboration single-chat contract',
   );
   assert.match(
     chat,
-    /const acceptPromise = outbox\.acceptPendingOutboxItem\(queuedItem, ownerEpoch\);[\s\S]{0,1800}setHostedRunning\(true\);/,
+    /const acceptPromise = outbox\.acceptPendingOutboxItem\(queuedItem, ownerEpoch\);[\s\S]{0,2200}setHostedRunning\(!completedOnStream\);/,
   );
   assert.match(
     chat,
@@ -824,7 +826,7 @@ test('chat and notification lifecycles fence stale work without restarting accou
     indexLifecycle,
     /preferredConversationId \|\| notificationConversationId/,
   );
-  assert.doesNotMatch(indexLifecycle, /catch\(\(\) => undefined\)/);
+  assert.match(indexLifecycle, /void replayDurableOutboxes\(\)\s*\.catch\(reportError\)/);
   assert.match(
     snapshot,
     /!activateConversation[\s\S]{0,100}activeConversationIdRef\.current !== incomingConversation\.id/,
@@ -848,7 +850,7 @@ test('same-owner account epochs fence every long-lived chat callback', () => {
   }
   assert.match(snapshot, /applyConversation\(conversation, ownerEpoch, false, activateConversation\)/);
   assert.match(index, /commitConversationIndex\(synchronized, activeId, ownerEpoch\)/);
-  assert.match(actions, /applyConversation\(result\.conversation, ownerEpoch, false, true\)/);
+  assert.match(actions, /applyConversation\(refreshed\.conversation, ownerEpoch\)/);
   assert.match(actions, /applyConversation\(response\.conversation, ownerEpoch, false, true\)/);
   assert.match(
     stream,

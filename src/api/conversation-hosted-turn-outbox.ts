@@ -230,7 +230,15 @@ export class HostedTurnOutboxRepository {
       if (
         currentEntry?.pendingTurn
         && currentEntry.pendingTurn.userMessageId !== normalizedPendingTurn.userMessageId
-      ) return;
+      ) {
+        const previousDelivery = current.find((candidate) => (
+          candidate.conversationId === normalizedItem.conversationId
+          && candidate.input.message.id === currentEntry.pendingTurn?.userMessageId
+        ));
+        // A UI pending marker may outlive an acknowledged send. Only an
+        // undelivered outbox item owns the foreground submission slot.
+        if (previousDelivery && !previousDelivery.deliveryAcceptedAt && !previousDelivery.cancelledAt) return;
+      }
 
       // Recovery intent lands first. If the process exits before the ledger
       // update, replay retains the stable request identity and repairs the UI.

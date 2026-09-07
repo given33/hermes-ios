@@ -280,6 +280,12 @@ export function useHermesSwiftUIRouteData({
           cacheOwner,
           profile,
         );
+        if (version !== requestVersion.current) return;
+        if (synchronized.cacheWarning === 'quota') {
+          notify(locale === 'zh'
+            ? '会话已从服务器加载，但本地存储空间不足，离线副本未更新。'
+            : 'Sessions loaded from the server. Local storage is full; offline copies were not updated.');
+        }
         const synchronizedPendingDeletionIds = await localStore.readPendingConversationDeletionIds(
           cacheOwner,
         );

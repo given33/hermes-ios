@@ -164,39 +164,10 @@ export function useOptimisticConversationState({
     if (!isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)) return;
     clearOptimisticHostedTurn();
     optimisticHostedTurnIdRef.current = turnId;
-    optimisticHostedTurnConfirmedRef.current = false;
-    optimisticHostedTurnDeadlineRef.current = Date.now() + visibilityGraceMs;
-    optimisticHostedTurnTimeoutRef.current = setTimeout(() => {
-      optimisticHostedTurnTimeoutRef.current = null;
-      if (
-        !isConversationStorageEpochCurrent(cacheOwner, ownerEpoch)
-        ||
-        optimisticHostedTurnIdRef.current !== turnId
-        || activeConversationIdRef.current !== conversationId
-      ) return;
-      optimisticHostedTurnIdRef.current = '';
-      optimisticHostedTurnDeadlineRef.current = 0;
-      const failure = hostedTurnVisibilityFailure(turnId, isChinese);
-      hostedTurnVisibilityFailuresRef.current.set(
-        conversationId,
-        [
-          ...(hostedTurnVisibilityFailuresRef.current.get(conversationId) || [])
-            .filter((current) => current.turnId !== turnId),
-          failure,
-        ],
-      );
-      activeHostedTurnIdRef.current = '';
-      setActiveHostedTurnId('');
-      const nextMessages = upsertChatMessage(
-        optimisticMessagesByConversationRef.current.get(conversationId) || [],
-        failure.message,
-      );
-      void replaceOptimisticMessages(conversationId, nextMessages);
-      void clearOptimisticPendingTurn(conversationId);
-      setMessages((current) => upsertChatMessage(current, failure.message));
-      setHostedRunning(false);
-      setSending(false);
-    }, visibilityGraceMs);
+    // This is called only after the durable enqueue acknowledgement. A slow
+    // snapshot or reconnect cannot revoke the server's acceptance.
+    optimisticHostedTurnConfirmedRef.current = true;
+    optimisticHostedTurnDeadlineRef.current = 0;
   }, [
     activeConversationIdRef,
     activeHostedTurnIdRef,

@@ -74,6 +74,8 @@ export function ModelsManagementPage({
   const [detectedExpanded, setDetectedExpanded] = useState(false);
   const [detectedModels, setDetectedModels] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [activeModel, setActiveModel] = useState({ model: '', provider: '' });
   const [model, setModel] = useState('');
   const [operation, setOperation] = useState<ModelOperationState>(null);
   const [reasoningEffort, setReasoningEffort] = useState<CustomModelConfiguration['reasoningEffort']>('medium');
@@ -95,9 +97,11 @@ export function ModelsManagementPage({
   const load = useCallback(async () => {
     const generation = ++loadGenerationRef.current;
     setLoading(true);
+    setLoadError('');
     try {
-      const current = await api.getCustomModel(profile);
+      const [current, info] = await Promise.all([api.getCustomModel(profile), api.getModelInfo(profile)]);
       if (generation !== loadGenerationRef.current) return;
+      setActiveModel({ model: String(info.model || ''), provider: String(info.provider || '') });
       setApiKey('');
       setApiKeyConfigured(current.apiKeyConfigured === true);
       setApiKeyDeleteRequested(false);
@@ -109,13 +113,16 @@ export function ModelsManagementPage({
       setReasoningEffort(current.reasoningEffort);
     } catch (error) {
       if (generation !== loadGenerationRef.current) return;
-      setOperation({ kind: 'save', message: modelPageError(error, chinese), state: 'error' });
+      setLoadError(modelPageError(error, chinese));
     } finally {
       if (generation === loadGenerationRef.current) setLoading(false);
     }
   }, [api, chinese, profile]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    return () => { loadGenerationRef.current += 1; };
+  }, [load]);
 
   const configuration = useCallback((): CustomModelConfiguration => ({
     apiKey,
@@ -235,7 +242,20 @@ export function ModelsManagementPage({
 
   return (
     <PreviewPage title={chinese ? '模型' : 'Models'}>
-      <PreviewCard title={chinese ? '当前模型' : 'Current model'}>
+      <View style={styles.fields}>
+        <PreviewText variant="label">{chinese ? '当前模型' : 'Current model'}</PreviewText>
+        <PreviewText>{loadError || activeModel.model || (chinese ? '未配置' : 'Not configured')}</PreviewText>
+        {!loadError && activeModel.provider ? <PreviewText variant="muted">{activeModel.provider}</PreviewText> : null}
+        <NativeButton
+          accessibilityLabel={loadError ? (chinese ? '重试加载模型' : 'Retry loading models') : (chinese ? '刷新当前模型' : 'Refresh current model')}
+          onPress={() => { void load(); }}
+          outlined
+          size="icon"
+        >
+          <RefreshCw size={16} color={tokens.colors.textSecondary} />
+        </NativeButton>
+      </View>
+      {!loadError ? <PreviewCard title={chinese ? '自定义端点' : 'Custom endpoint'}>
         {/* Loaded form fades in over the loading state instead of popping. */}
         <Reanimated.View
           entering={motion.animate(FadeIn.duration(MOTION.duration.transition))}
@@ -410,7 +430,7 @@ export function ModelsManagementPage({
             </Reanimated.View>
           ) : null}
         </Reanimated.View>
-      </PreviewCard>
+      </PreviewCard> : null}
     </PreviewPage>
   );
 }

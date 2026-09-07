@@ -33,13 +33,13 @@ function activity(overrides: Partial<HermesChatActivity> = {}): HermesChatActivi
   };
 }
 
-test('the in-flight entry auto-expands and auto-collapses once it settles', () => {
+test('tool entries stay collapsed during execution and after completion until opened', () => {
   let state = createTimelineCollapseState();
   state = timelineCollapseReducer(state, {
     entries: [{ id: 'a', running: true }, { id: 'b', running: false }],
     type: 'sync',
   });
-  assert.equal(isTimelineEntryExpanded(state, 'a'), true);
+  assert.equal(isTimelineEntryExpanded(state, 'a'), false);
   assert.equal(isTimelineEntryExpanded(state, 'b'), false);
 
   state = timelineCollapseReducer(state, {
@@ -47,7 +47,7 @@ test('the in-flight entry auto-expands and auto-collapses once it settles', () =
     type: 'sync',
   });
   assert.equal(isTimelineEntryExpanded(state, 'a'), false);
-  assert.equal(isTimelineEntryExpanded(state, 'b'), true);
+  assert.equal(isTimelineEntryExpanded(state, 'b'), false);
 
   state = timelineCollapseReducer(state, {
     entries: [{ id: 'a', running: false }, { id: 'b', running: false }],
@@ -62,8 +62,9 @@ test('a manual toggle pins the entry against every later automatic transition', 
     entries: [{ id: 'a', running: true }],
     type: 'sync',
   });
-  // The user collapses the auto-expanded running entry; sync must not
-  // re-expand it while it keeps running.
+  // A manual expansion survives streamed updates; a second click collapses it.
+  state = timelineCollapseReducer(state, { id: 'a', type: 'toggle' });
+  assert.equal(isTimelineEntryExpanded(state, 'a'), true);
   state = timelineCollapseReducer(state, { id: 'a', type: 'toggle' });
   assert.equal(isTimelineEntryExpanded(state, 'a'), false);
   state = timelineCollapseReducer(state, {
@@ -180,6 +181,26 @@ test('the collapsed line surfaces the command, path, or query of the step', () =
     activityPrimaryDetail(activity({ category: 'status', name: '运行状态', preview: '运行状态' })),
     '',
   );
+});
+
+test('structured custom tool summaries identify the task without exposing long payloads', () => {
+  const input = JSON.stringify({ task_id: 't_example', body: 'Long comment '.repeat(500) });
+  const step = activity({ category: 'tool', toolName: 'kanban_comment', name: 'kanban_comment', input });
+  assert.equal(activityPrimaryDetail(step), 't_example');
+  assert.equal(step.input, input, 'full input stays available to the expanded details');
+  assert.equal(activityPrimaryDetail(activity({
+    category: 'tool', toolName: 'kanban_block', name: 'kanban_block',
+    input: JSON.stringify({ kind: 'capability', reason: 'Long reason '.repeat(500) }),
+  })), 'kanban_block');
+  assert.equal(activityPrimaryDetail(activity({
+    category: 'file', toolName: 'write_file', input: JSON.stringify({ content: 'Long file '.repeat(500) }),
+  })), 'write_file');
+});
+
+test('collapsed summary length is bounded without splitting Unicode code points', () => {
+  const command = '😀'.repeat(200);
+  assert.equal(activityPrimaryDetail(activity({ input: JSON.stringify({ command }) })), `${'😀'.repeat(160)}…`);
+  assert.equal(activityPrimaryDetail(activity({ input: 'echo   hello\nsecond command' })), 'echo hello');
 });
 
 test('long outputs clamp with an accurate hidden-line count', () => {

@@ -1,4 +1,5 @@
 import { HermesApiError } from '../../api/HermesApiClient';
+import { isStorageQuotaError } from '../../api/conversation-storage-primitives';
 import {
   parseOfficialConversationPlaceholderId,
   type CollaborationMessage,
@@ -62,8 +63,12 @@ export function sameChatMessages(
 }
 
 function liveMessageMergeKey(message: ChatMessage): string {
+  if (message.role === 'user') return '';
   if (!message.runtimeTurnId || !message.roleStage) return '';
-  return `${message.runtimeTurnId}\u0000${message.roleStage}\u0000${message.profile || ''}`;
+  return JSON.stringify([
+    message.role, message.runtimeTurnId, message.rawRoleStage || message.roleStage,
+    message.profile || '', message.memberId || message.senderId || '',
+  ]);
 }
 
 function mergeSnapshotMessage(
@@ -96,6 +101,7 @@ function mergeSnapshotMessage(
     // live→durable handoff does not remount the message and replay its
     // entering animation (visual flicker + open/manualPin state resets).
     id: persisted.id,
+    renderKey: live.renderKey || live.id,
     content: richerText(persisted.content, live.content, persistedIsTerminal),
     activities,
     attachments: mergeSnapshotAttachments(persisted.attachments, live.attachments),
@@ -111,6 +117,9 @@ function mergeSnapshotMessage(
   return {
     ...merged,
     completedAt: persisted.completedAt,
+    activities: activities.map((activity) => activity.status === 'queued' || activity.status === 'running'
+      ? { ...activity, status: persisted.status as HermesChatActivity['status'], completedAt: persisted.completedAt || activity.completedAt }
+      : activity),
     durationMs: persisted.durationMs,
     status: persisted.status,
     timingLabel: persisted.timingLabel,
@@ -193,16 +202,20 @@ export function mergeLiveMessagesIntoSnapshot(
   persisted: readonly ChatMessage[],
   live: readonly ChatMessage[],
 ): ChatMessage[] {
+  const persistedById = new Map(persisted.map((message) => [message.id, message]));
+  const liveById = new Map(live.map((message) => [message.id, message]));
   const liveByKey = new Map<string, ChatMessage[]>();
   for (const message of live) {
+    if (persistedById.has(message.id)) continue;
     const key = liveMessageMergeKey(message);
     if (!key) continue;
     const bucket = liveByKey.get(key);
     if (bucket) bucket.push(message);
     else liveByKey.set(key, [message]);
   }
-  if (!liveByKey.size) return [...persisted];
   const merged = persisted.map((message) => {
+    const exact = liveById.get(message.id);
+    if (exact && exact.role === message.role) return mergeSnapshotMessage(message, exact);
     const key = liveMessageMergeKey(message);
     if (!key) return message;
     const bucket = liveByKey.get(key);
@@ -219,7 +232,13 @@ export function mergeLiveMessagesIntoSnapshot(
   for (const bucket of liveByKey.values()) {
     if (bucket.length) trailing.push(...bucket);
   }
-  return trailing.length ? [...merged, ...trailing] : merged;
+  for (const message of trailing) {
+    const turnStart = merged.findIndex((candidate) => candidate.role === 'user'
+      && candidate.runtimeTurnId === message.runtimeTurnId);
+    const nextTurn = turnStart < 0 ? -1 : merged.findIndex((candidate, index) => index > turnStart && candidate.role === 'user');
+    merged.splice(nextTurn < 0 ? merged.length : nextTurn, 0, message);
+  }
+  return merged;
 }
 
 export function optimisticConversationTitle(
@@ -350,6 +369,11 @@ export async function mapWithConcurrency<T, R>(
 }
 
 export function serverFailure(error: unknown, chinese: boolean): string {
+  if (isStorageQuotaError(error)) {
+    return chinese
+      ? '本地存储空间不足，数据未能保存。请释放设备空间后重试。'
+      : 'Local storage is full and data could not be saved. Free device storage and retry.';
+  }
   if (error instanceof HermesApiError) {
     if (error.status === 401) {
       return chinese

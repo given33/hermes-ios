@@ -85,6 +85,12 @@ export interface HermesChatViewMessage {
   createdAt?: number;
   durationMs?: number;
   firstTokenAt?: number;
+  /** Local delivery boundaries; never replaced with provider-only latency. */
+  submittedAt?: number;
+  firstObservedAt?: number;
+  completedObservedAt?: number;
+  renderKey?: string;
+  finalReport?: boolean;
   handoffTarget?: string;
   id: string;
   /** Canonical hosted-team member id (participants[].id) that produced this event. */
@@ -114,6 +120,8 @@ export interface HermesChatViewMessage {
   todos?: HermesChatTodo[];
   /** Context-window usage percent reported by the remote node (0-100+). */
   contextUsedPercent?: number;
+  contextUsedTokens?: number;
+  contextMaxTokens?: number;
   updatedAt?: number;
 }
 

@@ -142,10 +142,11 @@ export class HermesModelsCloudApi {
     return this.transport.request<ModelInfoResult>('/api/model/info', { profile });
   }
 
-  getModelOptions(profile = 'default') {
+  getModelOptions(profile = 'default', configuredOnly = false) {
     return this.transport.request<ModelOptionsResult>('/api/model/options', {
       profile,
-      query: { include_unconfigured: 1 },
+      query: configuredOnly ? { catalog_only: 1, explicit_only: 1 } : { include_unconfigured: 1 },
+      ...(configuredOnly ? { deadlineMs: 45_000 } : {}),
     });
   }
 
@@ -338,7 +339,7 @@ export class HermesModelsCloudApi {
       scope: 'main',
       provider,
       model,
-    }, { profile });
+    }, { profile, deadlineMs: 60_000 });
     const result: ModelAssignmentResult = {
       confirmMessage: stringValue(value.confirm_message) || undefined,
       confirmRequired: value.confirm_required === true,

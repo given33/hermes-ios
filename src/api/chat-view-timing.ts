@@ -70,11 +70,14 @@ export function messageDurationMs(
   message: Pick<
     HermesChatViewMessage,
     'activities' | 'completedAt' | 'durationMs' | 'firstTokenAt' | 'modelStartedAt' | 'startedAt'
-    | 'roleStage' | 'status' | 'updatedAt'
+    | 'roleStage' | 'status' | 'updatedAt' | 'submittedAt' | 'firstObservedAt' | 'completedObservedAt'
   >,
   now = Date.now(),
 ): number {
   const running = messageIsRunning(message);
+  if (message.submittedAt) {
+    return Math.max(0, (message.completedObservedAt || now) - message.submittedAt);
+  }
   const modelBoundary = message.modelStartedAt || message.startedAt;
   const firstTokenLowerBound = modelBoundary && message.firstTokenAt
     ? Math.max(0, message.firstTokenAt - modelBoundary)

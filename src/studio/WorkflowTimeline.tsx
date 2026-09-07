@@ -1,13 +1,12 @@
-import * as Clipboard from 'expo-clipboard';
-import { Check, ChevronDown, Copy, Search, Globe, Terminal, FilePenLine, FileText,
+import { ChevronDown, Search, Globe, Terminal, FilePenLine, FileText,
   CalendarClock, Users, Wrench, Clock3, CircleCheck, CircleX, CircleSlash, LoaderCircle,
   ExternalLink } from 'lucide-react-native';
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
   useReducer,
-  useRef,
   useState,
 } from 'react';
 import { Linking, StyleSheet, Text, View } from 'react-native';
@@ -15,7 +14,6 @@ import Reanimated, {
   Easing,
   FadeIn,
   FadeOut,
-  LinearTransition,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -60,7 +58,7 @@ const RUNNING_COLOR = '#D28B22';
  * auto-expanded and collapses again once it settles unless the user pinned
  * it by toggling it manually.
  */
-export function WorkflowTimeline({
+export const WorkflowTimeline = memo(function WorkflowTimeline({
   activities,
   isChinese,
   now,
@@ -76,7 +74,6 @@ export function WorkflowTimeline({
     undefined,
     createTimelineCollapseState,
   );
-  const motion = useMotion();
   const entries = useMemo(() => groupTimelineActivities(activities), [activities]);
   useEffect(() => {
     dispatchCollapse({ entries: timelineEntryLiveStates(entries), type: 'sync' });
@@ -86,12 +83,7 @@ export function WorkflowTimeline({
     dispatchCollapse({ id, type: 'toggle' });
   }, [onInspectActivity]);
   return (
-    <Reanimated.View
-      layout={motion.animate(LinearTransition
-        .duration(IOS_MOTION.duration.control)
-        .easing(IOS_STANDARD_EASING))}
-      style={styles.timeline}
-    >
+    <View style={styles.timeline}>
       {entries.map((entry) => (
         entry.kind === 'group' ? (
           <TimelineGroupRow
@@ -114,11 +106,11 @@ export function WorkflowTimeline({
           />
         )
       ))}
-    </Reanimated.View>
+    </View>
   );
-}
+});
 
-function TimelineStepRow({
+const TimelineStepRow = memo(function TimelineStepRow({
   activity,
   expanded,
   isChinese,
@@ -133,7 +125,6 @@ function TimelineStepRow({
 }) {
   const { tokens } = useTheme();
   const running = activityIsRunning(activity);
-  const motion = useMotion();
   const ToolIcon = { search: Search, browser: Globe, command: Terminal, edit: FilePenLine,
     file: FileText, schedule: CalendarClock, subagent: Users }[activity.category] || Wrench;
   const StatusIcon = { queued: Clock3, running: LoaderCircle, completed: CircleCheck,
@@ -145,7 +136,7 @@ function TimelineStepRow({
       : activity.status === 'cancelled'
         ? tokens.colors.textTertiary
         : tokens.colors.success;
-  const label = activityCategoryLabel(activity.category, isChinese);
+  const label = activity.toolName || activity.name || activityCategoryLabel(activity.category, isChinese);
   const primaryDetail = activityPrimaryDetail(activity);
   const elapsed = activityElapsedLabel(activity, now);
   return (
@@ -163,36 +154,25 @@ function TimelineStepRow({
         onPress={() => onToggle(activity.id)}
         style={styles.entryRow}
       >
-        <ToolIcon color={tokens.colors.textSecondary} size={20} />
-        <View style={styles.entryTitleColumn}>
-          <View style={styles.entryTitleRow}>
-            <Text style={[styles.entryKind, { color: tokens.colors.foreground }]}>{label}</Text>
-          </View>
-          {primaryDetail ? <Text numberOfLines={1} style={[styles.entryPrimaryDetail, { color: tokens.colors.textSecondary }]}>{primaryDetail}</Text> : null}
-          <View style={styles.entryTitleRow}>
-            <StatusIcon size={12} color={statusColor} />
-            <Text style={[styles.entryElapsed, { color: statusColor }]}>{activityStatusLabel(activity.status, isChinese)}</Text>
-            {elapsed ? <Text style={[styles.entryElapsed, { color: tokens.colors.textTertiary }]}>{elapsed}</Text> : null}
-          </View>
+        <ToolIcon color={tokens.colors.textSecondary} size={14} />
+        <Text style={[styles.entryKind, { color: tokens.colors.textSecondary }]}>{label}</Text>
+        <Text numberOfLines={1} style={[styles.entryPrimaryDetail, { color: tokens.colors.textSecondary }]}>
+          {primaryDetail === label ? '' : primaryDetail}
+        </Text>
+        {elapsed ? <Text style={[styles.entryElapsed, { color: tokens.colors.textTertiary }]}>{elapsed}</Text> : null}
+        <View accessibilityLabel={activityStatusLabel(activity.status, isChinese)}>
+          <StatusIcon size={13} color={statusColor} />
         </View>
-        <AnimatedChevron color={tokens.colors.textSecondary} open={expanded} size={16} />
+        <AnimatedChevron color={tokens.colors.textTertiary} open={expanded} size={12} />
       </IOSPressable>
       {expanded ? (
-        <Reanimated.View
-          entering={motion.animate(FadeIn
-            .duration(IOS_MOTION.duration.control)
-            .easing(IOS_DECELERATE_EASING))}
-          exiting={motion.animate(FadeOut
-            .duration(IOS_MOTION.duration.press)
-            .easing(IOS_STANDARD_EASING))}
-          style={[styles.entryDetail, { borderLeftColor: tokens.colors.border }]}
-        >
+        <View style={[styles.entryDetail, { borderLeftColor: tokens.colors.border }]}>
           <EntryDetailBody activity={activity} isChinese={isChinese} />
-        </Reanimated.View>
+        </View>
       ) : null}
     </View>
   );
-}
+});
 
 function TimelineGroupRow({
   collapseState,
@@ -299,35 +279,18 @@ function EntryDetailBody({
   isChinese: boolean;
 }) {
   const { tokens } = useTheme();
-  const [copied, setCopied] = useState(false);
   const [actionError, setActionError] = useState('');
-  const [rawOpen, setRawOpen] = useState(false);
   const [sourceCount, setSourceCount] = useState(6);
-  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-  }, []);
-  const sections = useMemo(() => entryDetailSections(activity, isChinese), [activity, isChinese]);
   const detail = useMemo(() => activityDetails(activity), [activity]);
-  const copyDetail = useCallback(async () => {
-    const value = sections.map(({ label, text }) => `${label}\n${text}`).join('\n\n');
-    if (!value.trim()) return;
-    try { await Clipboard.setStringAsync(value); }
-    catch { setActionError(isChinese ? '无法复制，请重试' : 'Copy failed. Try again.'); return; }
-    setActionError('');
-    setCopied(true);
-    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-    copyTimerRef.current = setTimeout(() => setCopied(false), 1_200);
-  }, [sections, isChinese]);
   const openSource = async (url: string) => {
     try { await Linking.openURL(url); setActionError(''); }
     catch { setActionError(isChinese ? '无法打开来源，请重试' : 'Could not open source. Try again.'); }
   };
   return (
     <View style={styles.entryDetailBody}>
-      {detail.fields.map(({ key, value }) => (
+      {detail.fields.filter(({ key }) => !['model', 'provider', 'model_provider', 'model_service'].includes(key.toLowerCase())).map(({ key, value }) => (
         <View key={key} style={styles.entrySection}>
-          <Text style={[styles.entrySectionLabel, { color: tokens.colors.textTertiary }]}>{isChinese ? ({ command: '命令', cmd: '命令', query: '搜索内容', q: '搜索内容', url: '地址', path: '文件', file_path: '文件', action: '操作', schedule: '计划', task: '任务', agent: 'Agent', profile: '配置', model: '模型', provider: '模型服务', files: '涉及文件', tool: '工具', call_id: '调用 ID', parent_call_id: '父调用 ID' }[key] || key) : key}</Text>
+          <Text style={[styles.entrySectionLabel, { color: tokens.colors.textTertiary }]}>{isChinese ? ({ command: '命令', cmd: '命令', code: '代码', script: '脚本', arguments: '参数', target: '目标', content: '内容', query: '搜索内容', q: '搜索内容', url: '地址', path: '文件', file_path: '文件', action: '操作', schedule: '计划', task: '任务', agent: 'Agent', profile: '配置', model: '模型', provider: '模型服务', files: '涉及文件', tool: '工具', call_id: '调用 ID', parent_call_id: '父调用 ID' }[key] || key) : key}</Text>
           <ClampedActivityTextBlock isChinese={isChinese} text={value} />
         </View>
       ))}
@@ -353,44 +316,12 @@ function EntryDetailBody({
         <ClampedActivityTextBlock isChinese={isChinese} text={detail.change.patch} diff />
       </View> : null}
       {activity.error ? <ClampedActivityTextBlock isChinese={isChinese} text={activity.error} tone="error" /> : null}
-      {detail.output && !detail.sources.length && !detail.change ? <ClampedActivityTextBlock isChinese={isChinese} text={detail.output} /> : null}
-      {!detail.output && !activity.error && !detail.fields.length && !detail.sources.length && !detail.change && activityDisplayContent(activity)
-        ? <ClampedActivityTextBlock isChinese={isChinese} text={activityDisplayContent(activity)} /> : null}
-      <IOSPressable accessibilityRole="button" accessibilityState={{ expanded: rawOpen }}
-        accessibilityLabel={isChinese ? '原始输入与输出' : 'Raw input and output'}
-        onPress={() => setRawOpen((open) => !open)} style={styles.entryShowMore}>
-        <AnimatedChevron color={tokens.colors.textSecondary} open={rawOpen} size={14} />
-        <Text style={[styles.entryShowMoreText, { color: tokens.colors.textSecondary }]}>{isChinese ? '原始输入与输出' : 'Raw input and output'}</Text>
-      </IOSPressable>
-      {rawOpen ? sections.map((section) => (
-        <View key={section.label} style={styles.entrySection}>
-          <Text
-            style={[
-              styles.entrySectionLabel,
-              { color: section.tone === 'error' ? tokens.colors.destructive : tokens.colors.textTertiary },
-            ]}
-          >
-            {section.label}
-          </Text>
-          <ClampedActivityTextBlock isChinese={isChinese} text={section.text} tone={section.tone} />
-        </View>
-      )) : null}
+      {detail.output.trim() && !detail.change && !detail.sources.length ? <View style={styles.entrySection}>
+        <Text style={[styles.entrySectionLabel, { color: tokens.colors.textTertiary }]}>{isChinese ? '结果' : 'Result'}</Text>
+        <ClampedActivityTextBlock isChinese={isChinese} text={detail.output} />
+      </View> : null}
+      {activity.presentationMeta?.summary ? <ClampedActivityTextBlock isChinese={isChinese} text={activity.presentationMeta.summary} /> : null}
       {actionError ? <Text accessibilityRole="alert" style={{ color: tokens.colors.destructive }}>{actionError}</Text> : null}
-      {sections.length ? (
-        <IOSPressable
-          accessibilityLabel={isChinese ? '复制工具详情' : 'Copy tool detail'}
-          accessibilityRole="button"
-          onPress={() => { void copyDetail(); }}
-          style={styles.entryCopy}
-        >
-          {copied
-            ? <Check color={tokens.colors.success} size={12} />
-            : <Copy color={tokens.colors.textTertiary} size={12} />}
-          <Text style={[styles.entryCopyText, { color: tokens.colors.textTertiary }]}>
-            {copied ? (isChinese ? '已复制' : 'Copied') : (isChinese ? '复制' : 'Copy')}
-          </Text>
-        </IOSPressable>
-      ) : null}
     </View>
   );
 }
@@ -475,22 +406,21 @@ export function AnimatedChevron({
 const styles = StyleSheet.create({
   timeline: { gap: 0 },
   entryCard: { borderBottomWidth: StyleSheet.hairlineWidth },
-  entryRow: { alignItems: 'center', flexDirection: 'row', gap: 10, minHeight: 60, paddingHorizontal: 4, paddingVertical: 10 },
-  entryTitleColumn: { flex: 1, minWidth: 0, gap: 4 },
-  entryTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, minWidth: 0 },
-  entryKind: { fontSize: 15, fontWeight: '600', lineHeight: 21 },
+  entryRow: { alignItems: 'center', flexDirection: 'row', gap: 6, minHeight: 32, paddingHorizontal: 2, paddingVertical: 2 },
+  entryTitleColumn: { flex: 1, minWidth: 0, gap: 3 },
+  entryKind: { fontSize: 12, fontWeight: '500', lineHeight: 17, flexShrink: 0 },
   entryName: { flexShrink: 1, fontFamily: MONO_REGULAR, fontSize: 11, lineHeight: 16 },
-  entryPrimaryDetail: { fontSize: 14, lineHeight: 20 },
+  entryPrimaryDetail: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 17 },
   entryGroupCount: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13 },
-  entryElapsed: { fontSize: 12, lineHeight: 18 },
-  entryDetail: { borderLeftWidth: 2, marginBottom: 12, marginLeft: 13, marginRight: 2, paddingLeft: 12 },
+  entryElapsed: { fontSize: 10, lineHeight: 15, flexShrink: 0, fontVariant: ['tabular-nums'] },
+  entryDetail: { borderLeftWidth: 1, marginBottom: 8, marginLeft: 8, marginRight: 2, paddingLeft: 10 },
   entryDetailBody: { gap: 6 },
   entrySection: { gap: 3 },
-  entrySectionLabel: { fontSize: 13, fontWeight: '500', letterSpacing: 0, lineHeight: 19 },
+  entrySectionLabel: { fontSize: 11, fontWeight: '500', letterSpacing: 0, lineHeight: 16 },
   entryCodeBlock: { borderRadius: 5 },
   // Tool input/output often contains Chinese text; the mono Latin font has no
   // CJK glyphs, so fall back to the system font for correct wrapping.
-  entryCode: { fontSize: 13, lineHeight: 20, padding: 10 },
+  entryCode: { fontSize: 12, lineHeight: 18, padding: 8 },
   entryShowMore: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 6, minHeight: 44, paddingHorizontal: 7 },
   entryShowMoreText: { fontFamily: BODY_REGULAR, fontSize: 12, lineHeight: 18 },
   entryCopy: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 6, minHeight: 44, paddingHorizontal: 7 },

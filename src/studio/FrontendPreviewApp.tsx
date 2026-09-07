@@ -32,6 +32,7 @@ import { hermesCloudApiFor } from '../api/hermes-api-registry';
 import {
   MANAGED_NODE_FRESHNESS_MS,
   managedNodeGatewayStatuses,
+  serverGatewayStatus,
 } from '../api/managed-node-status';
 import { ConfirmDialog } from '../components/ui/ConfirmDialog';
 import { IOSPressable } from '../components/ios/IOSPressable';
@@ -211,11 +212,11 @@ export function FrontendPreviewApp({
         managedNodesSnapshot.current = system.managedNodes;
       }
       setSystemSummary(systemSummaryFromStatus(system.status));
-      setGatewayStatuses(managedNodeGatewayStatuses(managedNodesSnapshot.current));
+      setGatewayStatuses([serverGatewayStatus(lastSystemSuccessAt.current), ...managedNodeGatewayStatuses(managedNodesSnapshot.current)]);
     };
     const expireStaleSystemStatus = () => {
       if (!active) return;
-      setGatewayStatuses(managedNodeGatewayStatuses(managedNodesSnapshot.current));
+      setGatewayStatuses([serverGatewayStatus(lastSystemSuccessAt.current), ...managedNodeGatewayStatuses(managedNodesSnapshot.current)]);
       if (
         !lastSystemSuccessAt.current
         || Date.now() - lastSystemSuccessAt.current > MANAGED_NODE_FRESHNESS_MS

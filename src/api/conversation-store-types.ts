@@ -11,6 +11,8 @@ export interface ConversationCacheSnapshot {
   activeConversationId: string;
   conversations: SingleConversation[];
   syncedAt: number;
+  /** The returned server snapshot is usable but was not saved for offline use. */
+  cacheWarning?: 'quota';
 }
 
 export interface ConversationCacheReconciliation {

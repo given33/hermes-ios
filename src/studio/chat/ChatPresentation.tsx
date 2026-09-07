@@ -2,9 +2,7 @@ import * as Clipboard from 'expo-clipboard';
 import {
   Check,
   Copy,
-  Cpu,
   File,
-  UserRound,
   Volume2,
   VolumeX,
 } from 'lucide-react-native';
@@ -115,7 +113,8 @@ export const UnifiedMessage = memo(function UnifiedMessage({
 }) {
   const { tokens } = useTheme();
   const motion = useMotion();
-  const [copied, setCopied] = useState<'message' | 'model' | 'sender' | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState('');
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
     if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
@@ -131,25 +130,19 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   const bubbleBorder = message.status === 'failed'
     ? multiplyAlpha(tokens.colors.destructive, 0.2)
     : multiplyAlpha('#192320', 0.11);
-  const senderCopy = [
-    message.name,
-    message.roleLabel,
-    message.profile,
-    message.senderId,
-  ].filter(Boolean).join(' · ');
-  const copyValue = useCallback(async (
-    target: 'message' | 'model' | 'sender',
-    value: string,
-  ) => {
+  const copyValue = useCallback(async (value: string) => {
     if (!value.trim()) return;
-    await Clipboard.setStringAsync(value);
-    setCopied(target);
-    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
-    copyTimerRef.current = setTimeout(
-      () => setCopied((current) => current === target ? null : current),
-      1_200,
-    );
-  }, []);
+    try {
+      setCopyError('');
+      const success = await Clipboard.setStringAsync(value);
+      if (!success) throw new Error('Clipboard unavailable');
+      setCopied(true);
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => setCopied(false), 1_500);
+    } catch {
+      setCopyError(isChinese ? '复制失败，请允许剪贴板访问后重试' : 'Copy failed. Allow clipboard access and try again.');
+    }
+  }, [isChinese]);
   const markdownStyles = createMessageMarkdownStyles(
     messageForeground,
     tokens.colors.primary,
@@ -164,7 +157,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   // 气泡内渲染任务分派卡片而非普通 Markdown;各项状态由本轮
   // hosted turn 的执行轨迹(activities 与终态)推导。
   const todoListItems = useMemo(
-    () => (isUser ? null : todoListItemsForMessage(message)),
+    () => (isUser || message.finalReport || message.roleStage === 'reporter' ? null : todoListItemsForMessage(message)),
     [isUser, message],
   );
   const metadataNode = metadata ? (
@@ -239,22 +232,10 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   const messageActions = [
     {
       id: 'copy-message',
-      onPress: () => { void copyValue('message', message.content); },
+      onPress: () => { void copyValue(message.content); },
       systemImage: 'doc.on.doc',
       title: isChinese ? '复制消息' : 'Copy message',
     },
-    {
-      id: 'copy-sender',
-      onPress: () => { void copyValue('sender', senderCopy); },
-      systemImage: 'person.crop.circle',
-      title: isChinese ? '复制发送者信息' : 'Copy sender information',
-    },
-    ...(message.model ? [{
-      id: 'copy-model',
-      onPress: () => { void copyValue('model', message.model || ''); },
-      systemImage: 'cpu',
-      title: isChinese ? '复制模型信息' : 'Copy model information',
-    }] : []),
     ...(canBranch ? [{
       id: 'branch',
       onPress: () => onBranch(message),
@@ -264,6 +245,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   ];
   return (
     <Reanimated.View
+      testID={`chat-message-${message.runtimeTurnId || message.id}-${message.role}`}
       entering={motion.fade(
         FadeInUp
           .delay(Math.min(index, 8) * 35)
@@ -284,14 +266,15 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           onLongPress={isUser ? undefined : () => onMentionMember(message)}
         />
         <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
-          {!isUser && showTodos && message.todos?.length ? (
+          {!isUser && !message.finalReport && showTodos && message.todos?.length ? (
             <TodoSection
+              owner={message.name}
               isChinese={isChinese}
               running={messageIsRunning(message)}
               todos={message.todos}
             />
           ) : null}
-          {!isUser && shouldShowMessageTiming(message) ? (
+          {!isUser && !message.finalReport && shouldShowMessageTiming(message) ? (
             <RoleActivityGroup
               isChinese={isChinese}
               message={message}
@@ -304,9 +287,9 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           <View style={[styles.messageMeta, isUser && styles.userMessageMeta]}>
             {isUser ? metadataNode : null}
             <View style={[styles.senderMeta, isUser && styles.userSenderMeta]}>
-              <Text numberOfLines={1} style={[styles.messageName, { color: tokens.colors.textSecondary }]}>{message.name}</Text>
+              <Text numberOfLines={1} style={[styles.messageName, { color: tokens.colors.textSecondary }]}>{message.finalReport ? 'Hermes' : message.name}</Text>
               {!isUser && message.roleStage !== 'chat' ? (
-                <Text numberOfLines={1} style={[styles.roleLabel, { color: tokens.colors.textTertiary }]}>{message.roleLabel}</Text>
+                <Text numberOfLines={1} style={[styles.roleLabel, { color: tokens.colors.textTertiary }]}>{message.finalReport ? (isChinese ? '最终答复' : 'Final response') : message.roleLabel}</Text>
               ) : null}
               {!isUser && (message.rawRoleStage || '').toLowerCase().includes('rework') ? (
                 <View style={[styles.reworkBadge, { backgroundColor: multiplyAlpha('#D28B22', 0.14) }]}>
@@ -326,34 +309,15 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           {hasBubble ? <View style={[styles.messageFooter, isUser && styles.userMessageFooter]}>
             <View style={[styles.messageActions, isUser && styles.userMessageActions]}>
             <IOSPressable
-              accessibilityLabel={isChinese ? '复制消息' : 'Copy message'}
-              onPress={() => { void copyValue('message', message.content); }}
+              accessibilityLabel={copied ? (isChinese ? '已复制' : 'Copied') : (isChinese ? '复制消息' : 'Copy message')}
+              disabled={!message.content.trim()}
+              onPress={() => { void copyValue(message.content); }}
               style={styles.messageAction}
             >
-              {copied === 'message'
+              {copied
                 ? <Check color={tokens.colors.success} size={13} />
                 : <Copy color={tokens.colors.textTertiary} size={13} />}
             </IOSPressable>
-            <IOSPressable
-              accessibilityLabel={isChinese ? '复制发送者信息' : 'Copy sender information'}
-              onPress={() => { void copyValue('sender', senderCopy); }}
-              style={styles.messageAction}
-            >
-              {copied === 'sender'
-                ? <Check color={tokens.colors.success} size={13} />
-                : <UserRound color={tokens.colors.textTertiary} size={13} />}
-            </IOSPressable>
-            {message.model ? (
-              <IOSPressable
-                accessibilityLabel={isChinese ? '复制模型信息' : 'Copy model information'}
-                onPress={() => { void copyValue('model', message.model || ''); }}
-                style={styles.messageAction}
-              >
-                {copied === 'model'
-                  ? <Check color={tokens.colors.success} size={13} />
-                  : <Cpu color={tokens.colors.textTertiary} size={13} />}
-              </IOSPressable>
-            ) : null}
             {!isUser && message.content.trim() ? (
               <IOSPressable
                 accessibilityLabel={speaking
@@ -369,6 +333,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
               </IOSPressable>
             ) : null}
             </View>
+            {copyError ? <Text accessibilityRole="alert" style={{ color: tokens.colors.destructive, fontSize: 12, flexShrink: 1 }}>{copyError}</Text> : null}
           </View> : null}
         </View>
         </View>
@@ -429,11 +394,7 @@ export function PendingMessage({
 }) {
   const { tokens } = useTheme();
   const motion = useMotion();
-  const executionStartedAt = (
-    phase === 'thinking' || phase === 'responding' || phase === 'executing'
-  ) && startedAt > 0
-    ? startedAt
-    : undefined;
+  const executionStartedAt = startedAt > 0 ? startedAt : undefined;
   const pendingStatusText = phase === 'cancel_requested'
     ? (isChinese ? '正在取消' : 'Cancelling')
     : phase === 'reconnecting'
@@ -446,8 +407,8 @@ export function PendingMessage({
         ? (isChinese ? '正在回复' : 'Responding')
       : phase === 'thinking'
         ? (isChinese ? '正在思考' : 'Thinking')
-        : (isChinese ? '正在连接模型' : 'Connecting to model');
-  const statusText = phase === 'connecting' ? '' : pendingStatusText;
+        : (isChinese ? '等待响应' : 'Waiting for response');
+  const statusText = pendingStatusText;
   const statusColor = phase === 'cancel_requested'
     ? tokens.colors.textTertiary
     : phase === 'connecting'

@@ -11,7 +11,7 @@ export interface ActivityDetails {
 }
 
 const MAX_STRUCTURED_CHARS = 200_000;
-const FIELD_KEYS = ['command', 'cmd', 'query', 'q', 'url', 'path', 'file_path', 'action', 'schedule', 'task', 'agent', 'profile'];
+const FIELD_KEYS = ['command', 'cmd', 'code', 'script', 'query', 'q', 'url', 'path', 'file_path', 'action', 'target', 'content', 'schedule', 'task', 'agent'];
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -42,6 +42,12 @@ export function activityDetails(activity: HermesChatActivity): ActivityDetails {
     return typeof value === 'string' || typeof value === 'number'
       ? [{ key, value: String(value) }] : [];
   });
+  if (!input && activity.input?.trim()) {
+    fields.push({ key: activity.category === 'command' ? 'command' : 'arguments', value: activity.input });
+  } else if (input && !fields.length) {
+    const args = Object.fromEntries(Object.entries(input).filter(([key]) => !/^(model|provider|model_provider|model_service)$/i.test(key)));
+    if (Object.keys(args).length) fields.push({ key: 'arguments', value: JSON.stringify(args, null, 2) });
+  }
   for (const [key, value] of [['tool', activity.toolName || activity.name], ['agent', activity.agentName], ['model', activity.model],
     ['provider', activity.provider], ['call_id', activity.callId], ['parent_call_id', activity.parentCallId]]) {
     if (value && !fields.some((field) => field.key === key)) fields.push({ key: key!, value });
@@ -62,7 +68,7 @@ export function activityDetails(activity: HermesChatActivity): ActivityDetails {
   // Only explicit source fields become links; arbitrary log strings remain text.
   const data = record(output?.data);
   const web = record(output?.web);
-  for (const candidate of [parsedOutput, output?.results, output?.sources, data?.results,
+  for (const candidate of [parsedOutput, output?.results, output?.sources, data?.web, data?.results,
     web?.results, input?.urls]) {
     if (Array.isArray(candidate)) candidate.forEach(add);
   }

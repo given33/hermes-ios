@@ -574,7 +574,7 @@ export function NativeShell({
               : null,
           ]}
         >
-          {state.mode === 'compact' ? (
+          {state.mode === 'compact' && Platform.OS !== 'web' ? (
             <NavigationContainer
               onReady={syncCompactNavigation}
               onStateChange={syncCompactNavigation}
@@ -750,7 +750,8 @@ function CompactDrawerFrame({
   open: boolean;
   swipeEnabled: boolean;
 }) {
-  if (!compact) return children;
+  // Keep the web chat mounted when a resize crosses the drawer breakpoint.
+  if (!compact && Platform.OS !== 'web') return children;
   return (
     <Drawer
       direction="ltr"
@@ -763,7 +764,7 @@ function CompactDrawerFrame({
       keyboardDismissMode="on-drag"
       onClose={onClose}
       onOpen={onOpen}
-      open={open}
+      open={compact && open}
       overlayAccessibilityLabel={locale === 'zh' ? '关闭导航' : 'Close navigation'}
       overlayStyle={{ backgroundColor: SHELL_METRICS.overlayColor }}
       renderDrawerContent={() => (
@@ -771,12 +772,12 @@ function CompactDrawerFrame({
           collapsable={false}
           style={[styles.compactDrawerSurface, { backgroundColor }]}
         >
-          {drawerContent}
+          {compact ? drawerContent : null}
         </View>
       )}
       style={styles.compactDrawer}
       swipeEdgeWidth={28}
-      swipeEnabled={swipeEnabled}
+      swipeEnabled={compact && swipeEnabled}
       swipeMinDistance={48}
       swipeMinVelocity={450}
     >
@@ -1340,6 +1341,7 @@ function resolveSidebarGatewayStatuses(
 ): SidebarGatewayStatus[] {
   const byId = new Map(statuses.map((status) => [status.id.toLowerCase(), status]));
   return [
+    byId.get('aliyun') ?? { id: 'aliyun', label: '阿里云', state: 'unknown' },
     byId.get('dbb3') ?? { id: 'dbb3', label: 'DBB3', state: 'unknown' },
     byId.get('wsl') ?? { id: 'wsl', label: 'WSL', state: 'unknown' },
     byId.get('hk') ?? { id: 'hk', label: 'HK', state: 'unknown' },

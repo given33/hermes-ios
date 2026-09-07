@@ -23,6 +23,7 @@ import { CollaborationLiftNotice } from './ChatCollaborationPresentation';
 import { styles } from './chat-presentation-styles';
 import type { PendingPhase } from './chat-types';
 import type { HostedRuntimeProjection } from '../../api/hosted-runtime-types';
+import { chatMemberKey, compactChatMessages } from './chat-member-model';
 
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
 
@@ -67,7 +68,7 @@ export function ChatMessageStream({
   hostedRunning,
   isChinese,
   keepLatestVisible,
-  messages,
+  messages: sourceMessages,
   onBranch,
   onChoiceInputFocus,
   onCloseActivity,
@@ -96,12 +97,13 @@ export function ChatMessageStream({
   // Only the newest todo snapshot renders a checklist; every older
   // assistant message that carried one stays quiet so history cannot show
   // several stale lists or double-count the same tasks.
-  let lastTodoIndex = -1;
+  const messages = useMemo(() => compactChatMessages(sourceMessages), [sourceMessages]);
+  const lastTodoIndices = new Map<string, number>();
   for (let position = messages.length - 1; position >= 0; position -= 1) {
     const message = messages[position];
     if (message.role !== 'user' && message.todos?.length) {
-      lastTodoIndex = position;
-      break;
+      const key = `${message.runtimeTurnId || ''}:${chatMemberKey(message)}`;
+      if (!lastTodoIndices.has(key)) lastTodoIndices.set(key, position);
     }
   }
   const { tokens } = useTheme();
@@ -168,7 +170,7 @@ export function ChatMessageStream({
         showsVerticalScrollIndicator={false}
         style={styles.stream}
       >
-        {messages.length > 0 ? (
+        {messages.length > 0 && (hostedRunning || sending) ? (
           <TeamStatusBar
             isChinese={isChinese}
             messages={messages}
@@ -207,14 +209,13 @@ export function ChatMessageStream({
                   onMentionMember={onMentionMember}
                   state="active"
                 />
-                <TeamParticipantsStrip events={messages} isChinese={isChinese} />
               </>
             ) : null}
             <UnifiedMessage
               index={index}
               isChinese={isChinese}
               message={message}
-              showTodos={index === lastTodoIndex}
+              showTodos={index === lastTodoIndices.get(`${message.runtimeTurnId || ''}:${chatMemberKey(message)}`)}
               onBranch={onBranch}
               onChoiceInputFocus={onChoiceInputFocus}
               onCloseActivity={onCloseActivity}
@@ -316,10 +317,6 @@ export function ChatMessageStream({
 }
 
 function messageReactKey(message: ChatMessage): string {
-  // `id` is the canonical message identity after the conversation reducer has
-  // reconciled live and durable projections. Keying by role/turn/stage made
-  // two legitimate dispatcher or progress messages collide, which caused
-  // React to reuse rows, jump the scroll position, and sometimes render an
-  // echo twice. Keep the key tied to the durable id for every role.
-  return message.id;
+  // Retain the mounted row across live-to-durable ID reconciliation.
+  return message.renderKey || message.id;
 }

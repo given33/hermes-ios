@@ -21,10 +21,12 @@ export function TodoSection({
   isChinese,
   running,
   todos,
+  owner,
 }: {
   isChinese: boolean;
   running: boolean;
   todos: readonly HermesChatTodo[];
+  owner?: string;
 }) {
   const { tokens } = useTheme();
   const completed = todos.filter((item) => item.status === 'completed').length;
@@ -33,7 +35,7 @@ export function TodoSection({
       <View style={styles.todoHeader}>
         <ListChecks color={tokens.colors.primary} size={14} />
         <Text style={[styles.todoHeaderTitle, { color: tokens.colors.textSecondary }]}>
-          {isChinese ? '待办清单' : 'Todo list'}
+          {owner ? `${owner} · ` : ''}{isChinese ? '待办' : 'Tasks'}
         </Text>
         <Text style={[styles.todoCount, { color: tokens.colors.textTertiary }]}>
           {isChinese
