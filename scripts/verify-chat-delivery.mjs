@@ -58,6 +58,8 @@ await page.addInitScript(() => {
                 turn: event.turn_id, source: event.occurred_at, received: Date.now(), length: (event.payload?.text || '').length,
                 text: event.payload?.text || event.payload?.delta || event.payload?.content, stage: event.role_stage, snapshot: Boolean(payload.conversation),
                 finalReport: event.payload?.final_report, action: event.payload?.action,
+                model: event.payload?.model, provider: event.payload?.provider,
+                toolName: event.payload?.name || event.payload?.tool_name, toolError: Boolean(event.payload?.error),
                 cursor: event.cursor, role: event.payload?.role, sourceType: event.payload?.source_event_type });
             } catch { /* Ignore keepalive frames. */ }
           }
@@ -125,7 +127,7 @@ try {
     const sent = Date.now();
     records.push({ kind: 'send', index, sent });
     console.log(JSON.stringify({ kind: 'send', index, sent }));
-    const traceNode = process.env.HERMES_TRACE_WSL && index === 7 ? 'wsl'
+    const traceNode = process.env.HERMES_TRACE_WSL && [7, 10].includes(index) ? 'wsl'
       : process.env.HERMES_TRACE_DBB3 && [5, 9].includes(index) ? 'dbb3' : '';
     if (traceNode) {
       const connectorPid = traceNode === 'wsl' ? process.env.HERMES_TRACE_WSL : process.env.HERMES_TRACE_DBB3;
@@ -230,6 +232,9 @@ try {
       if (index === 5) assert.match((await page.getByTestId(`chat-message-${turn}-assistant`).allTextContents()).join('\n'), /dbb3-hermes/i);
       if (index === 10) {
         const reply = page.getByTestId(`chat-message-${turn}-assistant`);
+        assert.match(await reply.innerText(), /\/mnt\/d/);
+        assert(events.some(record => record.type === 'tool.completed' && !record.toolError
+          && /list_allowed_directories|tool_call/.test(record.toolName || '')), 'MCP execution must succeed');
         await reply.getByLabel('执行过程', { exact: true }).click();
         assert(await reply.getByRole('button', { name: /list_allowed_directories/ }).count(), 'Cached MCP tools must connect and run on first use');
       }
