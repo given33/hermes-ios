@@ -88,8 +88,10 @@ export function applyHostedLifecycleEvents(
       ));
     if (!acceptedRoleStage) continue;
     const milestone = /(?:^|[.:/])(?:milestone|opening|progress)(?:[.:/]|$)/i.test(rawRoleStage);
-    const eventType = milestone && event.event_type.toLowerCase() === 'message.completed'
-      ? 'message.interim' : event.event_type.toLowerCase();
+    const finalHandoff = eventTypeForStage === 'role.handoff'
+      && event.payload?.action === 'final_report' && event.payload?.final_report === true;
+    const eventType = finalHandoff ? 'message.completed'
+      : milestone && eventTypeForStage === 'message.completed' ? 'message.interim' : eventTypeForStage;
     const occurredAt = positiveTimestamp(event.occurred_at) || Date.now();
     const payload = { ...event.payload };
     if (!stringValue(payload.entity_id) && event.entity_id) payload.entity_id = event.entity_id;

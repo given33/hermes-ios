@@ -2,6 +2,7 @@ import { createInterface } from 'node:readline/promises';
 import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
 
 const { chromium } = await import(pathToFileURL(process.argv[2]).href);
 const input = createInterface({ input: process.stdin, terminal: false });
@@ -12,6 +13,7 @@ await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
 const records = [];
+const existingConversation = process.argv[4] && process.argv[4] !== 'new' ? process.argv[4] : '';
 await page.exposeFunction('recordDelivery', (record) => {
   records.push(record);
   if (record.kind === 'event' && !record.snapshot && !/delta$/.test(record.type)) {
@@ -90,7 +92,7 @@ try {
     await page.screenshot({ path: `${output}/header-${width}.png` });
   }
   if (!(await page.getByLabel('新建会话', { exact: true }).isVisible())) await page.getByLabel('会话', { exact: true }).click();
-  if (process.argv[4]) {
+  if (existingConversation) {
     await page.getByLabel('刷新会话历史', { exact: true }).click();
     await page.getByTestId('history-category-test').click();
     await page.getByTestId(`open-conversation-${process.argv[4]}`).click({ timeout: 90000 });
@@ -121,6 +123,12 @@ try {
     const sent = Date.now();
     records.push({ kind: 'send', index, sent });
     console.log(JSON.stringify({ kind: 'send', index, sent }));
+    if (process.env.HERMES_TRACE_DBB3 && [5, 9].includes(index)) {
+      const trace = spawn('ssh', ['hermes-dbb3', `python3 /tmp/hermes-trace-worker-startup.py ${process.env.HERMES_TRACE_DBB3} /tmp/hermes-pyspy-diag/bin/py-spy`]);
+      let traceOutput = '';
+      trace.stdout.on('data', data => { traceOutput += data; });
+      trace.on('close', () => { void writeFile(`${output}/startup-${index}.jsonl`, traceOutput); });
+    }
     await page.getByLabel('发送消息', { exact: true }).click();
     let previous = '', firstVisible = 0, doneAt = 0, prematureSince = 0;
     while (Date.now() - sent < 180000) {
@@ -154,7 +162,10 @@ try {
       const finalRoleEvent = records.some(record => record.kind === 'event' && record.turn === turn
         && ((record.type === 'message.completed' && record.stage === 'chat' && record.sourceType === 'message.complete')
           || ['turn.completed', 'turn.failed', 'turn.cancelled'].includes(record.type)));
-      const answered = (completedEvent || finalRoleEvent) && replyText.includes(expected);
+      const verifiedOutput = index === 7 ? replyText.includes('LAPTOP-DQNM5NRK')
+        : index === 9 ? replyText.includes('dbb3-hermes') && replyText.includes('LAPTOP-DQNM5NRK')
+          : replyText.includes(expected);
+      const answered = finalRoleEvent && verifiedOutput;
       const completedChip = reply && await reply.getByText('已完成', { exact: true }).count();
       if (completedChip && !finalRoleEvent) {
         prematureSince ||= Date.now();
@@ -176,7 +187,7 @@ try {
     const summary = { kind: 'task', index, sent, firstVisible, doneAt, elapsed: (doneAt || Date.now()) - sent };
     records.push(summary);
     console.log(JSON.stringify(summary));
-    if (process.argv[4]) {
+    if (existingConversation) {
       const calls = records.filter(record => record.kind === 'enqueue');
       assert(calls.every(record => record.path.includes(`/conversations/${process.argv[4]}/enqueue`)), 'Every message must stay in the selected conversation');
     }

@@ -41,7 +41,9 @@ test('final speaker selection updates the existing worker instead of adding a di
     ...event(cursor, 'message.completed', { profile: 'dbb3-worker', ...payload }), role_stage: 'worker',
   });
   const first = applyHostedLifecycleEvents([], [worker(1, { text: 'Verified output' })]);
-  const final = applyHostedLifecycleEvents(first.messages, [worker(2, { text: 'Verified output', final_report: true })]);
+  const final = applyHostedLifecycleEvents(first.messages, [{
+    ...worker(2, { text: 'Verified output', final_report: true, action: 'final_report' }), event_type: 'role.handoff',
+  }]);
   assert.equal(final.messages.length, 1);
   assert.equal(final.messages[0].profile, 'dbb3-worker');
   assert.equal(final.messages[0].finalReport, true);
