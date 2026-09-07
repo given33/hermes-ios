@@ -187,7 +187,6 @@ export function ChatPreviewPage({
     keyboardAvoidanceEnabled,
     keyboardRootStyle,
     pauseStreamAutoFollow,
-    resumeStreamAutoFollow,
     showScrollToBottom,
     streamRef,
   } = useChatScrollController(safeAreaBottom);
@@ -822,7 +821,7 @@ export function ChatPreviewPage({
         shareAttachment,
         slashMenuOpen,
         updateAttachments,
-      }), modelControl: <ChatModelControl api={cloudApi} profile={profile} busy={hostedRunning || sending || voice.voiceConversation} isChinese={isChinese} notify={notify} onBusyChange={setModelSwitching} /> }}
+      }), modelControl: <ChatModelControl api={cloudApi} profile={profile} conversationId={activeConversationId} busy={hostedRunning || sending || voice.voiceConversation} isChinese={isChinese} notify={notify} onBusyChange={setModelSwitching} /> }}
       headerProps={{
         chatMode,
         collaborationState,
@@ -870,7 +869,7 @@ export function ChatPreviewPage({
         messages: displayMessages,
         onBranch: branchFromMessage,
         onChoiceInputFocus: focusChoiceInput,
-        onCloseActivity: resumeStreamAutoFollow,
+        onCloseActivity: pauseStreamAutoFollow,
         onInspectActivity: pauseStreamAutoFollow,
         onJumpToLatest: () => {
           autoFollowStreamRef.current = true;

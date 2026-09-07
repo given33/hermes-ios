@@ -31,6 +31,7 @@ import type {
 } from '../../api/HermesCloudApi';
 import {
   upsertChatMessage,
+  hostedViewTurnIsTerminal,
   type ConversationCollaborationState,
   type HermesChatViewMessage as ChatMessage,
   type HostedTurnVisibilityFailure,
@@ -596,10 +597,7 @@ export function useHostedSendController({
       setActiveConversationId(conversationId);
       if (activeConversationIdRef.current === conversationId) {
         activeHostedTurnIdRef.current = hostedTurnId;
-        const completedOnStream = messagesRef.current.some((message) => (
-          message.role === 'assistant' && message.runtimeTurnId === hostedTurnId
-          && ['completed', 'failed', 'cancelled'].includes(message.status || '')
-        ));
+        const completedOnStream = hostedViewTurnIsTerminal(messagesRef.current, hostedTurnId);
         if (!completedOnStream) beginOptimisticHostedTurn(conversationId, hostedTurnId);
         setActiveHostedTurnId(hostedTurnId);
         setHostedRunning(!completedOnStream);
@@ -669,8 +667,8 @@ export function useHostedSendController({
         deliveryRetryScheduled = outcome === 'retry';
         if (deliveryRetryScheduled) {
           notify(isChinese
-            ? '消息已保存在待发送队列，将在一分钟后自动重连。'
-            : 'Message queued. Hermes will retry in one minute.');
+            ? '连接暂时中断，消息已保留，正在自动重连。'
+            : 'Connection interrupted. Your message is saved and reconnecting.');
         }
       } else if (!enqueueAcknowledged) {
         const recovered = restoreQueuedComposer();

@@ -13,11 +13,12 @@ import {
   Users,
   X,
 } from 'lucide-react-native';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ScrollView, Text, TextInput, View } from 'react-native';
 
 import type { SingleConversation } from '../../api/HermesCloudApi';
 import { conversationHasRunningWork } from '../../api/chat-view-model';
+import { conversationHistoryCategory, formatConversationCreatedAt, type HistoryCategory } from '../../api/conversation-history-presentation';
 import { StudioOfficialAvatar } from '../../components/studio/StudioOfficialAvatar';
 import { StudioProfileAvatar } from '../../components/studio/StudioProfileAvatar';
 import { IOSPressable } from '../../components/ios/IOSPressable';
@@ -67,13 +68,23 @@ export function ConversationHistory({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [pendingDeleteIds, setPendingDeleteIds] = useState<string[]>([]);
   const [deleting, setDeleting] = useState(false);
+  const [category, setCategory] = useState<HistoryCategory>('chat');
+  const categories: { value: HistoryCategory; label: string }[] = [
+    { value: 'chat', label: isChinese ? '聊天' : 'Chats' },
+    { value: 'agent-group', label: isChinese ? '群聊' : 'Groups' },
+    { value: 'coding', label: 'Coding' },
+    { value: 'runtime', label: isChinese ? '运行记录' : 'Runs' },
+    { value: 'test', label: isChinese ? '测试记录' : 'Tests' },
+    { value: 'draft', label: isChinese ? '未发送' : 'Drafts' },
+    { value: 'archived', label: isChinese ? '已归档' : 'Archived' },
+  ];
   const normalizedQuery = query.trim().toLowerCase();
-  const filtered = conversations.filter((conversation) => !normalizedQuery || [
-    conversation.title,
-    conversation.profile,
-    conversation.official_model,
-    conversation.preview,
-  ].some((value) => value?.toLowerCase().includes(normalizedQuery)));
+  const filtered = useMemo(() => conversations.filter((conversation) => normalizedQuery ? [
+    conversation.title, conversation.profile, conversation.official_model, conversation.preview,
+  ].some((value) => value?.toLowerCase().includes(normalizedQuery))
+    : conversationHistoryCategory(conversation) === category)
+    .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned))
+      || (right.updated_at || 0) - (left.updated_at || 0)), [category, conversations, normalizedQuery]);
   const toggleSelected = (id: string) => {
     setSelectedIds((current) => {
       const next = new Set(current);
@@ -174,6 +185,20 @@ export function ConversationHistory({
           />
         </View>
       ) : null}
+      <View accessibilityRole="tablist" style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 2, paddingTop: 8 }}>
+        {categories.map((item) => (
+          <IOSPressable key={item.value} accessibilityRole="tab"
+            accessibilityState={{ selected: category === item.value && !normalizedQuery }}
+            accessibilityLabel={item.label} testID={`history-category-${item.value}`}
+            onPress={() => { setCategory(item.value); setQuery(''); leaveSelectionMode(); }}
+            style={{ minHeight: 34, paddingHorizontal: 8, justifyContent: 'center', borderBottomWidth: 2,
+              borderBottomColor: category === item.value && !normalizedQuery ? tokens.colors.primary : 'transparent' }}>
+            <Text style={{ fontSize: 12, color: category === item.value ? tokens.colors.foreground : tokens.colors.textSecondary }}>
+              {item.label}
+            </Text>
+          </IOSPressable>
+        ))}
+      </View>
       <Text style={[styles.historyLabel, { color: tokens.colors.textTertiary }]}>
         {isChinese ? `会话 · ${filtered.length}` : `Conversations · ${filtered.length}`}
       </Text>
@@ -240,6 +265,14 @@ export function ConversationHistory({
                       {formatConversationRecency(conversation.updated_at, isChinese)}
                     </Text>
                   </View>
+                  {conversation.preview ? (
+                    <Text numberOfLines={2} style={{ color: tokens.colors.textSecondary, fontSize: 12, lineHeight: 18 }}>
+                      {conversation.preview}
+                    </Text>
+                  ) : null}
+                  <Text style={{ color: tokens.colors.textTertiary, fontSize: 11, lineHeight: 16 }}>
+                    {formatConversationCreatedAt(conversation.created_at, isChinese)}
+                  </Text>
                   <View style={styles.historyItemProfileRow}>
                     {kind === 'agent-group' ? (
                       <StudioOfficialAvatar size={18} variant="studio" />
@@ -258,7 +291,7 @@ export function ConversationHistory({
                       {historyLabel}
                     </Text>
                     <Text numberOfLines={1} style={[styles.historyItemMeta, { color: tokens.colors.textSecondary }]}>
-                      {[conversation.profile || 'default', model].filter(Boolean).join(' · ')}
+                      {[conversation.profile?.startsWith('acct-') ? '' : conversation.profile || 'default', model].filter(Boolean).join(' · ')}
                     </Text>
                     {active ? <View style={[styles.historyActiveDot, { backgroundColor: tokens.colors.success }]} /> : null}
                   </View>

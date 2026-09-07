@@ -10,6 +10,8 @@ import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-m
 import { truncateByCodePoints } from '../../api/text-clamp';
 import type { HermesChatActivity, HermesChatAttachment } from '../../api/chat-view-types';
 import { isTerminalStatus } from '../../api/chat-view-timing';
+import { appendExecutionReport } from '../../api/chat-execution-phases';
+import { hostedRoleIdentity } from '../../api/hosted-role-identity';
 
 export function chatMessageToCollaborationMessage(message: ChatMessage): CollaborationMessage {
   return {
@@ -63,10 +65,10 @@ export function sameChatMessages(
 }
 
 function liveMessageMergeKey(message: ChatMessage): string {
-  if (message.role === 'user') return '';
+  if (message.role === 'user') return message.runtimeTurnId ? JSON.stringify(['user', message.runtimeTurnId]) : '';
   if (!message.runtimeTurnId || !message.roleStage) return '';
   return JSON.stringify([
-    message.role, message.runtimeTurnId, message.rawRoleStage || message.roleStage,
+    message.role, message.runtimeTurnId, hostedRoleIdentity(message.rawRoleStage, message.roleStage),
     message.profile || '', message.memberId || message.senderId || '',
   ]);
 }
@@ -81,14 +83,20 @@ function mergeSnapshotMessage(
   const persistedActivities = new Map(
     (persisted.activities || []).filter(({ id }) => id).map((activity) => [activity.id, activity]),
   );
-  const liveIds = new Set((live.activities || []).map(({ id }) => id).filter(Boolean));
+  const matchedIds = new Set<string>();
   const activities = [
     ...(live.activities || []).map((activity) => {
-      const durable = activity.id ? persistedActivities.get(activity.id) : undefined;
+      const durable = persistedActivities.get(activity.id) || (activity.category === 'reasoning'
+        ? (persisted.activities || []).find(candidate => candidate.category === 'reasoning'
+          && !matchedIds.has(candidate.id) && candidate.startedAt && activity.startedAt
+          && Math.abs(candidate.startedAt - activity.startedAt) < 1000
+          && Boolean(candidate.output && activity.output && (candidate.output.startsWith(activity.output) || activity.output.startsWith(candidate.output))))
+        : undefined);
+      if (durable) matchedIds.add(durable.id);
       return durable ? mergeSnapshotActivity(durable, activity) : activity;
     }),
     ...(persisted.activities || []).filter(
-      (activity) => !activity.id || !liveIds.has(activity.id),
+      (activity) => !activity.id || !matchedIds.has(activity.id),
     ),
   ];
   const persistedIsTerminal = isTerminalStatus(persisted.status || '');
@@ -102,7 +110,11 @@ function mergeSnapshotMessage(
     // entering animation (visual flicker + open/manualPin state resets).
     id: persisted.id,
     renderKey: live.renderKey || live.id,
-    content: richerText(persisted.content, live.content, persistedIsTerminal),
+    content: persistedIsTerminal && persisted.executionComplete ? persisted.content
+      : richerText(persisted.content, live.content, persistedIsTerminal),
+    executionReports: (live.executionReports || []).reduce(
+      (reports, report) => appendExecutionReport(reports, report), persisted.executionReports || [],
+    ),
     activities,
     attachments: mergeSnapshotAttachments(persisted.attachments, live.attachments),
   };
@@ -229,10 +241,20 @@ export function mergeLiveMessagesIntoSnapshot(
     return mergeSnapshotMessage(message, liveMessage);
   });
   const trailing: ChatMessage[] = [];
+  for (const message of live) {
+    if (message.role === 'user' && !persistedById.has(message.id) && !liveMessageMergeKey(message)) trailing.push(message);
+  }
   for (const bucket of liveByKey.values()) {
     if (bucket.length) trailing.push(...bucket);
   }
   for (const message of trailing) {
+    if (message.role === 'user') {
+      const reply = merged.findIndex(candidate => candidate.runtimeTurnId === message.runtimeTurnId && candidate.role !== 'user');
+      const later = merged.findIndex(candidate => (candidate.createdAt || 0) > (message.createdAt || 0));
+      const index = reply >= 0 ? reply : later;
+      merged.splice(index < 0 ? merged.length : index, 0, message);
+      continue;
+    }
     const turnStart = merged.findIndex((candidate) => candidate.role === 'user'
       && candidate.runtimeTurnId === message.runtimeTurnId);
     const nextTurn = turnStart < 0 ? -1 : merged.findIndex((candidate, index) => index > turnStart && candidate.role === 'user');

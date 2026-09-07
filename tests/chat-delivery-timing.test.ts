@@ -26,6 +26,14 @@ test('history without a local send boundary keeps server timing', () => {
   assert.equal(turnTimingLine(history[0], true), '首字 7 s · 全程 8 s');
 });
 
+test('a continuing execution clears an obsolete milestone completion time', () => {
+  const old = { ...reply, submittedAt: 1000, firstObservedAt: 8000, completedObservedAt: 11000, status: 'completed' };
+  const next = observeChatDelivery([user, { ...reply, content: 'Still reading', status: 'running' }], [user, old], 12000);
+  assert.equal(next[1].firstObservedAt, 8000);
+  assert.equal(next[1].completedObservedAt, undefined);
+  assert.equal(messageDurationMs(next[1], 20000), 19000);
+});
+
 test('canonical chat metadata and ids cannot reset locally observed first token time', () => {
   const live = { ...reply, firstObservedAt: 8000, submittedAt: 1000, rawRoleStage: 'chat' };
   const result = observeChatDelivery([user, { ...reply, id: 'durable-id', rawRoleStage: undefined,

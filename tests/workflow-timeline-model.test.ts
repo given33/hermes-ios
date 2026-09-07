@@ -33,6 +33,14 @@ function activity(overrides: Partial<HermesChatActivity> = {}): HermesChatActivi
   };
 }
 
+test('remote timing separates queue, startup and model execution', () => {
+  const assigned = { status: 'running', remotePhase: 'waiting_claim', dispatchedAt: 1000 };
+  assert.equal(turnTimingLine(assigned, true, 91000), '等待接单 1m 30s');
+  const executing = { ...assigned, remotePhase: 'executing', acceptedAt: 1500,
+    modelStartedAt: 3500, firstTokenAt: 10500, submittedAt: 100, firstObservedAt: 91000 };
+  assert.equal(turnTimingLine(executing, true, 11500), '接单 500 ms · 启动 2 s · 首字 7 s · 执行 8 s');
+});
+
 test('tool entries stay collapsed during execution and after completion until opened', () => {
   let state = createTimelineCollapseState();
   state = timelineCollapseReducer(state, {
@@ -302,6 +310,13 @@ test('reasoning previews the first settled line or the newest streamed line', ()
   assert.equal(reasoningPreviewLine(text), '先梳理需求。');
   assert.equal(reasoningPreviewLine(text, true), '然后检查两条链路。');
   assert.equal(reasoningPreviewLine('   '), '');
+});
+
+test('completed member stages do not claim the complete task has ended', () => {
+  assert.equal(turnPhaseChip({ roleStage: 'dispatcher', rawRoleStage: 'manager_planning', status: 'completed' }, true).label, '规划完成');
+  assert.equal(turnPhaseChip({ roleStage: 'dispatcher', status: 'completed' }, true).label, '已派发');
+  assert.equal(turnPhaseChip({ roleStage: 'worker', status: 'completed' }, true).label, '成员已交付');
+  assert.equal(turnPhaseChip({ roleStage: 'dispatcher', status: 'completed', finalReport: true }, true).label, '已完成');
 });
 
 test('elapsed labels stay live for running work and settle with the record', () => {

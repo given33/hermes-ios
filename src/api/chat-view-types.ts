@@ -76,6 +76,7 @@ export interface HermesChatTodo {
 
 export interface HermesChatViewMessage {
   activities?: HermesChatActivity[];
+  executionReports?: { id: string; content: string; createdAt: number }[];
   attachments?: HermesChatAttachment[];
   avatarRole?: HermesChatAvatarRole;
   avatarSymbol?: string;
@@ -89,6 +90,8 @@ export interface HermesChatViewMessage {
   submittedAt?: number;
   firstObservedAt?: number;
   completedObservedAt?: number;
+  /** True only for a final role response or an authoritative turn terminal. */
+  executionComplete?: boolean;
   renderKey?: string;
   finalReport?: boolean;
   handoffTarget?: string;
@@ -99,6 +102,9 @@ export interface HermesChatViewMessage {
   planItems?: unknown;
   /** Provider request boundary used for first-token and terminal model timing. */
   modelStartedAt?: number;
+  remotePhase?: string;
+  dispatchedAt?: number;
+  acceptedAt?: number;
   model?: string;
   name: string;
   optimisticConfirmedAt?: number;
@@ -112,6 +118,8 @@ export interface HermesChatViewMessage {
   runtimeMessageId?: number;
   runtimeSessionId?: string;
   runtimeTurnId?: string;
+  /** Authoritative parent-turn completion, independent of individual roles. */
+  turnTerminal?: boolean;
   senderId?: string;
   startedAt?: number;
   status?: string;

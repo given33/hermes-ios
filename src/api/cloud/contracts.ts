@@ -149,6 +149,8 @@ export interface CollaborationMessage {
 }
 
 export interface SingleConversation {
+  history_category?: 'chat' | 'test' | 'runtime';
+  title_source?: 'derived' | 'llm' | 'user';
   account_generation?: string;
   id: string;
   profile: string;
@@ -163,6 +165,7 @@ export interface SingleConversation {
   room_id?: string;
   message_count?: number;
   runtime_sessions?: Record<string, string>;
+  runtime_session_aliases?: Record<string, string>;
   runtime_runs?: Record<string, JsonRecord>;
   hosted_turns?: Record<string, JsonRecord>;
   participants?: JsonRecord[];

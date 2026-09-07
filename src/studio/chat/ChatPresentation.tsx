@@ -61,6 +61,7 @@ import { todoListItemsForMessage } from '../todolist-card-model';
 import { formatAttachmentSize } from './chat-attachments';
 import { styles } from './chat-presentation-styles';
 import type { PendingPhase } from './chat-types';
+import { chatFileFailureNotice } from '../../api/chat-file-failure-notice';
 
 export { styles } from './chat-presentation-styles';
 export { ModelToolsDrawer } from './ChatModelToolsDrawer';
@@ -70,6 +71,7 @@ export {
   OpenMinisVoiceWaveform,
 } from './ChatComposerPresentation';
 export { ConversationHistory } from './ConversationHistory';
+import { executionReportText } from '../../api/chat-execution-phases';
 
 const BODY_REGULAR = 'HermesGoogle-IBMPlexSans-400-Normal';
 const BODY_SEMIBOLD = 'HermesGoogle-IBMPlexSans-600-Normal';
@@ -80,6 +82,12 @@ const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
 const RECONNECT_MAX_ATTEMPTS = 5;
 
 
+
+const MessageMarkdown = memo(function MessageMarkdown({ content, style }: {
+  content: string; style: Record<string, object>;
+}) {
+  return <Markdown style={style}>{content}</Markdown>;
+});
 
 export const UnifiedMessage = memo(function UnifiedMessage({
   index,
@@ -112,7 +120,6 @@ export const UnifiedMessage = memo(function UnifiedMessage({
   speaking: boolean;
 }) {
   const { tokens } = useTheme();
-  const motion = useMotion();
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState('');
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -143,7 +150,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
       setCopyError(isChinese ? '复制失败，请允许剪贴板访问后重试' : 'Copy failed. Allow clipboard access and try again.');
     }
   }, [isChinese]);
-  const markdownStyles = createMessageMarkdownStyles(
+  const markdownStyles = useMemo(() => createMessageMarkdownStyles(
     messageForeground,
     tokens.colors.primary,
     multiplyAlpha(tokens.colors.foreground, 0.055),
@@ -152,7 +159,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
     resolveNativeFontStack(tokens.typography.fontSans, 600) || BODY_SEMIBOLD,
     resolveNativeFontStack(tokens.typography.fontSans, 700) || BODY_BOLD,
     resolveNativeFontStack(tokens.typography.fontMono, 400) || MONO_REGULAR,
-  );
+  ), [messageForeground, tokens]);
   // 编排工作流:manager 的 meta 携带 todolist/manager_plan 计划时,
   // 气泡内渲染任务分派卡片而非普通 Markdown;各项状态由本轮
   // hosted turn 的执行轨迹(activities 与终态)推导。
@@ -165,9 +172,11 @@ export const UnifiedMessage = memo(function UnifiedMessage({
       {metadata}
     </Text>
   ) : null;
+  const displayContent = !isUser && messageIsRunning(message) ? '' : isUser ? message.content
+    : chatFileFailureNotice(executionReportText(message, message.content), isChinese);
   const hasBubble = Boolean(
     isUser
-      || message.content.trim()
+      || displayContent.trim()
       || message.attachments?.length
       || message.todos?.length
       || todoListItems?.length,
@@ -186,7 +195,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
       {todoListItems?.length ? (
         <TodoListCard isChinese={isChinese} items={todoListItems} />
       ) : null}
-      {message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
+      {displayContent.trim() ? <MessageMarkdown style={markdownStyles} content={displayContent} /> : null}
       {message.attachments?.length ? (
         <View style={styles.storedAttachments}>
           {message.attachments.map((attachment) => (
@@ -244,15 +253,8 @@ export const UnifiedMessage = memo(function UnifiedMessage({
     }] : []),
   ];
   return (
-    <Reanimated.View
+    <View
       testID={`chat-message-${message.runtimeTurnId || message.id}-${message.role}`}
-      entering={motion.fade(
-        FadeInUp
-          .delay(Math.min(index, 8) * 35)
-          .duration(IOS_MOTION.duration.content)
-          .easing(IOS_DECELERATE_EASING),
-        FadeIn.duration(MOTION.fade.reduced),
-      )}
       style={[
         styles.messageEnvelope,
         isUser ? styles.userMessageEnvelope : styles.agentMessageEnvelope,
@@ -287,7 +289,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           <View style={[styles.messageMeta, isUser && styles.userMessageMeta]}>
             {isUser ? metadataNode : null}
             <View style={[styles.senderMeta, isUser && styles.userSenderMeta]}>
-              <Text numberOfLines={1} style={[styles.messageName, { color: tokens.colors.textSecondary }]}>{message.finalReport ? 'Hermes' : message.name}</Text>
+              <Text numberOfLines={1} style={[styles.messageName, { color: tokens.colors.textSecondary }]}>{message.name}</Text>
               {!isUser && message.roleStage !== 'chat' ? (
                 <Text numberOfLines={1} style={[styles.roleLabel, { color: tokens.colors.textTertiary }]}>{message.finalReport ? (isChinese ? '最终答复' : 'Final response') : message.roleLabel}</Text>
               ) : null}
@@ -332,13 +334,18 @@ export const UnifiedMessage = memo(function UnifiedMessage({
                   : <Volume2 color={tokens.colors.textTertiary} size={13} />}
               </IOSPressable>
             ) : null}
+            {!isUser && !messageIsRunning(message) && message.content.trim() ? (
+              <Text testID="reply-completed-time" style={[styles.messageTime, { color: tokens.colors.textTertiary }]}>
+                {formatMessageLocalTime(message.completedObservedAt || message.completedAt || message.updatedAt || message.createdAt, isChinese, Date.now(), true)}
+              </Text>
+            ) : null}
             </View>
             {copyError ? <Text accessibilityRole="alert" style={{ color: tokens.colors.destructive, fontSize: 12, flexShrink: 1 }}>{copyError}</Text> : null}
           </View> : null}
         </View>
         </View>
       ) : null}
-    </Reanimated.View>
+    </View>
   );
 });
 

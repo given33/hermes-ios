@@ -17,6 +17,7 @@ import {
   turnTimingLine,
 } from '../workflow-timeline-model';
 import { styles } from './chat-presentation-styles';
+import { chatExecutionPhases } from '../../api/chat-execution-phases';
 import type {
   HostedRuntimeProjection,
 } from '../../api/hosted-runtime-types';
@@ -479,6 +480,8 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
     ),
   );
   const running = messageIsRunning(message);
+  const phases = useMemo(() => chatExecutionPhases(message), [message]);
+  const hasProcess = Boolean(stepActivities.length || reasoningText || phases.some(phase => phase.reports.length));
   const now = useNowTicker(running);
   // Live workflow display: while the turn runs the activity group stays
   // open so tool calls / searches appear in real time; once the turn ends it
@@ -514,7 +517,7 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
           {isChinese ? `${stepActivities.length} 个工具调用` : `${stepActivities.length} tool calls`}
         </Text>
       ) : null}
-      {stepActivities.length || reasoningText ? (
+      {hasProcess ? (
         <AnimatedChevron
           color={tokens.colors.textTertiary}
           open={open}
@@ -562,7 +565,7 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
           ))}
         </View>
       ) : null}
-      {stepActivities.length || reasoningText ? (
+      {hasProcess ? (
         <IOSPressable
           accessibilityRole="button"
           accessibilityState={{ expanded: open }}
@@ -587,21 +590,21 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
         <View
           style={styles.activityTimeline}
         >
-          {reasoningText ? <ReasoningSection
-            isChinese={isChinese}
-            running={reasoningActivities.some(activityIsRunning)}
-            durationLabel={reasoningElapsedLabel(reasoningActivities, now)}
-            text={reasoningText}
-            onInspectActivity={onInspectActivity}
-          /> : null}
-          {stepActivities.length ? (
-            <WorkflowTimeline
-              activities={stepActivities}
-              isChinese={isChinese}
-              now={now}
-              onInspectActivity={onInspectActivity}
-            />
-          ) : null}
+          {phases.map((phase, index) => {
+            const thoughts = phase.activities.filter(activity => activity.category === 'reasoning');
+            const tools = phase.activities.filter(activity => !['reasoning', 'awaiting', 'rework'].includes(activity.category));
+            const text = thoughts.map(activity => activity.output || activity.preview || '').filter(Boolean).join('\n\n');
+            return <View key={phase.id} testID={`execution-phase-${index}`} style={{ gap: 8, paddingBottom: 10 }}>
+              {phase.reports.map(report => <Text key={report.id} selectable style={{ fontSize: 14, lineHeight: 22, color: tokens.colors.foreground }}>
+                {report.content}
+              </Text>)}
+              {text ? <ReasoningSection isChinese={isChinese} running={thoughts.some(activityIsRunning)}
+                turnRunning={running} durationLabel={reasoningElapsedLabel(thoughts, now)} text={text}
+                onInspectActivity={onInspectActivity} /> : null}
+              {tools.length ? <WorkflowTimeline activities={tools} isChinese={isChinese} now={now}
+                onInspectActivity={onInspectActivity} /> : null}
+            </View>;
+          })}
         </View>
       ) : null}
     </View>

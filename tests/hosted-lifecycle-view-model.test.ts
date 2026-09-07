@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import type { HostedLifecycleEvent } from '../src/api/hosted-conversation-events';
 import { applyHostedLifecycleEvents } from '../src/api/hosted-lifecycle-view-model';
-import { messageDurationMs } from '../src/api/chat-view-model';
+import { hostedViewTurnIsTerminal, messageDurationMs } from '../src/api/chat-view-model';
 
 function event(
   cursor: number,
@@ -26,6 +26,61 @@ function event(
     turn_id: 'turn-1',
   };
 }
+
+test('official assistant-content fallback never appears as a new reasoning block', () => {
+  const result = applyHostedLifecycleEvents([], [
+    event(1, 'message.delta', { text: 'Answer' }),
+    event(2, 'thinking.completed', { text: 'Answer', source_event_type: 'reasoning.available' }),
+    event(3, 'message.completed', { text: 'Answer' }),
+  ]);
+  assert.equal(result.messages[0].activities?.filter(activity => activity.category === 'reasoning').length || 0, 0);
+});
+
+test('dispatch completion cannot end the parent workflow or release its send button', () => {
+  const planning = applyHostedLifecycleEvents([], [{
+    ...event(1, 'message.completed', { text: 'Plan ready', source_event_type: 'message.complete' }),
+    role_stage: 'manager_planning',
+  }]);
+  const dispatch = applyHostedLifecycleEvents(planning.messages, [{
+    ...event(2, 'message.completed', { text: 'Assigned to worker' }), role_stage: 'dispatcher',
+  }], true, planning.runtime);
+  assert.equal(dispatch.completed, false);
+  assert.equal(hostedViewTurnIsTerminal(dispatch.messages, 'turn-1'), false);
+  assert.equal(dispatch.messages.length, 2);
+  assert.equal(dispatch.messages[0].roleStage, 'dispatcher');
+  const working = applyHostedLifecycleEvents(dispatch.messages, [{
+    ...event(3, 'tool.started', { name: 'web_search', entity_id: 'search-1', args: { query: 'profiles' } }),
+    role_stage: 'worker',
+  }], true, dispatch.runtime);
+  assert.equal(working.turnActive, true);
+  assert.equal(working.completed, false);
+  const done = applyHostedLifecycleEvents(working.messages, [{
+    ...event(4, 'turn.completed'), role_stage: 'turn',
+  }], true, working.runtime);
+  assert.equal(done.completed, true);
+  assert.equal(hostedViewTurnIsTerminal(done.messages, 'turn-1'), true);
+});
+
+test('each member and server takeover own their stream and terminal state', () => {
+  const memberEvent = (cursor: number, type: string, stage: string, text: string) => ({
+    ...event(cursor, type, { text }), role_stage: stage,
+  });
+  const result = applyHostedLifecycleEvents([], [
+    memberEvent(1, 'message.delta', 'worker:dbb3-worker', 'DBB3 answer'),
+    memberEvent(2, 'message.completed', 'worker:dbb3-worker', 'DBB3 answer'),
+    memberEvent(3, 'reasoning.delta', 'worker:pc-worker', 'Checking Windows'),
+    memberEvent(4, 'reasoning.delta', 'worker:server-fallback', 'Taking over'),
+    memberEvent(5, 'message.delta', 'worker:pc-worker.progress', 'Windows is running'),
+  ]);
+  assert.equal(result.messages.length, 3);
+  assert.equal(result.messages[0].executionComplete, true);
+  assert.equal(result.messages[1].status, 'running');
+  assert.equal(result.messages[1].content, 'Windows is running');
+  assert.equal(result.messages[1].activities?.[0].output, 'Checking Windows');
+  assert.equal(result.messages[2].status, 'running');
+  assert.equal(result.messages[2].activities?.[0].output, 'Taking over');
+  assert.equal(result.completed, false);
+});
 
 test('hosted lifecycle waits for real reasoning content before thinking and timing begin', () => {
   const connected = applyHostedLifecycleEvents([], [event(1, 'agent.started', {
@@ -202,9 +257,10 @@ test('hosted lifecycle accepts team-stage events and a turn-stage terminal event
     { ...event(4, 'turn.completed'), role_stage: 'turn' },
   ], false);
 
-  assert.equal(completed.messages.length, 1);
+  assert.equal(completed.messages.length, 3);
   assert.equal(completed.messages[0]?.roleStage, 'worker');
-  assert.equal(completed.messages[0]?.content, 'Implementation complete. Review passed.');
+  assert.equal(completed.messages[1]?.content, 'Implementation complete. ');
+  assert.equal(completed.messages[2]?.content, 'Review passed.');
   assert.equal(completed.messages.every((message) => message.status === 'completed'), true);
   assert.equal(completed.completed, true);
   assert.equal(completed.turnActive, false);
@@ -279,6 +335,32 @@ test('interim answer text stays in the same streaming message', () => {
   assert.equal(streamed.messages.length, 1);
   assert.equal(streamed.messages[0].content, 'Early answer completed');
   assert.equal(streamed.messages[0].status, 'completed');
+});
+
+test('completed milestone cannot finish a task that continues through tools and reasoning', () => {
+  const interim = applyHostedLifecycleEvents([], [
+    { ...event(1, 'message.completed', { role: 'assistant', status: 'completed', content: 'Checking the proxy.' }), role_stage: 'chat.milestone.1' },
+    event(2, 'message.interim', { text: 'Checking the proxy.', source_event_type: 'message.interim' }),
+  ]);
+  assert.equal(interim.completed, false);
+  assert.equal(interim.turnActive, true);
+  assert.equal(interim.messages[0].status, 'running');
+  assert.equal(interim.messages[0].completedAt, undefined);
+  const executing = applyHostedLifecycleEvents(interim.messages, [
+    event(3, 'tool.started', { tool_id: 'fetch', name: 'web_search', arguments: { query: 'Hermes documentation' } }),
+    event(4, 'reasoning.delta', { text: 'Reading search results.' }),
+  ], true, interim.runtime);
+  assert.equal(executing.completed, false);
+  assert.equal(executing.messages[0].activities?.find(a => a.toolName === 'web_search')?.status, 'running');
+  const done = applyHostedLifecycleEvents(executing.messages, [
+    event(5, 'tool.completed', { tool_id: 'fetch', name: 'web_search' }),
+    event(6, 'message.completed', { text: 'Final result', source_event_type: 'message.complete' }),
+    event(7, 'turn.completed'),
+  ], true, executing.runtime);
+  assert.equal(done.completed, true);
+  assert.equal(done.turnActive, false);
+  assert.equal(done.messages.length, 1);
+  assert.equal(done.messages[0].content, 'Final result');
 });
 
 test('late gateway metadata and retry frames cannot restore the stop button after completion', () => {

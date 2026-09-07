@@ -31,6 +31,32 @@ function conversation(overrides: Partial<SingleConversation> = {}): SingleConver
   };
 }
 
+test('persisted file tool errors cannot display as successful calls', () => {
+  const [message] = conversationMessagesToView(conversation({ messages: [{
+    id: 'answer', name: 'Hermes', role: 'assistant', content: 'Result', status: 'completed',
+    meta: { activities: [{ id: 'write', name: 'write_file', kind: 'tool', status: 'completed',
+      output: JSON.stringify({ error: 'Permission denied' }) }] },
+  }] }));
+  assert.equal(message.activities?.[0].status, 'failed');
+  assert.equal(message.activities?.[0].error, 'Permission denied');
+});
+
+test('assistant progress cleanup never hides user messages carrying chat stage metadata', () => {
+  for (const phase of ['opening', 'progress', 'milestone', 'completed']) {
+    const view = conversationMessagesToView(conversation({ messages: [
+      { id: 'user', name: 'You', role: 'user', content: 'My question', meta: { runtime_turn_id: 'turn', role_stage: 'chat', phase } },
+      { id: 'report', name: 'Hermes', role: 'assistant', content: 'Checking now', created_at: 200,
+        meta: { runtime_turn_id: 'turn', role_stage: 'chat.milestone.1', phase: 'milestone' } },
+      { id: 'final', name: 'Hermes', role: 'assistant', content: 'Answer', status: 'completed', created_at: 300,
+        meta: { runtime_turn_id: 'turn', role_stage: 'chat', phase: 'completed' } },
+    ] }));
+    assert.equal(view.filter(message => message.role === 'user').length, 1, phase);
+    const final = view.find(message => message.id === 'final')!;
+    assert.equal(final.content, 'Answer');
+    assert.deepEqual(final.executionReports?.map(report => report.content), ['Checking now']);
+  }
+});
+
 test('cloud conversation messages normalize legacy workflow stages to worker output', () => {
   const messages = conversationMessagesToView(conversation({
     messages: [

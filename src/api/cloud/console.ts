@@ -38,7 +38,7 @@ export interface MobileConsoleResult {
   status: MobileConsoleStatus;
 }
 
-export type MobileHostedCommand = 'bg' | 'btw' | 'busy';
+export type MobileHostedCommand = 'bg' | 'btw' | 'busy' | 'model';
 
 export interface MobileHostedCommandResult {
   accepted: boolean;
@@ -47,6 +47,11 @@ export interface MobileHostedCommandResult {
   event_type?: string;
   task_id?: string;
   value?: string;
+  deferred?: boolean;
+  model?: string;
+  provider?: string;
+  confirm_required?: boolean;
+  confirm_message?: string;
 }
 
 export interface MobileConsoleCompletionSuggestion {
@@ -96,11 +101,12 @@ export class HermesConsoleCloudApi {
     command: MobileHostedCommand,
     text = '',
     value = '',
+    confirmExpensiveModel = false,
   ) {
     return this.transport.json<MobileHostedCommandResult>(
       `/api/plugins/collaboration/mobile/conversations/${encodeURIComponent(conversationId)}/commands`,
       'POST',
-      { command, text, value },
+      { command, text, value, confirm_expensive_model: confirmExpensiveModel },
     );
   }
 }

@@ -265,7 +265,7 @@ export function timelineGroupElapsedLabel(
 export function turnPhaseChip(
   message: Pick<
     HermesChatViewMessage,
-    'activities' | 'roleStage' | 'status' | 'timingLabel'
+    'activities' | 'roleStage' | 'rawRoleStage' | 'status' | 'timingLabel' | 'finalReport'
   >,
   chinese: boolean,
 ): TimelinePhaseChip {
@@ -281,6 +281,13 @@ export function turnPhaseChip(
   if (status === 'failed' || status === 'error') return { label, tone: 'failed' };
   if (status === 'cancelled' || status === 'canceled' || status === 'stopped') {
     return { label, tone: 'cancelled' };
+  }
+  if (!message.finalReport && message.roleStage === 'dispatcher') {
+    return { label: message.rawRoleStage?.startsWith('manager_planning')
+      ? (chinese ? '规划完成' : 'Plan ready') : (chinese ? '已派发' : 'Dispatched'), tone: 'ok' };
+  }
+  if (!message.finalReport && message.roleStage === 'worker') {
+    return { label: chinese ? '成员已交付' : 'Member delivered', tone: 'ok' };
   }
   return { label, tone: 'ok' };
 }
@@ -308,11 +315,29 @@ export function turnTimingLine(
     'activities' | 'completedAt' | 'createdAt' | 'durationMs' | 'firstTokenAt' | 'modelStartedAt'
     | 'startedAt' | 'status' | 'updatedAt'
     | 'submittedAt' | 'firstObservedAt' | 'completedObservedAt'
+    | 'remotePhase' | 'dispatchedAt' | 'acceptedAt'
   >,
   chinese: boolean,
   now = Date.now(),
 ): string {
   const parts: string[] = [];
+  if (message.remotePhase && message.dispatchedAt) {
+    const end = message.completedAt || now;
+    if (!message.acceptedAt) return chinese
+      ? `等待接单 ${formatDurationLabel(Math.max(0, end - message.dispatchedAt))}`
+      : `Waiting for member ${formatDurationLabel(Math.max(0, end - message.dispatchedAt))}`;
+    const accepted = formatDurationLabel(Math.max(0, message.acceptedAt - message.dispatchedAt));
+    parts.push(chinese ? `接单 ${accepted}` : `Accepted ${accepted}`);
+    const starting = formatDurationLabel(Math.max(0, (message.modelStartedAt || end) - message.acceptedAt));
+    if (starting) parts.push(chinese ? `启动 ${starting}` : `Startup ${starting}`);
+    if (message.modelStartedAt) {
+      const first = message.firstTokenAt && formatDurationLabel(Math.max(0, message.firstTokenAt - message.modelStartedAt));
+      if (first) parts.push(chinese ? `首字 ${first}` : `First token ${first}`);
+      const elapsed = formatDurationLabel(Math.max(0, end - message.modelStartedAt));
+      if (elapsed) parts.push(chinese ? `执行 ${elapsed}` : `Execution ${elapsed}`);
+    }
+    return parts.join(' · ');
+  }
   const firstToken = firstTokenLabel(message, chinese);
   if (firstToken) parts.push(firstToken);
   const elapsed = formatDurationLabel(messageDurationMs(message, now));

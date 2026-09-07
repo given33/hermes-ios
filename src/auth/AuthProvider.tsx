@@ -1167,7 +1167,7 @@ function authenticationErrorMessage(error: unknown): string {
     if (error.status === 409) return '服务器已有所有者账号，请登录。';
     if (error.status === 422) return '邮箱、验证码、账号或密码格式不符合要求。';
     if (error.status === 429) return '尝试次数过多，请稍后重试。';
-    if (error.status === 502 || error.status === 503) return 'QQ 邮箱验证码服务尚未配置。';
+    if (error.status === 502 || error.status === 503) return 'Hermes 服务器暂时不可用，请稍后重试。';
   }
   if (error instanceof HermesApiError) {
     if (error.status === 401 || error.status === 403) {

@@ -101,7 +101,7 @@ export const styles = StyleSheet.create({
   todoRunningDot: { borderRadius: 3, height: 6, width: 6 },
   activitySummary: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 6, minHeight: 32, paddingHorizontal: 3, paddingVertical: 2 },
   activityTitle: { flexShrink: 1, fontFamily: BODY_MEDIUM, fontSize: 11, lineHeight: 15 },
-  activityCount: { fontFamily: MONO_REGULAR, fontSize: 9, lineHeight: 13 },
+  activityCount: { fontFamily: BODY_MEDIUM, fontSize: 11, lineHeight: 15 },
   activityTimeline: { gap: 4, paddingBottom: 4 },
   subagentCards: { gap: 6, paddingBottom: 2 },
   subagentCard: { borderRadius: 10, borderWidth: StyleSheet.hairlineWidth, gap: 4, paddingHorizontal: 10, paddingVertical: 8, width: '100%' },

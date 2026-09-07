@@ -116,6 +116,8 @@ export function conversationMessagesToView(
     if (!terminal) return [converted];
     return [{
       ...converted,
+      turnTerminal: true,
+      executionComplete: true,
       activities: converted.activities?.map((activity) => (
         activity.status === 'queued' || activity.status === 'running'
           ? {
@@ -132,7 +134,21 @@ export function conversationMessagesToView(
       updatedAt: terminal.completedAt || converted.updatedAt,
     }];
   });
-  const messages = deduplicateMessages(converted);
+  const reports = sourceMessages.flatMap((message) => {
+    if (message.role !== 'assistant') return [];
+    const meta = messageMetadata(message);
+    if (stringValue(meta.phase).toLowerCase() !== 'milestone' || !message.content) return [];
+    const normalized = collaborationMessageToView(message, chinese, now);
+    return normalized ? [{ turnId: normalized.runtimeTurnId, roleStage: normalized.roleStage,
+      profile: normalized.profile, memberId: normalized.memberId,
+      id: message.id, content: message.content, createdAt: normalized.createdAt || 0 }] : [];
+  });
+  const messages = deduplicateMessages(converted).map((message) => {
+    if (message.role !== 'assistant') return message;
+    const owned = reports.filter(report => report.turnId === message.runtimeTurnId && report.roleStage === message.roleStage
+      && report.profile === message.profile && report.memberId === message.memberId);
+    return owned.length ? { ...message, executionReports: owned } : message;
+  });
   if (conversationCollaborationState(conversation) !== 'single') return messages;
   return messages.map((message) => {
     const ordinaryMessage = message.role === 'assistant'
@@ -156,6 +172,17 @@ export function conversationMessagesToView(
         }
       : ordinaryMessage;
   });
+}
+
+export function hostedViewTurnIsTerminal(
+  messages: readonly HermesChatViewMessage[],
+  turnId: string,
+): boolean {
+  return messages.some((message) => message.role === 'assistant'
+    && message.runtimeTurnId === turnId
+    && ['completed', 'failed', 'cancelled'].includes(message.status || '')
+    && (message.turnTerminal === true || (message.executionComplete === true
+      && (!message.roleStage || message.roleStage === 'chat'))));
 }
 
 function cancelledHostedTurnIds(conversation: SingleConversation): Set<string> {
@@ -214,6 +241,7 @@ function shouldHideSupersededChatMessage(
   cancelledTurnIds: ReadonlySet<string>,
   index: number,
 ): boolean {
+  if (message.role !== 'assistant') return false;
   const meta = messageMetadata(message);
   const turnId = messageRuntimeTurnId(message, meta);
   if (!turnId) return false;
@@ -251,7 +279,7 @@ function isFinalChatMessage(
   message: CollaborationMessage,
   meta: JsonRecord,
 ): boolean {
-  if (chatMessageBaseStage(meta) !== 'chat') return false;
+  if (message.role !== 'assistant' || chatMessageBaseStage(meta) !== 'chat') return false;
   const phase = stringValue(meta.phase).toLowerCase();
   const key = stringValue(meta.message_key).toLowerCase();
   const status = terminalStatus(message.status || meta.status);
@@ -264,7 +292,7 @@ function isSupersededChatProgress(
   message: CollaborationMessage,
   meta: JsonRecord,
 ): boolean {
-  if (chatMessageBaseStage(meta) !== 'chat') return false;
+  if (message.role !== 'assistant' || chatMessageBaseStage(meta) !== 'chat') return false;
   const phase = stringValue(meta.phase).toLowerCase();
   const roleStage = stringValue(meta.role_stage).toLowerCase();
   const key = stringValue(meta.message_key).toLowerCase();
@@ -538,7 +566,8 @@ export function collaborationMessageToView(
     messageFreshnessMs,
     now,
   );
-  const status = staleRunning ? 'failed' : rawStatus;
+  const progressMessage = !isUser && isSupersededChatProgress(message, meta);
+  const status = staleRunning ? 'failed' : progressMessage ? 'running' : rawStatus;
   const terminal = isTerminalStatus(status);
   const serverUpdatedAt = timestampValue(message.updated_at)
     || timestampValue(meta.updated_at);
@@ -558,6 +587,10 @@ export function collaborationMessageToView(
       ))
     : mappedActivities;
   let timingLabel = '';
+  if (!terminal && roleStage === 'worker') {
+    timingLabel = meta.remote_phase === 'waiting_claim' ? (chinese ? '等待成员接单' : 'Waiting for member')
+      : meta.remote_phase === 'starting' ? (chinese ? '成员已接单，正在启动' : 'Member starting') : '';
+  }
   if (!terminal && roleStage === 'chat') {
     const firstTokenAt = timestampValue(meta.first_token_at);
     if (firstTokenAt || message.content) {
@@ -618,6 +651,7 @@ export function collaborationMessageToView(
       || stringValue(meta.avatar_url)
       || undefined,
     completedAt: completedAt || undefined,
+    executionComplete: !isUser && terminal && !progressMessage,
     content: visibleMessageContent(message, meta),
     contextUsedTokens: typeof meta.context_used === 'number' && meta.context_used >= 0 ? meta.context_used : undefined,
     contextMaxTokens: typeof meta.context_max === 'number' && meta.context_max > 0 ? meta.context_max : undefined,
@@ -657,6 +691,9 @@ export function collaborationMessageToView(
       || stringValue(meta.member_id)
       || undefined,
     modelStartedAt: modelStartedAt || undefined,
+    remotePhase: stringValue(meta.remote_phase) || undefined,
+    dispatchedAt: timestampValue(meta.dispatched_at) || undefined,
+    acceptedAt: timestampValue(meta.accepted_at) || undefined,
     model: [provider, model].filter(Boolean).join(' · ') || undefined,
     name,
     optimisticConfirmedAt: timestampValue(meta.optimistic_confirmed_at) || undefined,
@@ -1435,10 +1472,15 @@ function activityFromRecord(
       ? Math.max(0, completedAt - startedAt)
       : 0;
   const detail = structuredText(item.detail ?? item.metadata);
-  const error = structuredText(item.error);
   const output = structuredText(
     item.output ?? item.output_text ?? item.result_text ?? item.result ?? item.response,
   );
+  let resultError = '';
+  try {
+    const result = JSON.parse(output);
+    if (isRecord(result) && result.error) resultError = structuredText(result.error);
+  } catch { /* Plain text tool output has no structured error. */ }
+  const error = structuredText(item.error) || resultError;
   const input = structuredText(
     item.input ?? item.input_text ?? item.args_text ?? item.args ?? item.command ?? item.query ?? item.request,
   );
@@ -1472,7 +1514,7 @@ function activityFromRecord(
     preview,
     provider: stringValue(item.provider) || undefined,
     startedAt: startedAt || undefined,
-    status: normalizeStatus(item.status),
+    status: error ? 'failed' : normalizeStatus(item.status),
     toolName: toolName || undefined,
     files: (Array.isArray(item.files)
       ? (item.files as unknown[]).map((value) => stringValue(value)).filter(Boolean)

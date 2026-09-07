@@ -31,7 +31,7 @@ await page.addInitScript(() => {
     const start = Date.now();
     if (url.includes('/enqueue')) {
       const request = JSON.parse(args[1]?.body || '{}');
-      window.recordDelivery({ kind: 'enqueue', turn: request.turn_id || request.turnId, start });
+      window.recordDelivery({ kind: 'enqueue', turn: request.turn_id || request.turnId, path: new URL(url, location.href).pathname, start });
     }
     const response = await original(...args);
     if (/enqueue|hosted-events/.test(url)) window.recordDelivery({ kind: 'http', path: new URL(url, location.href).pathname, start, received: Date.now(), status: response.status });
@@ -54,7 +54,7 @@ await page.addInitScript(() => {
               const payload = JSON.parse(data);
               for (const event of payload.events || []) window.recordDelivery({ kind: 'event', type: event.event_type,
                 turn: event.turn_id, source: event.occurred_at, received: Date.now(), length: (event.payload?.text || '').length,
-                text: event.payload?.text, stage: event.role_stage, snapshot: Boolean(payload.conversation),
+                text: event.payload?.text || event.payload?.delta || event.payload?.content, stage: event.role_stage, snapshot: Boolean(payload.conversation),
                 cursor: event.cursor, role: event.payload?.role, sourceType: event.payload?.source_event_type });
             } catch { /* Ignore keepalive frames. */ }
           }
@@ -91,7 +91,9 @@ try {
   }
   if (!(await page.getByLabel('新建会话', { exact: true }).isVisible())) await page.getByLabel('会话', { exact: true }).click();
   if (process.argv[4]) {
-    await page.getByTestId(`open-conversation-${process.argv[4]}`).click();
+    await page.getByLabel('刷新会话历史', { exact: true }).click();
+    await page.getByTestId('history-category-test').click();
+    await page.getByTestId(`open-conversation-${process.argv[4]}`).click({ timeout: 90000 });
     if (!(await page.getByTestId(`open-conversation-${process.argv[4]}`).isVisible())) {
       await page.getByLabel('会话', { exact: true }).click();
     }
@@ -100,16 +102,27 @@ try {
     await page.getByLabel('新建会话', { exact: true }).click();
   }
   if (await page.getByLabel('新建会话', { exact: true }).isVisible()) await page.getByLabel('会话', { exact: true }).click();
+  let sentCount = 0;
   for (const [index, task] of [
     '请直接计算 137×29，只回复结果。',
-    '请你直接在当前会话用 terminal 运行 python3 -u -c "import time; print(\'phase_one\', flush=True); time.sleep(3); print(\'phase_two\', flush=True)"。这是单步任务，无需团队或派发。完成后只回复 delivery_done。',
+    '先回复一句正在准备执行，然后直接在当前会话用 terminal 运行 python3 -u -c "import time; print(\'phase_one\', flush=True); time.sleep(3); print(\'phase_two\', flush=True)"。这是单步任务，无需团队或派发。工具完成后最终回复 delivery_done。',
+    '先简短说明正在搜索，然后用 web_search 搜索 Hermes Agent 官方 profiles 文档，读取其中一个官方页面，用中文说明独立配置的作用并给出来源链接。直接完成，不派发成员，最终回复末尾写 search_done。',
+    '请直接使用 write_file 在当前会话工作目录创建 delivery_check.md，内容为 file_delivery_verified，然后用 read_file 读取并核实。不要写代码安装目录，不要派发成员。完成后回复 file_done 和实际文件路径。',
+    '先回复开始文件校验，再使用 write_file 尝试创建 /opt/hermes-agent/delivery_permission_check.md，内容为 permission_check。如果权限不足，请改为在当前会话工作目录写入同名文件，然后使用 read_file 核实实际内容。直接完成，不派发成员。最终说明真实保存结果，末尾写 file_done。',
+    '请明确派发给 dbb3-worker 执行一项真实验收：先简短汇报将检查本机，然后在 DBB3 上使用 terminal 运行 python3 -u -c "import socket,time; print(socket.gethostname(),flush=True); time.sleep(8); print(\'remote_done\',flush=True)"。执行成员直接返回实际主机名和命令输出，结尾写 remote_done。',
+    '以后称呼我皇上。你现在运行在哪个服务器上？我问的是当前会话的你，直接回答即可，最后写 identity_done。',
+    '请派发给 pc-worker 在 Windows WSL 使用 terminal 执行 hostname，执行成员直接回复真实输出，结尾写 pc_done。',
+    '请派发给 hk-worker 在香港主机使用 terminal 执行 hostname，执行成员直接回复真实输出，结尾写 hk_done。',
+    '请同时派发给 dbb3-worker 和 pc-worker，各自在自己主机上使用 terminal 执行 hostname，分别汇报真实主机名；两个成员完成后，当前会话 Hermes 汇总一次，结尾写 team_done。',
   ].entries()) {
+    if (process.argv[5] && !process.argv[5].split(',').includes(String(index))) continue;
+    sentCount++;
     await page.getByPlaceholder('发送消息给 Hermes').fill(task);
     const sent = Date.now();
     records.push({ kind: 'send', index, sent });
     console.log(JSON.stringify({ kind: 'send', index, sent }));
     await page.getByLabel('发送消息', { exact: true }).click();
-    let previous = '', firstVisible = 0, doneAt = 0;
+    let previous = '', firstVisible = 0, doneAt = 0, prematureSince = 0;
     while (Date.now() - sent < 180000) {
       const body = await page.locator('body').innerText();
       if (body !== previous) {
@@ -123,16 +136,36 @@ try {
         firstVisible = Date.now();
         await page.screenshot({ path: `${output}/task-${index}-live.png` });
       }
-      const expected = index === 0 ? '3973' : 'delivery_done';
+      const expected = index === 0 ? '3973' : index === 1 ? 'delivery_done' : index === 2 ? 'search_done'
+        : index === 5 ? 'remote_done' : index === 6 ? 'identity_done' : index === 7 ? 'pc_done'
+          : index === 8 ? 'hk_done' : index === 9 ? 'team_done' : 'file_done';
+      const promptRows = await page.locator('[data-testid^="chat-message-"][data-testid$="-user"]').evaluateAll(rows => rows.map(row => {
+        let opaque = true;
+        for (let node = row; node; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          if (Number(style.opacity) === 0 || style.visibility === 'hidden' || style.display === 'none') opaque = false;
+        }
+        return { id: row.dataset.testid, opaque, text: row.textContent };
+      }));
+      if (Date.now() - sent > 2000) assert(promptRows.length >= sentCount, 'User messages disappeared while streaming');
+      assert(promptRows.every(row => row.opaque), 'User messages have invisible ancestors');
       const completedEvent = records.some((record) => record.kind === 'event' && record.turn === turn
         && record.type === 'message.completed' && record.text?.includes(expected) && record.received >= sent);
-      const answered = completedEvent && replyText.includes(expected);
+      const finalRoleEvent = records.some(record => record.kind === 'event' && record.turn === turn
+        && ((record.type === 'message.completed' && record.stage === 'chat' && record.sourceType === 'message.complete')
+          || ['turn.completed', 'turn.failed', 'turn.cancelled'].includes(record.type)));
+      const answered = (completedEvent || finalRoleEvent) && replyText.includes(expected);
+      if (replyText.includes('已完成') && !finalRoleEvent) {
+        prematureSince ||= Date.now();
+        assert(Date.now() - prematureSince < 300, 'An interim milestone marked the executing turn completed');
+      } else { prematureSince = 0; }
       if (records.some((record) => record.kind === 'event' && record.turn === turn
         && ['turn.failed', 'turn.cancelled'].includes(record.type))) {
         records.push({ kind: 'unexpected-terminal', index, received: Date.now(), replyText });
         break;
       }
       if (answered && !(await page.getByLabel('取消当前任务', { exact: true }).isVisible())) {
+        assert(finalRoleEvent, 'Only a root chat final or parent turn terminal may release the composer');
         if (!doneAt) doneAt = Date.now();
         if (Date.now() - doneAt > 4000) break;
       }
@@ -142,6 +175,10 @@ try {
     const summary = { kind: 'task', index, sent, firstVisible, doneAt, elapsed: (doneAt || Date.now()) - sent };
     records.push(summary);
     console.log(JSON.stringify(summary));
+    if (process.argv[4]) {
+      const calls = records.filter(record => record.kind === 'enqueue');
+      assert(calls.every(record => record.path.includes(`/conversations/${process.argv[4]}/enqueue`)), 'Every message must stay in the selected conversation');
+    }
     if (!doneAt) {
       if (await page.getByLabel('取消当前任务', { exact: true }).isVisible()) {
         await page.getByLabel('取消当前任务', { exact: true }).click();
@@ -149,6 +186,14 @@ try {
       process.exitCode = 1;
       break;
     }
+    if ([5, 7, 8, 9].includes(index)) {
+      const turn = records.find(record => record.kind === 'enqueue' && record.start >= sent)?.turn;
+      const events = records.filter(record => record.kind === 'event' && record.turn === turn);
+      assert(!events.some(record => record.stage?.includes('server-fallback')), 'Remote acceptance failed: server fallback executed this probe');
+      assert(events.some(record => record.type === 'tool.started' && record.stage?.startsWith('worker')), 'The member did not stream a real tool start');
+      if (index === 5) assert.match(await page.getByTestId(`chat-message-${turn}-assistant`).innerText(), /dbb3-hermes/i);
+    }
+    assert.match(await page.getByTestId('reply-completed-time').last().innerText(), /\d+月\d+日 \d{2}:\d{2}/);
     if (index === 1) {
       const details = page.getByLabel('执行过程', { exact: true }).last();
       await details.click();
@@ -163,6 +208,34 @@ try {
       await page.getByText('delivery_done', { exact: true }).last().waitFor({ timeout: 10000 });
       await page.getByText('结果', { exact: true }).last().scrollIntoViewIfNeeded();
       await page.screenshot({ path: `${output}/tool-detail-mobile.png` });
+    }
+    if (index === 2) {
+      await page.getByLabel('执行过程', { exact: true }).last().click();
+      await page.getByRole('button', { name: /^搜索 ·/ }).last().waitFor();
+      await page.getByRole('button', { name: /^搜索 ·/ }).last().scrollIntoViewIfNeeded();
+      assert(await page.getByRole('link').count() > 0, 'Search must expose navigable sources');
+      await page.screenshot({ path: `${output}/search-sources-mobile.png` });
+      const reply = page.locator('[data-testid^="chat-message-"][data-testid$="-assistant"]').last();
+      assert(await reply.locator('[data-testid^="execution-phase-"]').count() >= 2, 'Reports must retain distinct model passes');
+      assert.doesNotMatch(await reply.innerText(), /Hermes.*阶段\s*\d/);
+      const summary = page.getByLabel('执行过程', { exact: true }).first();
+      await summary.scrollIntoViewIfNeeded();
+      const before = await summary.boundingBox();
+      await summary.click();
+      await page.waitForTimeout(400);
+      await summary.click();
+      await page.waitForTimeout(400);
+      const after = await summary.boundingBox();
+      assert(Math.abs(before.y - after.y) < 12, 'Collapsing history must retain the reading position');
+      records.push({ kind: 'collapse-anchor', before: before.y, after: after.y });
+    }
+    if (index === 4) {
+      await page.getByLabel('执行过程', { exact: true }).last().click();
+      await page.getByRole('button', { name: /write_file.*失败/ }).last().waitFor();
+      const body = await page.locator('body').innerText();
+      assert(!body.includes('File-mutation verifier:'), 'Show the localized failure explanation');
+      assert(body.includes('文件保存失败'), 'Do not hide the failed attempt');
+      await page.screenshot({ path: `${output}/write-recovered.png` });
     }
   }
 } catch (error) {

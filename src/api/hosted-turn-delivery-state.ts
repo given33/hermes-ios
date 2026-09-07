@@ -4,7 +4,11 @@ import type { HostedTurnOutboxItem } from './conversation-local-store';
 
 export const HOSTED_TURN_MAX_DELIVERY_ATTEMPTS = 5;
 export const HOSTED_TURN_MAX_RECONCILIATION_ATTEMPTS = 5;
-export const HOSTED_TURN_RETRY_DELAY_MS = 60_000;
+export const HOSTED_TURN_RETRY_DELAY_MS = 2_000;
+
+export function hostedTurnRetryDelay(attempt: number): number {
+  return Math.min(15_000, HOSTED_TURN_RETRY_DELAY_MS * 2 ** Math.max(0, Math.min(3, attempt - 1)));
+}
 
 export interface HostedTurnDeliveryFailure {
   certainty: 'definitive' | 'uncertain';
@@ -114,7 +118,7 @@ export function decideHostedTurnCancellationFailure(
     return {
       attempts,
       failure,
-      nextAttemptAt: now + HOSTED_TURN_RETRY_DELAY_MS,
+      nextAttemptAt: now + hostedTurnRetryDelay(attempts),
       outcome: 'retry',
     };
   }
@@ -153,7 +157,7 @@ export function decideHostedTurnDeliveryFailure(
       ),
       ...(reconciliationExhausted ? { reconciliationExhaustedAt: now } : {}),
       lastError: failure.message,
-      nextAttemptAt: terminal ? 0 : now + HOSTED_TURN_RETRY_DELAY_MS,
+      nextAttemptAt: terminal ? 0 : now + hostedTurnRetryDelay(attempts + reconciliationAttempts),
     },
     terminal,
   };

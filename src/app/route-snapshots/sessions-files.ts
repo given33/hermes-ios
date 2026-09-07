@@ -12,6 +12,7 @@ import type {
 } from '../../api/HermesCloudApi';
 import type { JsonRecord } from '../../api/cloud/transport';
 import { conversationSessionSummary } from '../../api/HermesCloudApi';
+import { formatConversationCreatedAt } from '../../api/conversation-history-presentation';
 import {
   formatBytes,
   formatTimestamp,
@@ -37,7 +38,7 @@ export function sessionsSnapshot(
       title: session.title?.trim() || session.preview?.trim()
         || localizer.choose('未命名会话', 'Untitled session'),
       model: session.model?.trim() || 'Hermes',
-      date: formatTimestamp(session.last_active || session.started_at),
+      date: formatConversationCreatedAt(session.started_at, localizer.choose('zh', 'en') === 'zh'),
       running: session.is_active,
       profile: session.profile?.trim() || undefined,
       archived: session.archived,

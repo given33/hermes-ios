@@ -482,6 +482,7 @@ export interface HermesStudioWorkflowHistoryItem {
   title: string;
   preview: string;
   profile: string;
+  createdAt?: number;
   updatedAt: number;
   status: HermesStudioWorkflowRunStatus;
 }

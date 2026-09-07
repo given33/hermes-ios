@@ -1,4 +1,5 @@
 import { mergeUnifiedConversationIndex } from './conversation-index';
+import { officialConversationPlaceholderId } from './conversation-identifiers';
 import { HermesApiError } from './HermesApiClient';
 import type { SessionSummary } from './cloud/contracts';
 import type { HermesConversationsCloudApi } from './cloud/conversations';
@@ -15,7 +16,7 @@ export async function loadUnifiedConversations(
   signal?: AbortSignal,
 ) {
   const cloudPromise = conversationsApi.getUnifiedConversations(profile, signal);
-  const officialPromise = sessionsApi.getAllProfileSessions(100, signal)
+  const officialPromise = sessionsApi.getAllProfileSessions(100, signal, 'dashboard-group,kanban,tool')
     .then(({ sessions }) => sessions)
     .catch((error: unknown) => {
       if (error instanceof HermesApiError && error.status === 404) {
@@ -24,8 +25,14 @@ export async function loadUnifiedConversations(
       throw error;
     });
   const [cloud, officialSessions] = await Promise.all([cloudPromise, officialPromise]);
+  const conversations = mergeUnifiedConversationIndex(cloud.conversations, officialSessions, profile);
+  const visibleIds = new Set(conversations.map(item => item.id));
   return {
-    conversations: mergeUnifiedConversationIndex(cloud.conversations, officialSessions, profile),
+    conversations,
+    superseded: [
+      ...cloud.conversations.map(item => item.id),
+      ...officialSessions.flatMap(item => [officialConversationPlaceholderId(item.profile || profile, item.id), `official:${item.id}`]),
+    ].filter(id => !visibleIds.has(id)),
     deleted: cloud.deleted,
   };
 }

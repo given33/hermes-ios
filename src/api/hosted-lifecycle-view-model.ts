@@ -1,4 +1,6 @@
 import { isRecord } from './chat-view-values';
+import { appendExecutionReport } from './chat-execution-phases';
+import { hostedRoleIdentity } from './hosted-role-identity';
 import type { HostedLifecycleEvent } from './hosted-conversation-events';
 import {
   reduceHostedRuntimeEvents,
@@ -8,6 +10,7 @@ import type { HermesChatRoleStage, HermesChatTodo } from './chat-view-types';
 import { truncateByCodePoints } from './text-clamp';
 import {
   avatarRoleFor,
+  hostedViewTurnIsTerminal,
   streamEventToActivity,
   type HermesChatActivity,
   type HermesChatViewMessage,
@@ -65,6 +68,7 @@ export function applyHostedLifecycleEvents(
     const roleStage = rawRoleStage.split(/[.:/]/, 1)[0].toLowerCase() || 'chat';
     const eventTypeForStage = event.event_type.toLowerCase();
     const acceptedRoleStage = roleStage === 'chat'
+      || roleStage === 'aggregator'
       || roleStage === 'worker'
       || roleStage === 'reviewer'
       || roleStage === 'reporter'
@@ -83,7 +87,9 @@ export function applyHostedLifecycleEvents(
         || eventTypeForStage === 'turn.cancel_requested'
       ));
     if (!acceptedRoleStage) continue;
-    const eventType = event.event_type.toLowerCase();
+    const milestone = /(?:^|[.:/])(?:milestone|opening|progress)(?:[.:/]|$)/i.test(rawRoleStage);
+    const eventType = milestone && event.event_type.toLowerCase() === 'message.completed'
+      ? 'message.interim' : event.event_type.toLowerCase();
     const occurredAt = positiveTimestamp(event.occurred_at) || Date.now();
     const payload = { ...event.payload };
     if (!stringValue(payload.entity_id) && event.entity_id) payload.entity_id = event.entity_id;
@@ -107,13 +113,12 @@ export function applyHostedLifecycleEvents(
         occurredAt,
         chinese,
       );
-    // P1-1 terminal latch: once the final answer reached message.completed,
-    // trailing execution/supervision events must merge activities but never
-    // flip the delivered bubble back to "running".
-    const wasMessageCompleted = Boolean(
-      message.completedAt != null || message.status === 'completed',
-    );
+    // A milestone is a completed message, not a completed agent execution.
+    const wasMessageCompleted = message.executionComplete === true;
     const settledMessage = wasMessageCompleted ? message : undefined;
+    if (!wasMessageCompleted) {
+      message = { ...message, completedAt: undefined, completedObservedAt: undefined };
+    }
     const sourceEventType = stringValue(payload.source_event_type).toLowerCase();
     const requestAccepted = sourceEventType === 'request.accepted'
       || (!sourceEventType && stringValue(payload.status).toLowerCase() === 'started');
@@ -142,6 +147,7 @@ export function applyHostedLifecycleEvents(
       turnActive = true;
       message = {
         ...message,
+        remotePhase: message.roleStage === 'worker' && requestAccepted ? 'executing' : message.remotePhase,
         model: modelLabel(payload) || message.model,
         modelStartedAt: explicitModelStartedAt
           || (requestAccepted ? occurredAt : message.modelStartedAt),
@@ -203,9 +209,13 @@ export function applyHostedLifecycleEvents(
         || sourceEventType.startsWith('reasoning.')
       )
     ) {
-      const id = stringValue(payload.entity_id) || `thinking:${event.turn_id}`;
+      const lastReasoning = message.activities?.filter(activity => activity.category === 'reasoning').at(-1);
+      const reasoningComplete = eventType === 'reasoning.available' || eventType === 'thinking.completed';
+      const fallbackReasoningId = lastReasoning && (lastReasoning.status === 'running' || reasoningComplete)
+        ? lastReasoning.id : `thinking:${event.turn_id}:${event.cursor}`;
+      const id = stringValue(payload.entity_id) || fallbackReasoningId;
       const existing = message.activities?.find((activity) => activity.id === id);
-      const text = structuredText(
+      let text = structuredText(
         payload.text
           ?? payload.delta
           ?? payload.output
@@ -213,6 +223,7 @@ export function applyHostedLifecycleEvents(
           ?? payload.content
           ?? payload.message,
       );
+      if (sourceEventType === 'reasoning.available' && text && message.content.trim().startsWith(text.trim())) text = '';
       if (!text && !existing?.output?.trim()) {
         continue;
       }
@@ -283,6 +294,8 @@ export function applyHostedLifecycleEvents(
       }
       const activity = streamEventToActivity(eventType, payload, occurredAt);
       if (activity) {
+        activity.startedAt ||= occurredAt;
+        if (['completed', 'failed', 'cancelled'].includes(activity.status)) activity.completedAt ||= occurredAt;
         turnActive = !['background.complete', 'review.summary'].includes(eventType)
           || turnActive;
         const existing = message.activities?.find(({ id }) => id === activity.id);
@@ -346,7 +359,7 @@ export function applyHostedLifecycleEvents(
       );
       const content = eventType === 'message.completed' && text
         ? preferCompleteText(message.content, text)
-        : appendDelta(message.content, text);
+        : eventType === 'message.interim' ? '' : appendDelta(message.content, text);
       if (text && !message.firstTokenAt) {
         firstTokenAt = occurredAt;
         message = { ...message, firstTokenAt: occurredAt };
@@ -357,7 +370,14 @@ export function applyHostedLifecycleEvents(
           ? finishActivities(completeTransientActivities(message.activities, occurredAt), 'completed', occurredAt)
           : completeTransientActivities(message.activities, occurredAt),
         completedAt: eventType === 'message.completed' ? occurredAt : undefined,
+        completedObservedAt: eventType === 'message.completed' ? message.completedObservedAt : undefined,
+        executionComplete: eventType === 'message.completed',
         content,
+        executionReports: eventType === 'message.interim'
+          ? appendExecutionReport(message.executionReports, {
+              id: `${event.turn_id}:report:${message.executionReports?.length || 0}`,
+              content: text, createdAt: occurredAt,
+            }) : message.executionReports,
         modelStartedAt,
         startedAt: message.startedAt || occurredAt,
         status: eventType === 'message.completed' ? 'completed' : 'running',
@@ -376,6 +396,7 @@ export function applyHostedLifecycleEvents(
         ...message,
         activities: finishActivities(message.activities, 'cancelled', occurredAt),
         completedAt: occurredAt,
+        executionComplete: true,
         status: 'cancelled',
         timingLabel: undefined,
         updatedAt: occurredAt,
@@ -397,6 +418,8 @@ export function applyHostedLifecycleEvents(
         ...message,
         activities: finishActivities(message.activities, status, occurredAt),
         completedAt: occurredAt,
+        executionComplete: true,
+        turnTerminal: true,
         content: message.content || error,
         status,
         timingLabel: undefined,
@@ -410,6 +433,7 @@ export function applyHostedLifecycleEvents(
         ...message,
         status: settledMessage.status || 'completed',
         completedAt: settledMessage.completedAt,
+        executionComplete: true,
         timingLabel: undefined,
         activities: finishActivities(message.activities,
           settledMessage.status === 'cancelled' ? 'cancelled'
@@ -431,7 +455,9 @@ export function applyHostedLifecycleEvents(
               ...candidate,
               activities: finishActivities(candidate.activities, terminalStatus, occurredAt),
               completedAt: occurredAt,
+              executionComplete: true,
               status: terminalStatus,
+              turnTerminal: true,
               timingLabel: undefined,
               updatedAt: occurredAt,
             }
@@ -442,9 +468,7 @@ export function applyHostedLifecycleEvents(
 
   const latestTurnId = controllingTurnId || events.at(-1)?.turn_id || runtimeProjection.turnId;
   const settledTurnMessage = nextMessages.find((message) => (
-    message.role === 'assistant' && message.runtimeTurnId === latestTurnId
-    && (!message.roleStage || message.roleStage === 'chat' || runtimeProjection.terminal)
-    && ['completed', 'failed', 'cancelled'].includes(message.status || '')
+    hostedViewTurnIsTerminal([message], latestTurnId || '')
   ));
   if (events.length && settledTurnMessage) {
     completed = settledTurnMessage.status === 'completed';
@@ -511,19 +535,30 @@ function liveMessageFor(
   occurredAt: number,
   chinese: boolean,
 ): HermesChatViewMessage {
-  return messages.find((message) => (
+  const identity = hostedRoleIdentity(rawRoleStage, roleStage);
+  const profile = stringValue(payload.profile) || rawRoleStage.split(/[.:/]/).find(part => part.endsWith('-worker')) || '';
+  const memberId = stringValue(payload.member_id);
+  const existing = messages.find((message) => (
     message.role === 'assistant'
     && message.runtimeTurnId === turnId
     && (message.roleStage || 'chat') === roleStage
-  )) || {
+    && hostedRoleIdentity(message.rawRoleStage, message.roleStage) === identity
+    && (!profile || !message.profile || message.profile === profile)
+    && (!memberId || !message.memberId || message.memberId === memberId)
+  ));
+  if (existing) return { ...existing, profile: profile || existing.profile,
+    memberId: memberId || existing.memberId, rawRoleStage: identity };
+  return {
     activities: [],
     avatarRole: avatarRoleFor(stringValue(payload.profile), roleStage, false),
     content: '',
     createdAt: occurredAt,
-    id: `hosted-live:${turnId}:${roleStage}`,
-    name: liveRoleName(roleStage, stringValue(payload.profile), chinese),
-    profile: stringValue(payload.profile) || undefined,
-    rawRoleStage,
+    id: `hosted-live:${turnId}:${identity}:${memberId || profile}`,
+    name: liveRoleName(roleStage, profile, chinese),
+    profile: profile || undefined,
+    memberId: memberId || undefined,
+    rawRoleStage: identity,
+    finalReport: identity === 'aggregator',
     role: 'assistant',
     roleLabel: liveRoleLabel(roleStage, chinese),
     roleStage,
@@ -547,7 +582,7 @@ function normalizeLiveRoleStage(value: string): HermesChatRoleStage {
   // share a fold key — mismatched keys caused the live bubble to be
   // re-appended at the tail instead of merging with its snapshot twin.
   if (normalized.startsWith('manager')) return 'dispatcher';
-  if (normalized === 'dispatch' || normalized.startsWith('dispatch.')) return 'dispatcher';
+  if (normalized.startsWith('dispatch')) return 'dispatcher';
   return 'chat';
 }
 
@@ -593,11 +628,7 @@ function upsertLiveMessage(
   messages: HermesChatViewMessage[],
   message: HermesChatViewMessage,
 ): HermesChatViewMessage[] {
-  const index = messages.findIndex((candidate) => (
-    candidate.role === 'assistant'
-    && candidate.runtimeTurnId === message.runtimeTurnId
-    && (candidate.roleStage || 'chat') === (message.roleStage || 'chat')
-  ));
+  const index = messages.findIndex((candidate) => candidate.id === message.id);
   if (index < 0) return [...messages, message];
   return messages.map((candidate, candidateIndex) => (
     candidateIndex === index ? message : candidate
@@ -664,8 +695,7 @@ function appendDelta(current: string, incoming: string): string {
 }
 
 function preferCompleteText(current: string, complete: string): string {
-  if (!current || complete.length >= current.length) return complete;
-  return current;
+  return complete || current;
 }
 
 function modelLabel(payload: Record<string, unknown>): string {

@@ -8,6 +8,7 @@ import {
 
 import type { HermesCloudApi, SingleConversation } from '../../api/HermesCloudApi';
 import { AsyncSingleFlight } from '../../api/async-single-flight';
+import { conversationHistoryCategory } from '../../api/conversation-history-presentation';
 import { withAbortableDeadline } from '../../api/async-deadline';
 import { filterConversationDeletionTombstones } from '../../api/conversation-delete-outbox';
 import {
@@ -388,6 +389,13 @@ export function useConversationIndexController({
     const remoteDeletedIds = new Set(
       Array.isArray(result.deleted) ? result.deleted.filter((id): id is string => typeof id === 'string' && id.length > 0) : [],
     );
+    const supersededIds = new Set(result.superseded || []);
+    const currentIndexIds = new Set(result.conversations.map(item => item.id));
+    localConversations = localConversations.filter(item => !supersededIds.has(item.id)
+      && (!item.id.startsWith('official:') || currentIndexIds.has(item.id) || item.archived)
+      && !(item.id.startsWith('official:') && (item.history_category === 'runtime'
+        || ['dashboard-group', 'kanban', 'tool'].includes(item.source || '')
+        || /^(Planning behavior:|You are |你仍可使用该 Profile)/i.test(item.title))));
     const remoteConversations = filterConversationDeletionTombstones(
       result.conversations,
       pendingDeletionIds.size || remoteDeletedIds.size
@@ -426,7 +434,7 @@ export function useConversationIndexController({
       preferredId
         || activeConversationIdRef.current
         || rememberedId
-        || reconciliation.conversations[0]?.id
+        || reconciliation.conversations.find(item => conversationHistoryCategory(item) === 'chat')?.id
         || '',
       selectableConversations,
     );

@@ -71,6 +71,7 @@ function toHistoryItems(groups: Array<{
       title: workflow.name,
       preview: run.error || run.status,
       profile: workflow.profile,
+      createdAt: run.created_at,
       updatedAt: run.updated_at || run.finished_at || run.started_at || run.created_at,
       status: run.status,
     })))

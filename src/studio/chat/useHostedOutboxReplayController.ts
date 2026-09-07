@@ -37,6 +37,7 @@ import {
 } from '../../api/hosted-turn-delivery-state';
 import {
   conversationMessagesToView,
+  hostedViewTurnIsTerminal,
   upsertChatMessage,
   type ConversationCollaborationState,
   type HermesChatViewMessage as ChatMessage,
@@ -214,9 +215,7 @@ export function useHostedOutboxReplayController({
     const deliveredMessages = messagesRef.current.filter((message) => (
       message.role === 'assistant' && message.runtimeTurnId === item.input.turnId
     ));
-    const terminal = deliveredMessages.some((message) => (
-      ['completed', 'failed', 'cancelled'].includes(message.status || '')
-    ));
+    const terminal = hostedViewTurnIsTerminal(deliveredMessages, item.input.turnId);
     const ownsForeground = activeConversationIdRef.current === item.conversationId
       && (!currentTurn || currentTurn === item.input.turnId) && !terminal;
     if (ownsForeground) optimisticPendingByConversationRef.current.set(item.conversationId, pendingTurn);
@@ -440,10 +439,7 @@ export function useHostedOutboxReplayController({
               activeConversationIdRef.current = item.conversationId;
               setActiveConversationId(item.conversationId);
             }
-            const terminal = messagesRef.current.some((message) => (
-              message.role === 'assistant' && message.runtimeTurnId === item.input.turnId
-              && ['completed', 'failed', 'cancelled'].includes(message.status || '')
-            ));
+            const terminal = hostedViewTurnIsTerminal(messagesRef.current, item.input.turnId);
             if (activeConversationIdRef.current === item.conversationId
               && (!activeHostedTurnIdRef.current || activeHostedTurnIdRef.current === item.input.turnId)
               && !terminal) {

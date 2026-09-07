@@ -43,7 +43,14 @@ export function reconcileConversationCache(
     if (isOfficialPlaceholder(summary)) return cloneCachedConversation(summary);
     const cached = localById.get(summary.id);
     if (cached && isCompleteConversation(cached) && sameRevision(cached, summary)) {
-      return cloneCachedConversation(cached);
+      return cloneCachedConversation({ ...cached,
+        title: summary.title, title_source: summary.title_source,
+        created_at: summary.created_at, preview: summary.preview,
+        history_category: summary.history_category, archived: summary.archived,
+        pinned: summary.pinned, unread: summary.unread,
+        runtime_sessions: summary.runtime_sessions || cached.runtime_sessions,
+        runtime_session_aliases: summary.runtime_session_aliases || cached.runtime_session_aliases,
+      });
     }
     downloadIds.push(summary.id);
     // Keep a complete device transcript attached to the lightweight summary
@@ -258,6 +265,9 @@ export async function synchronizeConversationCache(
   // the row-level cache prune finishes. Filter both sides before reconciliation
   // so preserveLocalOnly cannot resurrect that tombstoned row on restart.
   const localConversations = (cached?.conversations || [])
+    .filter(item => !item.id.startsWith('official:') || item.archived
+      || remote.conversations.some(current => current.id === item.id))
+    .filter(({ id }) => !(remote.superseded || []).includes(id))
     .filter(({ id }) => !pendingDeletionIds.has(id))
     .filter(({ id }) => !remoteDeletedIds.has(id));
   const reconciliation = reconcileConversationCache(

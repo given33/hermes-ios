@@ -181,7 +181,8 @@ test('hosted cancellation retries transport failures but only settles explicit t
   );
   assert.equal(retry.outcome, 'retry');
   assert.equal(retry.attempts, 1);
-  assert.equal(retry.nextAttemptAt, 61_000);
+  assert.equal(retry.nextAttemptAt, 3_000);
+  assert.equal(decideHostedTurnCancellationFailure(new HermesApiError(503, 'unavailable'), 3, now).nextAttemptAt, 16_000);
 
   for (const status of [404, 409, 410]) {
     assert.equal(

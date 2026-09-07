@@ -136,7 +136,11 @@ const TimelineStepRow = memo(function TimelineStepRow({
       : activity.status === 'cancelled'
         ? tokens.colors.textTertiary
         : tokens.colors.success;
-  const label = activity.toolName || activity.name || activityCategoryLabel(activity.category, isChinese);
+  const webActivity = activity.category === 'search' || activity.category === 'browser';
+  const label = webActivity ? activityCategoryLabel(activity.category, isChinese)
+    : activity.toolName || activity.name || activityCategoryLabel(activity.category, isChinese);
+  const sources = useMemo(() => webActivity ? activityDetails(activity).sources.slice(0, 3) : [], [activity, webActivity]);
+  const [sourceError, setSourceError] = useState('');
   const primaryDetail = activityPrimaryDetail(activity);
   const elapsed = activityElapsedLabel(activity, now);
   return (
@@ -165,6 +169,16 @@ const TimelineStepRow = memo(function TimelineStepRow({
         </View>
         <AnimatedChevron color={tokens.colors.textTertiary} open={expanded} size={12} />
       </IOSPressable>
+      {!expanded && sources.length ? <View style={{ paddingLeft: 22, paddingBottom: 6 }}>
+        {sources.map((source) => <IOSPressable key={source.url} accessibilityRole="link" accessibilityLabel={source.title}
+          onPress={() => { void Linking.openURL(source.url).catch(() => setSourceError(isChinese ? '无法打开来源' : 'Could not open source')); }}
+          style={{ flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 30 }}>
+          <Globe size={12} color={tokens.colors.primary} />
+          <Text numberOfLines={1} style={{ flex: 1, fontSize: 12, color: tokens.colors.primary }}>{source.title}</Text>
+          <ExternalLink size={12} color={tokens.colors.textTertiary} />
+        </IOSPressable>)}
+        {sourceError ? <Text accessibilityRole="alert" style={{ color: tokens.colors.destructive }}>{sourceError}</Text> : null}
+      </View> : null}
       {expanded ? (
         <View style={[styles.entryDetail, { borderLeftColor: tokens.colors.border }]}>
           <EntryDetailBody activity={activity} isChinese={isChinese} />

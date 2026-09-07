@@ -121,6 +121,7 @@ export function formatMessageLocalTime(
   timestamp: number | undefined,
   chinese = true,
   now = Date.now(),
+  alwaysShowDate = false,
 ): string {
   if (!timestamp) return '';
   const date = new Date(timestamp);
@@ -130,7 +131,7 @@ export function formatMessageLocalTime(
   const sameDay = date.getFullYear() === current.getFullYear()
     && date.getMonth() === current.getMonth()
     && date.getDate() === current.getDate();
-  if (sameDay) return time;
+  if (sameDay && !alwaysShowDate) return time;
   if (date.getFullYear() === current.getFullYear()) {
     return chinese
       ? `${date.getMonth() + 1}月${date.getDate()}日 ${time}`

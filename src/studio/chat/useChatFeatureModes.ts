@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 
 import type { HermesApiClient } from '../../api/HermesApiClient';
 import type { SingleConversation } from '../../api/HermesCloudApi';
+import { mergeUnifiedConversationIndex } from '../../api/conversation-index';
 import {
   latestRoomPreview,
   roomHasRunningWork,
@@ -116,7 +117,7 @@ export function useChatFeatureModes({
         .map((room) => room.conversationId)
         .filter((id): id is string => Boolean(id)),
     );
-    const chatItems = conversations
+    const chatItems = mergeUnifiedConversationIndex(conversations, [], profile)
       .filter((conversation) => (
         conversation.source !== 'collaboration_room'
         && !roomConversationIds.has(conversation.id)
@@ -138,6 +139,7 @@ export function useChatFeatureModes({
         profile: 'Hermes Studio',
         messages: [],
         preview: snapshot ? latestRoomPreview(snapshot) : '',
+        created_at: room.createdAt,
         updated_at: snapshot?.updatedAt || 0,
         historyKind: 'agent-group' as const,
         historyLabel: isChinese ? 'Agent group' : 'Agent group',
@@ -152,6 +154,7 @@ export function useChatFeatureModes({
       profile: item.profile,
       messages: [],
       preview: item.preview,
+      created_at: item.createdAt,
       updated_at: item.updatedAt,
       historyKind: 'workflow' as const,
       historyLabel: isChinese ? 'Workflow' : 'Workflow',
@@ -167,6 +170,7 @@ export function useChatFeatureModes({
       official_model: session.model || 'oh-my-pi',
       messages: [],
       preview: session.preview,
+      created_at: session.created_at,
       updated_at: session.updated_at,
       historyKind: 'coding' as const,
       historyLabel: 'Coding · Pi',
@@ -176,7 +180,7 @@ export function useChatFeatureModes({
       deletable: false,
     }));
     return [...chatItems, ...groupItems, ...workflowItems, ...codingItems];
-  }, [agentGroupController.roomSnapshots, agentGroupController.rooms, codingPiController.sessions, conversations, isChinese, workflowHistory.items]);
+  }, [agentGroupController.roomSnapshots, agentGroupController.rooms, codingPiController.sessions, conversations, isChinese, profile, workflowHistory.items]);
 
   const activeHistoryId = chatMode === 'agent-group' && agentGroupController.activeRoomId
     ? `agent-group:${agentGroupController.activeRoomId}`

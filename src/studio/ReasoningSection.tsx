@@ -36,6 +36,7 @@ export function ReasoningSection({
   isChinese,
   onInspectActivity,
   running,
+  turnRunning = running,
   text,
 }: {
   detailStyle?: StyleProp<ViewStyle>;
@@ -43,11 +44,12 @@ export function ReasoningSection({
   isChinese: boolean;
   onInspectActivity(): void;
   running: boolean;
+  turnRunning?: boolean;
   text: string;
 }) {
   const { tokens } = useTheme();
-  const [expanded, setExpanded] = useState(running);
-  useEffect(() => setExpanded(running), [running]);
+  const [expanded, setExpanded] = useState(turnRunning);
+  useEffect(() => setExpanded(turnRunning), [turnRunning]);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {

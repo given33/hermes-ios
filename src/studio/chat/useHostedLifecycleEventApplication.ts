@@ -7,8 +7,6 @@ import type { HostedRuntimeProjection } from '../../api/hosted-runtime-reducer';
 import type { HermesChatViewMessage as ChatMessage } from '../../api/chat-view-model';
 import type { PendingChatSend, PendingPhase } from './chat-types';
 
-const HOSTED_EVENT_BATCH_WINDOW_MS = 80;
-
 interface QueuedHostedLifecycleEvent {
   conversationId: string;
   event: HostedLifecycleEvent;
@@ -64,10 +62,10 @@ export function useHostedLifecycleEventApplication({
   const eventQueueRef = useRef<QueuedHostedLifecycleEvent[]>([]);
   const runtimeRef = useRef<HostedRuntimeProjection | undefined>(undefined);
   const [runtime, setRuntime] = useState<HostedRuntimeProjection | undefined>(undefined);
-  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushTimerRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
 
   const reset = useCallback(() => {
-    if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+    if (flushTimerRef.current !== null) cancelAnimationFrame(flushTimerRef.current);
     flushTimerRef.current = null;
     eventQueueRef.current = [];
     runtimeRef.current = undefined;
@@ -165,12 +163,12 @@ export function useHostedLifecycleEventApplication({
         || eventType === 'turn.failed';
     });
     if (terminalEvent) {
-      if (flushTimerRef.current) clearTimeout(flushTimerRef.current);
+      if (flushTimerRef.current !== null) cancelAnimationFrame(flushTimerRef.current);
       flush();
       return;
     }
-    if (flushTimerRef.current) return;
-    flushTimerRef.current = setTimeout(flush, HOSTED_EVENT_BATCH_WINDOW_MS);
+    if (flushTimerRef.current !== null) return;
+    flushTimerRef.current = requestAnimationFrame(flush);
   }, [flush]);
 
   useEffect(() => () => reset(), [cacheOwner, reset]);

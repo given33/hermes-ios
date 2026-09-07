@@ -33,6 +33,38 @@ function message(
   };
 }
 
+test('incomplete snapshots retain user prompts in front of their own replies without duplicating later echoes', () => {
+  const prompt = message('local-user', 'completed', { role: 'user', content: 'Question', createdAt: 100 });
+  const reply = message('reply', 'running', { createdAt: 200 });
+  const next = message('next-user', 'completed', { role: 'user', runtimeTurnId: 'turn-2', createdAt: 300 });
+  const merged = mergeLiveMessagesIntoSnapshot([reply], [prompt, reply, next]);
+  assert.deepEqual(merged.map(item => item.id), ['local-user', 'reply', 'next-user']);
+  const echo = { ...prompt, id: 'server-user' };
+  const refreshed = mergeLiveMessagesIntoSnapshot([echo, reply, next], merged);
+  assert.deepEqual(refreshed.map(item => item.id), ['server-user', 'reply', 'next-user']);
+  assert.equal(refreshed[0].renderKey, 'local-user');
+});
+
+test('a shorter final answer replaces an interim report while stage reports survive snapshot merging', () => {
+  const report = { id: 'report', content: 'Preparing a longer explanation', createdAt: 100 };
+  const live = message('live', 'running', { content: report.content, executionReports: [report] });
+  const final = message('final', 'completed', { content: 'Done', executionComplete: true });
+  const [merged] = mergeLiveMessagesIntoSnapshot([final], [live]);
+  assert.equal(merged.content, 'Done');
+  assert.deepEqual(merged.executionReports, [report]);
+});
+
+test('snapshot reasoning with a durable id merges with its live pass without duplication', () => {
+  const thought = { id: 'live-r', category: 'reasoning', name: 'Thinking', preview: '', duration: '',
+    status: 'running' as const, output: 'Read the page', startedAt: 10000 };
+  const live = message('live', 'running', { activities: [thought] });
+  const persisted = message('stored', 'completed', { activities: [{ ...thought, id: 'reasoning-1', status: 'completed', output: 'Read the page and check sources' }] });
+  const [merged] = mergeLiveMessagesIntoSnapshot([persisted], [live]);
+  assert.equal(merged.activities?.length, 1);
+  assert.equal(merged.activities?.[0].id, 'live-r');
+  assert.equal(merged.activities?.[0].output, 'Read the page and check sources');
+});
+
 test('a delayed live reply stays in its own turn when a later prompt already exists', () => {
   const a = message('u1', 'completed', { role: 'user' });
   const b = message('u2', 'completed', { role: 'user', runtimeTurnId: 'turn-2' });
