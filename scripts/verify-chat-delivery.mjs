@@ -117,6 +117,7 @@ try {
     '请派发给 pc-worker 在 Windows WSL 使用 terminal 执行 hostname，执行成员直接回复真实输出，结尾写 pc_done。',
     '请派发给 hk-worker 在香港主机使用 terminal 执行 hostname，执行成员直接回复真实输出，结尾写 hk_done。',
     '请同时派发给 dbb3-worker 和 pc-worker，各自在自己主机上使用 terminal 执行 hostname，分别汇报真实主机名；两个成员完成后，当前会话 Hermes 汇总一次，结尾写 team_done。',
+    '请派发给 pc-worker，使用已经配置的 MCP filesystem 的 list_allowed_directories 工具读取允许访问的目录，不要使用 terminal 替代。执行成员直接汇报工具实际返回的目录路径，结尾写 mcp_lazy_done。',
   ].entries()) {
     if (process.argv[5] && !process.argv[5].split(',').includes(String(index))) continue;
     sentCount++;
@@ -124,8 +125,15 @@ try {
     const sent = Date.now();
     records.push({ kind: 'send', index, sent });
     console.log(JSON.stringify({ kind: 'send', index, sent }));
-    if (process.env.HERMES_TRACE_DBB3 && [5, 9].includes(index)) {
-      const trace = spawn('ssh', ['hermes-dbb3', `python3 /tmp/hermes-trace-worker-startup.py ${process.env.HERMES_TRACE_DBB3} /tmp/hermes-pyspy-diag/bin/py-spy`]);
+    const traceNode = process.env.HERMES_TRACE_WSL && index === 7 ? 'wsl'
+      : process.env.HERMES_TRACE_DBB3 && [5, 9].includes(index) ? 'dbb3' : '';
+    if (traceNode) {
+      const connectorPid = traceNode === 'wsl' ? process.env.HERMES_TRACE_WSL : process.env.HERMES_TRACE_DBB3;
+      assert(/^\d+$/.test(connectorPid), 'Trace target must be a process ID');
+      const command = traceNode === 'wsl'
+        ? `sudo python3 /tmp/hermes-trace-worker-startup.py ${connectorPid} /tmp/hermes-pyspy-diag/bin/py-spy`
+        : `python3 /tmp/hermes-trace-worker-startup.py ${connectorPid} /tmp/hermes-pyspy-diag/bin/py-spy`;
+      const trace = spawn('ssh', [`hermes-${traceNode}`, command]);
       let traceOutput = '';
       trace.stdout.on('data', data => { traceOutput += data; });
       trace.on('close', () => { void writeFile(`${output}/startup-${index}.jsonl`, traceOutput); });
@@ -147,7 +155,7 @@ try {
       }
       const expected = index === 0 ? '3973' : index === 1 ? 'delivery_done' : index === 2 ? 'search_done'
         : index === 5 ? 'remote_done' : index === 6 ? 'identity_done' : index === 7 ? 'pc_done'
-          : index === 8 ? 'hk_done' : index === 9 ? 'team_done' : 'file_done';
+          : index === 8 ? 'hk_done' : index === 9 ? 'team_done' : index === 10 ? 'mcp_lazy_done' : 'file_done';
       const promptRows = await page.locator('[data-testid^="chat-message-"][data-testid$="-user"]').evaluateAll(rows => rows.map(row => {
         let opaque = true;
         for (let node = row; node; node = node.parentElement) {
@@ -199,7 +207,7 @@ try {
       process.exitCode = 1;
       break;
     }
-    if ([5, 7, 8, 9].includes(index)) {
+    if ([5, 7, 8, 9, 10].includes(index)) {
       const turn = records.find(record => record.kind === 'enqueue' && record.start >= sent)?.turn;
       const events = records.filter(record => record.kind === 'event' && record.turn === turn);
       assert(!events.some(record => record.stage?.includes('server-fallback')), 'Remote acceptance failed: server fallback executed this probe');
@@ -217,6 +225,11 @@ try {
         assert(await reply.getByRole('button', { name: /^terminal ·/ }).count(), 'Final delivery must retain tool history');
       }
       if (index === 5) assert.match((await page.getByTestId(`chat-message-${turn}-assistant`).allTextContents()).join('\n'), /dbb3-hermes/i);
+      if (index === 10) {
+        const reply = page.getByTestId(`chat-message-${turn}-assistant`);
+        await reply.getByLabel('执行过程', { exact: true }).click();
+        assert(await reply.getByRole('button', { name: /list_allowed_directories/ }).count(), 'Cached MCP tools must connect and run on first use');
+      }
     }
     assert.match(await page.getByTestId('reply-completed-time').last().innerText(), /\d+月\d+日 \d{2}:\d{2}/);
     if (index === 1) {
