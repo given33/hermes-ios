@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, Check, Search, X } from 'lucide-react-native
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import type { HermesCloudApi } from '../../api/HermesCloudApi';
+import type { ModelOptionsResult } from '../../api/cloud/models';
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { useTheme } from '../../design/ThemeProvider';
 import { configuredChatModels, type ChatModelOption } from './chat-model-options';
@@ -9,6 +10,7 @@ import { hostedTurnTransportFailure } from '../../api/hosted-turn-delivery-state
 
 const modelSelections = new WeakMap<HermesCloudApi, Map<string, {
   choices: ChatModelOption[]; selected: string; provider: string; loadedAt: number;
+  options?: ModelOptionsResult;
 }>>();
 
 export function ChatModelControl({ api, profile, conversationId, busy, isChinese, notify, onBusyChange }: {
@@ -18,6 +20,7 @@ export function ChatModelControl({ api, profile, conversationId, busy, isChinese
 }) {
   const { tokens } = useTheme();
   const cacheKey = JSON.stringify([profile, conversationId || '']);
+  const profileCacheKey = JSON.stringify([profile, '']);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -43,8 +46,24 @@ export function ChatModelControl({ api, profile, conversationId, busy, isChinese
     const revision = selectionRevision.current;
     setLoading(true);
     const request = (async () => { try {
+      let cached = modelSelections.get(api);
+      if (!cached) { cached = new Map(); modelSelections.set(api, cached); }
+      const catalog = cached.get(profileCacheKey);
+      const optionsRequest = (catalog?.options && Date.now() - catalog.loadedAt < 180_000
+        ? Promise.resolve(catalog.options) : api.getModelOptions(profile, true)).then((options) => {
+        if (version !== generation.current) return options;
+        const configured = configuredChatModels(options);
+        cached.set(profileCacheKey, { choices: configured,
+          selected: JSON.stringify([options.provider, options.model]), provider: options.provider || '',
+          loadedAt: Date.now(), options });
+        setChoices(configured);
+        if (revision === selectionRevision.current && !cached.has(cacheKey)) {
+          setSelected(JSON.stringify([options.provider, options.model]));
+        }
+        return options;
+      });
       const [options, session] = await Promise.all([
-        api.getModelOptions(profile, true),
+        optionsRequest,
         conversationId ? api.executeMobileHostedCommand(conversationId, 'model', '', 'status') : null,
       ]);
       if (version !== generation.current) return;
@@ -57,9 +76,8 @@ export function ChatModelControl({ api, profile, conversationId, busy, isChinese
         setSelected(selection);
         setDeferred(Boolean(session?.deferred));
         setExpandedProvider(provider || '');
-        let cached = modelSelections.get(api);
-        if (!cached) { cached = new Map(); modelSelections.set(api, cached); }
-        cached.set(cacheKey, { choices: configured, selected: selection, provider: provider || '', loadedAt: loadedAt.current });
+        cached.set(cacheKey, { choices: configured, selected: selection, provider: provider || '',
+          loadedAt: loadedAt.current, ...(conversationId ? {} : { options }) });
       }
       retryAttempt.current = 0;
       setError('');
@@ -79,15 +97,16 @@ export function ChatModelControl({ api, profile, conversationId, busy, isChinese
     } })();
     loadInFlight.current = request;
     try { await request; } finally { if (loadInFlight.current === request) loadInFlight.current = null; }
-  }, [api, profile, conversationId, cacheKey, isChinese]);
+  }, [api, profile, conversationId, cacheKey, profileCacheKey, isChinese]);
   useEffect(() => {
     generation.current += 1;
     const cached = api ? modelSelections.get(api)?.get(cacheKey) : undefined;
+    const initial = cached || (api ? modelSelections.get(api)?.get(profileCacheKey) : undefined);
     loadedAt.current = cached?.loadedAt || 0;
     loadInFlight.current = null;
-    setChoices(cached?.choices || []);
-    setSelected(cached?.selected || '');
-    setExpandedProvider(cached?.provider || '');
+    setChoices(initial?.choices || []);
+    setSelected(initial?.selected || '');
+    setExpandedProvider(initial?.provider || '');
     setConfirmation(null);
     setSaving(false);
     setDeferred(false);

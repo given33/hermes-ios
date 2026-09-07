@@ -13,11 +13,20 @@ const browser = await chromium.launch({ channel: 'msedge', headless: true });
 const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
 const probes = [];
 let attempts = 0;
+let delayedStatusRequests = 0;
 await page.route('**/api/model/options*', async (route) => {
   if (!route.request().url().includes('catalog_only')) { await route.continue(); return; }
   probes.push({ attempt: ++attempts, time: Date.now() });
   if (attempts <= 2) await route.fulfill({ status: 503, contentType: 'text/plain', body: 'Service Unavailable' });
   else await route.continue();
+});
+await page.route('**/mobile/conversations/*/commands', async (route) => {
+  const body = route.request().postDataJSON();
+  if (body?.command === 'model' && body?.value === 'status') {
+    delayedStatusRequests++;
+    await new Promise(resolve => setTimeout(resolve, 3000));
+  }
+  await route.continue();
 });
 try {
   const tokenResponse = await page.request.post('http://localhost:8082/auth/mobile/token', { data: credentials });
@@ -40,7 +49,7 @@ try {
   assert(attempts >= 3, 'Model options must retry both 503 responses automatically');
   await page.getByLabel('会话', { exact: true }).click();
   await page.getByLabel('新建会话', { exact: true }).click();
-  if (await page.getByLabel('新建会话', { exact: true }).isVisible()) await page.getByLabel('会话', { exact: true }).click();
+  await page.getByLabel('新建会话', { exact: true }).waitFor({ state: 'hidden' });
   const name = await model.innerText();
   assert(!name.includes('503'));
   const opened = Date.now();
@@ -50,6 +59,15 @@ try {
   await page.screenshot({ path: `${output}/model-recovered.png` });
   await page.getByLabel('关闭', { exact: true }).click();
   assert.equal(await model.innerText(), name);
+  await page.getByLabel('会话', { exact: true }).click();
+  await page.getByTestId('history-category-test').click();
+  await page.getByTestId('open-conversation-chat_user-mtrjp9om-82cfa7aa-2535-4ad1-858f-bceae6061cc4').click();
+  await page.getByLabel('新建会话', { exact: true }).waitFor({ state: 'hidden' });
+  assert.equal(await model.innerText(), name, 'Opening history retains the cached profile model while session status loads');
+  await page.waitForTimeout(4000);
+  assert(delayedStatusRequests > 0);
+  assert.equal(await model.innerText(), name);
+  probes.push({ delayedStatusRequests, retainedModel: await model.innerText() });
   console.log(JSON.stringify(probes));
 } finally {
   await writeFile(`${output}/model-recovery.json`, JSON.stringify(probes, null, 2));
