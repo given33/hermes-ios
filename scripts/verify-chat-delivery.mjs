@@ -232,7 +232,7 @@ try {
       if (index === 5) assert.match((await page.getByTestId(`chat-message-${turn}-assistant`).allTextContents()).join('\n'), /dbb3-hermes/i);
       if (index === 10) {
         const reply = page.getByTestId(`chat-message-${turn}-assistant`);
-        assert.match(await reply.innerText(), /\/mnt\/d/);
+        assert.match((await reply.allTextContents()).join('\n'), /\/mnt\/d/);
         assert(events.some(record => record.type === 'tool.completed' && !record.toolError
           && /list_allowed_directories|tool_call/.test(record.toolName || '')), 'MCP execution must succeed');
         await reply.getByLabel('执行过程', { exact: true }).click();
