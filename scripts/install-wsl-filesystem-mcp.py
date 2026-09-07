@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tempfile
 import time
 
 from hermes_cli.config import (
@@ -17,11 +18,15 @@ runtime = Path('/opt/hermes-mcp') / ('filesystem-' + version)
 package = runtime / 'node_modules/@modelcontextprotocol/server-filesystem'
 if not (package / 'dist/index.js').is_file():
     runtime.mkdir(parents=True, mode=0o755, exist_ok=True)
-    subprocess.run(['/usr/local/bin/npm', 'install', '--prefix', str(runtime),
-                    '--userconfig', '/dev/null', '--globalconfig', '/dev/null',
-                    '--ignore-scripts', '--no-audit', '--no-fund',
-                    '--registry=https://registry.npmjs.org',
-                    '@modelcontextprotocol/server-filesystem@' + version], check=True, timeout=180)
+    with tempfile.TemporaryDirectory(prefix='hermes-npm-config-') as directory:
+        user_config, global_config = (Path(directory) / name for name in ('user', 'global'))
+        user_config.write_text('')
+        global_config.write_text('')
+        subprocess.run(['/usr/local/bin/npm', 'install', '--prefix', str(runtime),
+                        '--userconfig', str(user_config), '--globalconfig', str(global_config),
+                        '--ignore-scripts', '--no-audit', '--no-fund',
+                        '--registry=https://registry.npmjs.org',
+                        '@modelcontextprotocol/server-filesystem@' + version], check=True, timeout=180)
 assert json.loads((package / 'package.json').read_text())['version'] == version
 target = Path('/mnt/d/Hermes/home/profiles/pc-worker/config.yaml')
 with _cross_process_write_lock(target):
