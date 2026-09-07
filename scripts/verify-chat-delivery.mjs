@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
+import assert from 'node:assert/strict';
 
 const { chromium } = await import(pathToFileURL(process.argv[2]).href);
 const input = createInterface({ input: process.stdin, terminal: false });
@@ -19,6 +20,11 @@ await page.exposeFunction('recordDelivery', (record) => {
   }
 });
 await page.addInitScript(() => {
+  if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) window.recordDelivery({ kind: 'longtask', received: Date.now(), duration: entry.duration });
+    }).observe({ type: 'longtask', buffered: true });
+  }
   const original = window.fetch.bind(window);
   window.fetch = async (...args) => {
     const url = String(args[0]?.url || args[0]);
@@ -65,6 +71,24 @@ try {
   await page.getByLabel('密码', { exact: true }).fill(credentials.password);
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.getByLabel('开始语音会话', { exact: true }).waitFor({ timeout: 60000 });
+  await page.getByTestId('chat-host-aliyun').waitFor({ timeout: 30000 });
+  for (const width of [320, 390, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.waitForTimeout(350);
+    const header = await page.getByTestId('chat-header').boundingBox();
+    const modes = await page.getByTestId('chat-mode-switch').boundingBox();
+    assert(Math.abs((header.x + header.width / 2) - (modes.x + modes.width / 2)) <= 2, 'Modes must be centered');
+    const hostRows = await page.getByTestId('chat-host-matrix').locator('[data-testid^="chat-host-"]').evaluateAll((rows) => rows.map((row) => {
+      const box = row.getBoundingClientRect();
+      return { text: row.textContent, x: box.x, y: box.y, width: box.width, overflow: row.scrollWidth > row.clientWidth + 1 };
+    }));
+    assert.equal(hostRows.length, 4);
+    assert.equal(new Set(hostRows.map(row => Math.round(row.x))).size, 2);
+    assert.equal(new Set(hostRows.map(row => Math.round(row.y))).size, 2);
+    assert(hostRows.every(row => !row.overflow && /\d+\.\d+\.\d+/.test(row.text)), 'Full host versions must be visible');
+    records.push({ kind: 'header', width, hosts: hostRows });
+    await page.screenshot({ path: `${output}/header-${width}.png` });
+  }
   if (!(await page.getByLabel('新建会话', { exact: true }).isVisible())) await page.getByLabel('会话', { exact: true }).click();
   if (process.argv[4]) {
     await page.getByTestId(`open-conversation-${process.argv[4]}`).click();

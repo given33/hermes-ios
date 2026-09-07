@@ -1,7 +1,8 @@
-import type {
-  Dispatch,
-  MutableRefObject,
-  SetStateAction,
+import {
+  useCallback,
+  type Dispatch,
+  type MutableRefObject,
+  type SetStateAction,
 } from 'react';
 
 import { withAbortableDeadline } from '../../api/async-deadline';
@@ -515,7 +516,7 @@ export function useConversationActionsController({
     }
   };
 
-  const branchFromMessage = async (message: ChatMessage) => {
+  const branchFromMessage = useCallback(async (message: ChatMessage) => {
     const conversationId = activeConversationIdRef.current;
     const ownerEpoch = captureConversationStorageEpoch(cacheOwner);
     if (
@@ -548,7 +549,7 @@ export function useConversationActionsController({
         notify(serverFailure(error, isChinese));
       }
     }
-  };
+  }, [activeConversationIdRef, applyConversation, cacheOwner, cloudApi, hostedRunning, isChinese, notify, profile, sending]);
 
   return {
     branchFromMessage,

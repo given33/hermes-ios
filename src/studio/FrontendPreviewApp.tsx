@@ -167,6 +167,7 @@ export function FrontendPreviewApp({
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const systemRequestVersion = useRef(0);
   const lastSystemSuccessAt = useRef(0);
+  const serverVersion = useRef<string | undefined>(undefined);
   const managedNodesSnapshot = useRef<JsonRecord>({});
   const notify = useCallback((message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -179,6 +180,7 @@ export function FrontendPreviewApp({
 
   useEffect(() => {
     lastSystemSuccessAt.current = 0;
+    serverVersion.current = undefined;
     managedNodesSnapshot.current = {};
     setGatewayStatuses([]);
     setSystemSummary({ activeSessions: 0, gatewayOnline: false });
@@ -191,6 +193,7 @@ export function FrontendPreviewApp({
     ) => {
       if (!active || requestVersion !== systemRequestVersion.current) return;
       lastSystemSuccessAt.current = Date.now();
+      serverVersion.current = stringField(system.status, 'version') || serverVersion.current;
       // `/api/managed-nodes/status` is an optional relay. Keep the last
       // observed node records when a healthy status/stats response arrives
       // without node observations, otherwise the sidebar flashes offline on
@@ -212,11 +215,11 @@ export function FrontendPreviewApp({
         managedNodesSnapshot.current = system.managedNodes;
       }
       setSystemSummary(systemSummaryFromStatus(system.status));
-      setGatewayStatuses([serverGatewayStatus(lastSystemSuccessAt.current), ...managedNodeGatewayStatuses(managedNodesSnapshot.current)]);
+      setGatewayStatuses([serverGatewayStatus(lastSystemSuccessAt.current, Date.now(), serverVersion.current), ...managedNodeGatewayStatuses(managedNodesSnapshot.current)]);
     };
     const expireStaleSystemStatus = () => {
       if (!active) return;
-      setGatewayStatuses([serverGatewayStatus(lastSystemSuccessAt.current), ...managedNodeGatewayStatuses(managedNodesSnapshot.current)]);
+      setGatewayStatuses([serverGatewayStatus(lastSystemSuccessAt.current, Date.now(), serverVersion.current), ...managedNodeGatewayStatuses(managedNodesSnapshot.current)]);
       if (
         !lastSystemSuccessAt.current
         || Date.now() - lastSystemSuccessAt.current > MANAGED_NODE_FRESHNESS_MS

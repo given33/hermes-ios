@@ -107,21 +107,19 @@ export function ChatMessageStream({
     }
   }
   const { tokens } = useTheme();
-  const latestMessage = messages[messages.length - 1];
-  const followVersion = [
-    messages.length,
-    latestMessage?.id || '',
-    latestMessage?.content.length || 0,
-    latestMessage?.status || '',
-    latestMessage?.activities?.length || 0,
-    latestMessage?.activities?.reduce((total, activity) => (
-      total + (activity.output?.length || 0) + (activity.preview?.length || 0)
-    ), 0) || 0,
-  ].join(':');
-
-  useEffect(() => {
-    keepLatestVisible(false);
-  }, [followVersion, keepLatestVisible]);
+  // Follow after layout changes, once per frame; tokens that do not change
+  // the content height need no scroll operation.
+  const followFrame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
+  const onContentSizeChange = useCallback(() => {
+    if (followFrame.current !== null) return;
+    followFrame.current = requestAnimationFrame(() => {
+      followFrame.current = null;
+      keepLatestVisible(false);
+    });
+  }, [keepLatestVisible]);
+  useEffect(() => () => {
+    if (followFrame.current !== null) cancelAnimationFrame(followFrame.current);
+  }, []);
 
   const userTurns = useMemo(
     () => messages
@@ -163,10 +161,10 @@ export function ChatMessageStream({
         decelerationRate="normal"
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
-        onContentSizeChange={() => keepLatestVisible(false)}
+        onContentSizeChange={onContentSizeChange}
         onScroll={onScroll}
         ref={streamRef}
-        scrollEventThrottle={8}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator={false}
         style={styles.stream}
       >

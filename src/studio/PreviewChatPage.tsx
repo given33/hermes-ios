@@ -751,6 +751,24 @@ export function ChatPreviewPage({
   });
   const chatFeatureModes = useChatFeatureModes({ activeConversationId, cacheOwner, client, conversations, deleteConversations, fixtureMode, isChinese, navigate, notify, profile, refreshConversationHistory, selectConversation });
   const { activeHistoryId, agentGroupController, chatMode, codingPiCollabController, codingPiController, deleteHistoryItems, historyConversations, refreshUnifiedHistory, selectHistoryItem, setChatMode } = chatFeatureModes;
+  const focusChoiceInput = useCallback(() => {
+    autoFollowStreamRef.current = true;
+    keepLatestVisible(false, true);
+  }, [autoFollowStreamRef, keepLatestVisible]);
+  const respondToChoice = useCallback((activityId: string, text: string) => {
+    const owner = messagesRef.current.find((message) => (
+      message.activities?.some((activity) => activity.id === activityId)
+    ));
+    const activity = owner?.activities?.find((item) => item.id === activityId);
+    const target = activity?.agentName || owner?.profile || '';
+    setMessages((current) => current.map((message) => (
+      message.activities?.some((item) => item.id === activityId)
+        ? { ...message, activities: message.activities.map((item) => (
+          item.id === activityId ? { ...item, status: 'completed', completedAt: Date.now() } : item
+        )) } : message
+    )));
+    void sendIntervention(target ? `@${target} 选择：${text}` : `选择：${text}`);
+  }, [messagesRef, sendIntervention, setMessages]);
   return (
     <>
       <ChatPageShell
@@ -851,12 +869,7 @@ export function ChatPreviewPage({
         keepLatestVisible,
         messages: displayMessages,
         onBranch: branchFromMessage,
-        onChoiceInputFocus: () => {
-          // The in-stream answer input can be covered by the keyboard:
-          // re-arm auto-follow and force the latest messages visible.
-          autoFollowStreamRef.current = true;
-          keepLatestVisible(false, true);
-        },
+        onChoiceInputFocus: focusChoiceInput,
         onCloseActivity: resumeStreamAutoFollow,
         onInspectActivity: pauseStreamAutoFollow,
         onJumpToLatest: () => {
@@ -865,32 +878,7 @@ export function ChatPreviewPage({
         },
         onMentionMember: mentionMember,
         onOpenAttachment: openStoredAttachment,
-        onRespondToChoice: (activityId, text) => {
-          // The awaiting member needs a decision: deliver the chosen
-          // option (or custom answer) through the hosted intervention
-          // channel, which steers the member back to work. Resolve the
-          // card's owner from the activity itself (agentName carries the
-          // awaiting member's profile) so multi-member turns answer the
-          // right worker.
-          const owner = messagesRef.current.find((message) => (
-            message.activities?.some((activity) => activity.id === activityId)
-          ));
-          const activity = owner?.activities?.find((item) => item.id === activityId);
-          const target = activity?.agentName || owner?.profile || '';
-          setMessages((current) => current.map((message) => (
-            message.activities?.some((item) => item.id === activityId)
-              ? {
-                ...message,
-                activities: message.activities.map((item) => (
-                  item.id === activityId
-                    ? { ...item, status: 'completed', completedAt: Date.now() }
-                    : item
-                )),
-              }
-              : message
-          )));
-          void sendIntervention(target ? `@${target} 选择：${text}` : `选择：${text}`);
-        },
+        onRespondToChoice: respondToChoice,
         ...hostedSubagentControls,
         onScroll: handleStreamScroll,
         onToggleSpeech: voice.toggleMessageSpeech,

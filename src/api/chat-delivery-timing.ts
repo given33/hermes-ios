@@ -21,17 +21,20 @@ export function observeChatDelivery(next: Message[], previous: readonly Message[
     ));
     const submittedAt = message.submittedAt || prior?.submittedAt || submitted.get(message.runtimeTurnId || '');
     if (!submittedAt) return message;
-    if (message.role === 'user') return { ...message, submittedAt };
+    if (message.role === 'user') return message.submittedAt === submittedAt ? message : { ...message, submittedAt };
     const hasOutput = Boolean(message.content.trim() || message.activities?.some((activity) => (
       activity.category === 'reasoning' && (activity.output?.trim() || activity.preview?.trim())
     )));
     const firstObservedAt = prior?.firstObservedAt || message.firstObservedAt || (hasOutput ? now : undefined);
     const terminal = ['completed', 'failed', 'cancelled', 'stopped'].includes(message.status || '');
+    const completedObservedAt = prior?.completedObservedAt || message.completedObservedAt || (terminal ? now : undefined);
+    if (message.submittedAt === submittedAt && message.firstObservedAt === firstObservedAt
+      && message.completedObservedAt === completedObservedAt) return message;
     return {
       ...message,
       submittedAt,
       firstObservedAt,
-      completedObservedAt: prior?.completedObservedAt || message.completedObservedAt || (terminal ? now : undefined),
+      completedObservedAt,
     };
   });
 }

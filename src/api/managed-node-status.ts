@@ -83,9 +83,9 @@ export function managedNodeGatewayStatuses(
   });
 }
 
-export function serverGatewayStatus(lastSuccessfulResponseAt: number, now = Date.now()): ManagedNodeGatewayStatus {
+export function serverGatewayStatus(lastSuccessfulResponseAt: number, now = Date.now(), version?: string): ManagedNodeGatewayStatus {
   return { id: 'aliyun', label: '阿里云', state: lastSuccessfulResponseAt > 0
-    && isFreshObservation({ observed_at: lastSuccessfulResponseAt }, now) ? 'online' : 'offline' };
+    && isFreshObservation({ observed_at: lastSuccessfulResponseAt }, now) ? 'online' : 'offline', version };
 }
 
 function managedTargetState(

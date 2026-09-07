@@ -33,3 +33,13 @@ test('canonical chat metadata and ids cannot reset locally observed first token 
   assert.equal(result[1].firstObservedAt, 8000);
   assert.equal(result[1].completedObservedAt, 9000);
 });
+
+test('streaming the next reply preserves identities of settled history rows', () => {
+  const history = observeChatDelivery([user, { ...reply, status: 'completed', content: '3973' }], [user], 9000);
+  const incoming = { ...reply, id: 'next', runtimeTurnId: 'next-turn', content: 'new token', submittedAt: 10000 };
+  const next = observeChatDelivery([...history, incoming], history, 11000);
+  assert.equal(next[0], history[0]);
+  assert.equal(next[1], history[1]);
+  assert.equal(next[2].firstObservedAt, 11000);
+  assert.equal(observeChatDelivery(next, next, 12000)[2], next[2]);
+});
