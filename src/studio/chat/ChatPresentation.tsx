@@ -276,7 +276,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
               todos={message.todos}
             />
           ) : null}
-          {!isUser && !message.finalReport && shouldShowMessageTiming(message) ? (
+          {!isUser && (!message.finalReport || Boolean(message.activities?.length)) && shouldShowMessageTiming(message) ? (
             <RoleActivityGroup
               isChinese={isChinese}
               message={message}

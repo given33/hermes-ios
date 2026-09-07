@@ -25,7 +25,7 @@ const proof = /E2E|验收|测试|探针|probe|latency audit|concurrent latency|l
 const original = JSON.parse(await readFile(path.join(os.tmpdir(), 'hermes-history-20260907/index.json'), 'utf8'));
 const originalTitles = new Map(original.conversations.map(item => [item.id, item.title]));
 for (const folder of await readdir(os.tmpdir(), { withFileTypes: true })) {
-  if (!folder.isDirectory() || !folder.name.startsWith('hermes-delivery-20260907-')) continue;
+  if (!folder.isDirectory() || !/^hermes-delivery-2026090[78]-/.test(folder.name)) continue;
   try {
     const records = JSON.parse(await readFile(path.join(os.tmpdir(), folder.name, 'delivery.json'), 'utf8'));
     for (const record of records) {

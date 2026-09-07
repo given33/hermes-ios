@@ -57,6 +57,7 @@ await page.addInitScript(() => {
               for (const event of payload.events || []) window.recordDelivery({ kind: 'event', type: event.event_type,
                 turn: event.turn_id, source: event.occurred_at, received: Date.now(), length: (event.payload?.text || '').length,
                 text: event.payload?.text || event.payload?.delta || event.payload?.content, stage: event.role_stage, snapshot: Boolean(payload.conversation),
+                finalReport: event.payload?.final_report, action: event.payload?.action,
                 cursor: event.cursor, role: event.payload?.role, sourceType: event.payload?.source_event_type });
             } catch { /* Ignore keepalive frames. */ }
           }
@@ -203,6 +204,18 @@ try {
       const events = records.filter(record => record.kind === 'event' && record.turn === turn);
       assert(!events.some(record => record.stage?.includes('server-fallback')), 'Remote acceptance failed: server fallback executed this probe');
       assert(events.some(record => record.type === 'tool.started' && record.stage?.startsWith('worker')), 'The member did not stream a real tool start');
+      const finalSpeakers = events.filter(record => record.finalReport === true
+        && (record.action === 'final_report' || record.type === 'message.completed'));
+      assert.equal(finalSpeakers.length, 1, 'Exactly one final speaker must be delivered live');
+      assert(index === 9 ? finalSpeakers[0].stage === 'aggregator' : finalSpeakers[0].stage === 'worker');
+      const reasoning = events.filter(record => /^(thinking|reasoning)\.delta$/.test(record.type) && record.text);
+      const terminal = events.find(record => record.type === 'turn.completed');
+      if (reasoning.length) assert(reasoning[0].received < terminal.received - 500, 'Reasoning arrived only at completion');
+      if (index === 5) {
+        const reply = page.getByTestId(`chat-message-${turn}-assistant`);
+        await reply.getByLabel('执行过程', { exact: true }).click();
+        assert(await reply.getByRole('button', { name: /^terminal ·/ }).count(), 'Final delivery must retain tool history');
+      }
       if (index === 5) assert.match((await page.getByTestId(`chat-message-${turn}-assistant`).allTextContents()).join('\n'), /dbb3-hermes/i);
     }
     assert.match(await page.getByTestId('reply-completed-time').last().innerText(), /\d+月\d+日 \d{2}:\d{2}/);

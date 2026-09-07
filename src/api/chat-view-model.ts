@@ -145,6 +145,12 @@ export function conversationMessagesToView(
   });
   const messages = deduplicateMessages(converted).map((message) => {
     if (message.role !== 'assistant') return message;
+    if (message.finalReport && converted.some(process => !process.finalReport
+      && process.role === 'assistant' && process.runtimeTurnId === message.runtimeTurnId
+      && process.profile === message.profile && process.memberId === message.memberId
+      && process.activities?.length)) {
+      return { ...message, activities: undefined, executionReports: undefined };
+    }
     const owned = reports.filter(report => report.turnId === message.runtimeTurnId && report.roleStage === message.roleStage
       && report.profile === message.profile && report.memberId === message.memberId);
     return owned.length ? { ...message, executionReports: owned } : message;
