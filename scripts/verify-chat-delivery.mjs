@@ -155,7 +155,8 @@ try {
         && ((record.type === 'message.completed' && record.stage === 'chat' && record.sourceType === 'message.complete')
           || ['turn.completed', 'turn.failed', 'turn.cancelled'].includes(record.type)));
       const answered = (completedEvent || finalRoleEvent) && replyText.includes(expected);
-      if (replyText.includes('已完成') && !finalRoleEvent) {
+      const completedChip = reply && await reply.getByText('已完成', { exact: true }).count();
+      if (completedChip && !finalRoleEvent) {
         prematureSince ||= Date.now();
         assert(Date.now() - prematureSince < 300, 'An interim milestone marked the executing turn completed');
       } else { prematureSince = 0; }
@@ -191,7 +192,7 @@ try {
       const events = records.filter(record => record.kind === 'event' && record.turn === turn);
       assert(!events.some(record => record.stage?.includes('server-fallback')), 'Remote acceptance failed: server fallback executed this probe');
       assert(events.some(record => record.type === 'tool.started' && record.stage?.startsWith('worker')), 'The member did not stream a real tool start');
-      if (index === 5) assert.match(await page.getByTestId(`chat-message-${turn}-assistant`).innerText(), /dbb3-hermes/i);
+      if (index === 5) assert.match((await page.getByTestId(`chat-message-${turn}-assistant`).allTextContents()).join('\n'), /dbb3-hermes/i);
     }
     assert.match(await page.getByTestId('reply-completed-time').last().innerText(), /\d+月\d+日 \d{2}:\d{2}/);
     if (index === 1) {

@@ -36,6 +36,17 @@ test('official assistant-content fallback never appears as a new reasoning block
   assert.equal(result.messages[0].activities?.filter(activity => activity.category === 'reasoning').length || 0, 0);
 });
 
+test('final speaker selection updates the existing worker instead of adding a dispatcher reply', () => {
+  const worker = (cursor: number, payload: Record<string, unknown>) => ({
+    ...event(cursor, 'message.completed', { profile: 'dbb3-worker', ...payload }), role_stage: 'worker',
+  });
+  const first = applyHostedLifecycleEvents([], [worker(1, { text: 'Verified output' })]);
+  const final = applyHostedLifecycleEvents(first.messages, [worker(2, { text: 'Verified output', final_report: true })]);
+  assert.equal(final.messages.length, 1);
+  assert.equal(final.messages[0].profile, 'dbb3-worker');
+  assert.equal(final.messages[0].finalReport, true);
+});
+
 test('dispatch completion cannot end the parent workflow or release its send button', () => {
   const planning = applyHostedLifecycleEvents([], [{
     ...event(1, 'message.completed', { text: 'Plan ready', source_event_type: 'message.complete' }),

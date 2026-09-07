@@ -372,6 +372,7 @@ export function applyHostedLifecycleEvents(
         completedAt: eventType === 'message.completed' ? occurredAt : undefined,
         completedObservedAt: eventType === 'message.completed' ? message.completedObservedAt : undefined,
         executionComplete: eventType === 'message.completed',
+        finalReport: payload.final_report === true || message.finalReport,
         content,
         executionReports: eventType === 'message.interim'
           ? appendExecutionReport(message.executionReports, {
@@ -547,14 +548,15 @@ function liveMessageFor(
     && (!memberId || !message.memberId || message.memberId === memberId)
   ));
   if (existing) return { ...existing, profile: profile || existing.profile,
-    memberId: memberId || existing.memberId, rawRoleStage: identity };
+    memberId: memberId || existing.memberId, rawRoleStage: identity,
+    name: identity.includes('server-fallback') ? 'Hermes' : profile ? liveRoleName(roleStage, profile, chinese) : existing.name };
   return {
     activities: [],
     avatarRole: avatarRoleFor(stringValue(payload.profile), roleStage, false),
     content: '',
     createdAt: occurredAt,
     id: `hosted-live:${turnId}:${identity}:${memberId || profile}`,
-    name: liveRoleName(roleStage, profile, chinese),
+    name: identity.includes('server-fallback') ? 'Hermes' : liveRoleName(roleStage, profile, chinese),
     profile: profile || undefined,
     memberId: memberId || undefined,
     rawRoleStage: identity,
@@ -620,7 +622,7 @@ function liveRoleName(
   if (stage === 'worker' && /hk|hong.?kong|香港/i.test(profile)) {
     return chinese ? 'HK 执行员' : 'Hong Kong Worker';
   }
-  if (stage === 'worker') return chinese ? 'DBB3 执行员' : 'DBB3 Worker';
+  if (stage === 'worker') return profile === 'default' ? 'Hermes' : chinese ? '执行成员' : 'Worker';
   return liveRoleLabel(stage, chinese);
 }
 
