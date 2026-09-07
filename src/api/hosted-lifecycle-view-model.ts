@@ -164,6 +164,9 @@ export function applyHostedLifecycleEvents(
       turnActive = true;
       const attempt = Math.max(1, numericValue(payload.attempt) || 1);
       const maxAttempts = Math.max(attempt, numericValue(payload.max_attempts) || 5);
+      const retryLabel = stringValue(payload.message).slice(0, 160) || (chinese
+        ? `正在重新连接 (${attempt}/${maxAttempts})`
+        : `Reconnecting (${attempt}/${maxAttempts})`);
       phase = 'reconnecting';
       phaseStartedAt = occurredAt;
       reconnectAttempt = attempt;
@@ -173,17 +176,13 @@ export function applyHostedLifecycleEvents(
           category: 'status',
           duration: '',
           id: 'model-connection-retry',
-          name: chinese
-            ? `正在重新连接 (${attempt}/${maxAttempts})`
-            : `Reconnecting (${attempt}/${maxAttempts})`,
+          name: retryLabel,
           preview: '',
           startedAt: occurredAt,
           status: 'running',
         }),
         status: 'running',
-        timingLabel: chinese
-          ? `正在重新连接 (${attempt}/${maxAttempts})`
-          : `Reconnecting (${attempt}/${maxAttempts})`,
+        timingLabel: retryLabel,
         updatedAt: occurredAt,
       };
     } else if (eventType === 'connection.retry_finished') {

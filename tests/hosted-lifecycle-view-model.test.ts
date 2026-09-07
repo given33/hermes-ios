@@ -221,6 +221,18 @@ test('empty thinking completion never creates a reasoning row or starts timing',
   assert.equal(result.messages[0].activities?.length || 0, 0);
 });
 
+test('worker provider failures appear as recovery status before an answer', () => {
+  const message = '模型或接口不可用，正在尝试已配置的备用模型';
+  const result = applyHostedLifecycleEvents([], [{
+    ...event(1, 'connection.retry_started', { attempt: 1, max_attempts: 5, message }),
+    role_stage: 'worker',
+  }]);
+  assert.equal(result.phase, 'reconnecting');
+  assert.equal(result.messages[0].timingLabel, message);
+  assert.equal(result.messages[0].firstTokenAt, undefined);
+  assert.equal(result.messages[0].activities?.[0].name, message);
+});
+
 test('retry lifecycle is visible only while reconnecting', () => {
   const reconnecting = applyHostedLifecycleEvents([], [
     event(1, 'connection.retry_scheduled', { attempt: 2, max_attempts: 5 }),

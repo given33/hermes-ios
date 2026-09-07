@@ -11,6 +11,14 @@ if (!response.ok) throw new Error(`Login HTTP ${response.status}`);
 const auth = await response.json();
 const token = auth.access_token || auth.tokens?.access_token;
 const id = process.argv[2], turnId = process.argv[3];
+if (process.argv[4] === '--cancel') {
+  const cancelled = await fetch(`${base}/api/plugins/collaboration/single/conversations/${encodeURIComponent(id)}/hosted-turns/${encodeURIComponent(turnId)}/cancel`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason: 'acceptance_cleanup', request_id: `cancel-acceptance-${turnId}` }),
+  });
+  console.log(JSON.stringify({ cancellation: cancelled.status }));
+  if (!cancelled.ok) throw new Error('Acceptance cancellation was not acknowledged');
+}
 const result = await fetch(`${base}/api/plugins/collaboration/single/conversations/${encodeURIComponent(id)}`, {
   headers: { Authorization: `Bearer ${token}` },
 });

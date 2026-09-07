@@ -202,7 +202,10 @@ try {
     }
     if (!doneAt) {
       if (await page.getByLabel('取消当前任务', { exact: true }).isVisible()) {
+        const cancellation = page.waitForResponse(response => response.url().includes('/cancel')
+          && response.request().method() === 'POST', { timeout: 30000 });
         await page.getByLabel('取消当前任务', { exact: true }).click();
+        assert((await cancellation).ok(), 'Timed-out acceptance task must acknowledge cancellation');
       }
       process.exitCode = 1;
       break;
