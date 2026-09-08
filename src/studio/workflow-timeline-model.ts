@@ -110,7 +110,7 @@ export function groupTimelineActivities(
     if (run.length >= TIMELINE_GROUP_MIN_RUN) {
       entries.push({
         activities: run,
-        id: `group:${run[0].id}:${run[run.length - 1].id}`,
+        id: `group:${run[0].id}`,
         kind: 'group',
       });
     } else {

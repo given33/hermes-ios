@@ -1,0 +1,4050 @@
+{
+  "boundary": "Client-observed lifecycle request.accepted; direct TUI acceptance is not the SDK wire boundary.",
+  "clocks": "Delivery samples have not been corrected for cross-host clock offset.",
+  "summaries": [
+    {
+      "scenario": "hk",
+      "index": 0,
+      "startedAt": 1788879909845,
+      "enqueueMs": 1739,
+      "lifecycleRequestAcceptedMs": 9645,
+      "firstTokenMs": 12215,
+      "terminalMs": 34771,
+      "terminal": "turn.completed",
+      "deliverySamples": [
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 6561,
+          "sourceToClientMs": 318
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 8377,
+          "sourceToClientMs": 346
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12215,
+          "sourceToClientMs": 413
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 658
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 638
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 629
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 619
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 610
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 601
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 593
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 583
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 575
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 567
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 560
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12553,
+          "sourceToClientMs": 552
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 13153,
+          "sourceToClientMs": 401
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15731,
+          "sourceToClientMs": 353
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15731,
+          "sourceToClientMs": 344
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 15772,
+          "sourceToClientMs": 301
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16096,
+          "sourceToClientMs": 684
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16096,
+          "sourceToClientMs": 660
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16096,
+          "sourceToClientMs": 650
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16096,
+          "sourceToClientMs": 633
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16096,
+          "sourceToClientMs": 606
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16096,
+          "sourceToClientMs": 586
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16207,
+          "sourceToClientMs": 620
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16207,
+          "sourceToClientMs": 619
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16207,
+          "sourceToClientMs": 495
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16207,
+          "sourceToClientMs": 477
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16557,
+          "sourceToClientMs": 671
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16557,
+          "sourceToClientMs": 658
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16557,
+          "sourceToClientMs": 648
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16557,
+          "sourceToClientMs": 593
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 16652,
+          "sourceToClientMs": 414
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 17874,
+          "sourceToClientMs": 317
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18828,
+          "sourceToClientMs": 862
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18828,
+          "sourceToClientMs": 843
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18828,
+          "sourceToClientMs": 793
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18828,
+          "sourceToClientMs": 752
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18828,
+          "sourceToClientMs": 663
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18828,
+          "sourceToClientMs": 657
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18914,
+          "sourceToClientMs": 512
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18914,
+          "sourceToClientMs": 511
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18914,
+          "sourceToClientMs": 510
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18914,
+          "sourceToClientMs": 510
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18914,
+          "sourceToClientMs": 510
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 19429,
+          "sourceToClientMs": 583
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 19806,
+          "sourceToClientMs": 359
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 28177,
+          "sourceToClientMs": 7250
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 28177,
+          "sourceToClientMs": 7249
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 28177,
+          "sourceToClientMs": 7242
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 28233,
+          "sourceToClientMs": 320
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 28551,
+          "sourceToClientMs": 7596
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 28551,
+          "sourceToClientMs": 7576
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 28551,
+          "sourceToClientMs": 7543
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 30155,
+          "sourceToClientMs": 336
+        }
+      ]
+    },
+    {
+      "scenario": "hk",
+      "index": 1,
+      "startedAt": 1788879945100,
+      "enqueueMs": 536,
+      "lifecycleRequestAcceptedMs": 4673,
+      "firstTokenMs": 7342,
+      "terminalMs": 45135,
+      "terminal": "turn.completed",
+      "deliverySamples": [
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 2534,
+          "sourceToClientMs": 311
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 7342,
+          "sourceToClientMs": 588
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1553
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1527
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1505
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1495
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1481
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1467
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1459
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1451
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1442
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1430
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1417
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1405
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 8362,
+          "sourceToClientMs": 1298
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 12143,
+          "sourceToClientMs": 333
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 14999,
+          "sourceToClientMs": 4315
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4764
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4740
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4731
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4722
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4713
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4703
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4695
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4686
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4677
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4668
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4655
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4647
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4638
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4625
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4611
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4598
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4585
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4571
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4557
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4544
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4533
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4519
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4508
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4495
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4483
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4473
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4465
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4456
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4446
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4436
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4425
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4417
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4408
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4399
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4392
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4382
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4369
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4355
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4343
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4342
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4341
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4340
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4338
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4338
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4336
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4336
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4334
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4333
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4333
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4332
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4331
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4330
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4330
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4329
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4327
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4326
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4326
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4326
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4325
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4324
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4323
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4323
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4321
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 15569,
+          "sourceToClientMs": 4320
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 16617,
+          "sourceToClientMs": 348
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 5476
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 5363
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 3258
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 3067
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 3051
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 3036
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 3021
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 3009
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 3002
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2994
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2987
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2979
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2973
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2965
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2958
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2950
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2943
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2935
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2927
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2920
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2912
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2905
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2896
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2888
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2880
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2872
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2866
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2859
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2852
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2846
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2839
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2832
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2825
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2817
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2810
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2804
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2797
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2791
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2784
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2779
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2772
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2766
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2764
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2764
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2762
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2762
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2761
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2760
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2759
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2758
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2758
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2757
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2756
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2755
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2754
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2753
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2753
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2751
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2751
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2750
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2749
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16725,
+          "sourceToClientMs": 2749
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4605
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4604
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4584
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4582
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4582
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4564
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4543
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4521
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4519
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4518
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4518
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4502
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 4501
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 18582,
+          "sourceToClientMs": 3908
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 18738,
+          "sourceToClientMs": 406
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2392
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2366
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2347
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2345
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2344
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2343
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2342
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2340
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2326
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2325
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2300
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2295
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2294
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2285
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2281
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2280
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2280
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2262
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2260
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2260
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2258
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2256
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2253
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2237
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2235
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2235
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2233
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2232
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2213
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2211
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2210
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19502,
+          "sourceToClientMs": 2210
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 21151,
+          "sourceToClientMs": 573
+        }
+      ]
+    },
+    {
+      "scenario": "hk",
+      "index": 2,
+      "startedAt": 1788879990808,
+      "enqueueMs": 1240,
+      "lifecycleRequestAcceptedMs": 6093,
+      "firstTokenMs": 10603,
+      "terminalMs": 23891,
+      "terminal": "turn.completed",
+      "deliverySamples": [
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 3982,
+          "sourceToClientMs": 347
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 4802,
+          "sourceToClientMs": 340
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 8724,
+          "sourceToClientMs": 533
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 10603,
+          "sourceToClientMs": 495
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 10807,
+          "sourceToClientMs": 611
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 10807,
+          "sourceToClientMs": 502
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 11082,
+          "sourceToClientMs": 422
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 11082,
+          "sourceToClientMs": 418
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 11082,
+          "sourceToClientMs": 417
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 11082,
+          "sourceToClientMs": 416
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 11082,
+          "sourceToClientMs": 415
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 11082,
+          "sourceToClientMs": 414
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 11406,
+          "sourceToClientMs": 529
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 11964,
+          "sourceToClientMs": 386
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 13531,
+          "sourceToClientMs": 399
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 13785,
+          "sourceToClientMs": 603
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 13785,
+          "sourceToClientMs": 558
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 13785,
+          "sourceToClientMs": 515
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 13785,
+          "sourceToClientMs": 480
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 14231,
+          "sourceToClientMs": 877
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 14231,
+          "sourceToClientMs": 747
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 14231,
+          "sourceToClientMs": 712
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 14351,
+          "sourceToClientMs": 388
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 14458,
+          "sourceToClientMs": 365
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 15961,
+          "sourceToClientMs": 366
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16445,
+          "sourceToClientMs": 348
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16445,
+          "sourceToClientMs": 322
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16831,
+          "sourceToClientMs": 679
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16831,
+          "sourceToClientMs": 660
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16831,
+          "sourceToClientMs": 636
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 16831,
+          "sourceToClientMs": 607
+        }
+      ]
+    },
+    {
+      "scenario": "hk",
+      "index": 3,
+      "startedAt": 1788880015907,
+      "enqueueMs": 2933,
+      "lifecycleRequestAcceptedMs": 12321,
+      "firstTokenMs": 14483,
+      "terminalMs": 28325,
+      "terminal": "turn.completed",
+      "deliverySamples": [
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 10155,
+          "sourceToClientMs": 574
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 11493,
+          "sourceToClientMs": 334
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 14483,
+          "sourceToClientMs": 380
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 14829,
+          "sourceToClientMs": 610
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 14829,
+          "sourceToClientMs": 588
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 14829,
+          "sourceToClientMs": 578
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 14829,
+          "sourceToClientMs": 571
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 872
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 869
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 862
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 853
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 846
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 838
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 829
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 818
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 806
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 794
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 783
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 772
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 761
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 749
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 737
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 726
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 716
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 704
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 694
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 683
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 672
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 664
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 657
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 650
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 639
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 638
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 630
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 15144,
+          "sourceToClientMs": 542
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19151,
+          "sourceToClientMs": 576
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 692
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 667
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 655
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 646
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 633
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 620
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 609
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 602
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 595
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 587
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 581
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 575
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 568
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 562
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 554
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 548
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 542
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 536
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 530
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 524
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 518
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 511
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 500
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 490
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 484
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19380,
+          "sourceToClientMs": 477
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 599
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 592
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 584
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 570
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 569
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 563
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 556
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 549
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 542
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 530
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 529
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 521
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 510
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 499
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 487
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 479
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 473
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 466
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 458
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 452
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 444
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 437
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 430
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 424
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 417
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 411
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 402
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19509,
+          "sourceToClientMs": 396
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19754,
+          "sourceToClientMs": 635
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19754,
+          "sourceToClientMs": 627
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19754,
+          "sourceToClientMs": 620
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19754,
+          "sourceToClientMs": 611
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 604
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 598
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 591
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 584
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 578
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 568
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 560
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 552
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 544
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 541
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 540
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 540
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 539
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 538
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 537
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 536
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 536
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 535
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 533
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 533
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 532
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 532
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 531
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 530
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 529
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 505
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 503
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 503
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 483
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 482
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 482
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 481
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 458
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 457
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 456
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 455
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 19755,
+          "sourceToClientMs": 454
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 20010,
+          "sourceToClientMs": 692
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 20010,
+          "sourceToClientMs": 497
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 20270,
+          "sourceToClientMs": 431
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22097,
+          "sourceToClientMs": 366
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22391,
+          "sourceToClientMs": 574
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22391,
+          "sourceToClientMs": 550
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22391,
+          "sourceToClientMs": 537
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22391,
+          "sourceToClientMs": 525
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22391,
+          "sourceToClientMs": 515
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22391,
+          "sourceToClientMs": 507
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22391,
+          "sourceToClientMs": 499
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 648
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 640
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 633
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 626
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 619
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 612
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 604
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 597
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 590
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 577
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 572
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 571
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 563
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 556
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 550
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 542
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 534
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 526
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 519
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 514
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 507
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 500
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 494
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 487
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 480
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 472
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 465
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 458
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 450
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 442
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 428
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 425
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 416
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 404
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22547,
+          "sourceToClientMs": 385
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22856,
+          "sourceToClientMs": 691
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22856,
+          "sourceToClientMs": 683
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 22856,
+          "sourceToClientMs": 676
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 676
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 674
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 673
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 671
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 670
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 670
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 668
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 667
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 667
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 666
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 665
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 664
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 663
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 662
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 661
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 659
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 659
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 649
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 648
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 648
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 647
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 646
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 641
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 629
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 629
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 623
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 621
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 617
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 22857,
+          "sourceToClientMs": 600
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 23150,
+          "sourceToClientMs": 372
+        }
+      ]
+    },
+    {
+      "scenario": "hk",
+      "index": 4,
+      "startedAt": 1788880045324,
+      "enqueueMs": 2569,
+      "lifecycleRequestAcceptedMs": 9708,
+      "firstTokenMs": 12817,
+      "terminalMs": 24585,
+      "terminal": "turn.completed",
+      "deliverySamples": [
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 7610,
+          "sourceToClientMs": 374
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 8836,
+          "sourceToClientMs": 363
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 12817,
+          "sourceToClientMs": 624
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 761
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 746
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 738
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 732
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 726
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 719
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 712
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 699
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 685
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 675
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 662
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 13057,
+          "sourceToClientMs": 653
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 13178,
+          "sourceToClientMs": 477
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15682,
+          "sourceToClientMs": 353
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15798,
+          "sourceToClientMs": 395
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15798,
+          "sourceToClientMs": 375
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 15798,
+          "sourceToClientMs": 348
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16066,
+          "sourceToClientMs": 582
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16066,
+          "sourceToClientMs": 559
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16066,
+          "sourceToClientMs": 552
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16066,
+          "sourceToClientMs": 532
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16066,
+          "sourceToClientMs": 515
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16066,
+          "sourceToClientMs": 496
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16066,
+          "sourceToClientMs": 482
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 619
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 607
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 579
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 564
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 563
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 557
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 550
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 542
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 534
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 526
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 518
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 509
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 494
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 491
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 483
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 474
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 465
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 452
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 438
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 432
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 424
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 418
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 409
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 402
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 396
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 389
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 381
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 375
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 16220,
+          "sourceToClientMs": 368
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1252
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1245
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1238
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1231
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1222
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1213
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1204
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1197
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1190
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1182
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1172
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1163
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1153
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1143
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1134
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1126
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1119
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17112,
+          "sourceToClientMs": 1113
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1505
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1494
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1493
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1487
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1481
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1474
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1461
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1461
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1454
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1448
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1442
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1430
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1428
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1421
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1413
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1406
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1400
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1393
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1386
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1378
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1371
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1365
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1358
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1353
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1346
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1340
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1334
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1322
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1316
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1316
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1309
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1303
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1296
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1295
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1293
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1292
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1292
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1291
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1291
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1290
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1289
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1288
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1287
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1287
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1286
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1285
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1284
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1283
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1282
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1281
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1281
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1279
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1278
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1278
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1277
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1276
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1275
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1274
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1273
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1273
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1272
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1271
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1270
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17512,
+          "sourceToClientMs": 1269
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17531,
+          "sourceToClientMs": 1219
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17531,
+          "sourceToClientMs": 1217
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17531,
+          "sourceToClientMs": 1217
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker",
+          "observedMs": 17531,
+          "sourceToClientMs": 1217
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 17531,
+          "sourceToClientMs": 967
+        },
+        {
+          "type": "message.delta",
+          "stage": "worker.progress",
+          "observedMs": 17542,
+          "sourceToClientMs": 561
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19240,
+          "sourceToClientMs": 328
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19538,
+          "sourceToClientMs": 495
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19538,
+          "sourceToClientMs": 473
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19538,
+          "sourceToClientMs": 458
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 636
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 612
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 604
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 596
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 588
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 580
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 571
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 557
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 554
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 547
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 540
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 533
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 524
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 516
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 508
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 501
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 487
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 479
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 473
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 472
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 466
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 459
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 453
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 445
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 436
+        },
+        {
+          "type": "thinking.delta",
+          "stage": "worker",
+          "observedMs": 19717,
+          "sourceToClientMs": 429
+        },
+        {
+          "type": "tool.started",
+          "stage": "worker",
+          "observedMs": 20178,
+          "sourceToClientMs": 368
+        }
+      ]
+    }
+  ]
+}

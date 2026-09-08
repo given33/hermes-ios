@@ -1,0 +1,508 @@
+[
+  {
+    "mode": "cold-process",
+    "iteration": 1,
+    "preparation_ms": 8937.695,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "cold-process",
+    "iteration": 2,
+    "preparation_ms": 7436.921,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 1,
+    "preparation_ms": 1945.62,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 2,
+    "preparation_ms": 2054.098,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 3,
+    "preparation_ms": 8194.472,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 4,
+    "preparation_ms": 1880.398,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 5,
+    "preparation_ms": 1980.919,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 6,
+    "preparation_ms": 8183.381,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 7,
+    "preparation_ms": 1952.26,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 8,
+    "preparation_ms": 2065.765,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 9,
+    "preparation_ms": 8003.133,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 10,
+    "preparation_ms": 1804.804,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 11,
+    "preparation_ms": 2467.809,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 12,
+    "preparation_ms": 8062.092,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 13,
+    "preparation_ms": 1986.796,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 14,
+    "preparation_ms": 2152.229,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 15,
+    "preparation_ms": 7848.072,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 16,
+    "preparation_ms": 1990.276,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 17,
+    "preparation_ms": 2386.405,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 18,
+    "preparation_ms": 7566.677,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 19,
+    "preparation_ms": 2043.609,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "sequential-worker",
+    "iteration": 20,
+    "preparation_ms": 2238.448,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 31
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 1,
+    "preparation_ms": 7957.381,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 2,
+    "preparation_ms": 338.958,
+    "path": "/v1/chat/completions",
+    "messages": 4,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 3,
+    "preparation_ms": 117.017,
+    "path": "/v1/chat/completions",
+    "messages": 6,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 4,
+    "preparation_ms": 112.826,
+    "path": "/v1/chat/completions",
+    "messages": 8,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 5,
+    "preparation_ms": 98.912,
+    "path": "/v1/chat/completions",
+    "messages": 10,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 6,
+    "preparation_ms": 76.602,
+    "path": "/v1/chat/completions",
+    "messages": 12,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 7,
+    "preparation_ms": 96.301,
+    "path": "/v1/chat/completions",
+    "messages": 14,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 8,
+    "preparation_ms": 78.514,
+    "path": "/v1/chat/completions",
+    "messages": 16,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 9,
+    "preparation_ms": 108.83,
+    "path": "/v1/chat/completions",
+    "messages": 18,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 10,
+    "preparation_ms": 66.902,
+    "path": "/v1/chat/completions",
+    "messages": 20,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 11,
+    "preparation_ms": 702.606,
+    "path": "/v1/chat/completions",
+    "messages": 22,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 12,
+    "preparation_ms": 68.342,
+    "path": "/v1/chat/completions",
+    "messages": 24,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 13,
+    "preparation_ms": 74.031,
+    "path": "/v1/chat/completions",
+    "messages": 26,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 14,
+    "preparation_ms": 153.504,
+    "path": "/v1/chat/completions",
+    "messages": 28,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 15,
+    "preparation_ms": 91.735,
+    "path": "/v1/chat/completions",
+    "messages": 30,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 16,
+    "preparation_ms": 96.63,
+    "path": "/v1/chat/completions",
+    "messages": 32,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 17,
+    "preparation_ms": 75.684,
+    "path": "/v1/chat/completions",
+    "messages": 34,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 18,
+    "preparation_ms": 83.479,
+    "path": "/v1/chat/completions",
+    "messages": 36,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 19,
+    "preparation_ms": 98.288,
+    "path": "/v1/chat/completions",
+    "messages": 38,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "persistent-session",
+    "iteration": 20,
+    "preparation_ms": 104.13,
+    "path": "/v1/chat/completions",
+    "messages": 40,
+    "tools": 32,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 1,
+    "preparation_ms": 887.559,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 32,
+    "conversation": 2,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 1,
+    "preparation_ms": 1030.029,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 32,
+    "conversation": 1,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 1,
+    "preparation_ms": 1117.861,
+    "path": "/v1/chat/completions",
+    "messages": 2,
+    "tools": 32,
+    "conversation": 3,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 2,
+    "preparation_ms": 198.303,
+    "path": "/v1/chat/completions",
+    "messages": 4,
+    "tools": 32,
+    "conversation": 2,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 2,
+    "preparation_ms": 214.994,
+    "path": "/v1/chat/completions",
+    "messages": 4,
+    "tools": 32,
+    "conversation": 1,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 2,
+    "preparation_ms": 196.255,
+    "path": "/v1/chat/completions",
+    "messages": 4,
+    "tools": 32,
+    "conversation": 3,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 3,
+    "preparation_ms": 175.622,
+    "path": "/v1/chat/completions",
+    "messages": 6,
+    "tools": 32,
+    "conversation": 2,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 3,
+    "preparation_ms": 158.643,
+    "path": "/v1/chat/completions",
+    "messages": 6,
+    "tools": 32,
+    "conversation": 1,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 4,
+    "preparation_ms": 183.695,
+    "path": "/v1/chat/completions",
+    "messages": 8,
+    "tools": 32,
+    "conversation": 2,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 3,
+    "preparation_ms": 247.002,
+    "path": "/v1/chat/completions",
+    "messages": 6,
+    "tools": 32,
+    "conversation": 3,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 5,
+    "preparation_ms": 197.553,
+    "path": "/v1/chat/completions",
+    "messages": 10,
+    "tools": 32,
+    "conversation": 2,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 4,
+    "preparation_ms": 209.091,
+    "path": "/v1/chat/completions",
+    "messages": 8,
+    "tools": 32,
+    "conversation": 1,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 4,
+    "preparation_ms": 237.365,
+    "path": "/v1/chat/completions",
+    "messages": 8,
+    "tools": 32,
+    "conversation": 3,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 5,
+    "preparation_ms": 112.459,
+    "path": "/v1/chat/completions",
+    "messages": 10,
+    "tools": 32,
+    "conversation": 1,
+    "result_ok": true
+  },
+  {
+    "mode": "parallel-sessions",
+    "iteration": 5,
+    "preparation_ms": 184.049,
+    "path": "/v1/chat/completions",
+    "messages": 10,
+    "tools": 32,
+    "conversation": 3,
+    "result_ok": true
+  }
+]

@@ -14,6 +14,7 @@ import Reanimated, {
   Easing,
   FadeIn,
   FadeOut,
+  LinearTransition,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -124,6 +125,7 @@ const TimelineStepRow = memo(function TimelineStepRow({
   onToggle(id: string): void;
 }) {
   const { tokens } = useTheme();
+  const motion = useMotion();
   const running = activityIsRunning(activity);
   const ToolIcon = { search: Search, browser: Globe, command: Terminal, edit: FilePenLine,
     file: FileText, schedule: CalendarClock, subagent: Users }[activity.category] || Wrench;
@@ -144,7 +146,10 @@ const TimelineStepRow = memo(function TimelineStepRow({
   const primaryDetail = activityPrimaryDetail(activity);
   const elapsed = activityElapsedLabel(activity, now);
   return (
-    <View style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
+    <Reanimated.View
+      entering={FadeIn.duration(motion.fadeDuration()).withInitialValues({ opacity: 0.65, transform: [] })}
+      layout={motion.animate(LinearTransition.duration(IOS_MOTION.duration.control).easing(IOS_DECELERATE_EASING))}
+      style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
       <IOSPressable
         accessibilityRole="button"
         accessibilityState={{ expanded }}
@@ -180,11 +185,13 @@ const TimelineStepRow = memo(function TimelineStepRow({
         {sourceError ? <Text accessibilityRole="alert" style={{ color: tokens.colors.destructive }}>{sourceError}</Text> : null}
       </View> : null}
       {expanded ? (
-        <View style={[styles.entryDetail, { borderLeftColor: tokens.colors.border }]}>
+        <Reanimated.View entering={FadeIn.duration(motion.fadeDuration())}
+          exiting={FadeOut.duration(motion.fadeDuration(120))}
+          style={[styles.entryDetail, { borderLeftColor: tokens.colors.border }]}>
           <EntryDetailBody activity={activity} isChinese={isChinese} />
-        </View>
+        </Reanimated.View>
       ) : null}
-    </View>
+    </Reanimated.View>
   );
 });
 
@@ -210,7 +217,10 @@ function TimelineGroupRow({
   const label = activityCategoryLabel(first.category, isChinese);
   const elapsed = timelineGroupElapsedLabel(entry);
   return (
-    <View style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
+    <Reanimated.View
+      entering={FadeIn.duration(motion.fadeDuration()).withInitialValues({ opacity: 0.65, transform: [] })}
+      layout={motion.animate(LinearTransition.duration(IOS_MOTION.duration.control).easing(IOS_DECELERATE_EASING))}
+      style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
       <IOSPressable
         accessibilityRole="button"
         accessibilityState={{ expanded }}
@@ -254,7 +264,7 @@ function TimelineGroupRow({
           ))}
         </Reanimated.View>
       ) : null}
-    </View>
+    </Reanimated.View>
   );
 }
 

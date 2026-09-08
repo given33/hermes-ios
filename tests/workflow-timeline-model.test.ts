@@ -33,6 +33,19 @@ function activity(overrides: Partial<HermesChatActivity> = {}): HermesChatActivi
   };
 }
 
+test('growing a tool group preserves its expanded state', () => {
+  const first = [1, 2, 3].map(index => activity({ id: `tool-${index}` }));
+  const entry = groupTimelineActivities(first)[0];
+  let state = timelineCollapseReducer(createTimelineCollapseState(), {
+    entries: [{ id: entry.id, running: false }], type: 'sync',
+  });
+  state = timelineCollapseReducer(state, { type: 'toggle', id: entry.id });
+  const grown = groupTimelineActivities([...first, activity({ id: 'tool-4' })])[0];
+  assert.equal(grown.id, entry.id);
+  state = timelineCollapseReducer(state, { entries: [{ id: grown.id, running: true }], type: 'sync' });
+  assert.equal(isTimelineEntryExpanded(state, grown.id), true);
+});
+
 test('remote timing separates queue, startup and model execution', () => {
   const assigned = { status: 'running', remotePhase: 'waiting_claim', dispatchedAt: 1000 };
   assert.equal(turnTimingLine(assigned, true, 91000), '等待接单 1m 30s');
@@ -122,7 +135,7 @@ test('three or more consecutive completed steps of one tool fold into a group', 
   assert.deepEqual(
     entries.map(({ id, kind }) => ({ id, kind })),
     [
-      { id: 'group:r1:r3', kind: 'group' },
+      { id: 'group:r1', kind: 'group' },
       { id: 'c1', kind: 'step' },
       { id: 'r4', kind: 'step' },
       { id: 'r5', kind: 'step' },

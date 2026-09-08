@@ -17,7 +17,7 @@ import {
   turnTimingLine,
 } from '../workflow-timeline-model';
 import { styles } from './chat-presentation-styles';
-import { chatExecutionPhases } from '../../api/chat-execution-phases';
+import { chatExecutionPhases, type ChatExecutionPhase } from '../../api/chat-execution-phases';
 import type {
   HostedRuntimeProjection,
 } from '../../api/hosted-runtime-types';
@@ -590,23 +590,39 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
         <View
           style={styles.activityTimeline}
         >
-          {phases.map((phase, index) => {
-            const thoughts = phase.activities.filter(activity => activity.category === 'reasoning');
-            const tools = phase.activities.filter(activity => !['reasoning', 'awaiting', 'rework'].includes(activity.category));
-            const text = thoughts.map(activity => activity.output || activity.preview || '').filter(Boolean).join('\n\n');
-            return <View key={phase.id} testID={`execution-phase-${index}`} style={{ gap: 8, paddingBottom: 10 }}>
-              {phase.reports.map(report => <Text key={report.id} selectable style={{ fontSize: 14, lineHeight: 22, color: tokens.colors.foreground }}>
-                {report.content}
-              </Text>)}
-              {text ? <ReasoningSection isChinese={isChinese} running={thoughts.some(activityIsRunning)}
-                turnRunning={running} durationLabel={reasoningElapsedLabel(thoughts, now)} text={text}
-                onInspectActivity={onInspectActivity} /> : null}
-              {tools.length ? <WorkflowTimeline activities={tools} isChinese={isChinese} now={now}
-                onInspectActivity={onInspectActivity} /> : null}
-            </View>;
-          })}
+          {phases.map((phase, index) => <ExecutionPhase key={index} index={index} phase={phase}
+            color={tokens.colors.foreground} isChinese={isChinese} running={running}
+            now={phase.activities.some(activityIsRunning) ? now : 0}
+            onInspectActivity={onInspectActivity} />)}
         </View>
       ) : null}
     </View>
   );
 });
+
+// A live report is promoted to a durable report after a tool handoff. Keep
+// the phase and text nodes mounted, and leave settled phases out of token renders.
+const ExecutionPhase = memo(function ExecutionPhase({ phase, index, color, isChinese,
+  running, now, onInspectActivity }: {
+  phase: ChatExecutionPhase; index: number; color: string; isChinese: boolean;
+  running: boolean; now: number; onInspectActivity(): void;
+}) {
+  const thoughts = useMemo(() => phase.activities.filter(activity => activity.category === 'reasoning'), [phase.activities]);
+  const tools = useMemo(() => phase.activities.filter(activity => !['reasoning', 'awaiting', 'rework'].includes(activity.category)), [phase.activities]);
+  const text = thoughts.map(activity => activity.output || activity.preview || '').filter(Boolean).join('\n\n');
+  return <View testID={`execution-phase-${index}`} style={{ gap: 8, paddingBottom: 10 }}>
+    {phase.reports.map((report, position) => <Text key={position} selectable={!running}
+      style={{ fontSize: 14, lineHeight: 22, color }}>{report.content}</Text>)}
+    {text ? <ReasoningSection isChinese={isChinese} running={thoughts.some(activityIsRunning)}
+      turnRunning={running} durationLabel={reasoningElapsedLabel(thoughts, now)} text={text}
+      onInspectActivity={onInspectActivity} /> : null}
+    {tools.length ? <WorkflowTimeline activities={tools} isChinese={isChinese} now={now}
+      onInspectActivity={onInspectActivity} /> : null}
+  </View>;
+}, (before, after) => before.index === after.index && before.color === after.color
+  && before.isChinese === after.isChinese && before.running === after.running
+  && before.now === after.now && before.onInspectActivity === after.onInspectActivity
+  && before.phase.activities.length === after.phase.activities.length
+  && before.phase.activities.every((activity, index) => activity === after.phase.activities[index])
+  && before.phase.reports.length === after.phase.reports.length
+  && before.phase.reports.every((report, index) => report.content === after.phase.reports[index].content));

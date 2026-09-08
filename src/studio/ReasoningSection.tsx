@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import { Check, Copy } from 'lucide-react-native';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -30,7 +30,7 @@ const REASONING_ENTRY_ID = 'reasoning';
  * still streaming reasoning, and collapses again on completion unless the
  * user toggled it manually.
  */
-export function ReasoningSection({
+export const ReasoningSection = memo(function ReasoningSection({
   detailStyle,
   durationLabel,
   isChinese,
@@ -110,7 +110,7 @@ export function ReasoningSection({
             detailStyle,
           ]}
         >
-          <Text selectable style={[styles.reasoningText, { color: tokens.colors.foreground }]}>
+          <Text selectable={!running} style={[styles.reasoningText, { color: tokens.colors.foreground }]}>
             {text}
           </Text>
           <IOSPressable
@@ -129,7 +129,7 @@ export function ReasoningSection({
       ) : null}
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   section: { borderRadius: 6, overflow: 'hidden' },
