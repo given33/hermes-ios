@@ -2,7 +2,9 @@
 
 ## Acceptance Status
 
-Final-speaker ownership, real tool execution and incremental rendering passed live browser checks. The requested few-second response from every worker is **not yet accepted**. Current backend is `e940cb4e96cb0a518892dc13039d41a202f202bc` on all four hosts. A warm direct identity request displayed real reasoning in 3.52 seconds, but Windows worker requests still required 18–24 seconds. Process samples show remaining startup work reading profile configuration, SQLite schema and skill indexes; this is not solely model-provider latency.
+The resumed September 8 startup work is recorded in [Startup optimization](startup-optimization-2026-09-08.md), including the official implementation review, four-host deployment of `d0dc95432629873b8c2605b130ef6c16d9f81e7b` and current live measurements. The requested few-second response from every worker is **not yet accepted**.
+
+Final-speaker ownership, real tool execution and incremental rendering passed live browser checks. The earlier acceptance below used backend `e940cb4e96cb0a518892dc13039d41a202f202bc` on all four hosts. A warm direct identity request displayed real reasoning in 3.52 seconds, but Windows worker requests still required 18–24 seconds. Process samples show remaining startup work reading profile configuration, SQLite schema and skill indexes; this is not solely model-provider latency.
 
 No physical iPhone or microphone acceptance is claimed. Expo Web exercises the shared iOS project source and authenticated backend, not the native iOS runtime.
 
