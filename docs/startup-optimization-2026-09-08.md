@@ -69,3 +69,31 @@ The DBB3 trace still shows MCP discovery joining, tool-module discovery, SDK/Pyd
 The dedicated DBB3 warm follow-up (`C:/Users/given/AppData/Local/Temp/hermes-delivery-20260908-dbb3-warm/`) passed with one final and zero failed tools: request observed 28.13 s, thinking visible 31.83 s, final/composer release 67.25 s. Its sampler observed the worker child at 14.35 s, followed by CLI imports, Kanban schema checks, MCP joining and SDK construction. Pre-child time and post-child initialization both remain material; neither is hidden in the model-provider budget.
 
 At the end of the run, all four runtime update timers and peer watchdog services were active. No physical-iOS acceptance or completion of the overall few-second worker-latency target is claimed.
+
+
+## Deep dive: official Quicksilver comparison
+
+The official source was cloned and compared locally at `C:/Users/given/hermes-audit/hermes-agent-upstream` (`upstream/main`, fetched 2026-09-08). The official [Quicksilver release](https://github.com/NousResearch/hermes-agent/releases/tag/v2026.7.20) defines the 0.9 s number as cold-start initialization before the first model request for a local CLI/gateway process. Its source commit [`a124d16764`](https://github.com/NousResearch/hermes-agent/commit/a124d16764a23a0ac29cfbfe14ef22310c4959d8) lists four removed stalls: Discord capability HTTP, an Ollama `/api/show` probe, the environment-probe subprocess sweep, and an unconditional MCP import. Our runtime already contains those upstream fixes. The follow-up [`0800af0b8a`](https://github.com/NousResearch/hermes-agent/commit/0800af0b8a) additionally reduces the first prompt build and makes partial output visible earlier.
+
+Our hosted path is a different measurement boundary. The request clock includes mobile HTTPS enqueue, Hub durable state and workflow routing, connector lease/claim, remote Kanban root creation, and worker process handoff. Those are outside the official single-process benchmark and cannot be attributed to model-provider time.
+
+## Latest release and evidence
+
+Backend commit `ae2cd139b923b15b97a9f286d2559d74d5c794b2` is pushed to GitHub and deployed with verified source and profile hashes on Hub, DBB3, WSL and Hong Kong. The release removes a telemetry session-list/export subprocess from the worker critical path, reads sessions through the official read-only `SessionDB` export plus redaction functions, caches successful CA validation by file signature, preloads the remaining policy/metrics modules, and coalesces duplicate hosted dispatch persistence. The acceptance script now requires native `kanban_complete`, real terminal output or the configured MCP tool, exactly one worker/aggregator final, and no failed tools.
+
+Evidence directory: `C:/Users/given/AppData/Local/Temp/hermes-latency-final-gap/`. These are measured from mobile enqueue to the first non-empty worker stream event; provider generation time is not removed from the observed total, while the `modelRequestMs` column ends at `agent.started` (the pre-provider boundary).
+
+| Task | Enqueue | Before model request | First visible token |
+| --- | ---: | ---: | ---: |
+| WSL | 0.76 s | 6.40 s | 8.66 s |
+| DBB3 | 0.67 s | 6.32 s | 9.13 s |
+| Hong Kong | 0.57 s | 5.28 s | 7.46 s |
+| Filesystem MCP | 0.56 s | 3.85 s | 6.30 s |
+| Two-worker aggregation | 0.56 s | 1.49 s (manager) | 3.10 s |
+| Direct chat | 0.62 s | 1.49 s | 1.51 s |
+
+This is materially below the previous 7.35 s DBB3 / 5.13 s WSL / 5.60 s Hong Kong worker request waits, but the remote worker lanes still do not meet the official 0.9 s single-process figure. The remaining gap is the distributed orchestration and cross-host process handoff; model generation is a separate upstream variable.
+
+The WSL home is now a persistent Linux ext4 bind mount at `/mnt/d/Hermes/home`, following the official WSL guidance to keep repositories, environments and runtime data on the Linux filesystem. Windows tools viewing `D:\Hermes\home` see the underlying migration backup; live data is accessed through WSL/Linux.
+
+Native physical-iPhone and microphone acceptance remains unverified. Local Expo reverse-proxy restart was blocked by the app's automatic approval policy, so the final run used the authorized public HTTPS API path.
