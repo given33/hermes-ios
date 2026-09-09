@@ -33,6 +33,9 @@ public final class HermesFrameRateModule: Module {
     AsyncFunction("getDiagnostics") {
       controller.diagnostics()
     }.runOnQueue(.main)
+    AsyncFunction("resetDiagnostics") {
+      controller.resetDiagnostics()
+    }.runOnQueue(.main)
   }
 }
 
@@ -69,6 +72,24 @@ final class HermesFrameRateController: NSObject {
   private var callbackCount = 0
   private var measuredCallbacksPerSecond = 0.0
   private var lastCallbackTimestamp: CFTimeInterval = 0
+  private var frameIntervalsMs: [Double] = []
+  private var sampleCursor = 0
+  private var measuredFrameCount = 0
+  private var delayedFrameCount = 0
+  private var over50MsCount = 0
+  private var maximumIntervalMs = 0.0
+  private var previousExpectedInterval: CFTimeInterval = 0
+
+  func resetDiagnostics() {
+    frameIntervalsMs.removeAll(keepingCapacity: true)
+    sampleCursor = 0
+    measuredFrameCount = 0
+    delayedFrameCount = 0
+    over50MsCount = 0
+    maximumIntervalMs = 0
+    lastCallbackTimestamp = 0
+    previousExpectedInterval = 0
+  }
   func start() {
     guard Thread.isMainThread else {
       DispatchQueue.main.async { [weak self] in
@@ -109,6 +130,7 @@ final class HermesFrameRateController: NSObject {
     callbackCount = 0
     measuredCallbacksPerSecond = 0
     lastCallbackTimestamp = 0
+    previousExpectedInterval = 0
   }
 
   func configure(_ link: CADisplayLink) {
@@ -131,6 +153,8 @@ final class HermesFrameRateController: NSObject {
       }
     }
     let current = snapshot()
+    let sortedIntervals = frameIntervalsMs.sorted()
+    let p95 = sortedIntervals.isEmpty ? 0 : sortedIntervals[min(sortedIntervals.count - 1, Int(Double(sortedIntervals.count) * 0.95))]
     return [
       "screenMaximumFramesPerSecond": current.screenMaximumFramesPerSecond,
       "requestedFramesPerSecond": current.requestedFramesPerSecond,
@@ -140,6 +164,12 @@ final class HermesFrameRateController: NSObject {
       "lowPowerMode": current.lowPowerMode,
       "thermalState": current.thermalState,
       "lastCallbackTimestamp": current.lastCallbackTimestamp,
+      "measuredFrameCount": measuredFrameCount,
+      "delayedFrameCount": delayedFrameCount,
+      "over50MsCount": over50MsCount,
+      "maximumIntervalMs": maximumIntervalMs,
+      "recentP95IntervalMs": p95,
+      "recentSampleCount": frameIntervalsMs.count,
     ]
   }
 
@@ -158,6 +188,24 @@ final class HermesFrameRateController: NSObject {
 
   @objc private func frameRequested(_ link: CADisplayLink) {
     let timestamp = link.timestamp
+    if lastCallbackTimestamp > 0 {
+      let interval = timestamp - lastCallbackTimestamp
+      let milliseconds = interval * 1000
+      measuredFrameCount += 1
+      maximumIntervalMs = max(maximumIntervalMs, milliseconds)
+      if milliseconds > 50 { over50MsCount += 1 }
+      // Compare with the previous scheduled interval, not an assumed 120 Hz:
+      // iOS can change the display cadence under thermal/power constraints.
+      if previousExpectedInterval > 0 && interval > previousExpectedInterval * 1.5 {
+        delayedFrameCount += 1
+      }
+      if frameIntervalsMs.count < 600 { frameIntervalsMs.append(milliseconds) }
+      else {
+        frameIntervalsMs[sampleCursor] = milliseconds
+        sampleCursor = (sampleCursor + 1) % 600
+      }
+    }
+    previousExpectedInterval = max(0, link.targetTimestamp - timestamp)
     if callbackWindowStart == 0 {
       callbackWindowStart = timestamp
       callbackCount = 0

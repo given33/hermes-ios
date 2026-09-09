@@ -51,14 +51,22 @@ export function compactChatMessages(messages: readonly ChatMessage[]): ChatMessa
   }
   // A terminal session-entry echo can carry a later timestamp for the user.
   // Keep each turn's prompt before its replies, independent of replay order.
-  for (let index = 0; index < rows.length; index += 1) {
-    const user = rows[index];
-    if (user.role !== 'user' || !user.runtimeTurnId) continue;
-    const firstReply = rows.findIndex((row) => row.role === 'assistant' && row.runtimeTurnId === user.runtimeTurnId);
-    if (firstReply >= 0 && firstReply < index) {
-      rows.splice(index, 1);
-      rows.splice(firstReply, 0, user);
+  const prompts = new Map(rows.filter(row => row.role === 'user' && row.runtimeTurnId)
+    .map(row => [row.runtimeTurnId!, row]));
+  const emitted = new Set<ChatMessage>();
+  const ordered: ChatMessage[] = [];
+  for (const row of rows) {
+    if (row.role === 'assistant' && row.runtimeTurnId) {
+      const prompt = prompts.get(row.runtimeTurnId);
+      if (prompt && !emitted.has(prompt)) {
+        ordered.push(prompt);
+        emitted.add(prompt);
+      }
+    }
+    if (!emitted.has(row)) {
+      ordered.push(row);
+      emitted.add(row);
     }
   }
-  return rows;
+  return ordered;
 }

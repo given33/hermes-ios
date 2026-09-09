@@ -21,6 +21,7 @@ interface HermesFrameRateNativeModule {
   start(): void;
   stop(): void;
   getDiagnostics(): Promise<Record<string, unknown>>;
+  resetDiagnostics?(): Promise<void>;
 }
 
 const nativeFrameRateModule =
@@ -34,6 +35,10 @@ export function startNativeFrameRateController() {
 
 export async function getNativeFrameRateDiagnostics() {
   return (await nativeFrameRateModule?.getDiagnostics()) ?? null;
+}
+
+export async function resetNativeFrameRateDiagnostics() {
+  await nativeFrameRateModule?.resetDiagnostics?.();
 }
 
 export interface HermesSwiftUIThemeProps {

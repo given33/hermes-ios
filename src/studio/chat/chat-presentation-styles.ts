@@ -71,6 +71,7 @@ export const styles = StyleSheet.create({
   messageAvatarCompact: { height: 24, marginTop: 0, width: 24 },
   hermesAvatar: { backgroundColor: 'transparent' },
   messageStack: { alignItems: 'flex-start', flexShrink: 1, maxWidth: '88%', minWidth: 0 },
+  agentMessageStack: { flex: 1 },
   userMessageStack: { alignItems: 'flex-end', maxWidth: '82%' },
   messageMeta: { alignItems: 'center', flexDirection: 'row', gap: 5, marginBottom: 3, marginHorizontal: 3, minHeight: 16 },
   userMessageMeta: { alignSelf: 'flex-end' },

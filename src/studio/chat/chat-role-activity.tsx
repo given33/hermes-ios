@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Text, TextInput, View } from 'react-native';
 import {
   messageIsRunning,
@@ -10,6 +10,8 @@ import { multiplyAlpha } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
 import { AnimatedChevron, WorkflowTimeline } from '../WorkflowTimeline';
 import { ReasoningSection } from '../ReasoningSection';
+import { StreamingText } from './StreamingText';
+import { WorkflowDisclosure } from './WorkflowDisclosure';
 import {
   activityIsRunning,
   reasoningElapsedLabel,
@@ -480,7 +482,20 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
     ),
   );
   const running = messageIsRunning(message);
-  const phases = useMemo(() => chatExecutionPhases(message), [message]);
+  const lastLiveMessage = useRef<ChatMessage | null>(null);
+  if (running) lastLiveMessage.current = message;
+  useEffect(() => {
+    if (!running && !open) lastLiveMessage.current = null;
+  }, [running, open]);
+  // Keep the same process geometry while its final answer enters. Otherwise
+  // removing the live report shrinks the scroll range before disclosure closes.
+  const finishing = !running && open && !manualPinRef.current && lastLiveMessage.current !== null;
+  const processMessage = finishing ? lastLiveMessage.current! : message;
+  const phases = useMemo(() => chatExecutionPhases(processMessage), [processMessage]);
+  const inspectProcess = useCallback(() => {
+    manualPinRef.current = true;
+    onInspectActivity();
+  }, [onInspectActivity]);
   const hasProcess = Boolean(stepActivities.length || reasoningText || phases.some(phase => phase.reports.length));
   const now = useNowTicker(running);
   // Live workflow display: while the turn runs the activity group stays
@@ -488,9 +503,10 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
   // collapses by default. A manual tap pins the state until the next turn.
   useEffect(() => {
     if (!running) {
-      manualPinRef.current = false;
-      setOpen(false);
-      return;
+      if (manualPinRef.current) return;
+      // Let the answer enter before retiring the live process.
+      const timer = setTimeout(() => { if (!manualPinRef.current) setOpen(false); }, 220);
+      return () => clearTimeout(timer);
     }
     if (manualPinRef.current) return;
     setOpen(running);
@@ -586,16 +602,16 @@ export const RoleActivityGroup = memo(function RoleActivityGroup({  isChinese,
       ) : (
         <View style={styles.activitySummary}>{summary}</View>
       )}
-      {open ? (
+      <WorkflowDisclosure open={open}>
         <View
           style={styles.activityTimeline}
         >
           {phases.map((phase, index) => <ExecutionPhase key={index} index={index} phase={phase}
-            color={tokens.colors.foreground} isChinese={isChinese} running={running}
+            color={tokens.colors.foreground} isChinese={isChinese} running={running || finishing}
             now={phase.activities.some(activityIsRunning) ? now : 0}
-            onInspectActivity={onInspectActivity} />)}
+            onInspectActivity={inspectProcess} />)}
         </View>
-      ) : null}
+      </WorkflowDisclosure>
     </View>
   );
 });
@@ -611,12 +627,13 @@ const ExecutionPhase = memo(function ExecutionPhase({ phase, index, color, isChi
   const tools = useMemo(() => phase.activities.filter(activity => !['reasoning', 'awaiting', 'rework'].includes(activity.category)), [phase.activities]);
   const text = thoughts.map(activity => activity.output || activity.preview || '').filter(Boolean).join('\n\n');
   return <View testID={`execution-phase-${index}`} style={{ gap: 8, paddingBottom: 10 }}>
-    {phase.reports.map((report, position) => <Text key={position} selectable={!running}
-      style={{ fontSize: 14, lineHeight: 22, color }}>{report.content}</Text>)}
+    {phase.reports.map((report, position) => <StreamingText key={position}
+      streaming={running && report.id === 'report-live'} text={report.content}
+      style={{ fontSize: 14, lineHeight: 22, color }} />)}
     {text ? <ReasoningSection isChinese={isChinese} running={thoughts.some(activityIsRunning)}
       turnRunning={running} durationLabel={reasoningElapsedLabel(thoughts, now)} text={text}
       onInspectActivity={onInspectActivity} /> : null}
-    {tools.length ? <WorkflowTimeline activities={tools} isChinese={isChinese} now={now}
+    {tools.length ? <WorkflowTimeline activities={tools} isChinese={isChinese} now={now} turnRunning={running}
       onInspectActivity={onInspectActivity} /> : null}
   </View>;
 }, (before, after) => before.index === after.index && before.color === after.color

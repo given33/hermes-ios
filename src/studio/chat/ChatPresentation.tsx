@@ -72,6 +72,7 @@ export {
 } from './ChatComposerPresentation';
 export { ConversationHistory } from './ConversationHistory';
 import { executionReportText } from '../../api/chat-execution-phases';
+import { WorkflowEntrance } from './WorkflowEntrance';
 
 const BODY_REGULAR = 'HermesGoogle-IBMPlexSans-400-Normal';
 const BODY_SEMIBOLD = 'HermesGoogle-IBMPlexSans-600-Normal';
@@ -182,7 +183,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
       || todoListItems?.length,
   );
   const messageBody = (
-    <View
+    <WorkflowEntrance enabled={!isUser}
       style={[
         styles.messageBody,
         isUser ? styles.userMessageBody : styles.agentMessageBody,
@@ -235,7 +236,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           ))}
         </View>
       ) : null}
-    </View>
+    </WorkflowEntrance>
   );
   const canBranch = Boolean(message.runtimeSessionId && message.runtimeMessageId);
   const messageActions = [
@@ -267,7 +268,7 @@ export const UnifiedMessage = memo(function UnifiedMessage({
           message={message}
           onLongPress={isUser ? undefined : () => onMentionMember(message)}
         />
-        <View style={[styles.messageStack, isUser && styles.userMessageStack]}>
+        <View style={[styles.messageStack, isUser ? styles.userMessageStack : styles.agentMessageStack]}>
           {!isUser && !message.finalReport && showTodos && message.todos?.length ? (
             <TodoSection
               owner={message.name}

@@ -40,3 +40,14 @@ test('separate turns and members retain their own messages', () => {
     message('three', { runtimeTurnId: 'b', memberId: 'a' }),
   ]).length, 3);
 });
+
+test('late user echoes move before the first reply without reordering other rows', () => {
+  const rows = [message('reply-a', { runtimeTurnId: 'a' }),
+    message('reply-b', { runtimeTurnId: 'b' }),
+    message('user-b', { role: 'user', runtimeTurnId: 'b' }),
+    message('user-a', { role: 'user', runtimeTurnId: 'a' }),
+    message('no-turn', { runtimeTurnId: undefined })];
+  assert.deepEqual(compactChatMessages(rows).map(row => row.id),
+    ['user-a', 'reply-a', 'user-b', 'reply-b', 'no-turn']);
+  assert.equal(rows[0].id, 'reply-a');
+});

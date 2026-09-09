@@ -63,11 +63,13 @@ export function useHostedLifecycleEventApplication({
   const runtimeRef = useRef<HostedRuntimeProjection | undefined>(undefined);
   const [runtime, setRuntime] = useState<HostedRuntimeProjection | undefined>(undefined);
   const flushTimerRef = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
+  const lastFlushAtRef = useRef(0);
 
   const reset = useCallback(() => {
     if (flushTimerRef.current !== null) cancelAnimationFrame(flushTimerRef.current);
     flushTimerRef.current = null;
     eventQueueRef.current = [];
+    lastFlushAtRef.current = 0;
     runtimeRef.current = undefined;
     setRuntime(undefined);
   }, []);
@@ -88,6 +90,7 @@ export function useHostedLifecycleEventApplication({
       .map((queued) => queued.event);
     eventQueueRef.current = [];
     if (!events.length) return;
+    lastFlushAtRef.current = performance.now();
 
     const result = applyHostedLifecycleEvents(
       messagesRef.current,
@@ -168,7 +171,13 @@ export function useHostedLifecycleEventApplication({
       return;
     }
     if (flushTimerRef.current !== null) return;
-    flushTimerRef.current = requestAnimationFrame(flush);
+    // Keep reducer, phase building and native text shaping off most display
+    // frames. The first batch is immediate; terminal events still bypass this.
+    const scheduleFlush = (now: number) => {
+      if (now - lastFlushAtRef.current >= 32) flush();
+      else flushTimerRef.current = requestAnimationFrame(scheduleFlush);
+    };
+    flushTimerRef.current = requestAnimationFrame(scheduleFlush);
   }, [flush]);
 
   useEffect(() => () => reset(), [cacheOwner, reset]);

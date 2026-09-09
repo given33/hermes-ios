@@ -14,6 +14,8 @@ import { IOSPressable } from '../components/ios/IOSPressable';
 import { multiplyAlpha } from '../design/control-contracts';
 import { useTheme } from '../design/ThemeProvider';
 import { AnimatedChevron } from './WorkflowTimeline';
+import { StreamingText } from './chat/StreamingText';
+import { WorkflowDisclosure } from './chat/WorkflowDisclosure';
 import {
   reasoningPreviewLine,
 } from './workflow-timeline-model';
@@ -49,7 +51,10 @@ export const ReasoningSection = memo(function ReasoningSection({
 }) {
   const { tokens } = useTheme();
   const [expanded, setExpanded] = useState(turnRunning);
-  useEffect(() => setExpanded(turnRunning), [turnRunning]);
+  const manuallyExpanded = useRef(false);
+  useEffect(() => {
+    if (!manuallyExpanded.current) setExpanded(turnRunning);
+  }, [turnRunning]);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => {
@@ -77,6 +82,7 @@ export const ReasoningSection = memo(function ReasoningSection({
         haptic="selection"
         onPress={() => {
           onInspectActivity();
+          manuallyExpanded.current = true;
           setExpanded((current) => !current);
         }}
         style={styles.headerRow}
@@ -102,7 +108,7 @@ export const ReasoningSection = memo(function ReasoningSection({
         ) : null}
         <AnimatedChevron color={tokens.colors.textSecondary} open={expanded} size={12} />
       </IOSPressable>
-      {expanded ? (
+      <WorkflowDisclosure open={expanded}>
         <View
           style={[
             styles.body,
@@ -110,9 +116,8 @@ export const ReasoningSection = memo(function ReasoningSection({
             detailStyle,
           ]}
         >
-          <Text selectable={!running} style={[styles.reasoningText, { color: tokens.colors.foreground }]}>
-            {text}
-          </Text>
+          <StreamingText streaming={running} text={text}
+            style={[styles.reasoningText, { color: tokens.colors.foreground }]} />
           <IOSPressable
             accessibilityLabel={isChinese ? '复制思考内容' : 'Copy reasoning'}
             onPress={() => { void copyReasoning(); }}
@@ -126,7 +131,7 @@ export const ReasoningSection = memo(function ReasoningSection({
             </Text>
           </IOSPressable>
         </View>
-      ) : null}
+      </WorkflowDisclosure>
     </View>
   );
 });

@@ -12,8 +12,6 @@ import {
 import { Linking, StyleSheet, Text, View } from 'react-native';
 import Reanimated, {
   Easing,
-  FadeIn,
-  FadeOut,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -30,6 +28,9 @@ import { multiplyAlpha } from '../design/control-contracts';
 import { IOS_MOTION } from '../design/ios-motion';
 import { useTheme } from '../design/ThemeProvider';
 import { useMotion } from '../design/motion';
+import { useStreamingText } from './chat/StreamingText';
+import { WorkflowDisclosure } from './chat/WorkflowDisclosure';
+import { WorkflowEntrance } from './chat/WorkflowEntrance';
 import { activityDetails, activityDiffText, activityStatusLabel } from './workflow-detail-model';
 import {
   activityElapsedLabel,
@@ -49,7 +50,6 @@ const BODY_REGULAR = 'HermesGoogle-IBMPlexSans-400-Normal';
 const BODY_SEMIBOLD = 'HermesGoogle-IBMPlexSans-600-Normal';
 const MONO_REGULAR = 'HermesTerminal-JetBrainsMono-400-Normal';
 const IOS_STANDARD_EASING = Easing.bezier(...IOS_MOTION.curve.standard);
-const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
 const RUNNING_COLOR = '#D28B22';
 
 /**
@@ -63,18 +63,25 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
   isChinese,
   now,
   onInspectActivity,
+  turnRunning = false,
 }: {
   activities: readonly ChatActivity[];
   isChinese: boolean;
   now: number;
   onInspectActivity(): void;
+  turnRunning?: boolean;
 }) {
   const [collapseState, dispatchCollapse] = useReducer(
     timelineCollapseReducer,
     undefined,
     createTimelineCollapseState,
   );
-  const entries = useMemo(() => groupTimelineActivities(activities), [activities]);
+  // Group history on mount. During a live turn keep every row's identity even
+  // when the third completed tool would otherwise replace rows with a group.
+  const [groupHistory] = useState(() => !turnRunning);
+  const entries = useMemo(() => groupHistory ? groupTimelineActivities(activities)
+    : activities.map(activity => ({ kind: 'step' as const, id: activity.id, activities: [activity] })),
+  [activities, groupHistory]);
   useEffect(() => {
     dispatchCollapse({ entries: timelineEntryLiveStates(entries), type: 'sync' });
   }, [entries]);
@@ -92,7 +99,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
             id={entry.id}
             isChinese={isChinese}
             key={entry.id}
-            now={now}
+            now={entry.activities.some(activityIsRunning) ? now : 0}
             onToggle={toggleEntry}
           />
         ) : (
@@ -101,7 +108,7 @@ export const WorkflowTimeline = memo(function WorkflowTimeline({
             expanded={isTimelineEntryExpanded(collapseState, entry.id)}
             isChinese={isChinese}
             key={entry.id}
-            now={now}
+            now={activityIsRunning(entry.activities[0]) ? now : 0}
             onToggle={toggleEntry}
           />
         )
@@ -124,7 +131,6 @@ const TimelineStepRow = memo(function TimelineStepRow({
   onToggle(id: string): void;
 }) {
   const { tokens } = useTheme();
-  const motion = useMotion();
   const running = activityIsRunning(activity);
   const ToolIcon = { search: Search, browser: Globe, command: Terminal, edit: FilePenLine,
     file: FileText, schedule: CalendarClock, subagent: Users }[activity.category] || Wrench;
@@ -145,8 +151,7 @@ const TimelineStepRow = memo(function TimelineStepRow({
   const primaryDetail = activityPrimaryDetail(activity);
   const elapsed = activityElapsedLabel(activity, now);
   return (
-    <Reanimated.View
-      entering={FadeIn.duration(motion.fadeDuration()).withInitialValues({ opacity: 0.65, transform: [] })}
+    <WorkflowEntrance
       style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
       <IOSPressable
         accessibilityRole="button"
@@ -182,14 +187,12 @@ const TimelineStepRow = memo(function TimelineStepRow({
         </IOSPressable>)}
         {sourceError ? <Text accessibilityRole="alert" style={{ color: tokens.colors.destructive }}>{sourceError}</Text> : null}
       </View> : null}
-      {expanded ? (
-        <Reanimated.View entering={FadeIn.duration(motion.fadeDuration())}
-          exiting={FadeOut.duration(motion.fadeDuration(120))}
-          style={[styles.entryDetail, { borderLeftColor: tokens.colors.border }]}>
+      <WorkflowDisclosure open={expanded}>
+        <View style={[styles.entryDetail, { borderLeftColor: tokens.colors.border }]}>
           <EntryDetailBody activity={activity} isChinese={isChinese} />
-        </Reanimated.View>
-      ) : null}
-    </Reanimated.View>
+        </View>
+      </WorkflowDisclosure>
+    </WorkflowEntrance>
   );
 });
 
@@ -209,14 +212,12 @@ function TimelineGroupRow({
   onToggle(id: string): void;
 }) {
   const { tokens } = useTheme();
-  const motion = useMotion();
   const expanded = isTimelineEntryExpanded(collapseState, id);
   const first = entry[0];
   const label = activityCategoryLabel(first.category, isChinese);
   const elapsed = timelineGroupElapsedLabel(entry);
   return (
-    <Reanimated.View
-      entering={FadeIn.duration(motion.fadeDuration()).withInitialValues({ opacity: 0.65, transform: [] })}
+    <WorkflowEntrance
       style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
       <IOSPressable
         accessibilityRole="button"
@@ -239,29 +240,21 @@ function TimelineGroupRow({
         ) : null}
         <AnimatedChevron color={tokens.colors.textSecondary} open={expanded} size={12} />
       </IOSPressable>
-      {expanded ? (
-        <Reanimated.View
-          entering={motion.animate(FadeIn
-            .duration(IOS_MOTION.duration.control)
-            .easing(IOS_DECELERATE_EASING))}
-          exiting={motion.animate(FadeOut
-            .duration(IOS_MOTION.duration.press)
-            .easing(IOS_STANDARD_EASING))}
-          style={styles.groupMembers}
-        >
+      <WorkflowDisclosure open={expanded}>
+        <View style={styles.groupMembers}>
           {entry.map((activity) => (
             <TimelineStepRow
               activity={activity}
               expanded={isTimelineEntryExpanded(collapseState, activity.id)}
               isChinese={isChinese}
               key={activity.id}
-              now={now}
+              now={activityIsRunning(activity) ? now : 0}
               onToggle={onToggle}
             />
           ))}
-        </Reanimated.View>
-      ) : null}
-    </Reanimated.View>
+        </View>
+      </WorkflowDisclosure>
+    </WorkflowEntrance>
   );
 }
 
@@ -312,7 +305,7 @@ function EntryDetailBody({
       {detail.fields.filter(({ key }) => !['model', 'provider', 'model_provider', 'model_service'].includes(key.toLowerCase())).map(({ key, value }) => (
         <View key={key} style={styles.entrySection}>
           <Text style={[styles.entrySectionLabel, { color: tokens.colors.textTertiary }]}>{isChinese ? ({ command: '命令', cmd: '命令', code: '代码', script: '脚本', arguments: '参数', target: '目标', content: '内容', query: '搜索内容', q: '搜索内容', url: '地址', path: '文件', file_path: '文件', action: '操作', schedule: '计划', task: '任务', agent: 'Agent', profile: '配置', model: '模型', provider: '模型服务', files: '涉及文件', tool: '工具', call_id: '调用 ID', parent_call_id: '父调用 ID' }[key] || key) : key}</Text>
-          <ClampedActivityTextBlock isChinese={isChinese} text={value} />
+          <ClampedActivityTextBlock isChinese={isChinese} text={value} streaming={activityIsRunning(activity)} />
         </View>
       ))}
       {detail.sources.slice(0, sourceCount).map((source) => (
@@ -339,9 +332,9 @@ function EntryDetailBody({
       {activity.error ? <ClampedActivityTextBlock isChinese={isChinese} text={activity.error} tone="error" /> : null}
       {detail.output.trim() && !detail.change && !detail.sources.length ? <View style={styles.entrySection}>
         <Text style={[styles.entrySectionLabel, { color: tokens.colors.textTertiary }]}>{isChinese ? '结果' : 'Result'}</Text>
-        <ClampedActivityTextBlock isChinese={isChinese} text={detail.output} />
+        <ClampedActivityTextBlock isChinese={isChinese} text={detail.output} streaming={activityIsRunning(activity)} />
       </View> : null}
-      {activity.presentationMeta?.summary ? <ClampedActivityTextBlock isChinese={isChinese} text={activity.presentationMeta.summary} /> : null}
+      {activity.presentationMeta?.summary ? <ClampedActivityTextBlock isChinese={isChinese} text={activity.presentationMeta.summary} streaming={activityIsRunning(activity)} /> : null}
       {actionError ? <Text accessibilityRole="alert" style={{ color: tokens.colors.destructive }}>{actionError}</Text> : null}
     </View>
   );
@@ -352,21 +345,23 @@ function ClampedActivityTextBlock({
   text,
   tone,
   diff = false,
+  streaming = false,
 }: {
   isChinese: boolean;
   text: string;
   tone?: 'error';
   diff?: boolean;
+  streaming?: boolean;
 }) {
   const { tokens } = useTheme();
   const [visibleCharacters, setVisibleCharacters] = useState(1_600);
   const displayText = useMemo(() => diff ? activityDiffText(text) : text, [diff, text]);
   const clamp = useMemo(() => clampActivityText(displayText, { maxCharacters: visibleCharacters, maxLines: Math.ceil(visibleCharacters / 65) }), [displayText, visibleCharacters]);
-  const value = clamp.text;
+  const value = useStreamingText(clamp.text, streaming);
   return (
     <View style={[styles.entryCodeBlock, { backgroundColor: multiplyAlpha(tokens.colors.foreground, 0.045) }]}>
       <Text
-        selectable
+        selectable={!streaming}
         style={[
           styles.entryCode,
           { color: tone === 'error' ? tokens.colors.destructive : tokens.colors.foreground },

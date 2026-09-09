@@ -44,7 +44,7 @@ interface ConversationActionsControllerOptions {
     resetCursor?: boolean,
     activateConversation?: boolean,
   ): void | Promise<void>;
-  autoFollowStreamRef: MutableRefObject<boolean>;
+  resumeStreamAutoFollow(): void;
   cacheOwner: string;
   cancelHostedTurnInFlightRef: MutableRefObject<boolean>;
   cancelTimeoutMs: number;
@@ -104,7 +104,7 @@ export function useConversationActionsController({
   activeConversationIdRef,
   activeHostedTurnIdRef,
   applyConversation,
-  autoFollowStreamRef,
+  resumeStreamAutoFollow,
   cacheOwner,
   cancelHostedTurnInFlightRef,
   cancelTimeoutMs,
@@ -168,7 +168,7 @@ export function useConversationActionsController({
     // The durable first-message enqueue creates the server conversation
     // atomically. No late create response may replace a newly sent turn.
     conversationSyncGenerationRef.current.advanceActive();
-    autoFollowStreamRef.current = true;
+    resumeStreamAutoFollow();
     clearOptimisticHostedTurn();
     optimisticMessagesRef.current = [];
     setCollaborationState('single');
@@ -348,7 +348,7 @@ export function useConversationActionsController({
       // right after sending on a slow network.
       pendingTurnActiveRef.current = false;
     }
-    autoFollowStreamRef.current = true;
+    resumeStreamAutoFollow();
     activeHostedTurnIdRef.current = '';
     clearOptimisticHostedTurn();
     setActiveHostedTurnId('');

@@ -1,7 +1,7 @@
 import { ChevronDown } from 'lucide-react-native';
 import { Fragment, type RefObject, useCallback, useEffect, useMemo, useRef } from 'react';
-import { ScrollView, type ScrollViewProps, Text, View } from 'react-native';
-import Reanimated, { Easing, FadeIn } from 'react-native-reanimated';
+import { Platform, type ScrollViewProps, Text, View } from 'react-native';
+import Reanimated, { Easing, FadeIn, useSharedValue, type SharedValue } from 'react-native-reanimated';
 
 import {
   shouldRenderPendingMessage,
@@ -24,6 +24,9 @@ import { styles } from './chat-presentation-styles';
 import type { PendingPhase } from './chat-types';
 import type { HostedRuntimeProjection } from '../../api/hosted-runtime-types';
 import { chatMemberKey, compactChatMessages } from './chat-member-model';
+import { WorkflowEntrance } from './WorkflowEntrance';
+import { ConversationTimeline } from './ConversationTimeline';
+import { buildConversationTimeline, type ConversationTimelineAnchor, type ConversationTimelineEntry } from './conversation-timeline-model';
 
 const IOS_DECELERATE_EASING = Easing.bezier(...IOS_MOTION.curve.decelerate);
 
@@ -45,6 +48,11 @@ export interface ChatMessageStreamProps {
   onSteerSubagent?(subagentId: string, message: string): void;
   onStopSubagent?(subagentId: string): void;
   onScroll: ScrollViewProps['onScroll'];
+  onContentSizeChange?: ScrollViewProps['onContentSizeChange'];
+  onStreamLayout?: ScrollViewProps['onLayout'];
+  onScrollBeginDrag?: ScrollViewProps['onScrollBeginDrag'];
+  scrollOffset?: SharedValue<number>;
+  onScrollToOffset?(offset: number): void;
   onToggleSpeech(message: ChatMessage): void;
   pendingPhase: PendingPhase;
   pendingStartedAt: number;
@@ -57,7 +65,7 @@ export interface ChatMessageStreamProps {
   showScrollToBottom: boolean;
   slashMenuOpen: boolean;
   speakingMessageId: string;
-  streamRef: RefObject<ScrollView | null>;
+  streamRef: RefObject<Reanimated.ScrollView | null>;
   keepLatestVisible(animated?: boolean, force?: boolean): void;
 }
 
@@ -80,6 +88,11 @@ export function ChatMessageStream({
   onSteerSubagent,
   onStopSubagent,
   onScroll,
+  onContentSizeChange: onStreamContentSizeChange,
+  onStreamLayout,
+  onScrollBeginDrag,
+  scrollOffset,
+  onScrollToOffset,
   onToggleSpeech,
   pendingPhase,
   pendingStartedAt,
@@ -107,54 +120,67 @@ export function ChatMessageStream({
     }
   }
   const { tokens } = useTheme();
-  // Follow after layout changes, once per frame; tokens that do not change
-  // the content height need no scroll operation.
-  const followFrame = useRef<ReturnType<typeof requestAnimationFrame> | null>(null);
-  const onContentSizeChange = useCallback(() => {
-    if (followFrame.current !== null) return;
-    followFrame.current = requestAnimationFrame(() => {
-      followFrame.current = null;
-      keepLatestVisible(false);
-    });
-  }, [keepLatestVisible]);
-  useEffect(() => () => {
-    if (followFrame.current !== null) cancelAnimationFrame(followFrame.current);
-  }, []);
+  const timelineContentHeight = useSharedValue(0);
+  const timelineViewportHeight = useSharedValue(0);
+  const onContentSizeChange = useCallback((width: number, height: number) => {
+    timelineContentHeight.value = height;
+    if (onStreamContentSizeChange) onStreamContentSizeChange(width, height);
+    else keepLatestVisible(true);
+  }, [keepLatestVisible, onStreamContentSizeChange, timelineContentHeight]);
+  const onLayout = useCallback<NonNullable<ScrollViewProps['onLayout']>>(event => {
+    timelineViewportHeight.value = event.nativeEvent.layout.height;
+    onStreamLayout?.(event);
+  }, [onStreamLayout, timelineViewportHeight]);
 
-  const userTurns = useMemo(
-    () => messages
-      .map((message, index) => ({ id: message.id, index, isUser: message.role === 'user' }))
-      .filter((item) => item.isUser),
-    [messages],
-  );
+  const previousTurns = useRef<readonly ConversationTimelineEntry[]>([]);
+  const userTurns = buildConversationTimeline(messages, previousTurns.current);
+  previousTurns.current = userTurns;
+  const turnAnchors = useSharedValue<ConversationTimelineAnchor[]>([]);
+  const fallbackOffset = useSharedValue(0);
+  const layoutFrame = useRef<number | null>(null);
   // Turn map: y-offsets of every user-turn boundary, captured at layout so
   // the side rail can scroll the stream to any past turn on tap. Pruned to
   // the current message ids on every change so a conversation switch (or
   // deletion) cannot leave stale offsets behind — and the map stays bounded.
   const turnOffsetsRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
-    const live = new Set(messages.map((message) => message.id));
+    const live = new Set(userTurns.map(turn => turn.id));
     for (const key of turnOffsetsRef.current.keys()) {
       if (!live.has(key)) turnOffsetsRef.current.delete(key);
     }
-  }, [messages]);
+    turnAnchors.value = userTurns.flatMap(turn => {
+      const y = turnOffsetsRef.current.get(turn.id);
+      return y === undefined ? [] : [{ id: turn.id, y }];
+    });
+  }, [userTurns, turnAnchors]);
+  useEffect(() => () => { if (layoutFrame.current !== null) cancelAnimationFrame(layoutFrame.current); }, []);
   const markTurnOffset = useCallback((id: string) => (event: { nativeEvent: { layout: { y: number } } }) => {
     turnOffsetsRef.current.set(id, event.nativeEvent.layout.y);
-  }, []);
+    if (layoutFrame.current !== null) return;
+    layoutFrame.current = requestAnimationFrame(() => {
+      layoutFrame.current = null;
+      turnAnchors.value = previousTurns.current.flatMap(turn => {
+        const y = turnOffsetsRef.current.get(turn.id);
+        return y === undefined ? [] : [{ id: turn.id, y }];
+      });
+    });
+  }, [turnAnchors]);
   const scrollToTurn = useCallback((id: string) => {
     const offset = turnOffsetsRef.current.get(id);
     if (offset === undefined) return;
-    streamRef.current?.scrollTo({ y: Math.max(0, offset - 12), animated: true });
-  }, []);
+    onInspectActivity();
+    if (onScrollToOffset) onScrollToOffset(Math.max(0, offset - 12));
+    else streamRef.current?.scrollTo({ y: Math.max(0, offset - 12), animated: true });
+  }, [onInspectActivity, onScrollToOffset, streamRef]);
   return (
     <>
-      <ScrollView
+      <Reanimated.ScrollView
         contentContainerStyle={[
           styles.streamContent,
           {
             paddingBottom: 22,
             paddingLeft: (compact ? 12 : 20) + safeAreaLeft,
-            paddingRight: (compact ? 12 : 20) + safeAreaRight,
+            paddingRight: (userTurns.length > 1 ? 48 : compact ? 12 : 20) + safeAreaRight,
           },
           messages.length === 0 && styles.emptyStream,
         ]}
@@ -162,6 +188,8 @@ export function ChatMessageStream({
         keyboardDismissMode="interactive"
         keyboardShouldPersistTaps="handled"
         onContentSizeChange={onContentSizeChange}
+        onLayout={onLayout}
+        onScrollBeginDrag={Platform.OS === 'web' ? onScrollBeginDrag : undefined}
         onScroll={onScroll}
         ref={streamRef}
         scrollEventThrottle={16}
@@ -197,7 +225,7 @@ export function ChatMessageStream({
           // inspection, but only the last carrier renders a TodoSection.
           <Fragment key={messageReactKey(message)}>
             {message.role === 'user' ? (
-              <View collapsable={false} onLayout={markTurnOffset(message.id)} style={{ height: 0 }} />
+              <View collapsable={false} onLayout={markTurnOffset(messageReactKey(message))} style={{ height: 0 }} />
             ) : null}
             {collaborationState === 'active' && collaborationStartIndex === index ? (
               <>
@@ -244,59 +272,19 @@ export function ChatMessageStream({
             startedAt={pendingStartedAt}
           />
         ) : null}
-      </ScrollView>
+      </Reanimated.ScrollView>
 
-      {userTurns.length > 1 ? (
-        <View
-          pointerEvents="box-none"
-          style={{
-            bottom: 12,
-            gap: 3,
-            justifyContent: 'space-between',
-            position: 'absolute',
-            right: 0,
-            top: 12,
-            width: 20,
-            alignItems: 'center',
-          }}
-        >
-          {userTurns.map((turn, position) => (
-            <IOSPressable
-              accessibilityLabel={isChinese ? `跳转到第 ${position + 1} 轮` : `Jump to turn ${position + 1}`}
-              haptic="selection"
-              key={turn.id}
-              onPress={() => scrollToTurn(turn.id)}
-              style={{
-                alignItems: 'center',
-                borderRadius: 6,
-                height: 14,
-                justifyContent: 'center',
-                paddingHorizontal: 6,
-                width: 20,
-              }}
-            >
-              <View
-                style={{
-                  borderRadius: 2,
-                  height: Math.max(3, 14 / userTurns.length),
-                  opacity: position === userTurns.length - 1 ? 0.95 : 0.4,
-                  width: 3,
-                  backgroundColor: position === userTurns.length - 1
-                    ? tokens.colors.primary
-                    : tokens.colors.textTertiary,
-                }}
-              />
-            </IOSPressable>
-          ))}
-        </View>
-      ) : null}
+      {!slashMenuOpen ? <ConversationTimeline entries={userTurns} anchors={turnAnchors}
+        contentHeight={timelineContentHeight} viewportHeight={timelineViewportHeight}
+        offset={scrollOffset || fallbackOffset} isChinese={isChinese} right={safeAreaRight}
+        onSelect={scrollToTurn} /> : null}
       {showScrollToBottom && !slashMenuOpen ? (
-        <Reanimated.View
-          entering={FadeIn.duration(IOS_MOTION.duration.control)}
+        <WorkflowEntrance
           style={[styles.scrollToBottomWrap, { bottom: 86 + safeAreaBottom }]}
         >
           <IOSPressable
             accessibilityLabel={isChinese ? '回到最新消息' : 'Jump to latest message'}
+            accessibilityRole="button"
             onPress={onJumpToLatest}
             style={[
               styles.scrollToBottom,
@@ -308,7 +296,7 @@ export function ChatMessageStream({
           >
             <ChevronDown color={tokens.colors.textSecondary} size={17} strokeWidth={1.8} />
           </IOSPressable>
-        </Reanimated.View>
+        </WorkflowEntrance>
       ) : null}
     </>
   );

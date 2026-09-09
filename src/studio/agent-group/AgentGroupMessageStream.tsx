@@ -20,6 +20,9 @@ import type {
 import { IOSPressable } from '../../components/ios/IOSPressable';
 import { multiplyAlpha } from '../../design/control-contracts';
 import { useTheme } from '../../design/ThemeProvider';
+import { useStreamingText } from '../chat/StreamingText';
+import { WorkflowDisclosure } from '../chat/WorkflowDisclosure';
+import { shouldResumeStreamFollow } from '../chat/stream-motion-model';
 
 export interface AgentGroupMessageStreamProps {
   agents: HermesStudioRoomAgent[];
@@ -82,19 +85,6 @@ export function AgentGroupMessageStream({
     () => [...displayMessages].reverse(),
     [displayMessages],
   );
-  const followVersion = useMemo(
-    () => displayMessages.map((message) => (
-      [
-        message.id,
-        message.content.length,
-        message.reasoning?.length || 0,
-        message.reasoning_content?.length || 0,
-        message.isStreaming ? 'streaming' : '',
-        message.runItems?.map((item) => `${item.id}:${item.content.length}:${item.toolStatus || ''}`).join(',') || '',
-      ].join(':')
-    )).join('|'),
-    [displayMessages],
-  );
 
   const scrollToBottom = useCallback((animated = false) => {
     // Inverted list: offset 0 IS the latest message.
@@ -107,15 +97,11 @@ export function AgentGroupMessageStream({
   // up to read history must not yank the view back down.
   const autoFollowRef = useRef(true);
 
-  useEffect(() => {
-    if (autoFollowRef.current) scrollToBottom(false);
-  }, [followVersion, scrollToBottom]);
-
   const onScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     // Inverted list: contentOffset.y grows upwards, so it already IS the
     // distance from the newest message.
     const distance = event.nativeEvent.contentOffset.y;
-    autoFollowRef.current = distance <= 72;
+    if (distance > 72) autoFollowRef.current = false;
     setShowScrollToBottom(distance > 180);
   }, []);
 
@@ -165,6 +151,14 @@ export function AgentGroupMessageStream({
           if (autoFollowRef.current) scrollToBottom(false);
         }}
         onScroll={onScroll}
+        onScrollBeginDrag={() => { autoFollowRef.current = false; }}
+        onScrollEndDrag={(event) => {
+          const { contentOffset, velocity } = event.nativeEvent;
+          autoFollowRef.current = shouldResumeStreamFollow(contentOffset.y, -(velocity?.y || 0));
+        }}
+        onMomentumScrollEnd={(event) => {
+          autoFollowRef.current = shouldResumeStreamFollow(event.nativeEvent.contentOffset.y);
+        }}
         ref={scrollRef}
         renderItem={({ item }) => (
           <Fragment key={item.id}>
@@ -353,9 +347,9 @@ function AgentGroupMessageItem({
             {message.toolStatus === 'running' ? <Text style={[styles.toolSpinner, { color: tokens.colors.primary }]}>◌</Text> : null}
             {message.toolStatus === 'error' ? <Text style={[styles.toolError, { color: tokens.colors.destructive }]}>{isChinese ? '错误' : 'error'}</Text> : null}
           </IOSPressable>
-          {toolExpanded && hasToolDetails ? (
+          <WorkflowDisclosure open={toolExpanded && hasToolDetails}>
             <ToolDetails isChinese={isChinese} message={message} />
-          ) : null}
+          </WorkflowDisclosure>
           {!embedded ? <Text style={[styles.time, { color: tokens.colors.textTertiary }]}>{formatTimestamp(message.timestamp)}</Text> : null}
         </View>
       </View>
@@ -384,10 +378,12 @@ function AgentGroupMessageItem({
                 <Text style={[styles.thinkingLabel, { color: tokens.colors.textTertiary }]}>{message.isStreaming && !message.content ? (isChinese ? '正在思考' : 'Thinking') : (isChinese ? '推理' : 'Thinking')}</Text>
                 <Text style={[styles.thinkingMeta, { color: tokens.colors.textTertiary }]}>· {reasoning.length}</Text>
               </IOSPressable>
-              {thinkingExpanded ? <Markdown style={markdownStyles}>{reasoning}</Markdown> : null}
+              <WorkflowDisclosure open={thinkingExpanded}>
+                <GroupStreamingMarkdown text={reasoning} streaming={Boolean(message.isStreaming)} style={markdownStyles} />
+              </WorkflowDisclosure>
             </View>
           ) : null}
-          {message.content.trim() ? <Markdown style={markdownStyles}>{message.content}</Markdown> : null}
+          {message.content.trim() ? <GroupStreamingMarkdown text={message.content} streaming={Boolean(message.isStreaming)} style={markdownStyles} /> : null}
           <GroupChoiceOptions
             content={message.content}
             isChinese={isChinese}
@@ -433,6 +429,15 @@ function AgentGroupMessageItem({
       </View>
     </View>
   );
+}
+
+function GroupStreamingMarkdown({ text, streaming, style }: {
+  text: string;
+  streaming: boolean;
+  style: ReturnType<typeof createGroupMarkdownStyles>;
+}) {
+  const visible = useStreamingText(text, streaming);
+  return <Markdown style={style}>{visible}</Markdown>;
 }
 
 function ToolDetails({ isChinese, message }: { isChinese: boolean; message: HermesStudioGroupChatMessage }) {
