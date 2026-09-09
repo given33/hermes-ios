@@ -113,11 +113,11 @@ export function useChatScrollController(safeAreaBottom: number) {
     const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
     metrics.current.content = contentSize.height;
     metrics.current.viewport = layoutMeasurement.height;
-    scrollOffset.value = contentOffset.y;
     // Programmatic scroll events (including the lag while following a growing
     // answer) must not be mistaken for the reader scrolling away.
     if (pendingScrollFrame.current !== null || navigationFrame.current !== null
       || (commandedOffset.current !== null && Math.abs(contentOffset.y - commandedOffset.current) < 2)) return;
+    scrollOffset.value = contentOffset.y;
     metrics.current.offset = contentOffset.y;
     if (distanceFromBottom <= 24 && !timelinePinned.current) autoFollowStreamRef.current = true;
     else if (distanceFromBottom > 72) autoFollowStreamRef.current = false;
