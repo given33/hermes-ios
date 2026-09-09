@@ -52,6 +52,11 @@ try {
     await page.waitForTimeout(950);
     const last = page.getByRole('button', { name: /^\u8df3\u8f6c\u5230\u4efb\u52a1 24:/ });
     await last.waitFor();
+    console.log(await page.evaluate(() => {
+      return Array.from(document.querySelectorAll('*'))
+        .filter(n => n.scrollHeight > n.clientHeight && getComputedStyle(n).overflowY === 'auto')
+        .map(n => ({ top: n.scrollTop, height: n.scrollHeight, view: n.clientHeight }));
+    }));
     assert.equal(await last.getAttribute('aria-selected'), 'true');
     assert.deepEqual(errors, []);
     const result = { viewport, navigationMs, taskTop: box.y, shortWidth: shortBar.width, longWidth: longBar.width, errors };

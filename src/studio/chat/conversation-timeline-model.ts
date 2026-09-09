@@ -33,7 +33,7 @@ export function timelineTurnAtOffset(anchors: readonly ConversationTimelineAncho
   'worklet';
   if (!anchors.length) return '';
   // The last prompt may never reach the viewport top when its reply is short.
-  if (maximumOffset > 0 && offset >= maximumOffset - 2) return anchors[anchors.length - 1].id;
+  if (maximumOffset > 0 && offset >= maximumOffset - 96) return anchors[anchors.length - 1].id;
   let low = 0;
   let high = anchors.length - 1;
   while (low < high) {
