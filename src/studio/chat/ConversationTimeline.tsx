@@ -112,7 +112,10 @@ const TimelineBar = memo(function TimelineBar({ entry, index, active, selected, 
   );
   useEffect(() => { progress.value = withTiming(active ? 1 : 0, { duration: reduceMotion ? 0 : 140 }); }, [active, progress, reduceMotion]);
   const width = selected ? timelineBarWidth(entry.length, maximum) : 16;
+  const barWidth = useSharedValue(width);
+  useEffect(() => { barWidth.value = withTiming(width, { duration: reduceMotion ? 0 : 160 }); }, [barWidth, reduceMotion, width]);
   const animatedStyle = useAnimatedStyle(() => ({
+    width: barWidth.value,
     opacity: 0.42 + 0.58 * Math.max(progress.value, proximity.value),
     transform: [
       { scaleY: 1 + 0.35 * Math.max(progress.value, proximity.value) },
