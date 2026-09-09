@@ -14,7 +14,6 @@ import Reanimated, {
   Easing,
   FadeIn,
   FadeOut,
-  LinearTransition,
   useAnimatedStyle,
   useSharedValue,
   withTiming,
@@ -148,7 +147,6 @@ const TimelineStepRow = memo(function TimelineStepRow({
   return (
     <Reanimated.View
       entering={FadeIn.duration(motion.fadeDuration()).withInitialValues({ opacity: 0.65, transform: [] })}
-      layout={motion.animate(LinearTransition.duration(IOS_MOTION.duration.control).easing(IOS_DECELERATE_EASING))}
       style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
       <IOSPressable
         accessibilityRole="button"
@@ -219,7 +217,6 @@ function TimelineGroupRow({
   return (
     <Reanimated.View
       entering={FadeIn.duration(motion.fadeDuration()).withInitialValues({ opacity: 0.65, transform: [] })}
-      layout={motion.animate(LinearTransition.duration(IOS_MOTION.duration.control).easing(IOS_DECELERATE_EASING))}
       style={[styles.entryCard, { borderColor: tokens.colors.border }]}>
       <IOSPressable
         accessibilityRole="button"
