@@ -27,7 +27,6 @@ import Reanimated, {
   withTiming,
 } from 'react-native-reanimated';
 import Markdown from 'react-native-markdown-display';
-import { CollapsibleImageCard } from './CollapsibleImageCard';
 import {
   activityDisplayContent,
   formatActivitySummary,
@@ -199,54 +198,43 @@ export const UnifiedMessage = memo(function UnifiedMessage({
       ) : null}
       {displayContent.trim() ? <MessageMarkdown style={markdownStyles} content={displayContent} /> : null}
       {message.attachments?.length ? (
-        <>
-          <CollapsibleImageCard
-            attachments={message.attachments}
-            isChinese={isChinese}
-            onOpenAttachment={onOpenAttachment}
-          />
-          {message.attachments.filter((att) => !att.mimeType?.startsWith('image/')).length > 0 ? (
-            <View style={styles.storedAttachments}>
-              {message.attachments
-                .filter((att) => !att.mimeType?.startsWith('image/'))
-                .map((attachment) => (
-                  <IOSContextMenu
-                    accessibilityLabel={`Open attachment ${attachment.name}`}
-                    actions={[
-                      {
-                        id: 'preview',
-                        onPress: () => onOpenAttachment(attachment),
-                        systemImage: 'doc.text.magnifyingglass',
-                        title: isChinese ? '快速查看' : 'Quick Look',
-                      },
-                      {
-                        id: 'share',
-                        onPress: () => onOpenAttachment(attachment, true),
-                        systemImage: 'square.and.arrow.up',
-                        title: isChinese ? '分享' : 'Share',
-                      },
-                    ]}
-                    key={attachment.id}
-                    onPress={() => onOpenAttachment(attachment)}
-                    style={styles.storedAttachment}
-                  >
-                    <File color={tokens.colors.primary} size={18} strokeWidth={1.7} />
-                    <View style={styles.storedAttachmentCopy}>
-                      <Text
-                        numberOfLines={1}
-                        style={[styles.storedAttachmentName, { color: messageForeground }]}
-                      >
-                        {attachment.name}
-                      </Text>
-                      <Text style={[styles.storedAttachmentSize, { color: tokens.colors.textSecondary }]}>
-                        {formatAttachmentSize(attachment.size)}
-                      </Text>
-                    </View>
-                  </IOSContextMenu>
-                ))}
-            </View>
-          ) : null}
-        </>
+        <View style={styles.storedAttachments}>
+          {message.attachments.map((attachment) => (
+            <IOSContextMenu
+              accessibilityLabel={`Open attachment ${attachment.name}`}
+              actions={[
+                {
+                  id: 'preview',
+                  onPress: () => onOpenAttachment(attachment),
+                  systemImage: 'doc.text.magnifyingglass',
+                  title: isChinese ? '快速查看' : 'Quick Look',
+                },
+                {
+                  id: 'share',
+                  onPress: () => onOpenAttachment(attachment, true),
+                  systemImage: 'square.and.arrow.up',
+                  title: isChinese ? '分享' : 'Share',
+                },
+              ]}
+              key={attachment.id}
+              onPress={() => onOpenAttachment(attachment)}
+              style={styles.storedAttachment}
+            >
+              <File color={tokens.colors.primary} size={18} strokeWidth={1.7} />
+              <View style={styles.storedAttachmentCopy}>
+                <Text
+                  numberOfLines={1}
+                  style={[styles.storedAttachmentName, { color: messageForeground }]}
+                >
+                  {attachment.name}
+                </Text>
+                <Text style={[styles.storedAttachmentSize, { color: tokens.colors.textSecondary }]}>
+                  {formatAttachmentSize(attachment.size)}
+                </Text>
+              </View>
+            </IOSContextMenu>
+          ))}
+        </View>
       ) : null}
     </WorkflowEntrance>
   );
